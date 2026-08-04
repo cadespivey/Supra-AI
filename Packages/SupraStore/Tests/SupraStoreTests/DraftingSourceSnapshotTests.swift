@@ -63,6 +63,37 @@ final class DraftingSourceSnapshotTests: XCTestCase {
         }
     }
 
+    func testTMDSS02BRejectsStaleDisplayedFactRevisionOrExcerptBinding() throws {
+        let fixture = try makeFixture()
+        let chunk = fixture.chunks[0]
+        let base = request(for: fixture)
+        let staleSelections = [
+            MotionDraftFactSelection(
+                chunkID: chunk.id,
+                expectedRevisionID: "different-revision",
+                expectedExcerptSHA256: sha256(chunk.normalizedText)
+            ),
+            MotionDraftFactSelection(
+                chunkID: chunk.id,
+                expectedRevisionID: fixture.revision.id,
+                expectedExcerptSHA256: String(repeating: "0", count: 64)
+            ),
+        ]
+
+        for staleSelection in staleSelections {
+            let stale = MotionDraftSnapshotRequest(
+                matterID: base.matterID,
+                factSelections: [staleSelection],
+                authoritySelections: base.authoritySelections,
+                assistantProfileSettingKey: base.assistantProfileSettingKey,
+                firmStyleProfileSettingKey: base.firmStyleProfileSettingKey
+            )
+            XCTAssertThrowsError(try fixture.store.draftingSources.captureMotionSnapshot(stale)) { error in
+                XCTAssertEqual(error as? MotionDraftSnapshotError, .factSelectionStale(chunk.id))
+            }
+        }
+    }
+
     // Expected RED: the controller trusts denormalized chunk text without proving that
     // it is the exact selected immutable revision range.
     func testTMDSS03CaptureRejectsForgedOrStaleChunkBinding() throws {
@@ -857,9 +888,18 @@ final class DraftingSourceSnapshotTests: XCTestCase {
         for fixture: Fixture,
         factChunkIDs: [String]? = nil
     ) -> MotionDraftSnapshotRequest {
-        MotionDraftSnapshotRequest(
+        let factChunkIDs = factChunkIDs ?? [fixture.chunks[0].id]
+        return MotionDraftSnapshotRequest(
             matterID: fixture.matter.id,
-            factChunkIDs: factChunkIDs ?? [fixture.chunks[0].id],
+            factSelections: factChunkIDs.map { chunkID in
+                let chunk = try? fixture.store.documentIndex.fetchChunk(id: chunkID)
+                return MotionDraftFactSelection(
+                    chunkID: chunkID,
+                    expectedRevisionID: chunk?.revisionID ?? "",
+                    expectedExcerptSHA256: chunk.map { sha256($0.normalizedText) }
+                        ?? String(repeating: "0", count: 64)
+                )
+            },
             authoritySelections: [
                 MotionDraftAuthoritySelection(
                     authorityID: fixture.authority.id,

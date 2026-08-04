@@ -977,7 +977,7 @@ final class MotionToDismissControllerTests: XCTestCase {
             text: "The complaint alleges a limitations dispute under Fla. Stat. § 95.11 and identifies no other breached duty."
         )
         var selectedEvidence = fixture.selectedInput
-        selectedEvidence.selectedFactChunkIDs = [citedFact.chunkID]
+        selectedEvidence.selectedFacts = [factSelection(citedFact)]
         XCTAssertTrue(
             controller.motionReadiness(input: selectedEvidence, matterID: fixture.matterID).canGenerate,
             "an exact citation-bearing fact excerpt remains eligible selected evidence"
@@ -1109,7 +1109,7 @@ final class MotionToDismissControllerTests: XCTestCase {
             respondingTo: "Plaintiff's First Amended Complaint",
             grounds: ["failure to state a claim"],
             reliefSought: "dismissal without prejudice and leave to amend",
-            selectedFactChunkIDs: [selectedFact.chunkID],
+            selectedFacts: [factSelection(selectedFact)],
             selectedAuthorities: [selectedAuthority]
         )
         return Fixture(
@@ -1189,6 +1189,14 @@ final class MotionToDismissControllerTests: XCTestCase {
         )
         try store.documentIndex.replaceChunks(documentID: document.id, chunks: [chunk])
         return IndexedFact(documentID: document.id, chunkID: chunk.id, revisionID: revision.id, text: text)
+    }
+
+    private func factSelection(_ fact: IndexedFact) -> MotionDraftFactSourceSelection {
+        MotionDraftFactSourceSelection(
+            chunkID: fact.chunkID,
+            expectedRevisionID: fact.revisionID,
+            expectedExcerptSHA256: DocumentStorage.sha256Hex(of: Data(fact.text.utf8))
+        )
     }
 
     private func insertAuthority(
@@ -1316,7 +1324,13 @@ final class MotionToDismissControllerTests: XCTestCase {
         let input = input ?? fixture.selectedInput
         return MotionDraftSnapshotRequest(
             matterID: fixture.matterID,
-            factChunkIDs: input.selectedFactChunkIDs,
+            factSelections: input.selectedFacts.map {
+                MotionDraftFactSelection(
+                    chunkID: $0.chunkID,
+                    expectedRevisionID: $0.expectedRevisionID,
+                    expectedExcerptSHA256: $0.expectedExcerptSHA256
+                )
+            },
             authoritySelections: input.selectedAuthorities.map {
                 MotionDraftAuthoritySelection(
                     authorityID: $0.authorityID,

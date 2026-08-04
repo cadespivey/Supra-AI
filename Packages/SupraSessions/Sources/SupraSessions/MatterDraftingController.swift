@@ -507,7 +507,8 @@ public final class MatterDraftingController: ObservableObject {
     /// assembly so stale/deleted sources cannot slip through a previously green UI.
     public func motionReadiness(input: MotionToDismissDraftInput, matterID: String) -> MotionDraftReadiness {
         var reasons: [String] = []
-        let selectedFactIDs = Self.uniqueNonEmpty(input.selectedFactChunkIDs)
+        let selectedFacts = Self.uniqueMotionFactSelections(input.selectedFacts)
+        let selectedFactIDs = selectedFacts.map(\.chunkID)
         let selectedAuthorities = Self.uniqueMotionAuthoritySelections(input.selectedAuthorities)
 
         let matter: MatterRecord?
@@ -572,8 +573,8 @@ public final class MatterDraftingController: ObservableObject {
             }
         }
 
-        if selectedFactIDs.count != input.selectedFactChunkIDs.count {
-            reasons.append("Fact-source selections must contain unique, nonblank IDs.")
+        if selectedFacts.count != input.selectedFacts.count {
+            reasons.append("Fact-source selections must contain unique, nonblank revision and excerpt bindings.")
         }
         if selectedFactIDs.isEmpty {
             reasons.append("Select at least one current fact excerpt.")
@@ -582,13 +583,16 @@ public final class MatterDraftingController: ObservableObject {
             let availableFacts = Dictionary(
                 uniqueKeysWithValues: try loadMotionFactSources(matterID: matterID).map { ($0.chunkID, $0) }
             )
-            for id in selectedFactIDs {
-                guard let source = availableFacts[id] else {
-                    reasons.append("Selected fact source \(id) is unavailable in this matter.")
+            for selection in selectedFacts {
+                guard let source = availableFacts[selection.chunkID] else {
+                    reasons.append("Selected fact source \(selection.chunkID) is unavailable in this matter.")
                     continue
                 }
                 if !source.isReady {
                     reasons.append("Fact source “\(source.documentName)” is unavailable: \(source.blockingReason ?? "it is not current and ready").")
+                } else if source.documentRevisionID != selection.expectedRevisionID
+                    || source.excerptSHA256 != selection.expectedExcerptSHA256 {
+                    reasons.append("Fact source “\(source.documentName)” changed after it was selected. Reload and select it again.")
                 }
             }
         } catch {
@@ -647,13 +651,20 @@ public final class MatterDraftingController: ObservableObject {
                 return .failure(.motionBlocked(readiness.blockingReasons))
             }
 
-            let selectedFactIDs = Self.uniqueNonEmpty(input.selectedFactChunkIDs)
+            let selectedFacts = Self.uniqueMotionFactSelections(input.selectedFacts)
+            let selectedFactIDs = selectedFacts.map(\.chunkID)
             let selectedAuthorities = Self.uniqueMotionAuthoritySelections(input.selectedAuthorities)
             let selectedAuthorityIDs = selectedAuthorities.map(\.authorityID)
             let groundSpecs = try Self.motionGroundSpecs(input.grounds)
             let snapshotRequest = MotionDraftSnapshotRequest(
                 matterID: matterID,
-                factChunkIDs: selectedFactIDs,
+                factSelections: selectedFacts.map {
+                    MotionDraftFactSelection(
+                        chunkID: $0.chunkID,
+                        expectedRevisionID: $0.expectedRevisionID,
+                        expectedExcerptSHA256: $0.expectedExcerptSHA256
+                    )
+                },
                 authoritySelections: selectedAuthorities.map {
                     MotionDraftAuthoritySelection(
                         authorityID: $0.authorityID,
@@ -1032,8 +1043,10 @@ public final class MatterDraftingController: ObservableObject {
             } else {
                 blockers.append("the excerpt is not bound to a current document part")
             }
-            let text = chunk.normalizedText.trimmingCharacters(in: .whitespacesAndNewlines)
-            if text.isEmpty { blockers.append("the excerpt is empty") }
+            let text = chunk.normalizedText
+            if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                blockers.append("the excerpt is empty")
+            }
             if InstructionShapeDetector.isBlocking(text) {
                 blockers.append("the excerpt contains instruction-shaped text")
             }
@@ -1053,6 +1066,7 @@ public final class MatterDraftingController: ObservableObject {
                 chunkID: chunk.id,
                 documentID: document.id,
                 documentRevisionID: revisionID,
+                excerptSHA256: DocumentStorage.sha256Hex(of: Data(text.utf8)),
                 documentName: document.displayName,
                 locator: locator,
                 text: text,
@@ -1118,12 +1132,26 @@ public final class MatterDraftingController: ObservableObject {
         return citations.first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     }
 
-    nonisolated private static func uniqueNonEmpty(_ values: [String]) -> [String] {
+    nonisolated private static func uniqueMotionFactSelections(
+        _ values: [MotionDraftFactSourceSelection]
+    ) -> [MotionDraftFactSourceSelection] {
         var seen = Set<String>()
-        return values.compactMap { value in
-            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty, seen.insert(trimmed).inserted else { return nil }
-            return trimmed
+        return values.compactMap { selection in
+            let chunkID = selection.chunkID.trimmingCharacters(in: .whitespacesAndNewlines)
+            let revisionID = selection.expectedRevisionID.trimmingCharacters(in: .whitespacesAndNewlines)
+            let excerptSHA256 = selection.expectedExcerptSHA256.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !chunkID.isEmpty,
+                  !revisionID.isEmpty,
+                  excerptSHA256.utf8.count == 64,
+                  excerptSHA256.utf8.allSatisfy({ byte in
+                      (48...57).contains(byte) || (97...102).contains(byte)
+                  }),
+                  seen.insert(chunkID).inserted else { return nil }
+            return MotionDraftFactSourceSelection(
+                chunkID: chunkID,
+                expectedRevisionID: revisionID,
+                expectedExcerptSHA256: excerptSHA256
+            )
         }
     }
 
@@ -1718,7 +1746,7 @@ public struct MotionToDismissDraftInput: Sendable, Equatable {
     public var respondingTo: String
     public var grounds: [String]
     public var reliefSought: String
-    public var selectedFactChunkIDs: [String]
+    public var selectedFacts: [MotionDraftFactSourceSelection]
     public var selectedAuthorities: [MotionDraftAuthoritySourceSelection]
 
     public init(
@@ -1730,7 +1758,7 @@ public struct MotionToDismissDraftInput: Sendable, Equatable {
         respondingTo: String,
         grounds: [String],
         reliefSought: String,
-        selectedFactChunkIDs: [String],
+        selectedFacts: [MotionDraftFactSourceSelection],
         selectedAuthorities: [MotionDraftAuthoritySourceSelection]
     ) {
         self.parties = parties
@@ -1741,8 +1769,29 @@ public struct MotionToDismissDraftInput: Sendable, Equatable {
         self.respondingTo = respondingTo
         self.grounds = grounds
         self.reliefSought = reliefSought
-        self.selectedFactChunkIDs = selectedFactChunkIDs
+        self.selectedFacts = selectedFacts
         self.selectedAuthorities = selectedAuthorities
+    }
+
+    public var selectedFactChunkIDs: [String] { selectedFacts.map(\.chunkID) }
+}
+
+/// The exact revision and excerpt bytes displayed when counsel selected a fact.
+/// A chunk identifier alone is insufficient because reindexing can reuse it for
+/// different persisted text.
+public struct MotionDraftFactSourceSelection: Sendable, Equatable, Hashable {
+    public let chunkID: String
+    public let expectedRevisionID: String
+    public let expectedExcerptSHA256: String
+
+    public init(
+        chunkID: String,
+        expectedRevisionID: String,
+        expectedExcerptSHA256: String
+    ) {
+        self.chunkID = chunkID
+        self.expectedRevisionID = expectedRevisionID
+        self.expectedExcerptSHA256 = expectedExcerptSHA256
     }
 }
 
@@ -1764,6 +1813,7 @@ public struct MotionDraftFactSource: Sendable, Equatable, Identifiable {
     public let chunkID: String
     public let documentID: String
     public let documentRevisionID: String
+    public let excerptSHA256: String
     public let documentName: String
     public let locator: String
     public let text: String
@@ -1776,6 +1826,7 @@ public struct MotionDraftFactSource: Sendable, Equatable, Identifiable {
         chunkID: String,
         documentID: String,
         documentRevisionID: String,
+        excerptSHA256: String,
         documentName: String,
         locator: String,
         text: String,
@@ -1785,6 +1836,7 @@ public struct MotionDraftFactSource: Sendable, Equatable, Identifiable {
         self.chunkID = chunkID
         self.documentID = documentID
         self.documentRevisionID = documentRevisionID
+        self.excerptSHA256 = excerptSHA256
         self.documentName = documentName
         self.locator = locator
         self.text = text

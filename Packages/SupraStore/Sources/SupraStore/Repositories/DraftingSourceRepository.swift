@@ -19,26 +19,44 @@ public struct MotionDraftAuthoritySelection: Codable, Equatable, Hashable, Senda
     }
 }
 
+public struct MotionDraftFactSelection: Codable, Equatable, Hashable, Sendable {
+    public let chunkID: String
+    public let expectedRevisionID: String
+    public let expectedExcerptSHA256: String
+
+    public init(
+        chunkID: String,
+        expectedRevisionID: String,
+        expectedExcerptSHA256: String
+    ) {
+        self.chunkID = chunkID
+        self.expectedRevisionID = expectedRevisionID
+        self.expectedExcerptSHA256 = expectedExcerptSHA256
+    }
+}
+
 public struct MotionDraftSnapshotRequest: Codable, Equatable, Sendable {
     public let matterID: String
-    public let factChunkIDs: [String]
+    public let factSelections: [MotionDraftFactSelection]
     public let authoritySelections: [MotionDraftAuthoritySelection]
     public let assistantProfileSettingKey: String
     public let firmStyleProfileSettingKey: String
 
     public init(
         matterID: String,
-        factChunkIDs: [String],
+        factSelections: [MotionDraftFactSelection],
         authoritySelections: [MotionDraftAuthoritySelection],
         assistantProfileSettingKey: String,
         firmStyleProfileSettingKey: String
     ) {
         self.matterID = matterID
-        self.factChunkIDs = factChunkIDs
+        self.factSelections = factSelections
         self.authoritySelections = authoritySelections
         self.assistantProfileSettingKey = assistantProfileSettingKey
         self.firmStyleProfileSettingKey = firmStyleProfileSettingKey
     }
+
+    public var factChunkIDs: [String] { factSelections.map(\.chunkID) }
 }
 
 /// Raw fact-source values captured by one Store read. Consumers can derive UI
@@ -167,6 +185,7 @@ public enum MotionDraftSnapshotError: Error, Equatable, Sendable {
     case factOutsideMatter(String)
     case factNotReady(String)
     case factBindingInvalid(String)
+    case factSelectionStale(String)
     case authorityNotFound(String)
     case authorityOutsideMatter(String)
     case authorityProvenanceInvalid(String)
@@ -310,8 +329,8 @@ public final class DraftingSourceRepository: @unchecked Sendable {
 
         let assistant = try setting(key: request.assistantProfileSettingKey, db: db)
         let style = try setting(key: request.firmStyleProfileSettingKey, db: db)
-        let facts = try request.factChunkIDs.map {
-            try fact(chunkID: $0, matterID: request.matterID, db: db)
+        let facts = try request.factSelections.map {
+            try fact(selection: $0, matterID: request.matterID, db: db)
         }
         let authorities = try request.authoritySelections.map {
             try authority(selection: $0, matterID: request.matterID, db: db)
@@ -338,7 +357,7 @@ public final class DraftingSourceRepository: @unchecked Sendable {
         guard !request.matterID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw MotionDraftSnapshotError.blankMatterID
         }
-        guard !request.factChunkIDs.isEmpty else {
+        guard !request.factSelections.isEmpty else {
             throw MotionDraftSnapshotError.emptyFactSelection
         }
         guard !request.authoritySelections.isEmpty else {
@@ -349,9 +368,14 @@ public final class DraftingSourceRepository: @unchecked Sendable {
             throw MotionDraftSnapshotError.blankSettingKey
         }
         var factIDs = Set<String>()
-        for id in request.factChunkIDs {
+        for selection in request.factSelections {
+            let id = selection.chunkID
             guard !id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 throw MotionDraftSnapshotError.factNotFound(id)
+            }
+            guard !selection.expectedRevisionID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  isSHA256(selection.expectedExcerptSHA256) else {
+                throw MotionDraftSnapshotError.factSelectionStale(id)
             }
             guard factIDs.insert(id).inserted else {
                 throw MotionDraftSnapshotError.duplicateFactChunkID(id)
@@ -383,12 +407,17 @@ public final class DraftingSourceRepository: @unchecked Sendable {
     }
 
     private static func fact(
-        chunkID: String,
+        selection: MotionDraftFactSelection,
         matterID: String,
         db: Database
     ) throws -> MotionDraftFactSnapshot {
+        let chunkID = selection.chunkID
         guard let chunk = try DocumentChunkRecord.fetchOne(db, key: chunkID) else {
             throw MotionDraftSnapshotError.factNotFound(chunkID)
+        }
+        guard nonblank(chunk.revisionID) == selection.expectedRevisionID,
+              sha256(Data(chunk.normalizedText.utf8)) == selection.expectedExcerptSHA256 else {
+            throw MotionDraftSnapshotError.factSelectionStale(chunkID)
         }
         guard let document = try MatterDocumentRecord.fetchOne(db, key: chunk.documentID) else {
             throw MotionDraftSnapshotError.factNotFound(chunkID)

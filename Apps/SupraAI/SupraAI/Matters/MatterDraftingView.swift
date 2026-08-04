@@ -869,9 +869,15 @@ struct MatterDraftingView: View {
             respondingTo: trimmed(motionRespondingTo),
             grounds: ["failure to state a claim"],
             reliefSought: trimmed(motionRelief),
-            selectedFactChunkIDs: motionFactSources
+            selectedFacts: motionFactSources
                 .filter { selectedMotionFactIDs.contains($0.chunkID) }
-                .map(\.chunkID),
+                .map { source in
+                    MotionDraftFactSourceSelection(
+                        chunkID: source.chunkID,
+                        expectedRevisionID: source.documentRevisionID,
+                        expectedExcerptSHA256: source.excerptSHA256
+                    )
+                },
             selectedAuthorities: motionAuthoritySources
                 .filter { selectedMotionAuthorityIDs.contains($0.authorityID) }
                 .compactMap { source in
@@ -889,6 +895,11 @@ struct MatterDraftingView: View {
     }
 
     private func loadMotionSourcesIfNeeded() {
+        let displayedFactBindings = Dictionary(
+            uniqueKeysWithValues: motionFactSources.map { source in
+                (source.chunkID, "\(source.documentRevisionID):\(source.excerptSHA256)")
+            }
+        )
         let displayedAuthorityBindings = Dictionary(
             uniqueKeysWithValues: motionAuthoritySources.compactMap { source in
                 source.bindingSHA256.map { (source.authorityID, $0) }
@@ -905,13 +916,21 @@ struct MatterDraftingView: View {
 
         motionFactSources = facts
         motionAuthoritySources = authorities
-        let currentFactIDs = Set(motionFactSources.map(\.chunkID))
+        let currentFactBindings = Dictionary(
+            uniqueKeysWithValues: motionFactSources.map { source in
+                (source.chunkID, "\(source.documentRevisionID):\(source.excerptSHA256)")
+            }
+        )
         let currentAuthorityBindings = Dictionary(
             uniqueKeysWithValues: motionAuthoritySources.compactMap { source in
                 source.bindingSHA256.map { (source.authorityID, $0) }
             }
         )
-        selectedMotionFactIDs.formIntersection(currentFactIDs)
+        selectedMotionFactIDs = Set(selectedMotionFactIDs.filter { chunkID in
+            guard let displayed = displayedFactBindings[chunkID],
+                  let current = currentFactBindings[chunkID] else { return false }
+            return displayed == current
+        })
         selectedMotionAuthorityIDs = Set(selectedMotionAuthorityIDs.filter { authorityID in
             guard let displayed = displayedAuthorityBindings[authorityID],
                   let current = currentAuthorityBindings[authorityID] else { return false }
