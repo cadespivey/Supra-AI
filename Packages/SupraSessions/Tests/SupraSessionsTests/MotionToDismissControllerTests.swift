@@ -8,7 +8,7 @@ import SupraExports
 import SupraStore
 import XCTest
 
-/// T-MTD-01...32: the first supported motion vertical. Every fixture is
+/// T-MTD-01...33: the first supported motion vertical. Every fixture is
 /// fictional and every negative assertion checks both the file boundary and the
 /// success-audit boundary.
 @MainActor
@@ -942,6 +942,45 @@ final class MotionToDismissControllerTests: XCTestCase {
         XCTAssertTrue(displayed.isReady, displayed.blockingReason ?? "unexpected block")
         XCTAssertEqual(displayed.documentRevisionID, replacementRevisionID)
         XCTAssertEqual(displayed.text, replacement)
+    }
+
+    // T-MTD-33. Expected RED: citation-shaped attorney-composed slots currently
+    // pass readiness and then fail the deterministic verifier after generation
+    // begins. Readiness must reject those slots without rejecting citations that
+    // occur inside the exact fact excerpt counsel selected as evidence.
+    func testTMTD33ReadinessRejectsCitationShapedComposedSlotsButAllowsSelectedFactCitations() throws {
+        let fixture = try makeFixture()
+        let controller = MatterDraftingController(store: fixture.store, storage: fixture.storage)
+
+        let mutatedInputs: [(String, (inout MotionToDismissDraftInput) -> Void)] = [
+            ("responding pleading", { $0.respondingTo = "Complaint under Fla. Stat. § 95.11" }),
+            ("relief", { $0.reliefSought = "dismissal under Fla. Stat. § 95.11" }),
+            ("represented party name", { $0.representedPartyName = "Gulf Works, Inc., 123 So. 3d 456" }),
+            ("represented role", { $0.partyRepresented = "Defendant under Fla. Stat. § 95.11" }),
+        ]
+        for (label, mutate) in mutatedInputs {
+            var input = fixture.selectedInput
+            mutate(&input)
+            let readiness = controller.motionReadiness(input: input, matterID: fixture.matterID)
+            XCTAssertFalse(readiness.canGenerate, "citation-shaped \(label) must fail before generation")
+            XCTAssertTrue(
+                readiness.blockingReasons.contains { $0.localizedCaseInsensitiveContains("citation") },
+                "citation-shaped \(label) needs an actionable readiness reason"
+            )
+        }
+
+        let citedFact = try insertFact(
+            store: fixture.store,
+            matterID: fixture.matterID,
+            name: "Citation-bearing complaint excerpt.txt",
+            text: "The complaint alleges a limitations dispute under Fla. Stat. § 95.11 and identifies no other breached duty."
+        )
+        var selectedEvidence = fixture.selectedInput
+        selectedEvidence.selectedFactChunkIDs = [citedFact.chunkID]
+        XCTAssertTrue(
+            controller.motionReadiness(input: selectedEvidence, matterID: fixture.matterID).canGenerate,
+            "an exact citation-bearing fact excerpt remains eligible selected evidence"
+        )
     }
 
     // MARK: - Fixtures
