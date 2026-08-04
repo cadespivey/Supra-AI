@@ -635,18 +635,7 @@ public struct DraftVerifier: Verifier, Sendable {
     }
 
     private static func containsCitationShape(_ text: String) -> Bool {
-        let patterns = [
-            #"\b[A-Z][\w.'&-]+ v\.? [A-Z][\w.'&-]+"#,
-            #"\b\d{1,4} [A-Z][\w.]*\.?( \d[a-z]{0,2})? \d{1,4}\b"#,
-            #"§\s?\d"#,
-            #"\bU\.?S\.?C\.?\b"#,
-            #"\bC\.?F\.?R\.?\b"#,
-            #"\bFla\.? Stat\.?\b"#,
-            #"\b(statute|statutes|code|rule)\s*(section\s*)?\d"#
-        ]
-        return patterns.contains {
-            text.range(of: $0, options: [.regularExpression, .caseInsensitive]) != nil
-        }
+        MotionCitationShapeDetector.containsCitationShape(in: text)
     }
 
     private static func isNonMaterialBoilerplate(_ text: String) -> Bool {

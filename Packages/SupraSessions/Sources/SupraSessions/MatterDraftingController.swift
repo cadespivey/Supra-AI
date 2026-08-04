@@ -595,7 +595,8 @@ public final class MatterDraftingController: ObservableObject {
             ("represented party name", input.representedPartyName),
             ("represented party role", input.partyRepresented),
         ]
-        for (label, value) in composedSlots where Self.motionContainsCitationShape(value) {
+        for (label, value) in composedSlots
+            where MotionCitationShapeDetector.containsCitationShape(in: value) {
             reasons.append(
                 "Remove citation-shaped text from the \(label). Legal citations must come from a selected fact excerpt or reviewed authority."
             )
@@ -1174,25 +1175,6 @@ public final class MatterDraftingController: ObservableObject {
             return ""
         }
         return citations.first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-    }
-
-    /// Mirrors the deterministic motion verifier's citation-shape boundary for
-    /// attorney-composed body slots. Selected fact and reviewed-authority text is
-    /// deliberately not inspected here because those exact evidence blocks are
-    /// independently bound and verified.
-    nonisolated private static func motionContainsCitationShape(_ text: String) -> Bool {
-        let patterns = [
-            #"\b[A-Z][\w.'&-]+ v\.? [A-Z][\w.'&-]+"#,
-            #"\b\d{1,4} [A-Z][\w.]*\.?( \d[a-z]{0,2})? \d{1,4}\b"#,
-            #"§\s?\d"#,
-            #"\bU\.?S\.?C\.?\b"#,
-            #"\bC\.?F\.?R\.?\b"#,
-            #"\bFla\.? Stat\.?\b"#,
-            #"\b(statute|statutes|code|rule)\s*(section\s*)?\d"#,
-        ]
-        return patterns.contains {
-            text.range(of: $0, options: [.regularExpression, .caseInsensitive]) != nil
-        }
     }
 
     nonisolated private static func uniqueMotionFactSelections(
