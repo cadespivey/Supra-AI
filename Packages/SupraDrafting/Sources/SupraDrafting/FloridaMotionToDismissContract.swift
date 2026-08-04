@@ -33,9 +33,9 @@ public enum FloridaMotionToDismissContract {
     /// Accepts one complete citation composed of an optional case caption, one
     /// supported state reporter, an optional state-reporter pinpoint, and an
     /// anchored Florida Supreme Court or District Court of Appeal parenthetical.
-    /// The caption grammar cannot consume another comma-delimited reporter, so a
-    /// mixed federal + Florida string fails rather than borrowing its final
-    /// Florida parenthetical.
+    /// A reporter-count guard prevents the optional caption from consuming an
+    /// earlier reporter, so a mixed federal + Florida string fails rather than
+    /// borrowing its final Florida parenthetical.
     public static func isSupportedAuthorityCitation(_ citation: String) -> Bool {
         let value = normalizedWhitespace(citation)
         guard !value.isEmpty else { return false }
@@ -47,6 +47,19 @@ public enum FloridaMotionToDismissContract {
         let weeklyPinpoint = #"(?:,\s+(?:D|S)?\d{1,6}(?:[-–—](?:D|S)?\d{1,6})?)?"#
         let stateParenthetical =
             #"\s+\(\s*Fla\.(?:\s+(?:1st|2d|3d|4th|5th|6th)\s+DCA)?\s+\d{4}\s*\)"#
+        let genericReporter =
+            #"\b\d{1,4}\s+(?:(?:[A-Z][A-Za-z]*\.)\s*){1,4}(?:(?:\d[a-z]{0,2})\s+)?(?:[A-Z]\s*)?\d{1,6}\b"#
+        let reporterShape = "(?:\(genericReporter)|\(weeklyReporter))"
+        guard let reporterRegex = try? NSRegularExpression(
+            pattern: reporterShape,
+            options: .caseInsensitive
+        ) else {
+            return false
+        }
+        let fullRange = NSRange(value.startIndex..<value.endIndex, in: value)
+        guard reporterRegex.numberOfMatches(in: value, range: fullRange) == 1 else {
+            return false
+        }
         let supportedCitation =
             "^\(optionalCaseCaption)(?:\(southernReporter)\(southernPinpoint)|"
             + "\(weeklyReporter)\(weeklyPinpoint))\(stateParenthetical)$"

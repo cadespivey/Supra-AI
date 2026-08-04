@@ -13,6 +13,7 @@ public enum MotionCitationShapeDetector {
             #"\bC\.?F\.?R\.?\b"#,
             #"\bFla\.? Stat\.?\b"#,
             #"\bFla\.?\s+R\.?\s+Civ\.?\s+P\.?\s+\d+(?:\.\d+)?(?:\([a-z0-9]+\))*"#,
+            #"\bFlorida\s+Rules?\s+of\s+Civil\s+Procedure\s+\d+(?:\.\d+)?(?:\([a-z0-9]+\))*"#,
             #"\b(statute|statutes|code|rule)\s*(section\s*)?\d"#,
         ]
         return patterns.contains {
