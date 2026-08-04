@@ -32,4 +32,39 @@ final class DraftArtifactIntentMigrationTests: XCTestCase {
             )
         }
     }
+
+    #if DEBUG
+    func testTDAI05DebugResetDropsAndRecreatesArtifactIntentLedger() throws {
+        let database = try SupraDatabase.inMemory()
+        let store = SupraStore(database: database)
+        let matter = try store.matters.createMatter(name: "Reset artifact matter")
+        _ = try store.draftArtifacts.prepareGenericIntent(
+            matterID: matter.id,
+            artifactKind: .customDescription,
+            format: .markdown,
+            fileName: "Before-reset.md",
+            output: Data("# Before reset\n".utf8),
+            id: "before-debug-reset"
+        )
+
+        try database.resetForDebug()
+
+        try database.writer.read { db in
+            XCTAssertEqual(
+                try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM draft_artifact_intents"),
+                0
+            )
+        }
+        let after = try store.matters.createMatter(name: "Reusable reset matter")
+        let intent = try store.draftArtifacts.prepareGenericIntent(
+            matterID: after.id,
+            artifactKind: .customDescription,
+            format: .markdown,
+            fileName: "After-reset.md",
+            output: Data("# After reset\n".utf8),
+            id: "after-debug-reset"
+        )
+        XCTAssertEqual(intent.status, DraftArtifactIntentStatus.prepared.rawValue)
+    }
+    #endif
 }

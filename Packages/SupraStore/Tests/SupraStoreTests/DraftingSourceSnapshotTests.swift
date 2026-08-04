@@ -720,6 +720,55 @@ final class DraftingSourceSnapshotTests: XCTestCase {
         )
     }
 
+    func testTMDSS10FinalizeRecomputesCanonicalVerificationReceiptDigest() throws {
+        let fixture = try makeFixture()
+        let snapshot = try fixture.store.draftingSources.captureMotionSnapshot(request(for: fixture))
+        let output = Data("synthetic motion".utf8)
+        let intent = try fixture.store.draftArtifacts.prepareMotionIntent(
+            snapshot: snapshot,
+            fileName: "Motion-to-Dismiss-receipt-tampered.docx",
+            output: output,
+            auditInput: motionAuditInput(snapshot: snapshot),
+            id: "tampered-motion-receipt"
+        )
+        var root = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(intent.auditMetadataJSON.utf8)) as? [String: Any]
+        )
+        root["verificationReceiptSHA256"] = String(repeating: "b", count: 64)
+        let mutatedData = try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])
+        let mutatedLineage = try JSONDecoder().decode(MotionDraftAuditLineage.self, from: mutatedData)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        let tampered = String(decoding: try encoder.encode(mutatedLineage), as: UTF8.self)
+        try fixture.store.database.writer.write { db in
+            try db.execute(
+                sql: """
+                UPDATE draft_artifact_intents
+                SET audit_metadata_json = ?, audit_metadata_sha256 = ?
+                WHERE id = ?
+                """,
+                arguments: [tampered, sha256(tampered), intent.id]
+            )
+        }
+
+        XCTAssertThrowsError(
+            try fixture.store.draftArtifacts.finalizeIntent(
+                id: intent.id,
+                installedOutput: output
+            )
+        ) { error in
+            XCTAssertEqual(error as? DraftArtifactIntentError, .intentIntegrityInvalid)
+        }
+        XCTAssertEqual(
+            try fixture.store.draftArtifacts.intent(id: intent.id)?.status,
+            DraftArtifactIntentStatus.prepared.rawValue
+        )
+        XCTAssertFalse(
+            try fixture.store.auditEvents.fetchEvents(matterID: fixture.matter.id)
+                .contains { $0.id == "draft-artifact-\(intent.id)" }
+        )
+    }
+
     private struct Fixture {
         let store: SupraStore
         let matter: MatterRecord

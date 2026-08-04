@@ -75,4 +75,62 @@ final class DraftArtifactIntentRepositoryTests: XCTestCase {
         )
         XCTAssertEqual(replacement.status, DraftArtifactIntentStatus.prepared.rawValue)
     }
+
+    func testTDAI04FinalizationRejectsConflictingDeterministicAuditID() throws {
+        let store = try SupraStore.inMemory()
+        let matter = try store.matters.createMatter(name: "Synthetic audit collision matter")
+        let output = Data("# Expected draft\n".utf8)
+        let intent = try store.draftArtifacts.prepareGenericIntent(
+            matterID: matter.id,
+            artifactKind: .customDescription,
+            format: .markdown,
+            fileName: "Audit-collision.md",
+            output: output,
+            id: "synthetic-audit-collision"
+        )
+        var conflicting = try store.draftArtifacts.auditEventPreview(intentID: intent.id)
+        conflicting.summary = "Forged event occupying the deterministic identifier"
+        try store.auditEvents.recordEvent(conflicting)
+
+        XCTAssertThrowsError(
+            try store.draftArtifacts.finalizeIntent(id: intent.id, installedOutput: output)
+        ) { error in
+            XCTAssertEqual(error as? DraftArtifactIntentError, .intentIntegrityInvalid)
+        }
+        XCTAssertEqual(
+            try store.draftArtifacts.intent(id: intent.id)?.status,
+            DraftArtifactIntentStatus.prepared.rawValue
+        )
+        let stored = try XCTUnwrap(
+            store.auditEvents.fetchEvents(matterID: matter.id).first { $0.id == conflicting.id }
+        )
+        XCTAssertEqual(stored.summary, conflicting.summary)
+        XCTAssertNotEqual(stored.summary, "Generated customDescription draft (Audit-collision.md)")
+    }
+
+    func testTDAI05FinalizationRejectsEvenExactPreexistingDeterministicAuditID() throws {
+        let store = try SupraStore.inMemory()
+        let matter = try store.matters.createMatter(name: "Exact audit collision matter")
+        let output = Data("# Expected draft\n".utf8)
+        let intent = try store.draftArtifacts.prepareGenericIntent(
+            matterID: matter.id,
+            artifactKind: .customDescription,
+            format: .markdown,
+            fileName: "Exact-audit-collision.md",
+            output: output,
+            id: "exact-audit-collision"
+        )
+        let exact = try store.draftArtifacts.auditEventPreview(intentID: intent.id)
+        try store.auditEvents.recordEvent(exact)
+
+        XCTAssertThrowsError(
+            try store.draftArtifacts.finalizeIntent(id: intent.id, installedOutput: output)
+        ) { error in
+            XCTAssertEqual(error as? DraftArtifactIntentError, .intentIntegrityInvalid)
+        }
+        XCTAssertEqual(
+            try store.draftArtifacts.intent(id: intent.id)?.status,
+            DraftArtifactIntentStatus.prepared.rawValue
+        )
+    }
 }

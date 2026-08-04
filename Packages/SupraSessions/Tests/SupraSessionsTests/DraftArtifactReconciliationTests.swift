@@ -327,6 +327,96 @@ final class DraftArtifactReconciliationTests: XCTestCase {
         )
     }
 
+    func testTDAR10RelaunchPreservesUnsafeExactWriterTemporaryEntriesForRecovery() throws {
+        let fixture = try makeFixture()
+        let output = Data("# Expected draft\n".utf8)
+        let symlinkIntent = try fixture.store.draftArtifacts.prepareGenericIntent(
+            matterID: fixture.matter.id,
+            artifactKind: .customDescription,
+            format: .markdown,
+            fileName: "Unsafe-temp-link.md",
+            output: output,
+            id: "unsafe-writer-temp-symlink"
+        )
+        let directoryIntent = try fixture.store.draftArtifacts.prepareGenericIntent(
+            matterID: fixture.matter.id,
+            artifactKind: .customDescription,
+            format: .markdown,
+            fileName: "Unsafe-temp-directory.md",
+            output: output,
+            id: "unsafe-writer-temp-directory"
+        )
+        let directory = fixture.storage.exportsDirectory(forMatterID: fixture.matter.id)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let target = fixture.storage.root.appendingPathComponent("unowned-temp-target.md")
+        try output.write(to: target)
+        let symlink = directory.appendingPathComponent(
+            ".\(symlinkIntent.fileName).supra-tmp-2da870c1-72b4-47b8-b4e8-8ebd23525a19"
+        )
+        let nonregular = directory.appendingPathComponent(
+            ".\(directoryIntent.fileName).supra-tmp-bbf231d5-d197-47d5-92ec-78ac7f33e593"
+        )
+        try FileManager.default.createSymbolicLink(at: symlink, withDestinationURL: target)
+        try FileManager.default.createDirectory(at: nonregular, withIntermediateDirectories: false)
+
+        let summary = try DraftArtifactReconciliationService(
+            store: fixture.store,
+            storage: fixture.storage
+        ).reconcilePendingIntents()
+
+        XCTAssertEqual(summary.recoveryRequiredCount, 2)
+        XCTAssertEqual(summary.abortedCount, 0)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: symlink.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: nonregular.path))
+        XCTAssertEqual(try Data(contentsOf: target), output)
+        XCTAssertEqual(
+            try fixture.store.draftArtifacts.intent(id: symlinkIntent.id)?.status,
+            DraftArtifactIntentStatus.recoveryRequired.rawValue
+        )
+        XCTAssertEqual(
+            try fixture.store.draftArtifacts.intent(id: directoryIntent.id)?.status,
+            DraftArtifactIntentStatus.recoveryRequired.rawValue
+        )
+    }
+
+    func testTDAR11ValidatesPreparedRowBeforeAnyFilesystemMutation() throws {
+        let fixture = try makeFixture()
+        let output = Data("# Expected draft\n".utf8)
+        let intent = try fixture.store.draftArtifacts.prepareGenericIntent(
+            matterID: fixture.matter.id,
+            artifactKind: .customDescription,
+            format: .markdown,
+            fileName: "Original.md",
+            output: output,
+            id: "tampered-path-intent"
+        )
+        try fixture.store.database.writer.write { db in
+            try db.execute(
+                sql: "UPDATE draft_artifact_intents SET file_name = ? WHERE id = ?",
+                arguments: ["Tampered.md", intent.id]
+            )
+        }
+        let directory = fixture.storage.exportsDirectory(forMatterID: fixture.matter.id)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let exactTemporary = directory.appendingPathComponent(
+            ".Tampered.md.supra-tmp-92b44b91-8c30-45db-8870-3ab32e0c9797"
+        )
+        try output.write(to: exactTemporary)
+
+        let summary = try DraftArtifactReconciliationService(
+            store: fixture.store,
+            storage: fixture.storage
+        ).reconcilePendingIntents()
+
+        XCTAssertEqual(summary.recoveryRequiredCount, 1)
+        XCTAssertEqual(summary.removedTemporaryFileCount, 0)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: exactTemporary.path))
+        XCTAssertEqual(
+            try fixture.store.draftArtifacts.intent(id: intent.id)?.status,
+            DraftArtifactIntentStatus.recoveryRequired.rawValue
+        )
+    }
+
     private struct Fixture {
         let store: SupraStore
         let matter: MatterRecord
