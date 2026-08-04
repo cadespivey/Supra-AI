@@ -1470,6 +1470,7 @@ public final class MatterDraftingController: ObservableObject {
         case checkpointFailed(String)
         case checkpointFailedAndQuarantined(String, Int32)
         case deletionFailed(String, String)
+        case directorySynchronizationFailed(String)
 
         var errorDescription: String? {
             switch self {
@@ -1491,6 +1492,8 @@ public final class MatterDraftingController: ObservableObject {
                 return "Motion rollback stopped before deletion; the destination was left untouched and the file remains preserved as \(name) (restore errno \(code))."
             case let .deletionFailed(name, detail):
                 return "The verified rollback quarantine \(name) could not be removed: \(detail)."
+            case let .directorySynchronizationFailed(detail):
+                return "The motion rollback was removed, but its directory synchronization failed: \(detail)."
             }
         }
     }
@@ -1535,6 +1538,13 @@ public final class MatterDraftingController: ObservableObject {
         } catch {
             throw MotionCompensationError.deletionFailed(
                 quarantine.lastPathComponent,
+                error.localizedDescription
+            )
+        }
+        do {
+            try fileWriter.synchronizeParentDirectory(of: url)
+        } catch {
+            throw MotionCompensationError.directorySynchronizationFailed(
                 error.localizedDescription
             )
         }

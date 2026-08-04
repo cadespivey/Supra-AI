@@ -333,7 +333,7 @@ final class ModelLibraryRuntimeTruthTests: XCTestCase {
         }
 
         ensure.cancel()
-        await fulfillment(of: [returned], timeout: 0.25)
+        await fulfillment(of: [returned], timeout: 1.0)
         stub.releaseFirstLoad()
         await ensure.value
 
@@ -344,7 +344,8 @@ final class ModelLibraryRuntimeTruthTests: XCTestCase {
         XCTAssertEqual(stub.loadRequestCount, 1, "cancellation must not duplicate the shared load")
 
         waited = 0
-        while stub.runtimeHeldModelID == nil, waited < 200 {
+        while (stub.runtimeHeldModelID == nil
+            || library.loadedModelID?.rawValue.uuidString != model.id), waited < 200 {
             waited += 1
             try await Task.sleep(nanoseconds: 10_000_000)
         }

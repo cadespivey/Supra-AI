@@ -43,6 +43,21 @@ public struct DurableFileWriter: Sendable {
         self.parentDirectorySynchronizer = parentDirectorySynchronizer
     }
 
+    /// Commits a caller-owned namespace change in the same durability domain as
+    /// this writer's installs. Compensation code uses this after removing an
+    /// installed file so it cannot report success before the parent directory
+    /// records the unlink.
+    public func synchronizeParentDirectory(of destination: URL) throws {
+        let standardizedDestination = destination.standardizedFileURL
+        guard standardizedDestination.isFileURL,
+              !standardizedDestination.lastPathComponent.isEmpty else {
+            throw WriterError.invalidDestination
+        }
+        try parentDirectorySynchronizer(
+            standardizedDestination.deletingLastPathComponent()
+        )
+    }
+
     /// Convenience for a complete in-memory payload.
     public func write(
         _ data: Data,

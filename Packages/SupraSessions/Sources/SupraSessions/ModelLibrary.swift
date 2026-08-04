@@ -505,7 +505,12 @@ public final class ModelLibrary: ObservableObject {
         // read the model directory. Hold any security scope until the load RPC
         // returns (the multi-GB read happens service-side during that call).
         var scopedAccess: SecurityScopedModelAccess?
-        defer { scopedAccess?.release() }
+        var scopedAccessTransferred = false
+        defer {
+            if !scopedAccessTransferred {
+                scopedAccess?.release()
+            }
+        }
 
         let modelBookmark: Data?
         let managedRootPath: String?
@@ -567,18 +572,29 @@ public final class ModelLibrary: ObservableObject {
             modelDirectoryIdentity: directoryIdentity
         )
 
-        do {
-            let response = try await runtimeClient.loadModel(request)
-            switch response.status {
-            case .loaded:
-                loadState = .loaded(modelID: record.id)
-                logLoadTiming(modelName: record.displayName, modelID: record.id, metrics: response.metrics)
-            case .failed:
-                loadState = .failed(message: Self.failureMessage(response.error))
+        let retainedScopedAccess = scopedAccess
+        scopedAccessTransferred = true
+        Task { @MainActor [weak self, retainedScopedAccess] in
+            defer { retainedScopedAccess?.release() }
+            guard let self else { return }
+            do {
+                let response = try await runtimeClient.loadModel(request)
+                switch response.status {
+                case .loaded:
+                    loadState = .loaded(modelID: record.id)
+                    logLoadTiming(
+                        modelName: record.displayName,
+                        modelID: record.id,
+                        metrics: response.metrics
+                    )
+                case .failed:
+                    loadState = .failed(message: Self.failureMessage(response.error))
+                }
+            } catch {
+                loadState = .failed(message: error.localizedDescription)
             }
-        } catch {
-            loadState = .failed(message: error.localizedDescription)
         }
+        _ = await settleInFlightLoad()
     }
 
     /// Records a load's duration as a `performance` diagnostic so the Diagnostics tab
