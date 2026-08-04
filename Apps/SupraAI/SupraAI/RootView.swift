@@ -100,8 +100,9 @@ struct RootView: View {
         let summary = environment.remediationRecoverySummary
         let outputs = summary.pendingByKind[.legacyStructuredOutput, default: 0]
         let drafts = summary.pendingByKind[.legacyDraftArtifact, default: 0]
+        let interruptedDrafts = summary.pendingByKind[.interruptedDraftArtifact, default: 0]
         let billing = summary.pendingByKind[.multiMatterBillingDraft, default: 0]
-        return "A security update changed how generated work is verified. \(outputs) saved output(s), \(drafts) draft artifact(s), and \(billing) multi-matter billing draft(s) need review. Nothing was deleted. Affected screens identify the item and provide reverify, regenerate, or confirmation actions."
+        return "A security update changed how generated work is verified. \(outputs) saved output(s), \(drafts) legacy draft artifact(s), \(interruptedDrafts) interrupted draft publication(s), and \(billing) multi-matter billing draft(s) need review. Nothing was deleted. Affected screens identify the item and provide reverify, regenerate, or confirmation actions."
     }
 }
 

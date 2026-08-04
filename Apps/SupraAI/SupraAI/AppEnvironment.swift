@@ -124,6 +124,7 @@ final class AppEnvironment: ObservableObject {
     let documentSetupController: DocumentIntelligenceSetupController
     let embeddingDownloadController: EmbeddingModelDownloadController
     let documentQueue: DocumentProcessingQueue
+    private let draftArtifactReconciler: DraftArtifactReconciliationService
 
     private let runtimeStatusController: RuntimeStatusController
     private let runtimeClient: RuntimeClient
@@ -324,6 +325,11 @@ final class AppEnvironment: ObservableObject {
         } else {
             draftingStorage = nil
         }
+        let effectiveDraftingStorage = draftingStorage ?? documentStorage
+        self.draftArtifactReconciler = DraftArtifactReconciliationService(
+            store: store,
+            storage: effectiveDraftingStorage
+        )
         let beforeMotionPersistence: MatterDraftingController.AsyncDraftCheckpoint?
         if Self.isUITestMode,
            ProcessInfo.processInfo.arguments.contains("-uiTestMotionDraftDelayed") {
@@ -464,6 +470,12 @@ final class AppEnvironment: ObservableObject {
         // Reconcile any validation run abandoned by a previous quit/crash so it
         // surfaces as cancelled rather than lingering as in-progress.
         try? store.validation.markUnfinishedRunsCancelled()
+        // Complete or surface a publication interrupted after its durable
+        // intent was recorded. Recovery/fallback launches are intentionally
+        // read-only with respect to the user's normal managed storage.
+        if !usingFallbackStore, databaseRecoveryState == nil {
+            _ = try? draftArtifactReconciler.reconcilePendingIntents()
+        }
         remediationRecoverySummary = (try? store.remediationRecovery.summary())
             ?? RemediationRecoverySummary(pendingCount: 0, pendingByKind: [:])
         modelLibrary.refresh()

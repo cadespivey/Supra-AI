@@ -1036,6 +1036,81 @@ final class MotionToDismissControllerTests: XCTestCase {
         XCTAssertEqual(authorityLoads, 2, "generation preflight must refresh authorities")
     }
 
+    // T-MTD-35: a crash-relaunch path must revalidate the motion snapshot, not
+    // merely recognize exact DOCX bytes. A drifted source preserves the public
+    // file for recovery and never receives a success audit.
+    func testTMTD35RelaunchPreservesExactMotionWhenSavedSourceSnapshotDrifted() async throws {
+        let fixture = try makeFixture()
+        let controller = MatterDraftingController(
+            store: fixture.store,
+            storage: fixture.storage,
+            fileStampProvider: { "reconcile-source" }
+        )
+        let generated = try successArtifact(
+            await controller.draft(.motionToDismiss(fixture.selectedInput), matterID: fixture.matterID)
+        )
+        let output = try Data(contentsOf: generated.fileURL)
+        let baselineAuditCount = try fixture.store.auditEvents.fetchEvents(matterID: fixture.matterID)
+            .filter { $0.eventType == "draft_generated" }.count
+        let snapshot = try fixture.store.draftingSources.captureMotionSnapshot(
+            snapshotRequest(for: fixture)
+        )
+        let intent = try fixture.store.draftArtifacts.prepareMotionIntent(
+            snapshot: snapshot,
+            fileName: "Motion-to-Dismiss-interrupted.docx",
+            output: output,
+            auditInput: MotionDraftAuditInput(
+                canonicalRequest: Data("canonical interrupted request".utf8),
+                canonicalCaption: Data("canonical interrupted caption".utf8),
+                canonicalEffectiveStyle: Data("canonical interrupted style".utf8),
+                groundContractIdentity: DraftArtifactIntentRepository.motionGroundContractIdentity,
+                assemblerIdentity: DraftArtifactIntentRepository.motionAssemblerIdentity,
+                verificationReceipt: MotionDraftVerificationReceiptInput(
+                    status: .passed,
+                    scope: .motionSelectedSourceReproductionAndStructure,
+                    supportedPropositionIDs:
+                        snapshot.facts.map { "motion.fact.\($0.chunkID)" }
+                        + snapshot.authorities.map { "motion.authority.\($0.authorityID)" },
+                    verifierIdentity: DraftArtifactIntentRepository.motionVerifierIdentity,
+                    gateIdentity: DraftArtifactIntentRepository.motionGateIdentity,
+                    rendererIdentity: DraftArtifactIntentRepository.motionRendererIdentity
+                )
+            ),
+            id: "interrupted-motion-source-drift"
+        )
+        let publicURL = fixture.storage.exportsDirectory(forMatterID: fixture.matterID)
+            .appendingPathComponent(intent.fileName)
+        try DurableFileWriter().writeNew(output, to: publicURL) {
+            try DocumentExportValidator.validate($0, as: .docx)
+        }
+        var changedProfile = completeProfile()
+        changedProfile.organization = "Changed Before Relaunch LLP"
+        try fixture.store.appSettings.setSetting(AssistantProfile.profileKey, value: changedProfile)
+
+        let summary = try DraftArtifactReconciliationService(
+            store: fixture.store,
+            storage: fixture.storage
+        ).reconcilePendingIntents()
+
+        XCTAssertEqual(summary.recoveryRequiredCount, 1)
+        XCTAssertEqual(try Data(contentsOf: publicURL), output)
+        XCTAssertEqual(
+            try fixture.store.draftArtifacts.intent(id: intent.id)?.status,
+            DraftArtifactIntentStatus.recoveryRequired.rawValue
+        )
+        XCTAssertEqual(
+            try fixture.store.auditEvents.fetchEvents(matterID: fixture.matterID)
+                .filter { $0.eventType == "draft_generated" }.count,
+            baselineAuditCount
+        )
+        XCTAssertNotNil(
+            try fixture.store.remediationRecovery.pendingItem(
+                kind: .interruptedDraftArtifact,
+                relatedID: intent.id
+            )
+        )
+    }
+
     // MARK: - Fixtures
 
     private struct IndexedFact {

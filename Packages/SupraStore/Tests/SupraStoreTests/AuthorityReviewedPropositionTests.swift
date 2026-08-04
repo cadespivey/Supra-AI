@@ -70,7 +70,7 @@ final class AuthorityReviewedPropositionTests: XCTestCase {
         try migrator.migrate(queue)
 
         try queue.read { db in
-            XCTAssertEqual(try appliedMigrations(db).last, "v070_add_authority_reviewed_proposition")
+            XCTAssertEqual(try appliedMigrations(db).last, "v071_create_draft_artifact_intents")
             let column = try XCTUnwrap(db.columns(in: "authorities").first {
                 $0.name == "reviewed_proposition_json"
             })

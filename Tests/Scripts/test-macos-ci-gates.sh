@@ -517,6 +517,18 @@ fi
 # ordinary launch flags. They must require the hermetic XCUITest launch and keep
 # their artifacts out of the user's managed model directory.
 app_environment="${repo_root}/Apps/SupraAI/SupraAI/AppEnvironment.swift"
+bootstrap_body="$(sed -n '/^    func bootstrap() async {/,/^    }/p' "$app_environment")"
+reconcile_line="$(grep -nF '_ = try? draftArtifactReconciler.reconcilePendingIntents()' <<<"$bootstrap_body" | cut -d: -f1 || true)"
+remediation_line="$(grep -nF 'remediationRecoverySummary = (try? store.remediationRecovery.summary())' <<<"$bootstrap_body" | cut -d: -f1 || true)"
+if grep -Fq 'let effectiveDraftingStorage = draftingStorage ?? documentStorage' "$app_environment" \
+    && grep -Fq 'storage: effectiveDraftingStorage' "$app_environment" \
+    && grep -Fq 'if !usingFallbackStore, databaseRecoveryState == nil {' <<<"$bootstrap_body" \
+    && [[ -n "$reconcile_line" && -n "$remediation_line" && "$reconcile_line" -lt "$remediation_line" ]]; then
+  printf '%s\n' 'PASS: shipping bootstrap reconciles draft artifact intents before remediation UI'
+else
+  record_failure 'shipping bootstrap does not safely reconcile draft artifact intents before remediation UI'
+fi
+
 if grep -Eq 'guidedQAUITestAuthorized[[:space:]]*=[[:space:]]*Self\.isUITestMode[[:space:]]*&&' "$app_environment" \
     && grep -Fq 'guidedQAUITestAuthorized ? GuidedQAUITestRuntimeClient() : runtimeClient' "$app_environment"; then
   printf '%s\n' 'PASS: guided Q&A synthetic runtime requires hermetic UI-test authority'

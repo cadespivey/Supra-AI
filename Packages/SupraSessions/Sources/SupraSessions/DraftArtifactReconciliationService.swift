@@ -8,17 +8,20 @@ public struct DraftArtifactReconciliationSummary: Sendable, Equatable {
     public var abortedCount: Int
     public var recoveryRequiredCount: Int
     public var removedTemporaryFileCount: Int
+    public var removedRollbackQuarantineCount: Int
 
     public init(
         finalizedCount: Int = 0,
         abortedCount: Int = 0,
         recoveryRequiredCount: Int = 0,
-        removedTemporaryFileCount: Int = 0
+        removedTemporaryFileCount: Int = 0,
+        removedRollbackQuarantineCount: Int = 0
     ) {
         self.finalizedCount = finalizedCount
         self.abortedCount = abortedCount
         self.recoveryRequiredCount = recoveryRequiredCount
         self.removedTemporaryFileCount = removedTemporaryFileCount
+        self.removedRollbackQuarantineCount = removedRollbackQuarantineCount
     }
 }
 
@@ -63,6 +66,26 @@ public final class DraftArtifactReconciliationService: @unchecked Sendable {
             do {
                 let removed = try removeOwnedTemporaryFiles(for: intent, publicURL: publicURL)
                 summary.removedTemporaryFileCount += removed
+            } catch {
+                try requireRecovery(intent.id)
+                summary.recoveryRequiredCount += 1
+                continue
+            }
+
+            do {
+                switch try reconcileRollbackQuarantine(for: intent, publicURL: publicURL) {
+                case .none:
+                    break
+                case .removedOwned:
+                    try store.draftArtifacts.abortIntent(id: intent.id)
+                    summary.removedRollbackQuarantineCount += 1
+                    summary.abortedCount += 1
+                    continue
+                case .recoveryRequired:
+                    try requireRecovery(intent.id)
+                    summary.recoveryRequiredCount += 1
+                    continue
+                }
             } catch {
                 try requireRecovery(intent.id)
                 summary.recoveryRequiredCount += 1
@@ -129,6 +152,11 @@ public final class DraftArtifactReconciliationService: @unchecked Sendable {
         }
         var removed = 0
         for entry in entries where entry.lastPathComponent.hasPrefix(prefix) {
+            let suffix = String(entry.lastPathComponent.dropFirst(prefix.count))
+            guard let identifier = UUID(uuidString: suffix),
+                  identifier.uuidString.caseInsensitiveCompare(suffix) == .orderedSame else {
+                continue
+            }
             let values = try entry.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
             guard values.isRegularFile == true, values.isSymbolicLink != true else { continue }
             try fileManager.removeItem(at: entry)
@@ -140,7 +168,83 @@ public final class DraftArtifactReconciliationService: @unchecked Sendable {
         return removed
     }
 
-    private enum RegularFileState {
+    private enum RollbackReconciliation {
+        case none
+        case removedOwned
+        case recoveryRequired
+    }
+
+    private func reconcileRollbackQuarantine(
+        for intent: DraftArtifactIntentRecord,
+        publicURL: URL
+    ) throws -> RollbackReconciliation {
+        let directory = publicURL.deletingLastPathComponent()
+        let entries: [URL]
+        do {
+            entries = try fileManager.contentsOfDirectory(
+                at: directory,
+                includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey],
+                options: []
+            )
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
+            return .none
+        }
+        let candidates = entries.filter {
+            Self.isExactRollbackQuarantineName(
+                $0.lastPathComponent,
+                fileName: intent.fileName
+            )
+        }
+        guard !candidates.isEmpty else { return .none }
+        guard candidates.count == 1,
+              Self.regularFileState(at: publicURL) == .missing else {
+            return .recoveryRequired
+        }
+        let candidate = candidates[0]
+        let values = try candidate.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+        guard values.isRegularFile == true, values.isSymbolicLink != true else {
+            return .recoveryRequired
+        }
+        let beforeValidation = try Data(contentsOf: candidate, options: .mappedIfSafe)
+        guard beforeValidation.count == intent.outputByteSize,
+              DocumentStorage.sha256Hex(of: beforeValidation) == intent.outputSHA256 else {
+            return .recoveryRequired
+        }
+        do {
+            try DocumentExportValidator.validate(
+                candidate,
+                as: try Self.exportFormat(intent.format)
+            )
+        } catch {
+            return .recoveryRequired
+        }
+        let afterValidation = try Data(contentsOf: candidate, options: .mappedIfSafe)
+        guard afterValidation == beforeValidation else { return .recoveryRequired }
+        try fileManager.removeItem(at: candidate)
+        try fileWriter.synchronizeParentDirectory(of: publicURL)
+        return .removedOwned
+    }
+
+    private static func isExactRollbackQuarantineName(
+        _ candidate: String,
+        fileName: String
+    ) -> Bool {
+        let prefix = ".supra-draft-rollback-"
+        guard candidate.hasPrefix(prefix) else { return false }
+        let remainder = String(candidate.dropFirst(prefix.count))
+        guard remainder.count > 37 else { return false }
+        let identifierText = String(remainder.prefix(36))
+        let separatorIndex = remainder.index(remainder.startIndex, offsetBy: 36)
+        guard remainder[separatorIndex] == "-",
+              String(remainder.dropFirst(37)) == fileName,
+              let identifier = UUID(uuidString: identifierText),
+              identifier.uuidString.caseInsensitiveCompare(identifierText) == .orderedSame else {
+            return false
+        }
+        return true
+    }
+
+    private enum RegularFileState: Equatable {
         case missing
         case regular
         case unsafeOrUnreadable
@@ -184,7 +288,34 @@ public final class DraftArtifactReconciliationService: @unchecked Sendable {
         let expected = storage.exportsDirectory(forMatterID: matterID)
             .appendingPathComponent(fileName, isDirectory: false)
             .standardizedFileURL
-        return url.standardizedFileURL == expected
+        guard url.standardizedFileURL == expected else { return false }
+        return safeManagedParents(
+            root: storage.root.standardizedFileURL,
+            parent: expected.deletingLastPathComponent()
+        )
+    }
+
+    private static func safeManagedParents(root: URL, parent: URL) -> Bool {
+        let rootPath = root.path
+        let parentPath = parent.path
+        guard parentPath == rootPath || parentPath.hasPrefix(rootPath + "/") else { return false }
+        let relative = String(parentPath.dropFirst(rootPath.count))
+            .split(separator: "/")
+            .map(String.init)
+        var candidate = root
+        for component in [""] + relative {
+            if !component.isEmpty {
+                candidate.appendPathComponent(component, isDirectory: true)
+            }
+            var information = stat()
+            let result = candidate.path.withCString { lstat($0, &information) }
+            if result != 0 {
+                if errno == ENOENT { continue }
+                return false
+            }
+            guard information.st_mode & S_IFMT == S_IFDIR else { return false }
+        }
+        return true
     }
 
     private enum ReconciliationError: Error {

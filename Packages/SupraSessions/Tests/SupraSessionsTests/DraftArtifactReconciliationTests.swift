@@ -109,9 +109,12 @@ final class DraftArtifactReconciliationTests: XCTestCase {
         )
         let directory = fixture.storage.exportsDirectory(forMatterID: fixture.matter.id)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let ownedTemporary = directory.appendingPathComponent(".Missing.md.supra-tmp-owned")
+        let temporaryUUID = "92B44B91-8C30-45DB-8870-3AB32E0C9797"
+        let ownedTemporary = directory.appendingPathComponent(".Missing.md.supra-tmp-\(temporaryUUID)")
+        let samePrefixNearMatch = directory.appendingPathComponent(".Missing.md.supra-tmp-user-notes")
         let unrelatedTemporary = directory.appendingPathComponent(".Other.md.supra-tmp-unrelated")
         try output.write(to: ownedTemporary)
+        try output.write(to: samePrefixNearMatch)
         try output.write(to: unrelatedTemporary)
 
         let summary = try DraftArtifactReconciliationService(
@@ -122,10 +125,18 @@ final class DraftArtifactReconciliationTests: XCTestCase {
         XCTAssertEqual(summary.removedTemporaryFileCount, 1)
         XCTAssertEqual(summary.abortedCount, 1)
         XCTAssertFalse(FileManager.default.fileExists(atPath: ownedTemporary.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: samePrefixNearMatch.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: unrelatedTemporary.path))
         XCTAssertEqual(
             try fixture.store.draftArtifacts.intent(id: intent.id)?.status,
             DraftArtifactIntentStatus.aborted.rawValue
+        )
+        XCTAssertTrue(try fixture.store.auditEvents.fetchEvents(matterID: fixture.matter.id).isEmpty)
+        XCTAssertNil(
+            try fixture.store.remediationRecovery.pendingItem(
+                kind: .interruptedDraftArtifact,
+                relatedID: intent.id
+            )
         )
     }
 
@@ -156,6 +167,164 @@ final class DraftArtifactReconciliationTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: publicURL.path))
         XCTAssertEqual(try Data(contentsOf: target), output)
         XCTAssertTrue(try fixture.store.auditEvents.fetchEvents(matterID: fixture.matter.id).isEmpty)
+    }
+
+    func testTDAR06RelaunchAbortsMissingPublicationWithoutFalseRecovery() throws {
+        let fixture = try makeFixture()
+        let intent = try fixture.store.draftArtifacts.prepareGenericIntent(
+            matterID: fixture.matter.id,
+            artifactKind: .customDescription,
+            format: .markdown,
+            fileName: "Never-installed.md",
+            output: Data("# Never installed\n".utf8),
+            id: "interrupted-no-public-file"
+        )
+
+        let summary = try DraftArtifactReconciliationService(
+            store: fixture.store,
+            storage: fixture.storage
+        ).reconcilePendingIntents()
+
+        XCTAssertEqual(summary.abortedCount, 1)
+        XCTAssertEqual(summary.recoveryRequiredCount, 0)
+        XCTAssertEqual(
+            try fixture.store.draftArtifacts.intent(id: intent.id)?.status,
+            DraftArtifactIntentStatus.aborted.rawValue
+        )
+        XCTAssertTrue(try fixture.store.auditEvents.fetchEvents(matterID: fixture.matter.id).isEmpty)
+        XCTAssertNil(
+            try fixture.store.remediationRecovery.pendingItem(
+                kind: .interruptedDraftArtifact,
+                relatedID: intent.id
+            )
+        )
+    }
+
+    func testTDAR07RelaunchRejectsSymlinkedManagedParentWithoutTouchingTarget() throws {
+        let fixture = try makeFixture()
+        let output = Data("# Outside managed root\n".utf8)
+        let intent = try fixture.store.draftArtifacts.prepareGenericIntent(
+            matterID: fixture.matter.id,
+            artifactKind: .customDescription,
+            format: .markdown,
+            fileName: "Redirected.md",
+            output: output,
+            id: "interrupted-parent-symlink"
+        )
+        let external = fixture.storage.root.deletingLastPathComponent()
+            .appendingPathComponent("supra-unowned-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: external) }
+        try FileManager.default.createDirectory(
+            at: external.appendingPathComponent(fixture.matter.id, isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(at: fixture.storage.root, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(
+            at: fixture.storage.exportsDirectory,
+            withDestinationURL: external
+        )
+        let redirectedPublic = external
+            .appendingPathComponent(fixture.matter.id, isDirectory: true)
+            .appendingPathComponent(intent.fileName)
+        try output.write(to: redirectedPublic)
+
+        let summary = try DraftArtifactReconciliationService(
+            store: fixture.store,
+            storage: fixture.storage
+        ).reconcilePendingIntents()
+
+        XCTAssertEqual(summary.recoveryRequiredCount, 1)
+        XCTAssertEqual(try Data(contentsOf: redirectedPublic), output)
+        XCTAssertTrue(try fixture.store.auditEvents.fetchEvents(matterID: fixture.matter.id).isEmpty)
+    }
+
+    func testTDAR08RelaunchRemovesOnlyExactOwnedRollbackQuarantine() throws {
+        let fixture = try makeFixture()
+        let output = Data("# Quarantined owned draft\n".utf8)
+        let intent = try fixture.store.draftArtifacts.prepareGenericIntent(
+            matterID: fixture.matter.id,
+            artifactKind: .customDescription,
+            format: .markdown,
+            fileName: "Quarantined.md",
+            output: output,
+            id: "interrupted-owned-quarantine"
+        )
+        let directory = fixture.storage.exportsDirectory(forMatterID: fixture.matter.id)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let identifier = "2da870c1-72b4-47b8-b4e8-8ebd23525a19"
+        let exact = directory.appendingPathComponent(
+            ".supra-draft-rollback-\(identifier)-\(intent.fileName)"
+        )
+        let nonUUID = directory.appendingPathComponent(
+            ".supra-draft-rollback-user-notes-\(intent.fileName)"
+        )
+        let malformedNearMatch = directory.appendingPathComponent(
+            ".supra-draft-rollback-\(identifier)-\(intent.fileName)-notes"
+        )
+        try output.write(to: exact)
+        try output.write(to: nonUUID)
+        try output.write(to: malformedNearMatch)
+
+        let summary = try DraftArtifactReconciliationService(
+            store: fixture.store,
+            storage: fixture.storage
+        ).reconcilePendingIntents()
+
+        XCTAssertEqual(summary.removedRollbackQuarantineCount, 1)
+        XCTAssertEqual(summary.abortedCount, 1)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: exact.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: nonUUID.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: malformedNearMatch.path))
+        XCTAssertEqual(
+            try fixture.store.draftArtifacts.intent(id: intent.id)?.status,
+            DraftArtifactIntentStatus.aborted.rawValue
+        )
+        XCTAssertTrue(try fixture.store.auditEvents.fetchEvents(matterID: fixture.matter.id).isEmpty)
+        XCTAssertNil(
+            try fixture.store.remediationRecovery.pendingItem(
+                kind: .interruptedDraftArtifact,
+                relatedID: intent.id
+            )
+        )
+    }
+
+    func testTDAR09RelaunchPreservesMismatchedExactRollbackQuarantineForRecovery() throws {
+        let fixture = try makeFixture()
+        let expected = Data("# Expected owned draft\n".utf8)
+        let mismatched = Data("# Changed quarantine\n".utf8)
+        let intent = try fixture.store.draftArtifacts.prepareGenericIntent(
+            matterID: fixture.matter.id,
+            artifactKind: .customDescription,
+            format: .markdown,
+            fileName: "Changed-quarantine.md",
+            output: expected,
+            id: "interrupted-changed-quarantine"
+        )
+        let directory = fixture.storage.exportsDirectory(forMatterID: fixture.matter.id)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let quarantine = directory.appendingPathComponent(
+            ".supra-draft-rollback-bbf231d5-d197-47d5-92ec-78ac7f33e593-\(intent.fileName)"
+        )
+        try mismatched.write(to: quarantine)
+
+        let summary = try DraftArtifactReconciliationService(
+            store: fixture.store,
+            storage: fixture.storage
+        ).reconcilePendingIntents()
+
+        XCTAssertEqual(summary.recoveryRequiredCount, 1)
+        XCTAssertEqual(try Data(contentsOf: quarantine), mismatched)
+        XCTAssertEqual(
+            try fixture.store.draftArtifacts.intent(id: intent.id)?.status,
+            DraftArtifactIntentStatus.recoveryRequired.rawValue
+        )
+        XCTAssertTrue(try fixture.store.auditEvents.fetchEvents(matterID: fixture.matter.id).isEmpty)
+        XCTAssertNotNil(
+            try fixture.store.remediationRecovery.pendingItem(
+                kind: .interruptedDraftArtifact,
+                relatedID: intent.id
+            )
+        )
     }
 
     private struct Fixture {

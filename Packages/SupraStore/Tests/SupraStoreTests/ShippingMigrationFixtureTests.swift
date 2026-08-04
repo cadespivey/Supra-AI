@@ -192,7 +192,7 @@ final class ShippingMigrationFixtureTests: XCTestCase {
 
         try migrator.migrate(queue)
         try queue.read { db in
-            XCTAssertEqual(try appliedMigrations(db).last, "v070_add_authority_reviewed_proposition")
+            XCTAssertEqual(try appliedMigrations(db).last, "v071_create_draft_artifact_intents")
             XCTAssertEqual(try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM document_import_sources"), 0)
         }
     }
