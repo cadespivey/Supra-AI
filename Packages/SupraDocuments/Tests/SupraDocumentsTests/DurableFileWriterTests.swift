@@ -405,6 +405,65 @@ final class DurableFileWriterTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: quarantine), foreignBytes)
     }
 
+    // The descriptor-origin inode, not a replacement first observed after the
+    // validation checkpoint, is the only entry this write may install.
+    func testACRFILE015BeforeValidationReplacementIsNeverAcceptedForInstall() throws {
+        try assertContainedWriteRejectsTemporaryReplacement(at: .beforeValidation)
+    }
+
+    // The final install checkpoint is also an untrusted namespace window. The
+    // writer must bind the source again immediately before the atomic rename.
+    func testACRFILE016BeforeInstallReplacementIsNeverAcceptedForInstall() throws {
+        try assertContainedWriteRejectsTemporaryReplacement(at: .beforeInstall)
+    }
+
+    private func assertContainedWriteRejectsTemporaryReplacement(
+        at replacementStage: DurableFileWriter.FaultStage
+    ) throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let parent = root
+            .appendingPathComponent("exports", isDirectory: true)
+            .appendingPathComponent("matter-123", isDirectory: true)
+        let destination = parent.appendingPathComponent("motion.docx")
+        let preservedOwned = root.appendingPathComponent(
+            "preserved-owned-\(replacementStage.rawValue).docx"
+        )
+        let ownedBytes = Data("writer-owned-origin-\(replacementStage.rawValue)".utf8)
+        let foreignBytes = Data("foreign-replacement-\(replacementStage.rawValue)".utf8)
+        let writer = DurableFileWriter { observedStage in
+            guard observedStage == replacementStage else { return }
+            let artifacts = try FileManager.default.contentsOfDirectory(
+                at: parent,
+                includingPropertiesForKeys: nil
+            ).filter { $0.lastPathComponent.contains(".supra-tmp-") }
+            guard let temporary = artifacts.first else {
+                throw InjectedTemporaryMutationFailure.missingTemporary
+            }
+            try FileManager.default.moveItem(at: temporary, to: preservedOwned)
+            try foreignBytes.write(to: temporary)
+        }
+
+        XCTAssertThrowsError(
+            try writer.writeNewOwned(
+                ownedBytes,
+                to: destination,
+                containedIn: root,
+                validator: { _ in }
+            )
+        ) { error in
+            guard case .unsafeManagedParent = error as? DurableFileWriter.WriterError else {
+                return XCTFail("Expected unsafe managed-parent failure, got \(error)")
+            }
+        }
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
+        XCTAssertEqual(try Data(contentsOf: preservedOwned), ownedBytes)
+        let replacements = try temporaryArtifacts(in: parent)
+        XCTAssertEqual(replacements.count, 1)
+        XCTAssertEqual(try Data(contentsOf: XCTUnwrap(replacements.first)), foreignBytes)
+    }
+
     private func temporaryDirectory() throws -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("Supra-DurableFileWriter-\(UUID().uuidString)", isDirectory: true)
