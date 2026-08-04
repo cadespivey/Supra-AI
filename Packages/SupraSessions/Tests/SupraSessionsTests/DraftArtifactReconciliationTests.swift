@@ -96,6 +96,68 @@ final class DraftArtifactReconciliationTests: XCTestCase {
         XCTAssertTrue(try fixture.store.auditEvents.fetchEvents(matterID: fixture.matter.id).isEmpty)
     }
 
+    func testTDAR04RelaunchCleansOnlyOwnedTemporaryAndAbortsMissingPublication() throws {
+        let fixture = try makeFixture()
+        let output = Data("# Never installed\n".utf8)
+        let intent = try fixture.store.draftArtifacts.prepareGenericIntent(
+            matterID: fixture.matter.id,
+            artifactKind: .customDescription,
+            format: .markdown,
+            fileName: "Missing.md",
+            output: output,
+            id: "interrupted-missing"
+        )
+        let directory = fixture.storage.exportsDirectory(forMatterID: fixture.matter.id)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let ownedTemporary = directory.appendingPathComponent(".Missing.md.supra-tmp-owned")
+        let unrelatedTemporary = directory.appendingPathComponent(".Other.md.supra-tmp-unrelated")
+        try output.write(to: ownedTemporary)
+        try output.write(to: unrelatedTemporary)
+
+        let summary = try DraftArtifactReconciliationService(
+            store: fixture.store,
+            storage: fixture.storage
+        ).reconcilePendingIntents()
+
+        XCTAssertEqual(summary.removedTemporaryFileCount, 1)
+        XCTAssertEqual(summary.abortedCount, 1)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: ownedTemporary.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: unrelatedTemporary.path))
+        XCTAssertEqual(
+            try fixture.store.draftArtifacts.intent(id: intent.id)?.status,
+            DraftArtifactIntentStatus.aborted.rawValue
+        )
+    }
+
+    func testTDAR05RelaunchNeverFollowsOrDeletesPublicSymlink() throws {
+        let fixture = try makeFixture()
+        let output = Data("# Expected artifact\n".utf8)
+        let intent = try fixture.store.draftArtifacts.prepareGenericIntent(
+            matterID: fixture.matter.id,
+            artifactKind: .customDescription,
+            format: .markdown,
+            fileName: "Unsafe-link.md",
+            output: output,
+            id: "interrupted-symlink"
+        )
+        let directory = fixture.storage.exportsDirectory(forMatterID: fixture.matter.id)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let target = fixture.storage.root.appendingPathComponent("unowned-target.md")
+        let publicURL = directory.appendingPathComponent(intent.fileName)
+        try output.write(to: target)
+        try FileManager.default.createSymbolicLink(at: publicURL, withDestinationURL: target)
+
+        let summary = try DraftArtifactReconciliationService(
+            store: fixture.store,
+            storage: fixture.storage
+        ).reconcilePendingIntents()
+
+        XCTAssertEqual(summary.recoveryRequiredCount, 1)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: publicURL.path))
+        XCTAssertEqual(try Data(contentsOf: target), output)
+        XCTAssertTrue(try fixture.store.auditEvents.fetchEvents(matterID: fixture.matter.id).isEmpty)
+    }
+
     private struct Fixture {
         let store: SupraStore
         let matter: MatterRecord
