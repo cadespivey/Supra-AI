@@ -601,6 +601,13 @@ else
   record_failure 'interactive motion readiness rescans sources or generation does not refresh them'
 fi
 
+motion_on_appear="$(sed -n '/\.onAppear {/,/^        }/p' "$motion_view")"
+if grep -Fq 'if selection == .kind(.motionToDismiss) { loadMotionSourcesIfNeeded() }' <<<"$motion_on_appear"; then
+  printf '%s\n' 'PASS: default non-motion drafting appearance performs no motion source load'
+else
+  record_failure 'default non-motion drafting appearance still loads motion sources'
+fi
+
 motion_launch_helper="$(sed -n '/private func launchMotionApp(/,/^    }/p' "$motion_ui_tests")"
 if grep -Fq -- '-uiTestSelectFirstMatter' <<<"$motion_launch_helper" \
     || grep -Fq -- '-uiTestOpenDraftSheet' <<<"$motion_launch_helper" \
