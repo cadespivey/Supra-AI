@@ -612,7 +612,7 @@ motion_claims="${repo_root}/Docs/Verified-Product-Claims.yml"
 if grep -Fq 'is reproduced for counsel’s analysis under the reviewed pleading standards' "$motion_core" \
     && ! grep -Fq 'does not plead the ultimate facts necessary to state a legally sufficient claim' "$motion_core" \
     && grep -Fq 'It does not decide fact-to-ground applicability, legal sufficiency, or filing readiness.' "$motion_view" \
-    && grep -Fq 'For the supported motion, the gate verifies required structure and exact selected-source reproduction; it does not determine fact-to-ground applicability, legal sufficiency, or filing readiness.' "$motion_claims"; then
+    && grep -Fq 'For the supported motion, the gate checks required structure and exact selected-source reproduction; it does not determine fact-to-ground applicability, legal sufficiency, or filing readiness.' "$motion_claims"; then
   printf '%s\n' 'PASS: motion verification stays scoped to structure and selected-source reproduction'
 else
   record_failure 'motion verification copy overstates applicability, legal sufficiency, or filing readiness'

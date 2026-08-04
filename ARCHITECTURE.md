@@ -271,6 +271,7 @@ repository:
   persisted ledger. Resume and discard consume that ledger directly: resume
   reopens top-level bookmarks and the durable target-folder identity, while
   discard terminalizes only unfinished rows.
+- Draft publication first persists a Store-owned prepared intent before public installation. Finalization binds the exact installed bytes and allow-listed output format—and, for the supported motion, a fresh source snapshot—to the audit and terminal intent state in one transaction; relaunch finalizes only authenticated exact files and preserves uncertain public files for explicit recovery.
 - Document semantic readiness is derived from complete chunk-vector coverage for
   the active embedding model, not the document's generic `ready` string alone.
   Model switches enqueue semantic-only work that reuses current chunks and keeps
