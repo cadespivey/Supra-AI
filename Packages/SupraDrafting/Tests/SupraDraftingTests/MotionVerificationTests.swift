@@ -300,6 +300,23 @@ final class MotionVerificationTests: XCTestCase {
         }
     }
 
+    // MVS-12. Expected RED: uncited prose and headings outside the supported
+    // one-ground body shape are not citation-shaped, so the old verifier lets
+    // them reach the renderer without any selected-source binding.
+    func testUncitedProseAndStructuralMutationNeverReachRenderer() async {
+        var extraParagraph = validModel()
+        extraParagraph.body.insert(
+            .paragraph("The fictional pleading admits every element of the claim."),
+            at: 1
+        )
+        var extraHeading = validModel()
+        extraHeading.body.insert(.sectionHeading("ADDITIONAL ARGUMENT"), at: 4)
+
+        for model in [extraParagraph, extraHeading] {
+            await assertBlocked(model: model, evidence: evidence)
+        }
+    }
+
     private func validModel(
         numberedFacts: [String]? = nil,
         authorityParagraphs: [String]? = nil,

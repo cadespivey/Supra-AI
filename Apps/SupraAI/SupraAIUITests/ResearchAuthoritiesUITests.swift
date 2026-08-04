@@ -763,6 +763,7 @@ final class DraftingBlockedStateUITests: XCTestCase {
 @MainActor
 final class MotionToDismissWorkspaceUITests: XCTestCase {
     private let exactMotionAuthorityExcerpt = "A motion to dismiss for failure to state a cause of action tests legal sufficiency, accepts well-pleaded allegations as true, and does not accept conclusory allegations."
+    private let exactMotionFactTail = "Full review tail: the fictional pleading alleges no damages amount."
 
     override func setUp() {
         continueAfterFailure = false
@@ -1044,6 +1045,10 @@ final class MotionToDismissWorkspaceUITests: XCTestCase {
         let fact = app.buttons["drafting.motion.fact.ui-motion-fact-chunk"]
         XCTAssertTrue(fact.waitForExistence(timeout: 5), "The seeded fact was not exposed as a selectable production row")
         XCTAssertTrue(fact.isEnabled)
+        XCTAssertTrue(
+            fact.label.contains(exactMotionFactTail),
+            "The selectable fact row did not expose the complete excerpt that generation will insert: \(fact.debugDescription)"
+        )
         XCTAssertTrue(fact.value.debugDescription.localizedCaseInsensitiveContains("Ready"), fact.debugDescription)
         fact.click()
         XCTAssertTrue(fact.value.debugDescription.localizedCaseInsensitiveContains("Selected"), fact.debugDescription)

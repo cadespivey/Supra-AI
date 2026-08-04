@@ -595,12 +595,13 @@ fi
 
 if grep -Fq '.accessibilityLabel(sourceAccessibilityLabel' "$motion_view" \
     && grep -Fq '.accessibilityValue(sourceAccessibilityValue' "$motion_view" \
-    && grep -Fq 'source.displayExcerpt' "$motion_view" \
+    && grep -Fq 'source.blockingReason ?? source.text' "$motion_view" \
     && grep -Fq 'localizedCaseInsensitiveContains("Selected")' "$motion_ui_tests" \
+    && grep -Fq 'fact.label.contains(exactMotionFactTail)' "$motion_ui_tests" \
     && grep -Fq 'authority.label.contains(exactMotionAuthorityExcerpt)' "$motion_ui_tests"; then
-  printf '%s\n' 'PASS: motion source rows announce literal state and expose reviewed authority text'
+  printf '%s\n' 'PASS: motion source rows announce literal state and expose complete selected text'
 else
-  record_failure 'motion source rows lack literal accessibility state or reviewed proposition text'
+  record_failure 'motion source rows lack literal accessibility state or complete selected text'
 fi
 
 if grep -Fq 'motionFactLoadError' "$motion_view" \

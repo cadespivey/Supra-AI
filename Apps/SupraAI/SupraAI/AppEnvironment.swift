@@ -1130,7 +1130,9 @@ final class AppEnvironment: ObservableObject {
 
             let factName = "Motion Draft First Amended Complaint.txt"
             if !(try store.documentLibrary.fetchDocuments(matterID: matterID)).contains(where: { $0.displayName == factName }) {
-                let text = "The fictional pleading alleges that Liberty Rail received rail components, without alleging a breached contractual duty."
+                let text = "The fictional pleading alleges that Liberty Rail received rail components, without alleging a breached contractual duty. "
+                    + "It identifies a shipment, describes the component category, and alleges receipt at the fictional project location, but it does not identify a contractual promise that Liberty Rail failed to perform. "
+                    + "Full review tail: the fictional pleading alleges no damages amount."
                 let blob = try store.documentLibrary.upsertBlob(DocumentBlobRecord(
                     sha256: DocumentStorage.sha256Hex(of: Data("uitest-motion-fact".utf8)),
                     byteSize: text.utf8.count,
