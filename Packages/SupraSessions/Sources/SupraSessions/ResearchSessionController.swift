@@ -672,12 +672,15 @@ public final class ResearchSessionController: ObservableObject {
             upsertAuthority(from: result, sessionID: sessionID, reviewState: .needsLaterReview, useStatus: .unverified)
             recordReviewAudit("authority_saved", result: result, summary: "Marked needs-later-review: “\(result.caseName)”")
         case .notAdverse:
-            try? store.research.updateResultReviewState(resultID: resultID, reviewState: .notAdverse)
-            // §10.3: only update an existing authority — do not create one.
-            if let existing = try? store.authorities.fetchAuthority(researchResultID: resultID) {
-                try? store.authorities.updateReviewState(authorityID: existing.id, reviewState: .notAdverse)
-            }
-            recordReviewAudit("research_result_reviewed", result: result, summary: "Marked not adverse: “\(result.caseName)”")
+            // §10.3: update an existing authority, but never create one. The
+            // result, optional authority, and audit move atomically and are bound
+            // to the exact open session/matter.
+            try? store.authorities.markResearchResultNotAdverse(
+                resultID: resultID,
+                researchSessionID: sessionID,
+                matterID: matterID,
+                actor: "user"
+            )
         }
         reloadOpenSession()
     }

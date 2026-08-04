@@ -130,6 +130,80 @@ public final class AuthorityRepository: @unchecked Sendable {
         }
     }
 
+    /// Marks a research result not adverse, updates its saved authority when one
+    /// exists, and records the review audit in one transaction. The result must
+    /// belong to the exact open research session and matter supplied by the
+    /// caller; a stale or foreign result ID cannot mutate either matter.
+    public func markResearchResultNotAdverse(
+        resultID: String,
+        researchSessionID: String,
+        matterID: String,
+        actor: String,
+        markedAt: Date = Date()
+    ) throws {
+        try writer.write { db in
+            guard let result = try ResearchResultRecord.fetchOne(
+                db,
+                sql: """
+                    SELECT result.*
+                    FROM research_results AS result
+                    JOIN research_queries AS query
+                      ON query.id = result.research_query_id
+                    JOIN research_sessions AS session
+                      ON session.id = query.research_session_id
+                    WHERE result.id = ?
+                      AND session.id = ?
+                      AND session.matter_id = ?
+                    LIMIT 1
+                    """,
+                arguments: [resultID, researchSessionID, matterID]
+            ) else {
+                throw AuthorityRepositoryError.authorityProvenanceMismatch
+            }
+            let normalizedActor = actor.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !normalizedActor.isEmpty else {
+                throw AuthorityRepositoryError.reviewerRequired
+            }
+
+            let authority = try AuthorityRecord.fetchOne(
+                db,
+                sql: "SELECT * FROM authorities WHERE research_result_id = ?",
+                arguments: [resultID]
+            )
+            if let authority {
+                guard authority.researchSessionID == researchSessionID,
+                      authority.matterID == matterID else {
+                    throw AuthorityRepositoryError.authorityProvenanceMismatch
+                }
+                try Self.validateResearchProvenance(authority: authority, db: db)
+                try db.execute(
+                    sql: "UPDATE authorities SET review_state = ?, updated_at = ? WHERE id = ?",
+                    arguments: [ResearchResultReviewState.notAdverse.rawValue, markedAt, authority.id]
+                )
+                guard db.changesCount == 1 else {
+                    throw AuthorityRepositoryError.authorityProvenanceMismatch
+                }
+            }
+
+            try db.execute(
+                sql: "UPDATE research_results SET review_state = ?, updated_at = ? WHERE id = ?",
+                arguments: [ResearchResultReviewState.notAdverse.rawValue, markedAt, resultID]
+            )
+            guard db.changesCount == 1 else {
+                throw AuthorityRepositoryError.authorityProvenanceMismatch
+            }
+            try AuditEventRecord(
+                matterID: matterID,
+                timestamp: markedAt,
+                eventType: "research_result_reviewed",
+                actor: normalizedActor,
+                summary: "Marked not adverse: “\(result.caseName)”",
+                relatedTable: ResearchResultRecord.databaseTableName,
+                relatedID: result.id
+            ).insert(db)
+        }
+    }
+
     /// Soft-deletes a saved authority. Returns false if no live authority with that
     /// id exists. The row stays (the `(matter_id, research_result_id)` unique index
     /// still holds its slot), so re-saving the same result revives it via
