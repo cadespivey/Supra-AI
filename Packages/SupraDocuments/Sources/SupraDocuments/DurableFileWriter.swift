@@ -205,15 +205,15 @@ public struct DurableFileWriter: Sendable {
         return installedFileIdentity
     }
 
-    /// Compares an already-quarantined path with an install-time ownership token.
-    /// The caller must move the public path out of circulation before invoking
-    /// this check; comparing the public pathname first would leave a race before
-    /// deletion.
+    /// Compares a no-follow pathname identity with an install-time ownership
+    /// token. A public-path comparison is suitable for fail-closed validation;
+    /// destructive callers must still quarantine first so no pathname race can
+    /// occur between comparison and deletion.
     public func matchesInstalledFileIdentity(
         _ expected: InstalledFileIdentity,
-        at quarantinedURL: URL
+        at url: URL
     ) throws -> Bool {
-        try Self.fileIdentity(at: quarantinedURL) == expected
+        try Self.fileIdentity(at: url) == expected
     }
 
     private static func createExclusiveTemporaryFile(at url: URL) throws -> FileHandle {

@@ -1490,10 +1490,15 @@ public final class MatterDraftingController: ObservableObject {
             }
 
             do {
-                let installed = try Data(contentsOf: url, options: .mappedIfSafe)
                 try DocumentExportValidator.validate(url, as: format)
                 let event = try store.draftArtifacts.auditEventPreview(intentID: intent.id)
                 try auditRecorder(event)
+                let installed = try finalInstalledOutput(
+                    at: url,
+                    format: format,
+                    expectedIdentity: installedIdentity,
+                    intent: intent
+                )
                 try store.draftArtifacts.finalizeIntent(
                     id: intent.id,
                     installedOutput: installed
@@ -1566,10 +1571,15 @@ public final class MatterDraftingController: ObservableObject {
                 throw error
             }
             do {
-                let installed = try Data(contentsOf: url, options: .mappedIfSafe)
                 try DocumentExportValidator.validate(url, as: .docx)
                 let event = try store.draftArtifacts.auditEventPreview(intentID: intent.id)
                 try motionAuditCommitter(event, snapshot)
+                let installed = try finalInstalledOutput(
+                    at: url,
+                    format: .docx,
+                    expectedIdentity: installedIdentity,
+                    intent: intent
+                )
                 try store.draftArtifacts.finalizeIntent(
                     id: intent.id,
                     installedOutput: installed
@@ -1596,6 +1606,34 @@ public final class MatterDraftingController: ObservableObject {
             return url
         }
         throw PersistenceError.filenameAllocationFailed
+    }
+
+    /// Reopens the public path after the process-boundary observer and binds the
+    /// bytes sent to Store to the exact inode installed by `writeNewOwned`.
+    /// Validation, two stable reads, content checks, and a final no-follow
+    /// identity comparison all happen immediately before transactional finalize.
+    private func finalInstalledOutput(
+        at url: URL,
+        format: DocumentExportFormat,
+        expectedIdentity: DurableFileWriter.InstalledFileIdentity,
+        intent: DraftArtifactIntentRecord
+    ) throws -> Data {
+        guard try fileWriter.matchesInstalledFileIdentity(expectedIdentity, at: url) else {
+            throw DraftCompensationError.destinationChanged
+        }
+        try DocumentExportValidator.validate(url, as: format)
+        let first = try Data(contentsOf: url, options: .mappedIfSafe)
+        guard first.count == intent.outputByteSize,
+              DocumentStorage.sha256Hex(of: first) == intent.outputSHA256,
+              try fileWriter.matchesInstalledFileIdentity(expectedIdentity, at: url) else {
+            throw DraftCompensationError.destinationChanged
+        }
+        let final = try Data(contentsOf: url, options: .mappedIfSafe)
+        guard final == first,
+              try fileWriter.matchesInstalledFileIdentity(expectedIdentity, at: url) else {
+            throw DraftCompensationError.destinationChanged
+        }
+        return final
     }
 
     private enum DraftCompensationError: Error, LocalizedError {

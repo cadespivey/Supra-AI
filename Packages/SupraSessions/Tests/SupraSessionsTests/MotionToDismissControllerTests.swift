@@ -1111,10 +1111,10 @@ final class MotionToDismissControllerTests: XCTestCase {
         )
     }
 
-    // T-MTD-31. A nonthrowing audit checkpoint can still race with another
+    // T-MTD-36. A nonthrowing audit checkpoint can still race with another
     // process replacing the public path. Finalization must authenticate the
     // post-checkpoint file and preserve bytes it no longer owns.
-    func testTMTD31CheckpointReplacementIsPreservedWithoutCompletedIntentOrAudit() async throws {
+    func testTMTD36CheckpointReplacementIsPreservedWithoutCompletedIntentOrAudit() async throws {
         let fixture = try makeFixture()
         let destination = fixture.storage.exportsDirectory(forMatterID: fixture.matterID)
             .appendingPathComponent("Motion-to-Dismiss-checkpoint-race.docx")
