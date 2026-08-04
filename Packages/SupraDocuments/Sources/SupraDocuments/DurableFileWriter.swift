@@ -14,11 +14,13 @@ public struct DurableFileWriter: Sendable {
         let parentIdentity: InstalledFileIdentity
         let destinationName: String
         let allowsDetachedParentCleanup: Bool
+        let exactFileDescriptor: Int32?
 
         init(
             retaining parent: ManagedParent,
             destinationName: String,
-            allowsDetachedParentCleanup: Bool
+            allowsDetachedParentCleanup: Bool,
+            exactFileDescriptor: Int32? = nil
         ) throws {
             let retainedRoot = DurableFileWriter.duplicateDescriptor(parent.rootDescriptor)
             guard retainedRoot >= 0 else {
@@ -30,8 +32,22 @@ public struct DurableFileWriter: Sendable {
                 Darwin.close(retainedRoot)
                 throw WriterError.unsafeManagedParent(code)
             }
+            let retainedFile: Int32?
+            if let exactFileDescriptor {
+                let duplicate = DurableFileWriter.duplicateDescriptor(exactFileDescriptor)
+                guard duplicate >= 0 else {
+                    let code = errno
+                    Darwin.close(retainedParent)
+                    Darwin.close(retainedRoot)
+                    throw WriterError.fileIdentityInspectionFailed(code)
+                }
+                retainedFile = duplicate
+            } else {
+                retainedFile = nil
+            }
             rootDescriptor = retainedRoot
             parentDescriptor = retainedParent
+            self.exactFileDescriptor = retainedFile
             managedRootURL = parent.rootURL
             parentURL = parent.parentURL
             relativeComponents = parent.relativeComponents
@@ -40,7 +56,12 @@ public struct DurableFileWriter: Sendable {
             self.allowsDetachedParentCleanup = allowsDetachedParentCleanup
         }
 
-        init(parentDescriptor: Int32, parentURL: URL, destinationName: String) throws {
+        init(
+            parentDescriptor: Int32,
+            parentURL: URL,
+            destinationName: String,
+            exactFileDescriptor: Int32? = nil
+        ) throws {
             let identity: InstalledFileIdentity
             do {
                 guard let captured = try DurableFileWriter.fileIdentity(
@@ -59,8 +80,22 @@ public struct DurableFileWriter: Sendable {
                 Darwin.close(parentDescriptor)
                 throw WriterError.unsafeManagedParent(code)
             }
+            let retainedFile: Int32?
+            if let exactFileDescriptor {
+                let duplicate = DurableFileWriter.duplicateDescriptor(exactFileDescriptor)
+                guard duplicate >= 0 else {
+                    let code = errno
+                    Darwin.close(retainedRoot)
+                    Darwin.close(parentDescriptor)
+                    throw WriterError.fileIdentityInspectionFailed(code)
+                }
+                retainedFile = duplicate
+            } else {
+                retainedFile = nil
+            }
             rootDescriptor = retainedRoot
             self.parentDescriptor = parentDescriptor
+            self.exactFileDescriptor = retainedFile
             managedRootURL = nil
             self.parentURL = parentURL
             relativeComponents = []
@@ -70,6 +105,7 @@ public struct DurableFileWriter: Sendable {
         }
 
         deinit {
+            if let exactFileDescriptor { Darwin.close(exactFileDescriptor) }
             Darwin.close(parentDescriptor)
             Darwin.close(rootDescriptor)
         }
@@ -153,17 +189,23 @@ public struct DurableFileWriter: Sendable {
         case postInstallStateUncertain(String)
         case managedTemporaryCleanupUncertain(String, String)
         case sourceNameReappeared(String)
+        case retainedManagedFileChanged(String)
+        case exactFileHasRemainingLinks(String, UInt64)
+        case exactFileLinkStateUncertain(String, String)
+        case exactFileSynchronizationFailed(Int32)
     }
 
     public typealias FaultInjector = @Sendable (FaultStage) throws -> Void
     typealias ParentDirectorySynchronizer = @Sendable (URL) throws -> Void
     typealias AnchoredParentDirectorySynchronizer = @Sendable (URL, Int32) throws -> Void
     typealias FileUnlinkCheckpoint = @Sendable (URL) throws -> Void
+    typealias ManagedAnchorRetentionCheckpoint = @Sendable (URL) throws -> Void
 
     private let faultInjector: FaultInjector
     private let parentDirectorySynchronizer: ParentDirectorySynchronizer
     private let anchoredParentDirectorySynchronizer: AnchoredParentDirectorySynchronizer
     private let fileUnlinkCheckpoint: FileUnlinkCheckpoint
+    private let beforeManagedAnchorRetention: ManagedAnchorRetentionCheckpoint
 
     public init(faultInjector: @escaping FaultInjector = { _ in }) {
         self.faultInjector = faultInjector
@@ -172,6 +214,7 @@ public struct DurableFileWriter: Sendable {
             try Self.synchronizeDirectory(descriptor)
         }
         self.fileUnlinkCheckpoint = { _ in }
+        self.beforeManagedAnchorRetention = { _ in }
     }
 
     init(
@@ -185,6 +228,7 @@ public struct DurableFileWriter: Sendable {
             try parentDirectorySynchronizer(url)
         }
         self.fileUnlinkCheckpoint = fileUnlinkCheckpoint
+        self.beforeManagedAnchorRetention = { _ in }
     }
 
     /// Test seam for proving that descriptor-relative durability operations use
@@ -192,12 +236,14 @@ public struct DurableFileWriter: Sendable {
     init(
         faultInjector: @escaping FaultInjector,
         anchoredParentDirectorySynchronizer: @escaping AnchoredParentDirectorySynchronizer,
+        beforeManagedAnchorRetention: @escaping ManagedAnchorRetentionCheckpoint = { _ in },
         fileUnlinkCheckpoint: @escaping FileUnlinkCheckpoint = { _ in }
     ) {
         self.faultInjector = faultInjector
         self.parentDirectorySynchronizer = Self.synchronizeParentDirectory
         self.anchoredParentDirectorySynchronizer = anchoredParentDirectorySynchronizer
         self.fileUnlinkCheckpoint = fileUnlinkCheckpoint
+        self.beforeManagedAnchorRetention = beforeManagedAnchorRetention
     }
 
     /// Commits a caller-owned namespace change in the same durability domain as
@@ -307,6 +353,11 @@ public struct DurableFileWriter: Sendable {
         case createExclusive
     }
 
+    private enum ManagedByteCountConstraint {
+        case exact(Int)
+        case maximum(Int)
+    }
+
     private func performWrite(
         to destination: URL,
         installPolicy: InstallPolicy,
@@ -411,16 +462,39 @@ public struct DurableFileWriter: Sendable {
             createMissingDirectories: false
         )
         defer { Self.close(managedParent) }
-        guard let identity = try Self.fileIdentity(
+        guard let namedStatus = try Self.fileStatus(
             named: destination.lastPathComponent,
             in: managedParent.parentDescriptor
         ) else {
             return nil
         }
+        guard Self.isRegularFile(namedStatus) else {
+            throw WriterError.fileIdentityInspectionFailed(EFTYPE)
+        }
+        let identity = Self.fileIdentity(status: namedStatus)
+        let exactFileDescriptor = destination.lastPathComponent.withCString {
+            Darwin.openat(
+                managedParent.parentDescriptor,
+                $0,
+                O_RDONLY | O_NONBLOCK | O_CLOEXEC | O_NOFOLLOW
+            )
+        }
+        guard exactFileDescriptor >= 0 else {
+            throw WriterError.fileIdentityInspectionFailed(errno)
+        }
+        defer { Darwin.close(exactFileDescriptor) }
+        let exactStatus = try Self.fileStatus(descriptor: exactFileDescriptor)
+        guard Self.isRegularFile(exactStatus),
+              exactStatus.st_dev == identity.device,
+              exactStatus.st_ino == identity.inode,
+              exactStatus.st_gen == identity.generation else {
+            throw WriterError.fileIdentityInspectionFailed(ESTALE)
+        }
         let anchor = try ManagedFileAnchor(
             retaining: managedParent,
             destinationName: destination.lastPathComponent,
-            allowsDetachedParentCleanup: false
+            allowsDetachedParentCleanup: false,
+            exactFileDescriptor: exactFileDescriptor
         )
         return identity.anchored(to: anchor)
     }
@@ -434,6 +508,7 @@ public struct DurableFileWriter: Sendable {
         matching expected: InstalledFileIdentity,
         at url: URL,
         containedIn managedRoot: URL,
+        expectedByteCount: Int,
         validator: (Data) throws -> Void
     ) throws -> Data {
         let destination = url.standardizedFileURL
@@ -448,35 +523,62 @@ public struct DurableFileWriter: Sendable {
             throw WriterError.unsafeManagedParent(ESTALE)
         }
 
-        let descriptor = destination.lastPathComponent.withCString {
-            Darwin.openat(
-                anchor.parentDescriptor,
-                $0,
-                O_RDONLY | O_CLOEXEC | O_NOFOLLOW
-            )
-        }
-        guard descriptor >= 0 else {
-            throw WriterError.fileIdentityInspectionFailed(errno)
-        }
-        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
-        defer { try? handle.close() }
-
+        let descriptor = try Self.exactFileDescriptor(
+            from: anchor,
+            named: destination.lastPathComponent
+        )
         guard try Self.fileIdentity(descriptor: descriptor) == expected else {
             throw WriterError.fileIdentityInspectionFailed(ESTALE)
         }
-        let first = try handle.readToEnd() ?? Data()
-        guard try Self.fileIdentity(descriptor: descriptor) == expected,
-              Self.managedAnchorIsReachable(anchor),
-              try Self.fileIdentity(
-                  named: destination.lastPathComponent,
-                  in: anchor.parentDescriptor
-              ) == expected else {
-            throw WriterError.unsafeManagedParent(ESTALE)
+        let first = try Self.fileData(
+            descriptor: descriptor,
+            matching: expected,
+            expectedByteCount: expectedByteCount,
+            named: destination.lastPathComponent
+        )
+        guard try Self.managedFileMatches(
+            expected: expected,
+            data: first,
+            destination: destination,
+            anchor: anchor,
+            descriptor: descriptor,
+            expectedByteCount: expectedByteCount,
+            requiresSingleLink: true
+        ) else {
+            throw WriterError.retainedManagedFileChanged(destination.lastPathComponent)
         }
 
         try validator(first)
 
-        guard try Self.fileIdentity(descriptor: descriptor) == expected,
+        guard try Self.managedFileMatches(
+            expected: expected,
+            data: first,
+            destination: destination,
+            anchor: anchor,
+            descriptor: descriptor,
+            expectedByteCount: expectedByteCount,
+            requiresSingleLink: true
+        ) else {
+            throw WriterError.retainedManagedFileChanged(destination.lastPathComponent)
+        }
+        return first
+    }
+
+    /// Relaunch finalization durability boundary. The same exact descriptor is
+    /// validated, synchronized, and reread before and after the retained parent
+    /// directory is synchronized; Store finalization may follow only after this
+    /// method returns the still-identical bytes.
+    public func durablyValidatedInstalledFileData(
+        matching expected: InstalledFileIdentity,
+        at url: URL,
+        containedIn managedRoot: URL,
+        expectedByteCount: Int,
+        validator: (Data) throws -> Void
+    ) throws -> Data {
+        let destination = url.standardizedFileURL
+        let standardizedRoot = managedRoot.standardizedFileURL
+        guard let anchor = expected.managedAnchor,
+              anchor.matches(destination: destination, managedRoot: standardizedRoot),
               Self.managedAnchorIsReachable(anchor),
               try Self.fileIdentity(
                   named: destination.lastPathComponent,
@@ -484,18 +586,80 @@ public struct DurableFileWriter: Sendable {
               ) == expected else {
             throw WriterError.unsafeManagedParent(ESTALE)
         }
-        try handle.seek(toOffset: 0)
-        let final = try handle.readToEnd() ?? Data()
-        guard final == first,
-              try Self.fileIdentity(descriptor: descriptor) == expected,
-              Self.managedAnchorIsReachable(anchor),
-              try Self.fileIdentity(
-                  named: destination.lastPathComponent,
-                  in: anchor.parentDescriptor
-              ) == expected else {
-            throw WriterError.unsafeManagedParent(ESTALE)
+        let descriptor = try Self.exactFileDescriptor(
+            from: anchor,
+            named: destination.lastPathComponent
+        )
+        guard try Self.fileIdentity(descriptor: descriptor) == expected else {
+            throw WriterError.fileIdentityInspectionFailed(ESTALE)
         }
-        return final
+        let validated = try Self.fileData(
+            descriptor: descriptor,
+            matching: expected,
+            expectedByteCount: expectedByteCount,
+            named: destination.lastPathComponent
+        )
+        guard try Self.managedFileMatches(
+            expected: expected,
+            data: validated,
+            destination: destination,
+            anchor: anchor,
+            descriptor: descriptor,
+            expectedByteCount: expectedByteCount,
+            requiresSingleLink: true
+        ) else {
+            throw WriterError.retainedManagedFileChanged(destination.lastPathComponent)
+        }
+        try validator(validated)
+        guard try Self.managedFileMatches(
+            expected: expected,
+            data: validated,
+            destination: destination,
+            anchor: anchor,
+            descriptor: descriptor,
+            expectedByteCount: expectedByteCount,
+            requiresSingleLink: true
+        ) else {
+            throw WriterError.retainedManagedFileChanged(destination.lastPathComponent)
+        }
+
+        try faultInjector(.beforeSynchronize)
+        guard Darwin.fsync(descriptor) == 0 else {
+            throw WriterError.exactFileSynchronizationFailed(errno)
+        }
+        guard try Self.managedFileMatches(
+            expected: expected,
+            data: validated,
+            destination: destination,
+            anchor: anchor,
+            descriptor: descriptor,
+            expectedByteCount: expectedByteCount,
+            requiresSingleLink: true
+        ) else {
+            throw WriterError.retainedManagedFileChanged(destination.lastPathComponent)
+        }
+        do {
+            try anchoredParentDirectorySynchronizer(
+                anchor.parentURL,
+                anchor.parentDescriptor
+            )
+        } catch {
+            throw WriterError.anchoredParentDirectorySynchronizationFailed(
+                error.localizedDescription
+            )
+        }
+        guard try Self.managedFileMatches(
+            expected: expected,
+            data: validated,
+            destination: destination,
+            anchor: anchor,
+            descriptor: descriptor,
+            expectedByteCount: expectedByteCount,
+            requiresSingleLink: true
+        ) else {
+            throw WriterError.retainedManagedFileChanged(destination.lastPathComponent)
+        }
+        return validated
     }
 
     /// Removes a pathname only when its current no-follow identity still equals
@@ -532,22 +696,128 @@ public struct DurableFileWriter: Sendable {
         at url: URL,
         containedIn managedRoot: URL
     ) throws -> Bool {
+        try unlinkFile(
+            matching: expected,
+            at: url,
+            containedIn: managedRoot,
+            maximumByteCount: ImportPolicy.default.maxInputBytes,
+            contentValidator: { _ in }
+        )
+    }
+
+    /// Content-bound managed unlink used by relaunch cleanup. The writer owns
+    /// the last callback and performs a final exact-descriptor reread after it;
+    /// no caller-controlled work occurs between that rebind and unlink.
+    @discardableResult
+    public func unlinkFile(
+        matching expected: InstalledFileIdentity,
+        at url: URL,
+        containedIn managedRoot: URL,
+        expectedByteCount: Int,
+        contentValidator: (Data) throws -> Void
+    ) throws -> Bool {
+        try unlinkFile(
+            matching: expected,
+            at: url,
+            containedIn: managedRoot,
+            byteCountConstraint: .exact(expectedByteCount),
+            contentValidator: contentValidator
+        )
+    }
+
+    /// Managed temporary cleanup accepts an authoritative maximum because an
+    /// interrupted writer may have durably produced only a payload prefix.
+    @discardableResult
+    public func unlinkFile(
+        matching expected: InstalledFileIdentity,
+        at url: URL,
+        containedIn managedRoot: URL,
+        maximumByteCount: Int,
+        contentValidator: (Data) throws -> Void
+    ) throws -> Bool {
+        try unlinkFile(
+            matching: expected,
+            at: url,
+            containedIn: managedRoot,
+            byteCountConstraint: .maximum(maximumByteCount),
+            contentValidator: contentValidator
+        )
+    }
+
+    private func unlinkFile(
+        matching expected: InstalledFileIdentity,
+        at url: URL,
+        containedIn managedRoot: URL,
+        byteCountConstraint: ManagedByteCountConstraint,
+        contentValidator: (Data) throws -> Void
+    ) throws -> Bool {
         let destination = url.standardizedFileURL
         let anchor = try Self.anchor(
             for: expected,
             destination: destination,
             managedRoot: managedRoot.standardizedFileURL
         )
+        let exactFileDescriptor = try Self.exactFileDescriptor(
+            from: anchor,
+            named: destination.lastPathComponent
+        )
         guard try Self.fileIdentity(
             named: destination.lastPathComponent,
             in: anchor.parentDescriptor
         ) == expected else {
+            let count = try Self.linkCount(
+                descriptor: exactFileDescriptor,
+                named: destination.lastPathComponent
+            )
+            if count > 0 {
+                throw WriterError.exactFileHasRemainingLinks(
+                    destination.lastPathComponent,
+                    count
+                )
+            }
             return false
         }
+        guard try Self.fileIdentity(descriptor: exactFileDescriptor) == expected else {
+            throw WriterError.fileIdentityInspectionFailed(ESTALE)
+        }
+        let validatedData = try Self.fileData(
+            descriptor: exactFileDescriptor,
+            matching: expected,
+            constraint: byteCountConstraint,
+            named: destination.lastPathComponent
+        )
+        try contentValidator(validatedData)
+        guard try Self.managedFileMatches(
+            expected: expected,
+            data: validatedData,
+            destination: destination,
+            anchor: anchor,
+            descriptor: exactFileDescriptor,
+            expectedByteCount: validatedData.count,
+            requiresSingleLink: false
+        ) else {
+            throw WriterError.retainedManagedFileChanged(destination.lastPathComponent)
+        }
         try fileUnlinkCheckpoint(url)
-        guard anchor.allowsDetachedParentCleanup
-                || Self.managedAnchorIsReachable(anchor) else {
-            return false
+        guard (anchor.allowsDetachedParentCleanup || Self.managedAnchorIsReachable(anchor)),
+              try Self.fileIdentity(descriptor: exactFileDescriptor) == expected,
+              try Self.fileIdentity(
+                  named: destination.lastPathComponent,
+                  in: anchor.parentDescriptor
+              ) == expected,
+              try Self.fileData(
+                  descriptor: exactFileDescriptor,
+                  matching: expected,
+                  expectedByteCount: validatedData.count,
+                  named: destination.lastPathComponent
+              ) == validatedData,
+              try Self.fileData(
+                  named: destination.lastPathComponent,
+                  in: anchor.parentDescriptor,
+                  matching: expected,
+                  expectedByteCount: validatedData.count
+              ) == validatedData else {
+            throw WriterError.retainedManagedFileChanged(destination.lastPathComponent)
         }
         let removed = try Self.removeEntry(
             named: destination.lastPathComponent,
@@ -555,12 +825,11 @@ public struct DurableFileWriter: Sendable {
             in: anchor.parentDescriptor
         )
         if removed {
+            var synchronizationError: Error?
             do {
                 try anchoredParentDirectorySynchronizer(anchor.parentURL, anchor.parentDescriptor)
             } catch {
-                throw WriterError.anchoredParentDirectorySynchronizationFailed(
-                    error.localizedDescription
-                )
+                synchronizationError = error
             }
             guard try Self.fileIdentity(
                 named: destination.lastPathComponent,
@@ -568,6 +837,21 @@ public struct DurableFileWriter: Sendable {
             ) == nil,
                   try Self.fileIdentity(at: destination) == nil else {
                 throw WriterError.sourceNameReappeared(destination.lastPathComponent)
+            }
+            let remainingLinkCount = try Self.linkCount(
+                descriptor: exactFileDescriptor,
+                named: destination.lastPathComponent
+            )
+            if remainingLinkCount > 0 {
+                throw WriterError.exactFileHasRemainingLinks(
+                    destination.lastPathComponent,
+                    remainingLinkCount
+                )
+            }
+            if let synchronizationError {
+                throw WriterError.anchoredParentDirectorySynchronizationFailed(
+                    synchronizationError.localizedDescription
+                )
             }
         }
         return removed
@@ -588,13 +872,122 @@ public struct DurableFileWriter: Sendable {
         contentValidator: (Data) throws -> Void,
         preRemovalCheckpoint: (URL) throws -> Void = { _ in }
     ) throws -> Bool {
+        try removeInstalledFile(
+            matching: expected,
+            at: url,
+            containedIn: managedRoot,
+            byteCountConstraint: .maximum(ImportPolicy.default.maxInputBytes),
+            missingIsSuccess: missingIsSuccess,
+            quarantineCheckpoint: quarantineCheckpoint,
+            contentValidator: contentValidator,
+            preRemovalCheckpoint: preRemovalCheckpoint
+        )
+    }
+
+    @discardableResult
+    public func removeInstalledFile(
+        matching expected: InstalledFileIdentity,
+        at url: URL,
+        containedIn managedRoot: URL,
+        expectedByteCount: Int,
+        missingIsSuccess: Bool = false,
+        quarantineCheckpoint: (URL, URL) throws -> Void = { _, _ in },
+        contentValidator: (Data) throws -> Void,
+        preRemovalCheckpoint: (URL) throws -> Void = { _ in }
+    ) throws -> Bool {
+        try removeInstalledFile(
+            matching: expected,
+            at: url,
+            containedIn: managedRoot,
+            byteCountConstraint: .exact(expectedByteCount),
+            missingIsSuccess: missingIsSuccess,
+            quarantineCheckpoint: quarantineCheckpoint,
+            contentValidator: contentValidator,
+            preRemovalCheckpoint: preRemovalCheckpoint
+        )
+    }
+
+    private func removeInstalledFile(
+        matching expected: InstalledFileIdentity,
+        at url: URL,
+        containedIn managedRoot: URL,
+        byteCountConstraint: ManagedByteCountConstraint,
+        missingIsSuccess: Bool,
+        quarantineCheckpoint: (URL, URL) throws -> Void,
+        contentValidator: (Data) throws -> Void,
+        preRemovalCheckpoint: (URL) throws -> Void
+    ) throws -> Bool {
+        do {
+            return try removeInstalledFileBound(
+                matching: expected,
+                at: url,
+                containedIn: managedRoot,
+                byteCountConstraint: byteCountConstraint,
+                missingIsSuccess: missingIsSuccess,
+                quarantineCheckpoint: quarantineCheckpoint,
+                contentValidator: contentValidator,
+                preRemovalCheckpoint: preRemovalCheckpoint
+            )
+        } catch let WriterError.retainedManagedFileChanged(name) {
+            throw WriterError.retainedQuarantineChanged(name)
+        }
+    }
+
+    private func removeInstalledFileBound(
+        matching expected: InstalledFileIdentity,
+        at url: URL,
+        containedIn managedRoot: URL,
+        byteCountConstraint: ManagedByteCountConstraint,
+        missingIsSuccess: Bool,
+        quarantineCheckpoint: (URL, URL) throws -> Void,
+        contentValidator: (Data) throws -> Void,
+        preRemovalCheckpoint: (URL) throws -> Void
+    ) throws -> Bool {
         let destination = url.standardizedFileURL
         guard let anchor = expected.managedAnchor,
               anchor.matches(
                   destination: destination,
                   managedRoot: managedRoot.standardizedFileURL
-              ) else {
+        ) else {
             throw WriterError.unsafeManagedParent(ESTALE)
+        }
+        let exactFileDescriptor = try Self.exactFileDescriptor(
+            from: anchor,
+            named: destination.lastPathComponent
+        )
+        guard try Self.fileIdentity(descriptor: exactFileDescriptor) == expected else {
+            throw WriterError.fileIdentityInspectionFailed(ESTALE)
+        }
+        if try Self.fileIdentity(
+            named: destination.lastPathComponent,
+            in: anchor.parentDescriptor
+        ) == expected {
+            let preflightData = try Self.fileData(
+                descriptor: exactFileDescriptor,
+                matching: expected,
+                constraint: byteCountConstraint,
+                named: destination.lastPathComponent
+            )
+            guard try Self.fileData(
+                named: destination.lastPathComponent,
+                in: anchor.parentDescriptor,
+                matching: expected,
+                expectedByteCount: preflightData.count
+            ) == preflightData,
+                  try Self.fileData(
+                      descriptor: exactFileDescriptor,
+                      matching: expected,
+                      expectedByteCount: preflightData.count,
+                      named: destination.lastPathComponent
+                  ) == preflightData,
+                  try Self.fileIdentity(
+                      named: destination.lastPathComponent,
+                      in: anchor.parentDescriptor
+                  ) == expected else {
+                throw WriterError.retainedManagedFileChanged(
+                    destination.lastPathComponent
+                )
+            }
         }
         guard let quarantineName = try Self.quarantineEntry(
             named: destination.lastPathComponent,
@@ -605,6 +998,16 @@ public struct DurableFileWriter: Sendable {
         ) else {
             if try Self.fileIdentity(at: destination) == expected {
                 throw WriterError.publicDestinationStillLinkedWithoutRetainedQuarantine
+            }
+            let count = try Self.linkCount(
+                descriptor: exactFileDescriptor,
+                named: destination.lastPathComponent
+            )
+            guard count == 0 else {
+                throw WriterError.exactFileHasRemainingLinks(
+                    destination.lastPathComponent,
+                    count
+                )
             }
             return missingIsSuccess
         }
@@ -654,10 +1057,19 @@ public struct DurableFileWriter: Sendable {
             return false
         }
         let initialQuarantineData = try Self.fileData(
+            descriptor: exactFileDescriptor,
+            matching: expected,
+            constraint: byteCountConstraint,
+            named: quarantineName
+        )
+        guard try Self.fileData(
             named: quarantineName,
             in: anchor.parentDescriptor,
-            matching: expected
-        )
+            matching: expected,
+            expectedByteCount: initialQuarantineData.count
+        ) == initialQuarantineData else {
+            throw WriterError.retainedQuarantineChanged(quarantineName)
+        }
 
         do {
             try quarantineCheckpoint(destination, quarantineURL)
@@ -672,8 +1084,16 @@ public struct DurableFileWriter: Sendable {
                 guard try Self.fileData(
                     named: quarantineName,
                     in: anchor.parentDescriptor,
-                    matching: expected
-                ) == initialQuarantineData else {
+                    matching: expected,
+                    expectedByteCount: initialQuarantineData.count
+                ) == initialQuarantineData,
+                      try Self.fileData(
+                          descriptor: exactFileDescriptor,
+                          matching: expected,
+                          expectedByteCount: initialQuarantineData.count,
+                          named: quarantineName
+                      )
+                        == initialQuarantineData else {
                     throw WriterError.retainedQuarantineChanged(quarantineName)
                 }
                 guard try Self.restoreOwnedEntry(
@@ -703,10 +1123,19 @@ public struct DurableFileWriter: Sendable {
         var firstCandidate: Data?
         do {
             let candidate = try Self.fileData(
+                descriptor: exactFileDescriptor,
+                matching: expected,
+                expectedByteCount: initialQuarantineData.count,
+                named: quarantineName
+            )
+            guard try Self.fileData(
                 named: quarantineName,
                 in: anchor.parentDescriptor,
-                matching: expected
-            )
+                matching: expected,
+                expectedByteCount: initialQuarantineData.count
+            ) == candidate else {
+                throw WriterError.retainedQuarantineChanged(quarantineName)
+            }
             firstCandidate = candidate
             try contentValidator(candidate)
         } catch {
@@ -721,8 +1150,16 @@ public struct DurableFileWriter: Sendable {
                    try Self.fileData(
                        named: quarantineName,
                        in: anchor.parentDescriptor,
-                       matching: expected
-                   ) != firstCandidate {
+                       matching: expected,
+                       expectedByteCount: firstCandidate.count
+                   ) != firstCandidate
+                    || (try Self.fileData(
+                        descriptor: exactFileDescriptor,
+                        matching: expected,
+                        expectedByteCount: firstCandidate.count,
+                        named: quarantineName
+                    ))
+                        != firstCandidate {
                     throw WriterError.retainedQuarantineChanged(quarantineName)
                 }
                 guard try Self.restoreOwnedEntry(
@@ -750,9 +1187,17 @@ public struct DurableFileWriter: Sendable {
         )
         guard let validatedQuarantineData = firstCandidate,
               try Self.fileData(
+                  descriptor: exactFileDescriptor,
+                  matching: expected,
+                  expectedByteCount: validatedQuarantineData.count,
+                  named: quarantineName
+              )
+                == validatedQuarantineData,
+              try Self.fileData(
                   named: quarantineName,
                   in: anchor.parentDescriptor,
-                  matching: expected
+                  matching: expected,
+                  expectedByteCount: validatedQuarantineData.count
               ) == validatedQuarantineData else {
             throw WriterError.retainedQuarantineChanged(quarantineName)
         }
@@ -770,8 +1215,16 @@ public struct DurableFileWriter: Sendable {
                 guard try Self.fileData(
                     named: quarantineName,
                     in: anchor.parentDescriptor,
-                    matching: expected
-                ) == validatedQuarantineData else {
+                    matching: expected,
+                    expectedByteCount: validatedQuarantineData.count
+                ) == validatedQuarantineData,
+                      try Self.fileData(
+                          descriptor: exactFileDescriptor,
+                          matching: expected,
+                          expectedByteCount: validatedQuarantineData.count,
+                          named: quarantineName
+                      )
+                        == validatedQuarantineData else {
                     throw WriterError.retainedQuarantineChanged(quarantineName)
                 }
                 guard try Self.restoreOwnedEntry(
@@ -800,18 +1253,35 @@ public struct DurableFileWriter: Sendable {
         guard try Self.fileData(
             named: quarantineName,
             in: anchor.parentDescriptor,
-            matching: expected
-        ) == validatedQuarantineData else {
+            matching: expected,
+            expectedByteCount: validatedQuarantineData.count
+        ) == validatedQuarantineData,
+              try Self.fileData(
+                  descriptor: exactFileDescriptor,
+                  matching: expected,
+                  expectedByteCount: validatedQuarantineData.count,
+                  named: quarantineName
+              )
+                == validatedQuarantineData else {
             throw WriterError.retainedQuarantineChanged(quarantineName)
         }
 
         var finalCandidate: Data?
         do {
             let candidate = try Self.fileData(
+                descriptor: exactFileDescriptor,
+                matching: expected,
+                expectedByteCount: validatedQuarantineData.count,
+                named: quarantineName
+            )
+            guard try Self.fileData(
                 named: quarantineName,
                 in: anchor.parentDescriptor,
-                matching: expected
-            )
+                matching: expected,
+                expectedByteCount: validatedQuarantineData.count
+            ) == candidate else {
+                throw WriterError.retainedQuarantineChanged(quarantineName)
+            }
             guard candidate == validatedQuarantineData else {
                 throw WriterError.retainedQuarantineChanged(quarantineName)
             }
@@ -842,9 +1312,16 @@ public struct DurableFileWriter: Sendable {
         )
         guard let finalCandidate,
               try Self.fileData(
+                  descriptor: exactFileDescriptor,
+                  matching: expected,
+                  expectedByteCount: finalCandidate.count,
+                  named: quarantineName
+              ) == finalCandidate,
+              try Self.fileData(
                   named: quarantineName,
                   in: anchor.parentDescriptor,
-                  matching: expected
+                  matching: expected,
+                  expectedByteCount: finalCandidate.count
               ) == finalCandidate else {
             throw WriterError.retainedQuarantineChanged(quarantineName)
         }
@@ -854,12 +1331,11 @@ public struct DurableFileWriter: Sendable {
             in: anchor.parentDescriptor
         )
         if removed {
+            var synchronizationError: Error?
             do {
                 try anchoredParentDirectorySynchronizer(anchor.parentURL, anchor.parentDescriptor)
             } catch {
-                throw WriterError.anchoredParentDirectorySynchronizationFailed(
-                    error.localizedDescription
-                )
+                synchronizationError = error
             }
             guard try Self.fileIdentity(
                 named: quarantineName,
@@ -868,8 +1344,26 @@ public struct DurableFileWriter: Sendable {
                   try Self.fileIdentity(at: quarantineURL) == nil else {
                 throw WriterError.sourceNameReappeared(quarantineName)
             }
+            if try Self.fileIdentity(at: destination) == expected {
+                throw WriterError.publicDestinationStillLinkedAfterRemoval
+            }
+            let remainingLinkCount = try Self.linkCount(
+                descriptor: exactFileDescriptor,
+                named: quarantineName
+            )
+            if remainingLinkCount > 0 {
+                throw WriterError.exactFileHasRemainingLinks(
+                    quarantineName,
+                    remainingLinkCount
+                )
+            }
+            if let synchronizationError {
+                throw WriterError.anchoredParentDirectorySynchronizationFailed(
+                    synchronizationError.localizedDescription
+                )
+            }
         }
-        if try Self.fileIdentity(at: destination) == expected {
+        if !removed, try Self.fileIdentity(at: destination) == expected {
             throw WriterError.publicDestinationStillLinkedAfterRemoval
         }
         return removed
@@ -904,17 +1398,6 @@ public struct DurableFileWriter: Sendable {
             managedRoot: standardizedRoot,
             directoryAuthenticator: anchoredParentDirectorySynchronizer
         )
-        let retainedAnchor: ManagedFileAnchor
-        do {
-            retainedAnchor = try ManagedFileAnchor(
-                retaining: managedParent,
-                destinationName: standardizedDestination.lastPathComponent,
-                allowsDetachedParentCleanup: true
-            )
-        } catch {
-            Self.close(managedParent)
-            throw error
-        }
         var temporaryName = ".\(standardizedDestination.lastPathComponent).supra-tmp-\(UUID().uuidString)"
         let temporaryURL = managedParent.parentURL.appendingPathComponent(
             temporaryName,
@@ -924,7 +1407,7 @@ public struct DurableFileWriter: Sendable {
             Darwin.openat(
                 managedParent.parentDescriptor,
                 $0,
-                O_CREAT | O_EXCL | O_WRONLY | O_CLOEXEC | O_NOFOLLOW,
+                O_CREAT | O_EXCL | O_RDWR | O_CLOEXEC | O_NOFOLLOW,
                 S_IRUSR | S_IWUSR
             )
         }
@@ -945,9 +1428,42 @@ public struct DurableFileWriter: Sendable {
                 "temporary identity capture failed, so identity-bound cleanup could not be authorized: \(String(describing: error))"
             )
         }
+        let retainedAnchor: ManagedFileAnchor
+        do {
+            try beforeManagedAnchorRetention(temporaryURL)
+            retainedAnchor = try ManagedFileAnchor(
+                retaining: managedParent,
+                destinationName: standardizedDestination.lastPathComponent,
+                allowsDetachedParentCleanup: true,
+                exactFileDescriptor: descriptor
+            )
+        } catch {
+            let retentionError = error
+            do {
+                try cleanupManagedTemporary(
+                    named: temporaryName,
+                    matching: createdTemporaryIdentity,
+                    expectedData: Data(),
+                    exactFileDescriptor: descriptor,
+                    in: managedParent
+                )
+            } catch {
+                Darwin.close(descriptor)
+                Self.close(managedParent)
+                throw error
+            }
+            Darwin.close(descriptor)
+            Self.close(managedParent)
+            throw retentionError
+        }
+        let retainedExactDescriptor = try Self.exactFileDescriptor(
+            from: retainedAnchor,
+            named: temporaryName
+        )
         let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
         var handleIsOpen = true
         var installed = false
+        var cleanupAuthorizedData = Data()
         defer {
             if handleIsOpen { try? handle.close() }
             Self.close(managedParent)
@@ -955,12 +1471,51 @@ public struct DurableFileWriter: Sendable {
 
         do {
             try faultInjector(.beforeWrite)
+            guard try Self.fileData(
+                descriptor: retainedExactDescriptor,
+                matching: createdTemporaryIdentity,
+                expectedByteCount: cleanupAuthorizedData.count,
+                named: temporaryName
+            )
+                    == cleanupAuthorizedData else {
+                throw WriterError.retainedManagedFileChanged(temporaryName)
+            }
             let sink = DurableFileSink(handle: handle, beforeWrite: {
+                let beforeCallback = try Self.fileData(
+                    descriptor: retainedExactDescriptor,
+                    matching: createdTemporaryIdentity,
+                    expectedByteCount: cleanupAuthorizedData.count,
+                    named: temporaryName
+                )
                 try faultInjector(.duringWrite)
+                guard try Self.fileData(
+                    descriptor: retainedExactDescriptor,
+                    matching: createdTemporaryIdentity,
+                    expectedByteCount: cleanupAuthorizedData.count,
+                    named: temporaryName
+                )
+                        == beforeCallback else {
+                    throw WriterError.retainedManagedFileChanged(temporaryName)
+                }
             })
             try sink.write(data)
+            cleanupAuthorizedData = try Self.fileData(
+                descriptor: retainedExactDescriptor,
+                matching: createdTemporaryIdentity,
+                expectedByteCount: data.count,
+                named: temporaryName
+            )
             try Task.checkCancellation()
             try faultInjector(.beforeSynchronize)
+            guard try Self.fileData(
+                descriptor: retainedExactDescriptor,
+                matching: createdTemporaryIdentity,
+                expectedByteCount: cleanupAuthorizedData.count,
+                named: temporaryName
+            )
+                    == cleanupAuthorizedData else {
+                throw WriterError.retainedManagedFileChanged(temporaryName)
+            }
             try handle.synchronize()
             try handle.close()
             handleIsOpen = false
@@ -978,9 +1533,29 @@ public struct DurableFileWriter: Sendable {
             let validatedData = try Self.fileData(
                 named: temporaryName,
                 in: managedParent.parentDescriptor,
-                matching: createdTemporaryIdentity
+                matching: createdTemporaryIdentity,
+                expectedByteCount: data.count
             )
+            guard validatedData == cleanupAuthorizedData,
+                  try Self.fileData(
+                      descriptor: retainedExactDescriptor,
+                      matching: createdTemporaryIdentity,
+                      expectedByteCount: cleanupAuthorizedData.count,
+                      named: temporaryName
+                  )
+                    == cleanupAuthorizedData else {
+                throw WriterError.retainedManagedFileChanged(temporaryName)
+            }
+            cleanupAuthorizedData = validatedData
             try validator(validatedData)
+            guard try Self.fileData(
+                descriptor: retainedExactDescriptor,
+                matching: createdTemporaryIdentity,
+                expectedByteCount: validatedData.count,
+                named: temporaryName
+            ) == validatedData else {
+                throw WriterError.retainedManagedFileChanged(temporaryName)
+            }
             try Task.checkCancellation()
             guard Self.managedParentIsReachable(managedParent),
                   try Self.fileIdentity(
@@ -1015,17 +1590,20 @@ public struct DurableFileWriter: Sendable {
                 throw WriterError.fileIdentityInspectionFailed(ENOENT)
             }
             temporaryName = isolatedName
-            guard Self.managedParentIsReachable(managedParent),
-                  try Self.fileIdentity(
-                      named: temporaryName,
-                      in: managedParent.parentDescriptor
-                  ) == createdTemporaryIdentity,
-                  try Self.fileData(
-                      named: temporaryName,
-                      in: managedParent.parentDescriptor,
-                      matching: createdTemporaryIdentity
-                  ) == validatedData else {
-                throw WriterError.unsafeManagedParent(ESTALE)
+            let isolatedURL = managedParent.parentURL.appendingPathComponent(
+                temporaryName,
+                isDirectory: false
+            )
+            guard try Self.managedFileMatches(
+                expected: createdTemporaryIdentity,
+                data: validatedData,
+                destination: isolatedURL,
+                managedParent: managedParent,
+                descriptor: retainedExactDescriptor,
+                expectedByteCount: data.count,
+                requiresSingleLink: true
+            ) else {
+                throw WriterError.retainedManagedFileChanged(temporaryName)
             }
             try Self.atomicInstall(
                 temporaryName,
@@ -1038,6 +1616,7 @@ public struct DurableFileWriter: Sendable {
                     destination: standardizedDestination,
                     expected: createdTemporaryIdentity,
                     validatedData: validatedData,
+                    exactFileDescriptor: retainedExactDescriptor,
                     in: managedParent
                 ) else {
                     throw WriterError.postInstallStateUncertain(
@@ -1050,6 +1629,8 @@ public struct DurableFileWriter: Sendable {
                     destination: standardizedDestination,
                     temporaryName: temporaryName,
                     expected: createdTemporaryIdentity,
+                    validatedData: validatedData,
+                    exactFileDescriptor: retainedExactDescriptor,
                     in: managedParent
                 )
                 throw WriterError.postInstallStateUncertain(
@@ -1067,6 +1648,8 @@ public struct DurableFileWriter: Sendable {
                     destination: standardizedDestination,
                     temporaryName: temporaryName,
                     expected: createdTemporaryIdentity,
+                    validatedData: validatedData,
+                    exactFileDescriptor: retainedExactDescriptor,
                     in: managedParent
                 )
                 throw WriterError.postInstallStateUncertain(
@@ -1078,6 +1661,7 @@ public struct DurableFileWriter: Sendable {
                     destination: standardizedDestination,
                     expected: createdTemporaryIdentity,
                     validatedData: validatedData,
+                    exactFileDescriptor: retainedExactDescriptor,
                     in: managedParent
                 ) else {
                     throw WriterError.postInstallStateUncertain(
@@ -1105,6 +1689,8 @@ public struct DurableFileWriter: Sendable {
                 try cleanupManagedTemporary(
                     named: temporaryName,
                     matching: createdTemporaryIdentity,
+                    expectedData: cleanupAuthorizedData,
+                    exactFileDescriptor: retainedExactDescriptor,
                     in: managedParent
                 )
             }
@@ -1116,22 +1702,18 @@ public struct DurableFileWriter: Sendable {
         destination: URL,
         expected: InstalledFileIdentity,
         validatedData: Data,
+        exactFileDescriptor: Int32,
         in managedParent: ManagedParent
     ) throws -> Bool {
-        guard Self.managedParentIsReachable(managedParent),
-              try fileIdentity(
-                  named: destination.lastPathComponent,
-                  in: managedParent.parentDescriptor
-              ) == expected,
-              try fileData(
-                  named: destination.lastPathComponent,
-                  in: managedParent.parentDescriptor,
-                  matching: expected
-              ) == validatedData,
-              try fileIdentity(at: destination) == expected else {
-            return false
-        }
-        return true
+        try managedFileMatches(
+            expected: expected,
+            data: validatedData,
+            destination: destination,
+            managedParent: managedParent,
+            descriptor: exactFileDescriptor,
+            expectedByteCount: validatedData.count,
+            requiresSingleLink: true
+        )
     }
 
     /// Once create-only installation has occurred, any inability to prove and
@@ -1143,15 +1725,41 @@ public struct DurableFileWriter: Sendable {
         destination: URL,
         temporaryName: String,
         expected: InstalledFileIdentity,
+        validatedData: Data,
+        exactFileDescriptor: Int32,
         in managedParent: ManagedParent
     ) throws {
         let changedDirectory: Bool
         do {
+            guard Self.managedParentIsReachable(managedParent),
+                  try Self.fileIdentity(descriptor: exactFileDescriptor) == expected,
+                  try Self.fileIdentity(
+                      named: destination.lastPathComponent,
+                      in: managedParent.parentDescriptor
+                  ) == expected,
+                  try Self.fileData(
+                      descriptor: exactFileDescriptor,
+                      matching: expected,
+                      expectedByteCount: validatedData.count,
+                      named: destination.lastPathComponent
+                  ) == validatedData,
+                  try Self.fileData(
+                      named: destination.lastPathComponent,
+                      in: managedParent.parentDescriptor,
+                      matching: expected,
+                      expectedByteCount: validatedData.count
+                  ) == validatedData else {
+                throw WriterError.retainedManagedFileChanged(
+                    destination.lastPathComponent
+                )
+            }
             changedDirectory = try Self.rollbackCreateExclusiveInstall(
                 destinationName: destination.lastPathComponent,
                 quarantineName: temporaryName,
                 parentDescriptor: managedParent.parentDescriptor,
-                expectedIdentity: expected
+                expectedIdentity: expected,
+                expectedData: validatedData,
+                exactFileDescriptor: exactFileDescriptor
             )
         } catch {
             throw WriterError.postInstallStateUncertain(
@@ -1163,15 +1771,14 @@ public struct DurableFileWriter: Sendable {
                 "the exact installed inode was no longer available at its retained destination for rollback"
             )
         }
+        var synchronizationError: Error?
         do {
             try anchoredParentDirectorySynchronizer(
                 managedParent.parentURL,
                 managedParent.parentDescriptor
             )
         } catch {
-            throw WriterError.createOnlyRollbackSynchronizationFailed(
-                error.localizedDescription
-            )
+            synchronizationError = error
         }
         do {
             let retainedDestination = try Self.fileIdentity(
@@ -1190,6 +1797,15 @@ public struct DurableFileWriter: Sendable {
                     "the exact installed inode remains reachable after rollback synchronization"
                 )
             }
+            let remainingLinkCount = try Self.linkCount(
+                descriptor: exactFileDescriptor,
+                named: temporaryName
+            )
+            if remainingLinkCount > 0 {
+                throw WriterError.postInstallStateUncertain(
+                    "the exact installed inode still has \(remainingLinkCount) filesystem link(s) after rollback"
+                )
+            }
         } catch let error as WriterError {
             if case .postInstallStateUncertain = error { throw error }
             throw WriterError.postInstallStateUncertain(
@@ -1200,15 +1816,42 @@ public struct DurableFileWriter: Sendable {
                 "post-rollback inspection failed: \(error.localizedDescription)"
             )
         }
+        if let synchronizationError {
+            throw WriterError.createOnlyRollbackSynchronizationFailed(
+                synchronizationError.localizedDescription
+            )
+        }
     }
 
     private func cleanupManagedTemporary(
         named temporaryName: String,
         matching expected: InstalledFileIdentity,
+        expectedData: Data,
+        exactFileDescriptor: Int32,
         in managedParent: ManagedParent
     ) throws {
         let removed: Bool
         do {
+            guard Self.managedParentIsReachable(managedParent),
+                  try Self.fileIdentity(descriptor: exactFileDescriptor) == expected,
+                  try Self.fileIdentity(
+                      named: temporaryName,
+                      in: managedParent.parentDescriptor
+                  ) == expected,
+                  try Self.fileData(
+                      descriptor: exactFileDescriptor,
+                      matching: expected,
+                      expectedByteCount: expectedData.count,
+                      named: temporaryName
+                  ) == expectedData,
+                  try Self.fileData(
+                      named: temporaryName,
+                      in: managedParent.parentDescriptor,
+                      matching: expected,
+                      expectedByteCount: expectedData.count
+                  ) == expectedData else {
+                throw WriterError.retainedManagedFileChanged(temporaryName)
+            }
             removed = try Self.removeEntry(
                 named: temporaryName,
                 matching: expected,
@@ -1226,16 +1869,14 @@ public struct DurableFileWriter: Sendable {
                 "the exact managed temporary could not be verified at its retained name"
             )
         }
+        var synchronizationError: Error?
         do {
             try anchoredParentDirectorySynchronizer(
                 managedParent.parentURL,
                 managedParent.parentDescriptor
             )
         } catch {
-            throw WriterError.managedTemporaryCleanupUncertain(
-                temporaryName,
-                "directory synchronization failed: \(error.localizedDescription)"
-            )
+            synchronizationError = error
         }
         do {
             guard try Self.fileIdentity(
@@ -1253,6 +1894,16 @@ public struct DurableFileWriter: Sendable {
                     "the removed temporary name reappeared after directory synchronization"
                 )
             }
+            let remainingLinkCount = try Self.linkCount(
+                descriptor: exactFileDescriptor,
+                named: temporaryName
+            )
+            if remainingLinkCount > 0 {
+                throw WriterError.managedTemporaryCleanupUncertain(
+                    temporaryName,
+                    "the exact temporary still has \(remainingLinkCount) filesystem link(s) after unlink"
+                )
+            }
         } catch let error as WriterError {
             if case .managedTemporaryCleanupUncertain = error { throw error }
             throw WriterError.managedTemporaryCleanupUncertain(
@@ -1263,6 +1914,12 @@ public struct DurableFileWriter: Sendable {
             throw WriterError.managedTemporaryCleanupUncertain(
                 temporaryName,
                 "post-cleanup inspection failed: \(error.localizedDescription)"
+            )
+        }
+        if let synchronizationError {
+            throw WriterError.managedTemporaryCleanupUncertain(
+                temporaryName,
+                "directory synchronization failed: \(synchronizationError.localizedDescription)"
             )
         }
     }
@@ -1504,10 +2161,44 @@ public struct DurableFileWriter: Sendable {
         guard descriptor >= 0 else {
             throw WriterError.unsafeManagedParent(errno)
         }
+        var callerOwnsParentDescriptor = true
+        defer {
+            if callerOwnsParentDescriptor { Darwin.close(descriptor) }
+        }
+        guard let namedStatus = try fileStatus(
+            named: destination.lastPathComponent,
+            in: descriptor
+        ) else {
+            throw WriterError.fileIdentityInspectionFailed(ESTALE)
+        }
+        guard isRegularFile(namedStatus) else {
+            throw WriterError.fileIdentityInspectionFailed(EFTYPE)
+        }
+        guard fileIdentity(status: namedStatus) == expected else {
+            throw WriterError.fileIdentityInspectionFailed(ESTALE)
+        }
+        let exactFileDescriptor = destination.lastPathComponent.withCString {
+            Darwin.openat(
+                descriptor,
+                $0,
+                O_RDONLY | O_NONBLOCK | O_CLOEXEC | O_NOFOLLOW
+            )
+        }
+        guard exactFileDescriptor >= 0 else {
+            throw WriterError.fileIdentityInspectionFailed(errno)
+        }
+        defer { Darwin.close(exactFileDescriptor) }
+        let exactStatus = try fileStatus(descriptor: exactFileDescriptor)
+        guard isRegularFile(exactStatus),
+              fileIdentity(status: exactStatus) == expected else {
+            throw WriterError.fileIdentityInspectionFailed(ESTALE)
+        }
+        callerOwnsParentDescriptor = false
         return try ManagedFileAnchor(
             parentDescriptor: descriptor,
             parentURL: parentURL,
-            destinationName: destination.lastPathComponent
+            destinationName: destination.lastPathComponent,
+            exactFileDescriptor: exactFileDescriptor
         )
     }
 
@@ -1526,10 +2217,39 @@ public struct DurableFileWriter: Sendable {
             createMissingDirectories: false
         )
         defer { close(managedParent) }
+        guard let namedStatus = try fileStatus(
+            named: destination.lastPathComponent,
+            in: managedParent.parentDescriptor
+        ) else {
+            throw WriterError.fileIdentityInspectionFailed(ESTALE)
+        }
+        guard isRegularFile(namedStatus) else {
+            throw WriterError.fileIdentityInspectionFailed(EFTYPE)
+        }
+        guard fileIdentity(status: namedStatus) == expected else {
+            throw WriterError.fileIdentityInspectionFailed(ESTALE)
+        }
+        let exactFileDescriptor = destination.lastPathComponent.withCString {
+            Darwin.openat(
+                managedParent.parentDescriptor,
+                $0,
+                O_RDONLY | O_NONBLOCK | O_CLOEXEC | O_NOFOLLOW
+            )
+        }
+        guard exactFileDescriptor >= 0 else {
+            throw WriterError.fileIdentityInspectionFailed(errno)
+        }
+        defer { Darwin.close(exactFileDescriptor) }
+        let exactStatus = try fileStatus(descriptor: exactFileDescriptor)
+        guard isRegularFile(exactStatus),
+              fileIdentity(status: exactStatus) == expected else {
+            throw WriterError.fileIdentityInspectionFailed(ESTALE)
+        }
         return try ManagedFileAnchor(
             retaining: managedParent,
             destinationName: destination.lastPathComponent,
-            allowsDetachedParentCleanup: false
+            allowsDetachedParentCleanup: false,
+            exactFileDescriptor: exactFileDescriptor
         )
     }
 
@@ -1555,6 +2275,149 @@ public struct DurableFileWriter: Sendable {
             currentDescriptor = nextDescriptor
         }
         return (try? fileIdentity(descriptor: currentDescriptor)) == anchor.parentIdentity
+    }
+
+    private static func managedFileMatches(
+        expected: InstalledFileIdentity,
+        data: Data,
+        destination: URL,
+        anchor: ManagedFileAnchor,
+        descriptor: Int32,
+        expectedByteCount: Int,
+        requiresSingleLink: Bool
+    ) throws -> Bool {
+        try managedFileMatches(
+            expected: expected,
+            data: data,
+            destination: destination,
+            parentDescriptor: anchor.parentDescriptor,
+            descriptor: descriptor,
+            expectedByteCount: expectedByteCount,
+            requiresSingleLink: requiresSingleLink,
+            parentIsReachable: { Self.managedAnchorIsReachable(anchor) }
+        )
+    }
+
+    private static func managedFileMatches(
+        expected: InstalledFileIdentity,
+        data: Data,
+        destination: URL,
+        managedParent: ManagedParent,
+        descriptor: Int32,
+        expectedByteCount: Int,
+        requiresSingleLink: Bool
+    ) throws -> Bool {
+        try managedFileMatches(
+            expected: expected,
+            data: data,
+            destination: destination,
+            parentDescriptor: managedParent.parentDescriptor,
+            descriptor: descriptor,
+            expectedByteCount: expectedByteCount,
+            requiresSingleLink: requiresSingleLink,
+            parentIsReachable: { Self.managedParentIsReachable(managedParent) }
+        )
+    }
+
+    private static func managedFileMatches(
+        expected: InstalledFileIdentity,
+        data: Data,
+        destination: URL,
+        parentDescriptor: Int32,
+        descriptor: Int32,
+        expectedByteCount: Int,
+        requiresSingleLink: Bool,
+        parentIsReachable: () -> Bool
+    ) throws -> Bool {
+        guard data.count == expectedByteCount,
+              try managedFileBindingMatches(
+                  expected: expected,
+                  destination: destination,
+                  parentDescriptor: parentDescriptor,
+                  descriptor: descriptor,
+                  expectedByteCount: expectedByteCount,
+                  requiresSingleLink: requiresSingleLink,
+                  parentIsReachable: parentIsReachable
+              ) else {
+            return false
+        }
+        let first = try fileData(
+            descriptor: descriptor,
+            matching: expected,
+            expectedByteCount: expectedByteCount,
+            named: destination.lastPathComponent
+        )
+        guard first == data,
+              try managedFileBindingMatches(
+                  expected: expected,
+                  destination: destination,
+                  parentDescriptor: parentDescriptor,
+                  descriptor: descriptor,
+                  expectedByteCount: expectedByteCount,
+                  requiresSingleLink: requiresSingleLink,
+                  parentIsReachable: parentIsReachable
+              ) else {
+            return false
+        }
+        let final = try fileData(
+            descriptor: descriptor,
+            matching: expected,
+            expectedByteCount: expectedByteCount,
+            named: destination.lastPathComponent
+        )
+        guard final == first,
+              try managedFileBindingMatches(
+                  expected: expected,
+                  destination: destination,
+                  parentDescriptor: parentDescriptor,
+                  descriptor: descriptor,
+                  expectedByteCount: expectedByteCount,
+                  requiresSingleLink: requiresSingleLink,
+                  parentIsReachable: parentIsReachable
+              ) else {
+            return false
+        }
+        return true
+    }
+
+    private static func managedFileBindingMatches(
+        expected: InstalledFileIdentity,
+        destination: URL,
+        parentDescriptor: Int32,
+        descriptor: Int32,
+        expectedByteCount: Int,
+        requiresSingleLink: Bool,
+        parentIsReachable: () -> Bool
+    ) throws -> Bool {
+        guard expectedByteCount >= 0,
+              parentIsReachable(),
+              try fileIdentity(descriptor: descriptor) == expected,
+              try fileIdentity(
+                  named: destination.lastPathComponent,
+                  in: parentDescriptor
+              ) == expected,
+              try fileIdentity(at: destination) == expected else {
+            return false
+        }
+        let status = try fileStatus(descriptor: descriptor)
+        guard isRegularFile(status),
+              status.st_mode & S_IRUSR == S_IRUSR,
+              status.st_size == off_t(expectedByteCount) else {
+            return false
+        }
+        if requiresSingleLink {
+            let count = UInt64(status.st_nlink)
+            guard count == 1 else {
+                if count > 0 {
+                    throw WriterError.exactFileHasRemainingLinks(
+                        destination.lastPathComponent,
+                        count
+                    )
+                }
+                return false
+            }
+        }
+        return true
     }
 
     /// Opens the root through its current caller-configured pathname and proves
@@ -1590,6 +2453,173 @@ public struct DurableFileWriter: Sendable {
             return -1
         }
         return duplicate
+    }
+
+    private static func exactFileDescriptor(
+        from anchor: ManagedFileAnchor,
+        named name: String
+    ) throws -> Int32 {
+        guard let descriptor = anchor.exactFileDescriptor else {
+            throw WriterError.exactFileLinkStateUncertain(
+                name,
+                "no retained exact-file descriptor was available"
+            )
+        }
+        return descriptor
+    }
+
+    private static func fileStatus(descriptor: Int32) throws -> stat {
+        var status = stat()
+        guard Darwin.fstat(descriptor, &status) == 0 else {
+            throw WriterError.fileIdentityInspectionFailed(errno)
+        }
+        return status
+    }
+
+    private static func fileStatus(
+        named name: String,
+        in parentDescriptor: Int32
+    ) throws -> stat? {
+        var status = stat()
+        let result = name.withCString {
+            Darwin.fstatat(parentDescriptor, $0, &status, AT_SYMLINK_NOFOLLOW)
+        }
+        guard result == 0 else {
+            let code = errno
+            if code == ENOENT { return nil }
+            throw WriterError.fileIdentityInspectionFailed(code)
+        }
+        return status
+    }
+
+    private static func isRegularFile(_ status: stat) -> Bool {
+        status.st_mode & S_IFMT == S_IFREG
+    }
+
+    private static func linkCount(
+        descriptor: Int32,
+        named name: String
+    ) throws -> UInt64 {
+        do {
+            return UInt64(try fileStatus(descriptor: descriptor).st_nlink)
+        } catch {
+            throw WriterError.exactFileLinkStateUncertain(
+                name,
+                String(describing: error)
+            )
+        }
+    }
+
+    private static func fileData(
+        descriptor: Int32,
+        matching expected: InstalledFileIdentity,
+        expectedByteCount: Int,
+        named name: String
+    ) throws -> Data {
+        try fileData(
+            descriptor: descriptor,
+            matching: expected,
+            constraint: .exact(expectedByteCount),
+            named: name
+        )
+    }
+
+    private static func fileData(
+        descriptor: Int32,
+        matching expected: InstalledFileIdentity,
+        constraint: ManagedByteCountConstraint,
+        named name: String
+    ) throws -> Data {
+        let initialStatus = try fileStatus(descriptor: descriptor)
+        guard isRegularFile(initialStatus),
+              initialStatus.st_dev == expected.device,
+              initialStatus.st_ino == expected.inode,
+              initialStatus.st_gen == expected.generation,
+              initialStatus.st_size >= 0 else {
+            throw WriterError.retainedManagedFileChanged(name)
+        }
+        let expectedByteCount: Int
+        switch constraint {
+        case let .exact(count):
+            guard count >= 0,
+                  initialStatus.st_size == off_t(count) else {
+                throw WriterError.retainedManagedFileChanged(name)
+            }
+            expectedByteCount = count
+        case let .maximum(maximum):
+            guard maximum >= 0,
+                  UInt64(initialStatus.st_size) <= UInt64(maximum) else {
+                throw WriterError.retainedManagedFileChanged(name)
+            }
+            expectedByteCount = Int(initialStatus.st_size)
+        }
+        let result = try readFileData(
+            descriptor: descriptor,
+            expectedByteCount: expectedByteCount
+        )
+        let finalStatus = try fileStatus(descriptor: descriptor)
+        guard isRegularFile(finalStatus),
+              finalStatus.st_dev == expected.device,
+              finalStatus.st_ino == expected.inode,
+              finalStatus.st_gen == expected.generation,
+              finalStatus.st_size == off_t(expectedByteCount) else {
+            throw WriterError.retainedManagedFileChanged(name)
+        }
+        return result
+    }
+
+    private static func readFileData(
+        descriptor: Int32,
+        expectedByteCount: Int
+    ) throws -> Data {
+        var result = Data()
+        result.reserveCapacity(expectedByteCount)
+        var offset: off_t = 0
+        var buffer = [UInt8](repeating: 0, count: 64 * 1_024)
+        while result.count < expectedByteCount {
+            let remaining = expectedByteCount - result.count
+            let count: Int = buffer.withUnsafeMutableBytes { bytes in
+                while true {
+                    let readCount = Darwin.pread(
+                        descriptor,
+                        bytes.baseAddress,
+                        min(bytes.count, remaining),
+                        offset
+                    )
+                    if readCount < 0, errno == EINTR { continue }
+                    return readCount
+                }
+            }
+            guard count >= 0 else {
+                throw WriterError.fileIdentityInspectionFailed(errno)
+            }
+            guard count > 0 else {
+                throw WriterError.fileIdentityInspectionFailed(ESTALE)
+            }
+            result.append(contentsOf: buffer.prefix(count))
+            offset += off_t(count)
+        }
+
+        var sentinel = [UInt8](repeating: 0, count: 1)
+        let trailingCount: Int = sentinel.withUnsafeMutableBytes { bytes in
+            while true {
+                let readCount = Darwin.pread(
+                    descriptor,
+                    bytes.baseAddress,
+                    bytes.count,
+                    offset
+                )
+                if readCount < 0, errno == EINTR { continue }
+                return readCount
+            }
+        }
+        guard trailingCount >= 0 else {
+            throw WriterError.fileIdentityInspectionFailed(errno)
+        }
+        guard trailingCount == 0 else {
+            throw WriterError.fileIdentityInspectionFailed(ESTALE)
+        }
+        return result
     }
 
     private enum QuarantinePublicState {
@@ -1828,20 +2858,26 @@ public struct DurableFileWriter: Sendable {
     private static func fileData(
         named name: String,
         in parentDescriptor: Int32,
-        matching expected: InstalledFileIdentity
+        matching expected: InstalledFileIdentity,
+        expectedByteCount: Int
     ) throws -> Data {
         let descriptor = name.withCString {
-            Darwin.openat(parentDescriptor, $0, O_RDONLY | O_CLOEXEC | O_NOFOLLOW)
+            Darwin.openat(
+                parentDescriptor,
+                $0,
+                O_RDONLY | O_NONBLOCK | O_CLOEXEC | O_NOFOLLOW
+            )
         }
         guard descriptor >= 0 else {
             throw WriterError.fileIdentityInspectionFailed(errno)
         }
-        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
-        defer { try? handle.close() }
-        guard try fileIdentity(descriptor: descriptor) == expected else {
-            throw WriterError.fileIdentityInspectionFailed(ESTALE)
-        }
-        return try handle.readToEnd() ?? Data()
+        defer { Darwin.close(descriptor) }
+        return try fileData(
+            descriptor: descriptor,
+            matching: expected,
+            expectedByteCount: expectedByteCount,
+            named: name
+        )
     }
 
     private static func createExclusiveTemporaryFile(at url: URL) throws -> FileHandle {
@@ -1955,7 +2991,9 @@ public struct DurableFileWriter: Sendable {
         destinationName: String,
         quarantineName: String,
         parentDescriptor: Int32,
-        expectedIdentity: InstalledFileIdentity
+        expectedIdentity: InstalledFileIdentity,
+        expectedData: Data? = nil,
+        exactFileDescriptor: Int32? = nil
     ) throws -> Bool {
         guard try fileIdentity(named: destinationName, in: parentDescriptor) == expectedIdentity else {
             return false
@@ -2002,6 +3040,24 @@ public struct DurableFileWriter: Sendable {
             return true
         }
 
+        if let expectedData, let exactFileDescriptor {
+            guard try fileIdentity(descriptor: exactFileDescriptor) == expectedIdentity,
+                  try fileData(
+                      descriptor: exactFileDescriptor,
+                      matching: expectedIdentity,
+                      expectedByteCount: expectedData.count,
+                      named: quarantineName
+                  ) == expectedData,
+                  try fileData(
+                      named: quarantineName,
+                      in: parentDescriptor,
+                      matching: expectedIdentity,
+                      expectedByteCount: expectedData.count
+                  ) == expectedData else {
+                throw WriterError.retainedManagedFileChanged(quarantineName)
+            }
+        }
+
         guard try removeEntry(
             named: quarantineName,
             matching: expectedIdentity,
@@ -2020,39 +3076,25 @@ public struct DurableFileWriter: Sendable {
             if code == ENOENT { return nil }
             throw WriterError.fileIdentityInspectionFailed(code)
         }
-        return InstalledFileIdentity(
-            device: status.st_dev,
-            inode: status.st_ino,
-            generation: status.st_gen
-        )
+        return fileIdentity(status: status)
     }
 
     private static func fileIdentity(
         named name: String,
         in parentDescriptor: Int32
     ) throws -> InstalledFileIdentity? {
-        var status = stat()
-        let result = name.withCString {
-            Darwin.fstatat(parentDescriptor, $0, &status, AT_SYMLINK_NOFOLLOW)
+        guard let status = try fileStatus(named: name, in: parentDescriptor) else {
+            return nil
         }
-        guard result == 0 else {
-            let code = errno
-            if code == ENOENT { return nil }
-            throw WriterError.fileIdentityInspectionFailed(code)
-        }
-        return InstalledFileIdentity(
-            device: status.st_dev,
-            inode: status.st_ino,
-            generation: status.st_gen
-        )
+        return fileIdentity(status: status)
     }
 
     private static func fileIdentity(descriptor: Int32) throws -> InstalledFileIdentity? {
-        var status = stat()
-        guard Darwin.fstat(descriptor, &status) == 0 else {
-            throw WriterError.fileIdentityInspectionFailed(errno)
-        }
-        return InstalledFileIdentity(
+        fileIdentity(status: try fileStatus(descriptor: descriptor))
+    }
+
+    private static func fileIdentity(status: stat) -> InstalledFileIdentity {
+        InstalledFileIdentity(
             device: status.st_dev,
             inode: status.st_ino,
             generation: status.st_gen

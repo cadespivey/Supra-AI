@@ -134,10 +134,11 @@ public final class DraftArtifactReconciliationService: @unchecked Sendable {
                         throw ReconciliationError.artifactChangedDuringInspection
                     }
                     try publicArtifactInspectionCheckpoint(publicURL)
-                    let installed = try fileWriter.validatedInstalledFileData(
+                    let installed = try fileWriter.durablyValidatedInstalledFileData(
                         matching: inspectedIdentity,
                         at: publicURL,
-                        containedIn: storage.root
+                        containedIn: storage.root,
+                        expectedByteCount: intent.outputByteSize
                     ) { candidate in
                         guard candidate.count == intent.outputByteSize,
                               DocumentStorage.sha256Hex(of: candidate) == intent.outputSHA256 else {
@@ -201,7 +202,9 @@ public final class DraftArtifactReconciliationService: @unchecked Sendable {
                   try fileWriter.unlinkFile(
                       matching: inspectedIdentity,
                       at: entry,
-                      containedIn: storage.root
+                      containedIn: storage.root,
+                      maximumByteCount: intent.outputByteSize,
+                      contentValidator: { _ in }
                   ) else {
                 throw ReconciliationError.unsafeOwnedTemporary
             }
@@ -251,13 +254,16 @@ public final class DraftArtifactReconciliationService: @unchecked Sendable {
               ) else {
             return .recoveryRequired
         }
-        let validated: Data
-        do {
-            validated = try fileWriter.validatedInstalledFileData(
-                matching: inspectedIdentity,
-                at: candidate,
-                containedIn: storage.root
-            ) { candidateData in
+        try cleanupPreUnlinkCheckpoint(candidate)
+        guard Self.regularFileState(at: publicURL) == .missing else {
+            return .recoveryRequired
+        }
+        let removed = try fileWriter.unlinkFile(
+            matching: inspectedIdentity,
+            at: candidate,
+            containedIn: storage.root,
+            expectedByteCount: intent.outputByteSize,
+            contentValidator: { candidateData in
                 guard candidateData.count == intent.outputByteSize,
                       DocumentStorage.sha256Hex(of: candidateData) == intent.outputSHA256 else {
                     throw ReconciliationError.artifactMismatch
@@ -267,33 +273,6 @@ public final class DraftArtifactReconciliationService: @unchecked Sendable {
                     try Self.exportFormat(intent.format)
                 )
             }
-        } catch {
-            return .recoveryRequired
-        }
-        try cleanupPreUnlinkCheckpoint(candidate)
-        guard Self.regularFileState(at: publicURL) == .missing else {
-            return .recoveryRequired
-        }
-        do {
-            _ = try fileWriter.validatedInstalledFileData(
-                matching: inspectedIdentity,
-                at: candidate,
-                containedIn: storage.root
-            ) { finalData in
-                guard finalData == validated else {
-                    throw ReconciliationError.artifactChangedDuringInspection
-                }
-            }
-        } catch {
-            return .recoveryRequired
-        }
-        guard Self.regularFileState(at: publicURL) == .missing else {
-            return .recoveryRequired
-        }
-        let removed = try fileWriter.unlinkFile(
-            matching: inspectedIdentity,
-            at: candidate,
-            containedIn: storage.root
         )
         guard removed else { return .recoveryRequired }
         guard Self.regularFileState(at: publicURL) == .missing else {

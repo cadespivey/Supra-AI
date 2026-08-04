@@ -1595,6 +1595,7 @@ public final class MatterDraftingController: ObservableObject {
                     try removeNewDraftFile(
                         at: url,
                         expectedIdentity: installedIdentity,
+                        expectedByteCount: intent.outputByteSize,
                         expectedSHA256: intent.outputSHA256
                     )
                     try store.draftArtifacts.abortIntent(id: intent.id)
@@ -1687,6 +1688,7 @@ public final class MatterDraftingController: ObservableObject {
                     try removeNewDraftFile(
                         at: url,
                         expectedIdentity: installedIdentity,
+                        expectedByteCount: intent.outputByteSize,
                         expectedSHA256: intent.outputSHA256,
                         checkpoint: motionCompensationCheckpoint
                     )
@@ -1718,7 +1720,8 @@ public final class MatterDraftingController: ObservableObject {
         try fileWriter.validatedInstalledFileData(
             matching: expectedIdentity,
             at: url,
-            containedIn: storage.root
+            containedIn: storage.root,
+            expectedByteCount: intent.outputByteSize
         ) { installed in
             guard installed.count == intent.outputByteSize,
                   DocumentStorage.sha256Hex(of: installed) == intent.outputSHA256 else {
@@ -1745,6 +1748,9 @@ public final class MatterDraftingController: ObservableObject {
         case publicDestinationStillLinkedAfterRemoval
         case quarantinePathChanged(String)
         case sourceNameReappeared(String)
+        case retainedManagedFileChanged(String)
+        case exactFileHasRemainingLinks(String, UInt64)
+        case exactFileLinkStateUncertain(String, String)
         case removalCouldNotBeVerified
 
         var errorDescription: String? {
@@ -1781,6 +1787,12 @@ public final class MatterDraftingController: ObservableObject {
                 return "The rollback quarantine path changed before deletion; nothing at \(name) was removed and recovery is required."
             case let .sourceNameReappeared(name):
                 return "The removed rollback source name \(name) reappeared after directory synchronization; recovery is required."
+            case let .retainedManagedFileChanged(name):
+                return "The exact rollback file \(name) changed before deletion and remains preserved; recovery is required."
+            case let .exactFileHasRemainingLinks(name, count):
+                return "The exact rollback file \(name) still has \(count) filesystem link(s) after known-name removal; recovery is required."
+            case let .exactFileLinkStateUncertain(name, detail):
+                return "The exact rollback file \(name) link state could not be verified (\(detail)); recovery is required."
             case .removalCouldNotBeVerified:
                 return "Draft rollback could not verify removal of the exact installed file; recovery is required."
             }
@@ -1790,6 +1802,7 @@ public final class MatterDraftingController: ObservableObject {
     private func removeNewDraftFile(
         at url: URL,
         expectedIdentity: DurableFileWriter.InstalledFileIdentity,
+        expectedByteCount: Int,
         expectedSHA256: String,
         checkpoint: MotionCompensationCheckpoint = { _, _ in }
     ) throws {
@@ -1798,6 +1811,7 @@ public final class MatterDraftingController: ObservableObject {
                 matching: expectedIdentity,
                 at: url,
                 containedIn: storage.root,
+                expectedByteCount: expectedByteCount,
                 missingIsSuccess: true,
                 quarantineCheckpoint: { publicURL, quarantineURL in
                     do {
@@ -1840,6 +1854,12 @@ public final class MatterDraftingController: ObservableObject {
             throw DraftCompensationError.quarantinePathChanged(name)
         } catch let DurableFileWriter.WriterError.sourceNameReappeared(name) {
             throw DraftCompensationError.sourceNameReappeared(name)
+        } catch let DurableFileWriter.WriterError.retainedManagedFileChanged(name) {
+            throw DraftCompensationError.retainedManagedFileChanged(name)
+        } catch let DurableFileWriter.WriterError.exactFileHasRemainingLinks(name, count) {
+            throw DraftCompensationError.exactFileHasRemainingLinks(name, count)
+        } catch let DurableFileWriter.WriterError.exactFileLinkStateUncertain(name, detail) {
+            throw DraftCompensationError.exactFileLinkStateUncertain(name, detail)
         } catch let DurableFileWriter.WriterError.retainedQuarantineChanged(name) {
             throw DraftCompensationError.deletionIdentityChanged(name)
         } catch let DurableFileWriter.WriterError.anchoredParentDirectorySynchronizationFailed(detail) {
