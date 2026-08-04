@@ -930,7 +930,7 @@ final class InterruptedDraftRecoveryUITests: XCTestCase {
     private func recoveryFixtureEvidence(in app: XCUIApplication) throws -> RecoveryFixtureEvidence {
         let marker = app.descendants(matching: .any)["drafting.interruptedRecovery.fixtureEvidence"]
         XCTAssertTrue(marker.waitForExistence(timeout: 5), marker.debugDescription)
-        let rawValue = try XCTUnwrap(marker.value as? String)
+        let rawValue = marker.label
         let fields = rawValue.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
         let exactFields = try XCTUnwrap(fields.count == 4 ? fields : nil, "Unexpected fixture evidence: \(rawValue)")
 
@@ -1172,6 +1172,8 @@ final class MotionToDismissWorkspaceUITests: XCTestCase {
 
         let excerpt = app.descendants(matching: .any)["authority.reviewedProposition.excerpt"]
         XCTAssertTrue(excerpt.waitForExistence(timeout: 5))
+        scrollToHittable(excerpt, in: app)
+        XCTAssertTrue(excerpt.isHittable, excerpt.debugDescription)
         excerpt.click()
         excerpt.typeText(exactMotionAuthorityExcerpt)
         let save = app.buttons["authority.reviewedProposition.save"]
@@ -1229,9 +1231,19 @@ final class MotionToDismissWorkspaceUITests: XCTestCase {
                 return
             }
             let windowWidth = windowFrame.width
-            guard let scrollView = app.scrollViews.allElementsBoundByIndex.first(where: {
-                $0.frame.width > windowWidth * 0.5
-            }) else { break }
+            // Text editors expose their own short NSScrollView. Choosing that
+            // nested container cannot reveal an editor clipped below the Form and
+            // can itself have no hit point. Scroll the largest visible content
+            // container so the target moves into the window first.
+            let candidates = app.scrollViews.allElementsBoundByIndex.filter {
+                let frame = $0.frame
+                return frame.width > windowWidth * 0.5
+                    && frame.height > windowFrame.height * 0.4
+                    && frame.intersects(windowFrame)
+            }
+            guard let scrollView = candidates.max(by: { $0.frame.height < $1.frame.height }) else {
+                break
+            }
             scrollView.scroll(byDeltaX: 0, deltaY: -360)
         }
     }

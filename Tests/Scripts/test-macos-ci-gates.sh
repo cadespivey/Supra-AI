@@ -596,11 +596,16 @@ fi
 
 # Expected RED after the sidecar proved unreadable across the app-container
 # boundary: the exact scenario needs an app-side byte probe whose accessibility
-# value contains only a validated managed-relative path and content-free facts.
+# marker contains only a validated managed-relative path and content-free facts.
 recovery_drafting_view="${repo_root}/Apps/SupraAI/SupraAI/Matters/MatterDraftingView.swift"
+recovery_ui_tests="${repo_root}/Apps/SupraAI/SupraAIUITests/ResearchAuthoritiesUITests.swift"
 recovery_fixture_probe="$(sed -n '/private var interruptedDraftRecoveryUITestEvidence:/,/^    }/p' "$recovery_drafting_view")"
+recovery_fixture_marker="$(sed -n '/if let evidence = interruptedDraftRecoveryUITestEvidence/,/^                }/p' "$recovery_drafting_view")"
+recovery_fixture_parser="$(sed -n '/private func recoveryFixtureEvidence(in app:/,/^    }/p' "$recovery_ui_tests")"
 if grep -Fq 'static var interruptedDraftRecoveryUITestManagedRoot: URL?' "$app_environment" \
     && grep -Fq 'drafting.interruptedRecovery.fixtureEvidence' "$recovery_drafting_view" \
+    && grep -Fq '.accessibilityLabel(evidence)' <<<"$recovery_fixture_marker" \
+    && grep -Fq 'let rawValue = marker.label' <<<"$recovery_fixture_parser" \
     && grep -Fq '@State private var interruptedDraftRecoveryUITestRecoveredURL: URL?' "$recovery_drafting_view" \
     && grep -Fq 'controller.interruptedDraftRecoveries.compactMap(\.fileURL)' "$recovery_drafting_view" \
     && grep -Fq '.onChange(of: controller.interruptedDraftRecoveries)' "$recovery_drafting_view" \
@@ -617,7 +622,7 @@ if grep -Fq 'static var interruptedDraftRecoveryUITestManagedRoot: URL?' "$app_e
     && ! grep -Fq 'seeded-matter-id' "$recovery_drafting_view"; then
   printf '%s\n' 'PASS: hosted recovery evidence probes actual bytes without exposing local paths'
 else
-  record_failure 'hosted recovery evidence does not safely probe the preserved file after acknowledgement'
+  record_failure 'hosted recovery evidence is not safely exposed and parsed through a reliable content-free accessibility label'
 fi
 
 root_view="${repo_root}/Apps/SupraAI/SupraAI/RootView.swift"
@@ -797,6 +802,7 @@ fi
 authority_detail_view="${repo_root}/Apps/SupraAI/SupraAI/Authorities/AuthorityDetailView.swift"
 authorities_controller="${repo_root}/Packages/SupraSessions/Sources/SupraSessions/AuthoritiesController.swift"
 motion_ui_class="$(sed -n '/final class MotionToDismissWorkspaceUITests:/,/^}/p' "$motion_ui_tests")"
+motion_authority_remediation_ui="$(sed -n '/func testTUIAUTH02BlockedAuthorityRemediatesIntoMotionReadiness()/,/^    }/p' "$motion_ui_tests")"
 if grep -Fq 'authority.reviewedProposition.status' "$authority_detail_view" \
     && grep -Fq 'authority.reviewedProposition.excerpt' "$authority_detail_view" \
     && grep -Fq 'authority.reviewedProposition.save' "$authority_detail_view" \
@@ -812,10 +818,12 @@ fi
 if grep -Fq 'authority.reviewState.markNotAdverse' "$authority_detail_view" \
     && grep -Fq 'markAuthorityNotAdverse' "$authorities_controller" \
     && grep -Fq 'testTUIAUTH02BlockedAuthorityRemediatesIntoMotionReadiness' <<<"$motion_ui_class" \
-    && grep -Fq 'ui-motion-authority-blocked' <<<"$motion_ui_class"; then
+    && grep -Fq 'ui-motion-authority-blocked' <<<"$motion_ui_class" \
+    && grep -Fq 'scrollToHittable(excerpt, in: app)' <<<"$motion_authority_remediation_ui" \
+    && grep -Fq 'XCTAssertTrue(excerpt.isHittable, excerpt.debugDescription)' <<<"$motion_authority_remediation_ui"; then
   printf '%s\n' 'PASS: blocked saved authority has an in-context hosted remediation path'
 else
-  record_failure 'blocked saved authority lacks an in-context hosted remediation path'
+  record_failure 'blocked saved authority remediation does not make the exact-excerpt editor visibly hittable before interaction'
 fi
 
 matter_workspace_view="${repo_root}/Apps/SupraAI/SupraAI/Matters/MatterWorkspaceView.swift"

@@ -149,8 +149,11 @@ struct MatterDraftingView: View {
                         .clipped()
                         .accessibilityElement(children: .ignore)
                         .accessibilityIdentifier("drafting.interruptedRecovery.fixtureEvidence")
-                        .accessibilityLabel("Recovery fixture evidence")
-                        .accessibilityValue(evidence)
+                        // macOS can omit the value of a clipped SwiftUI Text from
+                        // the hosted accessibility snapshot. Keep the validated,
+                        // content-free fixture facts in the label, which remains
+                        // queryable even when this DEBUG-only marker is offscreen.
+                        .accessibilityLabel(evidence)
                 }
 #endif
                 if controller.legacyDraftsNeedReviewCount > 0 {
