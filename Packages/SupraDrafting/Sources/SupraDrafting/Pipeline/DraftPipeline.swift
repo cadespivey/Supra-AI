@@ -34,7 +34,7 @@ public struct DraftPipeline: Sendable {
             docx: docx,
             followUps: vr.followUps + gateResult.followUps,
             propositionSupport: vr.propositionSupport,
-            verificationReceipt: receipt(for: vr)
+            verificationReceipt: receipt(for: vr, scope: .documentStructure)
         )
     }
 
@@ -60,7 +60,7 @@ public struct DraftPipeline: Sendable {
             docx: docx,
             followUps: vr.followUps + gateResult.followUps,
             propositionSupport: vr.propositionSupport,
-            verificationReceipt: receipt(for: vr)
+            verificationReceipt: receipt(for: vr, scope: .groundedLetterContentAndStructure)
         )
     }
 
@@ -88,7 +88,7 @@ public struct DraftPipeline: Sendable {
             docx: docx,
             followUps: vr.followUps + gateResult.followUps,
             propositionSupport: vr.propositionSupport,
-            verificationReceipt: receipt(for: vr)
+            verificationReceipt: receipt(for: vr, scope: .motionSelectedSourceReproductionAndStructure)
         )
     }
 
@@ -120,9 +120,13 @@ public struct DraftPipeline: Sendable {
         }
     }
 
-    private func receipt(for verification: VerificationResult) -> DraftVerificationReceipt {
+    private func receipt(
+        for verification: VerificationResult,
+        scope: DraftVerificationScope
+    ) -> DraftVerificationReceipt {
         DraftVerificationReceipt(
             status: .passed,
+            scope: scope,
             supportedPropositionIDs: verification.propositionSupport.map(\.propositionID),
             verifierIdentity: verifier.identity,
             gateIdentity: PreFileGate.identity,

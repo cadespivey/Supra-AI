@@ -65,8 +65,17 @@ final class MotionVerificationTests: XCTestCase {
             authorityTwo.reviewedExcerpt
         ])
         XCTAssertEqual(result.verificationReceipt.status, .passed)
+        XCTAssertEqual(
+            result.verificationReceipt.scope,
+            .motionSelectedSourceReproductionAndStructure
+        )
         XCTAssertEqual(result.verificationReceipt.supportedPropositionIDs,
                        result.propositionSupport.map(\.propositionID))
+        XCTAssertTrue(evidence.canonicalSelectedFactReviewParagraphs.allSatisfy {
+            $0.contains("is reproduced for counsel’s analysis")
+                && !$0.contains("does not plead")
+                && !$0.contains("legally sufficient")
+        })
     }
 
     // MVS-03. Expected RED: reordered, changed, or missing numbered facts pass the old
@@ -167,9 +176,9 @@ final class MotionVerificationTests: XCTestCase {
         XCTAssertEqual(result.verificationReceipt.gateIdentity, PreFileGate.identity)
         XCTAssertEqual(result.verificationReceipt.rendererIdentity, renderer.identity)
         XCTAssertEqual(MotionGroundSpec.contractIdentity,
-                       DraftComponentIdentity(id: "supra.drafting.motion-ground-contract", version: "3"))
+                       DraftComponentIdentity(id: "supra.drafting.motion-ground-contract", version: "4"))
         XCTAssertEqual(MotionToDismiss.assemblerIdentity,
-                       DraftComponentIdentity(id: "supra.drafting.motion-to-dismiss-assembler", version: "2"))
+                       DraftComponentIdentity(id: "supra.drafting.motion-to-dismiss-assembler", version: "3"))
     }
 
     // MVS-08. Expected RED: exact paragraph matching currently accepts an arbitrary
@@ -290,8 +299,8 @@ final class MotionVerificationTests: XCTestCase {
                 model: validModel(
                     numberedFacts: [factOne.text],
                     authorityParagraphs: [authority.canonicalParagraph],
-                    applicationParagraphs: [
-                        factOne.canonicalApplicationParagraph(number: 1)
+                    selectedFactReviewParagraphs: [
+                        factOne.canonicalSelectedFactReviewParagraph(number: 1)
                     ]
                 ),
                 evidence: scopedEvidence,
@@ -303,14 +312,14 @@ final class MotionVerificationTests: XCTestCase {
     }
 
     // MVS-11. Expected RED: exact facts may appear only in the statement of facts;
-    // the verifier does not require the argument to apply the reviewed pleading
-    // standards to each selected excerpt.
-    func testFactApplicationMustBeExactCompleteOrderedAndAfterAuthorities() async {
-        let expected = canonicalApplicationParagraphs
+    // the verifier does not require each selected excerpt's neutral counsel-review
+    // paragraph to appear exactly once after the reviewed authorities.
+    func testSelectedFactReviewMustBeExactCompleteOrderedAndAfterAuthorities() async {
+        let expected = canonicalSelectedFactReviewParagraphs
         let fixtures = [
-            validModel(applicationParagraphs: []),
-            validModel(applicationParagraphs: [expected[0] + " Changed.", expected[1]]),
-            validModel(applicationParagraphs: Array(expected.reversed())),
+            validModel(selectedFactReviewParagraphs: []),
+            validModel(selectedFactReviewParagraphs: [expected[0] + " Changed.", expected[1]]),
+            validModel(selectedFactReviewParagraphs: Array(expected.reversed())),
         ]
 
         for model in fixtures {
@@ -339,7 +348,7 @@ final class MotionVerificationTests: XCTestCase {
             model: validModel(
                 numberedFacts: [completePleadingFact.text],
                 authorityParagraphs: [authorityOne.canonicalParagraph],
-                applicationParagraphs: [unsupportedConclusion]
+                selectedFactReviewParagraphs: [unsupportedConclusion]
             ),
             evidence: scopedEvidence
         )
@@ -365,7 +374,7 @@ final class MotionVerificationTests: XCTestCase {
     private func validModel(
         numberedFacts: [String]? = nil,
         authorityParagraphs: [String]? = nil,
-        applicationParagraphs: [String]? = nil,
+        selectedFactReviewParagraphs: [String]? = nil,
         introduction: String = "Defendant moves to dismiss the fictional complaint."
     ) -> DocumentModel {
         MotionToDismiss.assemble(
@@ -386,7 +395,7 @@ final class MotionVerificationTests: XCTestCase {
                 heading: "THE FICTIONAL COMPLAINT FAILS TO STATE A CLAIM.",
                 body: (
                     (authorityParagraphs ?? evidence.authorities.map(\.canonicalParagraph))
-                        + (applicationParagraphs ?? canonicalApplicationParagraphs)
+                        + (selectedFactReviewParagraphs ?? canonicalSelectedFactReviewParagraphs)
                 ).map(BodyBlock.paragraph)
             )],
             conclusion: "WHEREFORE, Defendant requests dismissal.",
@@ -395,10 +404,8 @@ final class MotionVerificationTests: XCTestCase {
         )
     }
 
-    private var canonicalApplicationParagraphs: [String] {
-        evidence.facts.enumerated().map { index, fact in
-            "Applying the reviewed pleading standards to selected fact \(index + 1) (“\(fact.text)”), the moving party submits that the excerpt does not plead the ultimate facts necessary to state a legally sufficient claim."
-        }
+    private var canonicalSelectedFactReviewParagraphs: [String] {
+        evidence.canonicalSelectedFactReviewParagraphs
     }
 
     private func assertBlocked(model: DocumentModel, evidence: MotionVerificationEvidence) async {

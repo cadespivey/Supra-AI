@@ -879,10 +879,11 @@ public struct MotionFactEvidence: Sendable, Equatable {
 
     public var propositionID: String { "motion.fact.\(factID)" }
 
-    /// Deterministic advocacy that applies the reviewed pleading standard to this
-    /// exact selected excerpt without introducing a new factual assertion.
-    public func canonicalApplicationParagraph(number: Int) -> String {
-        "Applying the reviewed pleading standards to selected fact \(number) (“\(text)”), the moving party submits that the excerpt does not plead the ultimate facts necessary to state a legally sufficient claim."
+    /// Neutral deterministic placement of this exact selected excerpt for counsel's
+    /// analysis. Source verification does not establish ground applicability or a
+    /// legal-sufficiency conclusion.
+    public func canonicalSelectedFactReviewParagraph(number: Int) -> String {
+        "Selected fact \(number) (“\(text)”) is reproduced for counsel’s analysis under the reviewed pleading standards."
     }
 }
 
@@ -942,9 +943,9 @@ public struct MotionVerificationEvidence: Sendable, Equatable {
         facts.map(\.propositionID) + authorities.map(\.propositionID)
     }
 
-    public var canonicalApplicationParagraphs: [String] {
+    public var canonicalSelectedFactReviewParagraphs: [String] {
         facts.enumerated().map { index, fact in
-            fact.canonicalApplicationParagraph(number: index + 1)
+            fact.canonicalSelectedFactReviewParagraph(number: index + 1)
         }
     }
 }
@@ -1111,9 +1112,19 @@ public enum DraftVerificationStatus: String, Codable, Sendable, Equatable {
     case passed
 }
 
+/// The bounded claim made by a verification receipt. A pass confirms the named
+/// mechanical verification surface; it is never a legal-sufficiency or filing-
+/// readiness opinion.
+public enum DraftVerificationScope: String, Codable, Sendable, Equatable {
+    case documentStructure = "document_structure"
+    case groundedLetterContentAndStructure = "grounded_letter_content_and_structure"
+    case motionSelectedSourceReproductionAndStructure = "motion_selected_source_reproduction_and_structure"
+}
+
 /// Receipt created only after verification and the pre-file gate pass and rendering succeeds.
 public struct DraftVerificationReceipt: Codable, Sendable, Equatable {
     public let status: DraftVerificationStatus
+    public let scope: DraftVerificationScope
     public let supportedPropositionIDs: [String]
     public let verifierIdentity: DraftComponentIdentity
     public let gateIdentity: DraftComponentIdentity
@@ -1121,12 +1132,14 @@ public struct DraftVerificationReceipt: Codable, Sendable, Equatable {
 
     public init(
         status: DraftVerificationStatus,
+        scope: DraftVerificationScope,
         supportedPropositionIDs: [String],
         verifierIdentity: DraftComponentIdentity,
         gateIdentity: DraftComponentIdentity,
         rendererIdentity: DraftComponentIdentity
     ) {
         self.status = status
+        self.scope = scope
         self.supportedPropositionIDs = supportedPropositionIDs
         self.verifierIdentity = verifierIdentity
         self.gateIdentity = gateIdentity

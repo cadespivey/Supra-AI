@@ -8,7 +8,7 @@ import SupraDraftingCore
 public struct DraftVerifier: Verifier, Sendable {
     public let identity = DraftComponentIdentity(
         id: "supra.drafting.draft-verifier",
-        version: "5"
+        version: "6"
     )
     public let citator: CitatorClient?
 
@@ -172,21 +172,24 @@ public struct DraftVerifier: Verifier, Sendable {
             block(.authorityValidity, "Reviewed authority paragraphs are missing, duplicated, changed, or reordered.")
         }
 
-        let expectedApplicationParagraphs = evidence.canonicalApplicationParagraphs
-        let applicationIndices = expectedApplicationParagraphs.map { expected -> Int? in
+        let expectedSelectedFactReviewParagraphs = evidence.canonicalSelectedFactReviewParagraphs
+        let selectedFactReviewIndices = expectedSelectedFactReviewParagraphs.map { expected -> Int? in
             let matches = paragraphTexts.indices.filter { paragraphTexts[$0] == expected }
             return matches.count == 1 ? matches[0] : nil
         }
-        let exactApplicationOrder = applicationIndices.allSatisfy { $0 != nil }
-            && zip(applicationIndices.compactMap { $0 }, applicationIndices.compactMap { $0 }.dropFirst())
+        let exactSelectedFactReviewOrder = selectedFactReviewIndices.allSatisfy { $0 != nil }
+            && zip(
+                selectedFactReviewIndices.compactMap { $0 },
+                selectedFactReviewIndices.compactMap { $0 }.dropFirst()
+            )
                 .allSatisfy(<)
-        let applicationsFollowAuthorities = authorityIndices.compactMap { $0 }.last.map { lastAuthority in
-            applicationIndices.compactMap { $0 }.first.map { $0 > lastAuthority } ?? false
+        let selectedFactReviewFollowsAuthorities = authorityIndices.compactMap { $0 }.last.map { lastAuthority in
+            selectedFactReviewIndices.compactMap { $0 }.first.map { $0 > lastAuthority } ?? false
         } ?? false
-        if !exactApplicationOrder || !applicationsFollowAuthorities {
+        if !exactSelectedFactReviewOrder || !selectedFactReviewFollowsAuthorities {
             block(
                 .factProvenance,
-                "The argument must apply the reviewed pleading standards to every selected fact exactly once and in order."
+                "The argument must reproduce every selected fact for counsel’s review exactly once and in order after the reviewed authorities."
             )
         }
 
@@ -204,7 +207,7 @@ public struct DraftVerifier: Verifier, Sendable {
                 ),
             ]
             + expectedAuthorityParagraphs.map(BodyBlock.paragraph)
-            + expectedApplicationParagraphs.map(BodyBlock.paragraph)
+            + expectedSelectedFactReviewParagraphs.map(BodyBlock.paragraph)
             + [
                 .pointHeading(level: 1, numeral: "II.", text: "CONCLUSION"),
                 .paragraph(evidence.bodyContract.conclusion),

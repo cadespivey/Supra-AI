@@ -138,7 +138,8 @@ final class MotionToDismissControllerTests: XCTestCase {
             "MEMORANDUM OF LAW",
             "FAILS TO STATE A CLAIM",
             fixture.selectedAuthorityCitation,
-            "Applying the reviewed pleading standards to selected fact 1",
+            "Selected fact 1",
+            "is reproduced for counsel’s analysis under the reviewed pleading standards",
             "JUDGE: Avery Stone",
             "Submitted for review:",
             "/s/ Harvey Specter",
@@ -147,6 +148,7 @@ final class MotionToDismissControllerTests: XCTestCase {
             XCTAssertTrue(xml.contains(required), "motion DOCX XML missing \(required)")
         }
         XCTAssertTrue(xml.contains(fixture.selectedFact.text))
+        XCTAssertFalse(xml.contains("does not plead the ultimate facts necessary to state a legally sufficient claim"))
         XCTAssertFalse(xml.contains("UNSELECTED_FACT_CANARY"))
         XCTAssertFalse(xml.contains("UNSELECTED_AUTHORITY_CANARY"))
     }

@@ -8,7 +8,7 @@ import SupraDraftingCore
 public enum MotionToDismiss {
     public static let assemblerIdentity = DraftComponentIdentity(
         id: "supra.drafting.motion-to-dismiss-assembler",
-        version: "2"
+        version: "3"
     )
 
     public struct SectionDef: Sendable, Equatable {

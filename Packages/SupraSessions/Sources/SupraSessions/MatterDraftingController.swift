@@ -750,10 +750,10 @@ public final class MatterDraftingController: ObservableObject {
             let authorityParagraphs = evidence.authorities.map { authority in
                 BodyBlock.paragraph(authority.canonicalParagraph)
             }
-            let applicationParagraphs = evidence.canonicalApplicationParagraphs.map(BodyBlock.paragraph)
+            let selectedFactReviewParagraphs = evidence.canonicalSelectedFactReviewParagraphs.map(BodyBlock.paragraph)
             let argument = MotionToDismiss.ArgumentPoint(
                 heading: argumentHeading,
-                body: authorityParagraphs + applicationParagraphs
+                body: authorityParagraphs + selectedFactReviewParagraphs
             )
             let model = MotionToDismiss.assemble(
                 caption: shell.caption,

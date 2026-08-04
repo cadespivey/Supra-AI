@@ -571,6 +571,17 @@ else
   record_failure 'motion smoke does not select exact identified, review-bound production source rows'
 fi
 
+motion_core="${repo_root}/Packages/SupraDraftingCore/Sources/SupraDraftingCore/DraftingCore.swift"
+motion_claims="${repo_root}/Docs/Verified-Product-Claims.yml"
+if grep -Fq 'is reproduced for counsel’s analysis under the reviewed pleading standards' "$motion_core" \
+    && ! grep -Fq 'does not plead the ultimate facts necessary to state a legally sufficient claim' "$motion_core" \
+    && grep -Fq 'It does not decide fact-to-ground applicability, legal sufficiency, or filing readiness.' "$motion_view" \
+    && grep -Fq 'it does not determine fact-to-ground applicability, legal sufficiency, or filing readiness.' "$motion_claims"; then
+  printf '%s\n' 'PASS: motion verification stays scoped to structure and selected-source reproduction'
+else
+  record_failure 'motion verification copy overstates applicability, legal sufficiency, or filing readiness'
+fi
+
 motion_source_loader="$(sed -n '/private func loadMotionSourcesIfNeeded()/,/^    }/p' "$motion_view")"
 if grep -Fq -- '-uiTestMotionDraftSuccess' <<<"$motion_source_loader" \
     || grep -Fq 'selectedMotionFactIDs.insert' <<<"$motion_source_loader" \

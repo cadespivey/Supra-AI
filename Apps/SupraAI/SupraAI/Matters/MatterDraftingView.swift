@@ -400,7 +400,7 @@ struct MatterDraftingView: View {
         } header: {
             Text("Supported Florida motion")
         } footer: {
-            Text("Supra assembles this motion locally from only the fact excerpts and reviewed authorities you select. This first supported ground is failure to state a claim; no drafting model is used. Review every proposition and citation before filing.")
+            Text("Supra assembles this motion locally from only the fact excerpts and reviewed authorities you select. The pre-file gate checks required structure and exact selected-source reproduction; saved lineage records source provenance and reviewed-authority bindings. It does not decide fact-to-ground applicability, legal sufficiency, or filing readiness. This first supported ground is failure to state a claim; no drafting model is used. Review every proposition and citation before filing.")
         }
     }
 
@@ -629,7 +629,7 @@ struct MatterDraftingView: View {
         } footer: {
             switch artifact.format {
             case .docx:
-                Text("Review the generated document before filing. Unsupported content is blocked before rendering.")
+                Text("Verification covers required structure and exact selected-source reproduction. It does not determine factual applicability, legal sufficiency, or filing readiness. Review the generated document before filing.")
             case .markdown:
                 Text("A work-product description in your own words — a drafting brief, not a court-ready or model-generated filing.")
             }

@@ -84,7 +84,7 @@ final class MotionAssemblyTests: XCTestCase {
                     subPoints: [MotionToDismiss.ArgumentPoint(
                         heading: "McKernon Fails to Allege the Essential Terms of a Valid Contract.",
                         body: ([motionEvidence.authorities[1].canonicalParagraph]
-                            + motionEvidence.canonicalApplicationParagraphs)
+                            + motionEvidence.canonicalSelectedFactReviewParagraphs)
                             .map(BodyBlock.paragraph)
                     )]
                 ),
@@ -113,7 +113,7 @@ final class MotionAssemblyTests: XCTestCase {
                 heading: motionEvidence.bodyContract.argumentHeading,
                 body: (
                     motionEvidence.authorities.map(\.canonicalParagraph)
-                        + motionEvidence.canonicalApplicationParagraphs
+                        + motionEvidence.canonicalSelectedFactReviewParagraphs
                 ).map(BodyBlock.paragraph)
             )],
             conclusion: motionEvidence.bodyContract.conclusion,

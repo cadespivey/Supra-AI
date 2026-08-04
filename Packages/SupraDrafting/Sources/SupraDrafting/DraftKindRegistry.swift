@@ -98,7 +98,7 @@ public enum LetterDemandSlots {
 public struct MotionGroundSpec: Sendable, Equatable {
     public static let contractIdentity = DraftComponentIdentity(
         id: "supra.drafting.motion-ground-contract",
-        version: "3"
+        version: "4"
     )
 
     public var key: String

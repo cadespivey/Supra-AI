@@ -49,7 +49,7 @@ The current published Supra AI release is identified by the newest appcast entry
   bar-admissions list in **Settings**. A per-firm **style profile** (also in Settings) applies your
   letterhead, caption, and signature-block conventions to supported drafts, and can be captured by
   parsing an uploaded exemplar document for review.
-  Draft rendering stops before a file is created when required facts, authority support, or verification provenance are missing, unsupported, or unverifiable.
+  Draft rendering stops before a file is created when required facts, authority support, or verification provenance are missing, unsupported, or unverifiable. For the supported motion, the gate checks required structure and exact selected-source reproduction; it does not determine fact-to-ground applicability, legal sufficiency, or filing readiness.
 - **Timekeeping → defensible billing (ScratchPad).** Keep one running daily note — `@matter` /
   `#issue` tags, with work product, emails, and filings attached inline to the note they support.
   Tag an entry `#Note` to exclude that entry and its attachments before billing-model input. On demand, a local model turns the day into a reviewable, editable table of
