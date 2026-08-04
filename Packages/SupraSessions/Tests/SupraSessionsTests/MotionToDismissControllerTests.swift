@@ -970,16 +970,21 @@ final class MotionToDismissControllerTests: XCTestCase {
         XCTAssertEqual(displayed.text, replacement)
     }
 
-    // T-MTD-33. Expected RED: the abbreviated Florida rule citation is not
+    // T-MTD-33. Expected RED: the spelled-out Florida rule citation is not
     // recognized in attorney-composed slots, so generation can create a file,
-    // artifact intent, and success audit. Readiness must reject every composed
-    // slot without rejecting the same citation inside exact selected evidence.
+    // artifact intent, and success audit. Readiness must reject both common rule
+    // forms in every composed slot without rejecting the same citation inside
+    // exact selected evidence.
     func testTMTD33ReadinessRejectsCitationShapedComposedSlotsButAllowsSelectedFactCitations() async throws {
         let mutatedInputs: [(String, (inout MotionToDismissDraftInput) -> Void)] = [
-            ("responding pleading", { $0.respondingTo = "Complaint under Fla. R. Civ. P. 1.140(b)(6)" }),
-            ("relief", { $0.reliefSought = "dismissal under Fla. R. Civ. P. 1.140(b)(6)" }),
-            ("represented party name", { $0.representedPartyName = "Gulf Works, Inc., Fla. R. Civ. P. 1.140(b)(6)" }),
-            ("represented role", { $0.partyRepresented = "Defendant under Fla. R. Civ. P. 1.140(b)(6)" }),
+            ("abbreviated responding pleading", { $0.respondingTo = "Complaint under Fla. R. Civ. P. 1.140(b)(6)" }),
+            ("abbreviated relief", { $0.reliefSought = "dismissal under Fla. R. Civ. P. 1.140(b)(6)" }),
+            ("abbreviated represented party name", { $0.representedPartyName = "Gulf Works, Inc., Fla. R. Civ. P. 1.140(b)(6)" }),
+            ("abbreviated represented role", { $0.partyRepresented = "Defendant under Fla. R. Civ. P. 1.140(b)(6)" }),
+            ("spelled-out responding pleading", { $0.respondingTo = "Complaint under Florida Rule of Civil Procedure 1.140(b)(6)" }),
+            ("spelled-out relief", { $0.reliefSought = "dismissal under Florida Rule of Civil Procedure 1.140(b)(6)" }),
+            ("spelled-out represented party name", { $0.representedPartyName = "Gulf Works, Inc., Florida Rule of Civil Procedure 1.140(b)(6)" }),
+            ("spelled-out represented role", { $0.partyRepresented = "Defendant under Florida Rule of Civil Procedure 1.140(b)(6)" }),
         ]
         for (label, mutate) in mutatedInputs {
             let fixture = try makeFixture()
@@ -1004,7 +1009,7 @@ final class MotionToDismissControllerTests: XCTestCase {
             store: fixture.store,
             matterID: fixture.matterID,
             name: "Citation-bearing complaint excerpt.txt",
-            text: "The complaint alleges a limitations dispute under Fla. Stat. § 95.11 and identifies no other breached duty."
+            text: "The complaint invokes Florida Rule of Civil Procedure 1.140(b)(6) and identifies no other breached duty."
         )
         var selectedEvidence = fixture.selectedInput
         selectedEvidence.selectedFacts = [factSelection(citedFact)]

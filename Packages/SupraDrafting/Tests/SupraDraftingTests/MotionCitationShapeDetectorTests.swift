@@ -19,14 +19,18 @@ final class MotionCitationShapeDetectorTests: XCTestCase {
         }
     }
 
-    // T-MTD-CITE-01. Expected RED: the shared detector recognizes generic
-    // "rule 12" prose but not the standard abbreviated Florida rules citation.
+    // T-MTD-CITE-01. The shared detector must recognize both the standard
+    // abbreviated and spelled-out Florida civil-rule citation forms.
     func testFloridaRulesOfCivilProcedureCitationShapeIsDetected() {
-        XCTAssertTrue(
-            MotionCitationShapeDetector.containsCitationShape(
-                in: "Fla. R. Civ. P. 1.140(b)(6)"
+        for citation in [
+            "Fla. R. Civ. P. 1.140(b)(6)",
+            "Florida Rule of Civil Procedure 1.140(b)(6)",
+        ] {
+            XCTAssertTrue(
+                MotionCitationShapeDetector.containsCitationShape(in: citation),
+                "expected Florida civil-rule citation shape: \(citation)"
             )
-        )
+        }
     }
 
     func testOrdinaryComposedMotionSlotsAreNotCitationShaped() {

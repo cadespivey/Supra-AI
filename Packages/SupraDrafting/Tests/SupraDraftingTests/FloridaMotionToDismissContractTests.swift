@@ -9,6 +9,8 @@ final class FloridaMotionToDismissContractTests: XCTestCase {
         let mixedCitations = [
             "Example v. Fictional, 123 F. Supp. 3d 456, 321 So. 3d 654 (Fla. 2022)",
             "Example v. Fictional, 321 So. 3d 654, 123 F.3d 456 (Fla. 2022)",
+            "123 F.3d 456, 789 So. 3d 1 (Fla. 2024)",
+            "123 F. Supp. 3d 456, 321 So. 3d 654 (Fla. 2022)",
         ]
 
         for citation in mixedCitations {
