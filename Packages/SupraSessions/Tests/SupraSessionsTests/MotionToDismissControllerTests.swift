@@ -1402,6 +1402,61 @@ final class MotionToDismissControllerTests: XCTestCase {
         )
     }
 
+    // T-MTD-41. If the verified quarantine is modified in place at the final
+    // checkpoint, rollback must fail closed and accurately report that the
+    // changed bytes remain under the quarantine name rather than claiming a
+    // restore to the public destination.
+    func testTMTD41PreRemovalContentChangeReportsRetainedQuarantine() async throws {
+        let fixture = try makeFixture()
+        let fileName = "Motion-to-Dismiss-content-change.docx"
+        let publicURL = fixture.storage.exportsDirectory(forMatterID: fixture.matterID)
+            .appendingPathComponent(fileName)
+        let modifiedBytes = Data("modified-quarantine-owner-canary".utf8)
+        var intentID: String?
+        var quarantineURL: URL?
+        let controller = MatterDraftingController(
+            store: fixture.store,
+            storage: fixture.storage,
+            fileStampProvider: { "content-change" },
+            draftCompensationPreUnlinkCheckpoint: { quarantine in
+                quarantineURL = quarantine
+                let handle = try FileHandle(forWritingTo: quarantine)
+                try handle.truncate(atOffset: 0)
+                try handle.write(contentsOf: modifiedBytes)
+                try handle.synchronize()
+                try handle.close()
+            },
+            motionAuditCommitter: { event, _ in
+                intentID = String(event.id.dropFirst("draft-artifact-".count))
+                throw InjectedFailure.stop
+            }
+        )
+
+        let result = await controller.draft(
+            .motionToDismiss(fixture.selectedInput),
+            matterID: fixture.matterID
+        )
+
+        guard case let .failure(.renderFailed(message)) = result else {
+            return XCTFail("expected compensation failure, got \(result)")
+        }
+        let quarantine = try XCTUnwrap(quarantineURL)
+        XCTAssertTrue(message.contains("rollback also failed"), message)
+        XCTAssertTrue(message.contains(quarantine.lastPathComponent), message)
+        XCTAssertTrue(message.contains("remains preserved"), message)
+        XCTAssertFalse(message.contains("was restored"), message)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: publicURL.path))
+        XCTAssertEqual(try Data(contentsOf: quarantine), modifiedBytes)
+        XCTAssertEqual(
+            try fixture.store.draftArtifacts.intent(id: XCTUnwrap(intentID))?.status,
+            DraftArtifactIntentStatus.recoveryRequired.rawValue
+        )
+        XCTAssertFalse(
+            try fixture.store.auditEvents.fetchEvents(matterID: fixture.matterID)
+                .contains { $0.eventType == "draft_generated" }
+        )
+    }
+
     // MARK: - Fixtures
 
     private struct IndexedFact {
