@@ -432,6 +432,7 @@ final class MatterDraftingControllerTests: XCTestCase {
             destination.lastPathComponent
         )
         var intentID: String?
+        var quarantineURL: URL?
         let controller = MatterDraftingController(
             store: store,
             storage: storage,
@@ -447,7 +448,8 @@ final class MatterDraftingControllerTests: XCTestCase {
                     at: preservedDestination,
                     to: destination
                 )
-            }
+            },
+            draftCompensationPreUnlinkCheckpoint: { quarantineURL = $0 }
         )
 
         let result = await controller.draftCustomDescription(
@@ -458,14 +460,20 @@ final class MatterDraftingControllerTests: XCTestCase {
             )
         )
 
-        if case .success = result {
-            XCTFail("a detached installed inode must not authorize success finalization")
+        guard case let .failure(.renderFailed(message)) = result else {
+            return XCTFail("a detached installed inode must not authorize success finalization")
         }
+        XCTAssertTrue(message.contains("rollback also failed"), message)
         XCTAssertTrue(FileManager.default.fileExists(atPath: destination.path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: preservedDestination.path))
         try DocumentExportValidator.validate(destination, as: .markdown)
+        XCTAssertNotNil(quarantineURL)
+        if let quarantineURL {
+            XCTAssertTrue(FileManager.default.fileExists(atPath: quarantineURL.path))
+            try DocumentExportValidator.validate(quarantineURL, as: .markdown)
+        }
         let intent = try XCTUnwrap(try store.draftArtifacts.intent(id: XCTUnwrap(intentID)))
-        XCTAssertEqual(intent.status, DraftArtifactIntentStatus.aborted.rawValue)
+        XCTAssertEqual(intent.status, DraftArtifactIntentStatus.recoveryRequired.rawValue)
         XCTAssertTrue(try store.auditEvents.fetchEvents(matterID: matter.id).isEmpty)
     }
 
