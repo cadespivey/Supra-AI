@@ -318,6 +318,33 @@ final class MotionVerificationTests: XCTestCase {
         }
     }
 
+    // MVS-13. Source and structure verification must never manufacture a merits
+    // conclusion that no attorney reviewed or bound to the selected fact.
+    func testUnreviewedMeritsConclusionNeverReachesRenderer() async {
+        let completePleadingFact = MotionFactEvidence(
+            factID: "fact-complete",
+            text: "The complaint alleges a written contract, performance, breach on January 4, and $10,000 in damages.",
+            sourceID: "revision-complete",
+            locator: "p. 4"
+        )
+        let scopedEvidence = MotionVerificationEvidence(
+            facts: [completePleadingFact],
+            authorities: [authorityOne],
+            bodyContract: evidence.bodyContract
+        )
+        let unsupportedConclusion =
+            "Applying the reviewed pleading standards to selected fact 1 (“\(completePleadingFact.text)”), the moving party submits that the excerpt does not plead the ultimate facts necessary to state a legally sufficient claim."
+
+        await assertBlocked(
+            model: validModel(
+                numberedFacts: [completePleadingFact.text],
+                authorityParagraphs: [authorityOne.canonicalParagraph],
+                applicationParagraphs: [unsupportedConclusion]
+            ),
+            evidence: scopedEvidence
+        )
+    }
+
     // MVS-12. Expected RED: uncited prose and headings outside the supported
     // one-ground body shape are not citation-shaped, so the old verifier lets
     // them reach the renderer without any selected-source binding.
