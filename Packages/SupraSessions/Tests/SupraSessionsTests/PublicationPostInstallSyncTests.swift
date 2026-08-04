@@ -12,6 +12,19 @@ final class PublicationPostInstallSyncTests: XCTestCase {
     // hard link at a replacement public path, the writer must fail before audit
     // and leave the prepared intent recoverable.
     func testACREXPORT018PostInstallSyncParentReplacementStopsBeforeAudit() async throws {
+        try await assertPostInstallParentReplacementFailsClosed(throwsAfterReplacement: false)
+    }
+
+    // The callback's throwing path is equally untrusted: rollback through the
+    // retained parent cannot turn a newly exposed exact public hard link into a
+    // generic aborted result.
+    func testACREXPORT018ThrowingPostInstallSyncParentReplacementStopsBeforeAudit() async throws {
+        try await assertPostInstallParentReplacementFailsClosed(throwsAfterReplacement: true)
+    }
+
+    private func assertPostInstallParentReplacementFailsClosed(
+        throwsAfterReplacement: Bool
+    ) async throws {
         let store = try SupraStore.inMemory()
         let matter = try store.matters.createMatter(name: "Post-install sync matter")
         let root = FileManager.default.temporaryDirectory
@@ -24,7 +37,8 @@ final class PublicationPostInstallSyncTests: XCTestCase {
         let injector = PostInstallParentReplacementInjector(
             parent: parent,
             destination: destination,
-            preservedParent: preservedParent
+            preservedParent: preservedParent,
+            throwsAfterReplacement: throwsAfterReplacement
         )
         let writer = DurableFileWriter(
             faultInjector: { _ in },
@@ -52,20 +66,35 @@ final class PublicationPostInstallSyncTests: XCTestCase {
         }
         XCTAssertTrue(injector.didReplaceParent)
         XCTAssertEqual(auditCallCount, 0)
-        XCTAssertEqual(
-            try Data(contentsOf: destination),
-            try Data(contentsOf: preservedParent.appendingPathComponent(destination.lastPathComponent))
-        )
-        let statuses = try await store.database.writer.read { db in
-            try String.fetchAll(
+        let publicData = try Data(contentsOf: destination)
+        let intents = try await store.database.writer.read { db in
+            try DraftArtifactIntentRecord.fetchAll(
                 db,
-                sql: "SELECT status FROM draft_artifact_intents WHERE matter_id = ?",
+                sql: "SELECT * FROM draft_artifact_intents WHERE matter_id = ?",
                 arguments: [matter.id]
             )
         }
-        XCTAssertEqual(statuses, [DraftArtifactIntentStatus.recoveryRequired.rawValue])
+        XCTAssertEqual(intents.count, 1)
+        let intent = try XCTUnwrap(intents.first)
+        XCTAssertEqual(publicData.count, intent.outputByteSize)
+        XCTAssertEqual(DocumentStorage.sha256Hex(of: publicData), intent.outputSHA256)
+        if !throwsAfterReplacement {
+            XCTAssertEqual(
+                publicData,
+                try Data(
+                    contentsOf: preservedParent.appendingPathComponent(
+                        destination.lastPathComponent
+                    )
+                )
+            )
+        }
+        XCTAssertEqual(intent.status, DraftArtifactIntentStatus.recoveryRequired.rawValue)
         XCTAssertTrue(try store.auditEvents.fetchEvents(matterID: matter.id).isEmpty)
     }
+}
+
+private enum PostInstallSyncInjectedFailure: Error {
+    case stopAfterReplacement
 }
 
 private final class PostInstallParentReplacementInjector: @unchecked Sendable {
@@ -73,12 +102,19 @@ private final class PostInstallParentReplacementInjector: @unchecked Sendable {
     private let parent: URL
     private let destination: URL
     private let preservedParent: URL
+    private let throwsAfterReplacement: Bool
     private var replaced = false
 
-    init(parent: URL, destination: URL, preservedParent: URL) {
+    init(
+        parent: URL,
+        destination: URL,
+        preservedParent: URL,
+        throwsAfterReplacement: Bool
+    ) {
         self.parent = parent
         self.destination = destination
         self.preservedParent = preservedParent
+        self.throwsAfterReplacement = throwsAfterReplacement
     }
 
     var didReplaceParent: Bool { lock.withLock { replaced } }
@@ -99,5 +135,8 @@ private final class PostInstallParentReplacementInjector: @unchecked Sendable {
             at: preservedParent.appendingPathComponent(destination.lastPathComponent),
             to: destination
         )
+        if throwsAfterReplacement {
+            throw PostInstallSyncInjectedFailure.stopAfterReplacement
+        }
     }
 }
