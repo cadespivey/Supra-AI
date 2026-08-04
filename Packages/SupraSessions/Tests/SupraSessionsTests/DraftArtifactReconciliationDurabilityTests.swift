@@ -254,6 +254,141 @@ final class DraftArtifactReconciliationDurabilityTests: XCTestCase {
         )
     }
 
+    // T-DAR-DUR-04. Standing guard (expected GREEN at 5c4a3a17): after the
+    // format validator validates the supplied Data, mutates the same public
+    // inode, and returns normally, the writer's stable reread must fail closed
+    // before Store finalization. This pins an already-correct race boundary.
+    func testTDARDUR04StandingGuardPublicValidatorMutationFailsClosed() throws {
+        let fixture = try makeFixture()
+        let output = Data("# Public bytes validated before mutation\n".utf8)
+        let changed = Data("# Public bytes changed by returning validator\n".utf8)
+        let intent = try fixture.store.draftArtifacts.prepareGenericIntent(
+            matterID: fixture.matter.id,
+            artifactKind: .customDescription,
+            format: .markdown,
+            fileName: "Public-returning-validator-mutation.md",
+            output: output,
+            id: "public-returning-validator-mutation"
+        )
+        let publicURL = try install(output, intent: intent, storage: fixture.storage)
+        let originalIdentity = try reconciliationIdentity(at: publicURL)
+        let mutationProbe = ReturningValidatorMutationProbe(
+            expectedURL: publicURL,
+            expectedData: output,
+            replacement: changed
+        )
+        let service = DraftArtifactReconciliationService(
+            store: fixture.store,
+            storage: fixture.storage
+        )
+        service.artifactFormatValidator = {
+            try mutationProbe.validateThenMutate($0, format: $1)
+        }
+
+        let summary = try service.reconcilePendingIntents()
+
+        XCTAssertEqual(
+            summary,
+            DraftArtifactReconciliationSummary(recoveryRequiredCount: 1)
+        )
+        XCTAssertEqual(mutationProbe.invocationCount, 1)
+        XCTAssertEqual(mutationProbe.validatedFormats, [DocumentExportFormat.markdown.rawValue])
+        XCTAssertEqual(mutationProbe.validatedHashes, [intent.outputSHA256])
+        XCTAssertEqual(mutationProbe.identitiesBeforeMutation, [originalIdentity])
+        XCTAssertEqual(mutationProbe.identitiesAfterMutation, [originalIdentity])
+        let preserved = try Data(contentsOf: publicURL)
+        XCTAssertEqual(preserved, changed)
+        XCTAssertEqual(
+            DocumentStorage.sha256Hex(of: preserved),
+            DocumentStorage.sha256Hex(of: changed)
+        )
+        XCTAssertNotEqual(DocumentStorage.sha256Hex(of: preserved), intent.outputSHA256)
+        XCTAssertEqual(
+            try fixture.store.draftArtifacts.intent(id: intent.id)?.status,
+            DraftArtifactIntentStatus.recoveryRequired.rawValue
+        )
+        XCTAssertTrue(
+            try fixture.store.auditEvents.fetchEvents(matterID: fixture.matter.id).isEmpty
+        )
+        XCTAssertNotNil(
+            try fixture.store.remediationRecovery.pendingItem(
+                kind: .interruptedDraftArtifact,
+                relatedID: intent.id
+            )
+        )
+    }
+
+    // T-DAR-DUR-05. Standing guard (expected GREEN at 5c4a3a17): rollback
+    // cleanup has the same stable-reread obligation. A returning validator's
+    // same-inode mutation must leave the exact changed quarantine in place and
+    // require recovery without unlinking or aborting the prepared intent.
+    func testTDARDUR05StandingGuardQuarantineValidatorMutationFailsClosed() throws {
+        let fixture = try makeFixture()
+        let output = Data("# Quarantine bytes validated before mutation\n".utf8)
+        let changed = Data("# Quarantine changed by returning validator\n".utf8)
+        let intent = try fixture.store.draftArtifacts.prepareGenericIntent(
+            matterID: fixture.matter.id,
+            artifactKind: .customDescription,
+            format: .markdown,
+            fileName: "Quarantine-returning-validator-mutation.md",
+            output: output,
+            id: "quarantine-returning-validator-mutation"
+        )
+        let quarantine = try installRollbackQuarantine(
+            output,
+            intent: intent,
+            storage: fixture.storage
+        )
+        let publicURL = fixture.storage.exportsDirectory(forMatterID: intent.matterID)
+            .appendingPathComponent(intent.fileName, isDirectory: false)
+        let originalIdentity = try reconciliationIdentity(at: quarantine)
+        let mutationProbe = ReturningValidatorMutationProbe(
+            expectedURL: quarantine,
+            expectedData: output,
+            replacement: changed
+        )
+        let service = DraftArtifactReconciliationService(
+            store: fixture.store,
+            storage: fixture.storage
+        )
+        service.artifactFormatValidator = {
+            try mutationProbe.validateThenMutate($0, format: $1)
+        }
+
+        let summary = try service.reconcilePendingIntents()
+
+        XCTAssertEqual(
+            summary,
+            DraftArtifactReconciliationSummary(recoveryRequiredCount: 1)
+        )
+        XCTAssertEqual(mutationProbe.invocationCount, 1)
+        XCTAssertEqual(mutationProbe.validatedFormats, [DocumentExportFormat.markdown.rawValue])
+        XCTAssertEqual(mutationProbe.validatedHashes, [intent.outputSHA256])
+        XCTAssertEqual(mutationProbe.identitiesBeforeMutation, [originalIdentity])
+        XCTAssertEqual(mutationProbe.identitiesAfterMutation, [originalIdentity])
+        let preserved = try Data(contentsOf: quarantine)
+        XCTAssertEqual(preserved, changed)
+        XCTAssertEqual(
+            DocumentStorage.sha256Hex(of: preserved),
+            DocumentStorage.sha256Hex(of: changed)
+        )
+        XCTAssertNotEqual(DocumentStorage.sha256Hex(of: preserved), intent.outputSHA256)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: publicURL.path))
+        XCTAssertEqual(
+            try fixture.store.draftArtifacts.intent(id: intent.id)?.status,
+            DraftArtifactIntentStatus.recoveryRequired.rawValue
+        )
+        XCTAssertTrue(
+            try fixture.store.auditEvents.fetchEvents(matterID: fixture.matter.id).isEmpty
+        )
+        XCTAssertNotNil(
+            try fixture.store.remediationRecovery.pendingItem(
+                kind: .interruptedDraftArtifact,
+                relatedID: intent.id
+            )
+        )
+    }
+
     private struct Fixture {
         let store: SupraStore
         let matter: MatterRecord
@@ -385,6 +520,51 @@ private final class FinalUnlinkMutationProbe: @unchecked Sendable {
     }
 }
 
+private final class ReturningValidatorMutationProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private let expectedURL: URL
+    private let expectedData: Data
+    private let replacement: Data
+    private var count = 0
+    private var formats: [String] = []
+    private var hashes: [String] = []
+    private var beforeIdentities: [ReconciliationFilesystemIdentity] = []
+    private var afterIdentities: [ReconciliationFilesystemIdentity] = []
+
+    init(expectedURL: URL, expectedData: Data, replacement: Data) {
+        self.expectedURL = expectedURL.standardizedFileURL
+        self.expectedData = expectedData
+        self.replacement = replacement
+    }
+
+    var invocationCount: Int { lock.withLock { count } }
+    var validatedFormats: [String] { lock.withLock { formats } }
+    var validatedHashes: [String] { lock.withLock { hashes } }
+    var identitiesBeforeMutation: [ReconciliationFilesystemIdentity] {
+        lock.withLock { beforeIdentities }
+    }
+    var identitiesAfterMutation: [ReconciliationFilesystemIdentity] {
+        lock.withLock { afterIdentities }
+    }
+
+    func validateThenMutate(_ candidateData: Data, format: DocumentExportFormat) throws {
+        guard candidateData == expectedData else {
+            throw ReconciliationDurabilityInjectedFailure.unexpectedValidatorData
+        }
+        try DocumentExportValidator.validate(candidateData, as: format)
+        let before = try reconciliationIdentity(at: expectedURL)
+        try overwriteSameInode(at: expectedURL, with: replacement)
+        let after = try reconciliationIdentity(at: expectedURL)
+        lock.withLock {
+            count += 1
+            formats.append(format.rawValue)
+            hashes.append(DocumentStorage.sha256Hex(of: candidateData))
+            beforeIdentities.append(before)
+            afterIdentities.append(after)
+        }
+    }
+}
+
 private struct ReconciliationFilesystemIdentity: Equatable, Sendable {
     let device: UInt64
     let inode: UInt64
@@ -424,4 +604,5 @@ private enum ReconciliationDurabilityInjectedFailure: Error {
     case exactFileSynchronization
     case unexpectedParentSynchronization
     case unexpectedUnlinkCandidate
+    case unexpectedValidatorData
 }
