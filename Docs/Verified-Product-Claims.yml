@@ -250,7 +250,7 @@ claims:
 
   - id: "DRAFTING-PREFILE-GATE"
     topic: "drafting-gates"
-    wording: "Draft rendering stops before a file is created when required facts, authority support, or verification provenance are missing, unsupported, or unverifiable. The gate verifies required structure and exact selected-source reproduction; it does not determine fact-to-ground applicability, legal sufficiency, or filing readiness."
+    wording: "Draft rendering stops before a file is created when required facts, authority support, or verification provenance are missing, unsupported, or unverifiable. For the supported motion, the gate verifies required structure and exact selected-source reproduction; it does not determine fact-to-ground applicability, legal sufficiency, or filing readiness."
     owner: "Drafting engineering"
     code_anchor: "Packages/SupraSessions/Sources/SupraSessions/MatterDraftingController.swift"
     verification: "Apps/SupraAI/SupraAIUITests/ResearchAuthoritiesUITests.swift"

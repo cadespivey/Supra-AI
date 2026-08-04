@@ -627,10 +627,12 @@ struct MatterDraftingView: View {
         } header: {
             Text("Download")
         } footer: {
-            switch artifact.format {
-            case .docx:
+            switch (artifact.format, artifact.source) {
+            case (.docx, .kind(.motionToDismiss)):
                 Text("Verification covers required structure and exact selected-source reproduction. It does not determine factual applicability, legal sufficiency, or filing readiness. Review the generated document before filing.")
-            case .markdown:
+            case (.docx, _):
+                Text("Verification covers the required checks for this draft kind. It does not determine legal sufficiency or filing readiness. Review the generated document before filing.")
+            case (.markdown, _):
                 Text("A work-product description in your own words — a drafting brief, not a court-ready or model-generated filing.")
             }
         }
