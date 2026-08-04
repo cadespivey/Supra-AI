@@ -68,4 +68,56 @@ final class DurableFileWriterValidatorMutationTests: XCTestCase {
             }
         }
     }
+
+    // ACR-FILE-027. A returning validator may mutate the same quarantined inode
+    // after checking the immutable Data it received. The final boundary must
+    // bind that validated value to a second descriptor-bound read before unlink.
+    func testACRFILE027FinalReturningValidatorMutationRetainsQuarantine() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Supra-Final-Validator-Mutation-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let destination = root
+            .appendingPathComponent("exports", isDirectory: true)
+            .appendingPathComponent("matter-123", isDirectory: true)
+            .appendingPathComponent("motion.md")
+        let payload = Data("# Validated rollback bytes\n".utf8)
+        let mutated = Data("# Mutated after returning validation\n".utf8)
+        let writer = DurableFileWriter()
+        let identity = try writer.writeNewOwned(
+            payload,
+            to: destination,
+            containedIn: root,
+            validator: { _ in }
+        )
+        var quarantine: URL?
+        var validationCallCount = 0
+
+        XCTAssertThrowsError(
+            try writer.removeInstalledFile(
+                matching: identity,
+                at: destination,
+                containedIn: root,
+                quarantineCheckpoint: { _, candidate in quarantine = candidate },
+                contentValidator: { _ in
+                    validationCallCount += 1
+                    guard validationCallCount == 2 else { return }
+                    let handle = try FileHandle(forWritingTo: XCTUnwrap(quarantine))
+                    defer { try? handle.close() }
+                    try handle.truncate(atOffset: 0)
+                    try handle.write(contentsOf: mutated)
+                    try handle.synchronize()
+                }
+            )
+        ) { error in
+            XCTAssertTrue(String(describing: error).contains("retainedQuarantineChanged"), "\(error)")
+        }
+
+        XCTAssertEqual(validationCallCount, 2)
+        let retained = try XCTUnwrap(quarantine)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: retained.path))
+        if FileManager.default.fileExists(atPath: retained.path) {
+            XCTAssertEqual(try Data(contentsOf: retained), mutated)
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
+    }
 }
