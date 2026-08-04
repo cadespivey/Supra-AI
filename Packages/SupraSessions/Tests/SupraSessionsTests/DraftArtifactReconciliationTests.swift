@@ -826,6 +826,48 @@ final class DraftArtifactReconciliationTests: XCTestCase {
         XCTAssertTrue(try fixture.store.auditEvents.fetchEvents(matterID: fixture.matter.id).isEmpty)
     }
 
+    // T-DAR-20. Public finalization has the same byte-binding requirement as
+    // rollback cleanup: URL validation of a transient valid replacement cannot
+    // authorize completion with restored invalid origin bytes.
+    func testTDAR20PublicValidationSwapAndRestoreCannotAuthorizeFinalization() throws {
+        let fixture = try makeFixture()
+        let invalidOrigin = Data("not-an-office-archive".utf8)
+        let intent = try fixture.store.draftArtifacts.prepareGenericIntent(
+            matterID: fixture.matter.id,
+            artifactKind: .noticeAppearance,
+            format: .docx,
+            fileName: "Public-validation-race.docx",
+            output: invalidOrigin,
+            id: "public-validation-swap"
+        )
+        let publicURL = try install(invalidOrigin, intent: intent, storage: fixture.storage)
+        let preservedOrigin = fixture.storage.root
+            .appendingPathComponent("preserved-invalid-public.docx")
+        let validReplacement = try validDOCXData(in: fixture.storage.root)
+        let service = DraftArtifactReconciliationService(
+            store: fixture.store,
+            storage: fixture.storage
+        )
+        service.artifactFormatValidator = { candidate, format in
+            try FileManager.default.moveItem(at: candidate, to: preservedOrigin)
+            try validReplacement.write(to: candidate)
+            try DocumentExportValidator.validate(candidate, as: format)
+            try FileManager.default.removeItem(at: candidate)
+            try FileManager.default.moveItem(at: preservedOrigin, to: candidate)
+        }
+
+        let summary = try service.reconcilePendingIntents()
+
+        XCTAssertEqual(summary.finalizedCount, 0)
+        XCTAssertEqual(summary.recoveryRequiredCount, 1)
+        XCTAssertEqual(try Data(contentsOf: publicURL), invalidOrigin)
+        XCTAssertEqual(
+            try fixture.store.draftArtifacts.intent(id: intent.id)?.status,
+            DraftArtifactIntentStatus.recoveryRequired.rawValue
+        )
+        XCTAssertTrue(try fixture.store.auditEvents.fetchEvents(matterID: fixture.matter.id).isEmpty)
+    }
+
     private struct Fixture {
         let store: SupraStore
         let matter: MatterRecord
