@@ -231,7 +231,7 @@ final class MotionToDismissControllerTests: XCTestCase {
         let metadata = try XCTUnwrap(event.metadataJSON)
         let lineage = try JSONDecoder().decode(MotionDraftAuditLineage.self, from: Data(metadata.utf8))
 
-        XCTAssertEqual(lineage.schemaVersion, 2)
+        XCTAssertEqual(lineage.schemaVersion, 3)
         XCTAssertEqual(lineage.kindID, DraftKindID.motionToDismiss.rawValue)
         XCTAssertEqual(lineage.sourceSnapshotSHA256, snapshot.fingerprintSHA256)
         XCTAssertEqual(lineage.facts.map(\.chunkID), [fixture.selectedFact.chunkID])

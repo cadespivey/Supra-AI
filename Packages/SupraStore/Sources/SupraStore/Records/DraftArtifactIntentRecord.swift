@@ -31,6 +31,7 @@ public struct DraftArtifactIntentRecord: Codable, FetchableRecord, PersistableRe
     public var outputSHA256: String
     public var outputByteSize: Int
     public var auditMetadataJSON: String
+    public var auditMetadataSHA256: String
     public var motionSnapshotRequestJSON: String?
     public var motionSnapshotSHA256: String?
     public var status: String
@@ -47,6 +48,7 @@ public struct DraftArtifactIntentRecord: Codable, FetchableRecord, PersistableRe
         outputSHA256: String,
         outputByteSize: Int,
         auditMetadataJSON: String,
+        auditMetadataSHA256: String,
         motionSnapshotRequestJSON: String? = nil,
         motionSnapshotSHA256: String? = nil,
         status: DraftArtifactIntentStatus = .prepared,
@@ -62,6 +64,7 @@ public struct DraftArtifactIntentRecord: Codable, FetchableRecord, PersistableRe
         self.outputSHA256 = outputSHA256
         self.outputByteSize = outputByteSize
         self.auditMetadataJSON = auditMetadataJSON
+        self.auditMetadataSHA256 = auditMetadataSHA256
         self.motionSnapshotRequestJSON = motionSnapshotRequestJSON
         self.motionSnapshotSHA256 = motionSnapshotSHA256
         self.status = status.rawValue
@@ -78,6 +81,7 @@ public struct DraftArtifactIntentRecord: Codable, FetchableRecord, PersistableRe
         case outputSHA256 = "output_sha256"
         case outputByteSize = "output_byte_size"
         case auditMetadataJSON = "audit_metadata_json"
+        case auditMetadataSHA256 = "audit_metadata_sha256"
         case motionSnapshotRequestJSON = "motion_snapshot_request_json"
         case motionSnapshotSHA256 = "motion_snapshot_sha256"
         case createdAt = "created_at"

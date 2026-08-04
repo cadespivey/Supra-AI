@@ -714,7 +714,10 @@ final class DraftingSourceSnapshotTests: XCTestCase {
         ) { error in
             XCTAssertEqual(error as? DraftArtifactIntentError, .intentIntegrityInvalid)
         }
-        XCTAssertTrue(try fixture.store.auditEvents.fetchEvents(matterID: fixture.matter.id).isEmpty)
+        XCTAssertFalse(
+            try fixture.store.auditEvents.fetchEvents(matterID: fixture.matter.id)
+                .contains { $0.id == "draft-artifact-\(intent.id)" }
+        )
     }
 
     private struct Fixture {

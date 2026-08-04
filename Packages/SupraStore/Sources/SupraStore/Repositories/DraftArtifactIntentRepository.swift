@@ -250,6 +250,7 @@ public final class DraftArtifactIntentRepository: @unchecked Sendable {
             outputSHA256: Self.sha256(output),
             outputByteSize: output.count
         )
+        let metadataJSON = try Self.jsonString(metadata)
         let record = DraftArtifactIntentRecord(
             id: id,
             matterID: matterID,
@@ -258,7 +259,8 @@ public final class DraftArtifactIntentRepository: @unchecked Sendable {
             fileName: fileName,
             outputSHA256: metadata.outputSHA256,
             outputByteSize: metadata.outputByteSize,
-            auditMetadataJSON: try Self.jsonString(metadata),
+            auditMetadataJSON: metadataJSON,
+            auditMetadataSHA256: Self.sha256(Data(metadataJSON.utf8)),
             createdAt: createdAt
         )
         return try writer.write { db in
@@ -351,6 +353,7 @@ public final class DraftArtifactIntentRepository: @unchecked Sendable {
                 outputByteSize: output.count
             )
             let requestJSON = try Self.jsonString(current.request)
+            let metadataJSON = try Self.jsonString(lineage)
             let record = DraftArtifactIntentRecord(
                 id: id,
                 matterID: current.request.matterID,
@@ -359,7 +362,8 @@ public final class DraftArtifactIntentRepository: @unchecked Sendable {
                 fileName: fileName,
                 outputSHA256: lineage.outputSHA256,
                 outputByteSize: lineage.outputByteSize,
-                auditMetadataJSON: try Self.jsonString(lineage),
+                auditMetadataJSON: metadataJSON,
+                auditMetadataSHA256: Self.sha256(Data(metadataJSON.utf8)),
                 motionSnapshotRequestJSON: requestJSON,
                 motionSnapshotSHA256: current.fingerprintSHA256,
                 createdAt: createdAt
@@ -395,7 +399,7 @@ public final class DraftArtifactIntentRepository: @unchecked Sendable {
             guard record.status == DraftArtifactIntentStatus.prepared.rawValue else {
                 throw DraftArtifactIntentError.invalidIntentState
             }
-            try Self.validateStoredRecord(record)
+            _ = try Self.validateStoredRecord(record)
             return Self.auditEvent(for: record)
         }
     }
@@ -411,15 +415,20 @@ public final class DraftArtifactIntentRepository: @unchecked Sendable {
             guard record.status == DraftArtifactIntentStatus.prepared.rawValue else {
                 throw DraftArtifactIntentError.invalidIntentState
             }
-            try Self.validateStoredRecord(record)
+            let storedLineage = try Self.validateStoredRecord(record)
             guard installedOutput.count == record.outputByteSize,
                   Self.sha256(installedOutput) == record.outputSHA256 else {
                 throw DraftArtifactIntentError.installedArtifactMismatch
             }
-            if let requestJSON = record.motionSnapshotRequestJSON {
+            if case let .motion(lineage) = storedLineage {
+                guard let requestJSON = record.motionSnapshotRequestJSON else {
+                    throw DraftArtifactIntentError.intentIntegrityInvalid
+                }
                 guard let expected = record.motionSnapshotSHA256,
                       let data = requestJSON.data(using: .utf8),
-                      let request = try? JSONDecoder().decode(MotionDraftSnapshotRequest.self, from: data) else {
+                      let request = try? JSONDecoder().decode(MotionDraftSnapshotRequest.self, from: data),
+                      (try? Self.jsonString(request)) == requestJSON,
+                      request.matterID == record.matterID else {
                     throw DraftArtifactIntentError.intentIntegrityInvalid
                 }
                 let current: MotionDraftStoreSnapshot
@@ -431,6 +440,11 @@ public final class DraftArtifactIntentRepository: @unchecked Sendable {
                 guard current.fingerprintSHA256 == expected else {
                     throw DraftArtifactIntentError.sourceSnapshotStale
                 }
+                try Self.validateMotionLineage(
+                    lineage,
+                    record: record,
+                    current: current
+                )
             }
             let event = Self.auditEvent(for: record)
             if try AuditEventRecord.fetchOne(db, key: event.id) == nil {
@@ -534,10 +548,19 @@ public final class DraftArtifactIntentRepository: @unchecked Sendable {
         guard existing == nil else { throw DraftArtifactIntentError.fileNameReserved }
     }
 
-    private static func validateStoredRecord(_ record: DraftArtifactIntentRecord) throws {
+    private enum StoredLineage {
+        case generic(GenericDraftAuditLineage)
+        case motion(MotionDraftAuditLineage)
+    }
+
+    private static func validateStoredRecord(
+        _ record: DraftArtifactIntentRecord
+    ) throws -> StoredLineage {
         guard let format = DraftArtifactIntentFormat(rawValue: record.format),
               record.outputByteSize > 0,
               isSHA256(record.outputSHA256),
+              isSHA256(record.auditMetadataSHA256),
+              sha256(Data(record.auditMetadataJSON.utf8)) == record.auditMetadataSHA256,
               record.motionSnapshotRequestJSON == nil
                 ? record.motionSnapshotSHA256 == nil
                 : record.motionSnapshotSHA256.map(isSHA256) == true else {
@@ -549,11 +572,79 @@ public final class DraftArtifactIntentRepository: @unchecked Sendable {
             fileName: record.fileName,
             output: Data(repeating: 0, count: 1)
         )
-        guard let root = try? JSONSerialization.jsonObject(with: Data(record.auditMetadataJSON.utf8)) as? [String: Any],
-              root["kindID"] as? String == record.artifactKind,
-              root["outputFileName"] as? String == record.fileName,
-              root["outputSHA256"] as? String == record.outputSHA256,
-              root["outputByteSize"] as? Int == record.outputByteSize else {
+        let data = Data(record.auditMetadataJSON.utf8)
+        if record.motionSnapshotRequestJSON != nil {
+            guard record.artifactKind == DraftArtifactIntentKind.motionToDismiss.rawValue,
+                  format == .docx,
+                  let lineage = try? JSONDecoder().decode(MotionDraftAuditLineage.self, from: data),
+                  (try? jsonString(lineage)) == record.auditMetadataJSON,
+                  lineage.schemaVersion == MotionDraftAuditEnvelope.schemaVersion,
+                  lineage.kindID == DraftArtifactIntentKind.motionToDismiss.rawValue,
+                  lineage.sourceSnapshotSHA256 == record.motionSnapshotSHA256,
+                  lineage.groundContractIdentity == motionGroundContractIdentity,
+                  lineage.assemblerIdentity == motionAssemblerIdentity,
+                  lineage.verifierIdentity == motionVerifierIdentity,
+                  lineage.gateIdentity == motionGateIdentity,
+                  lineage.rendererIdentity == motionRendererIdentity,
+                  lineage.verificationStatus == .passed,
+                  lineage.verificationReceiptScope == .motionSelectedSourceReproductionAndStructure,
+                  lineage.outputFileName == record.fileName,
+                  lineage.outputSHA256 == record.outputSHA256,
+                  lineage.outputByteSize == record.outputByteSize,
+                  [
+                      lineage.sourceSnapshotSHA256,
+                      lineage.requestSHA256,
+                      lineage.captionSHA256,
+                      lineage.assistantProfileSHA256,
+                      lineage.effectiveStyleSHA256,
+                      lineage.verificationReceiptSHA256,
+                      lineage.outputSHA256,
+                  ].allSatisfy(isSHA256) else {
+                throw DraftArtifactIntentError.intentIntegrityInvalid
+            }
+            return .motion(lineage)
+        }
+
+        guard let kind = DraftArtifactIntentKind(rawValue: record.artifactKind),
+              kind != .motionToDismiss,
+              ((kind == .customDescription && format == .markdown)
+                || ([DraftArtifactIntentKind.noticeAppearance, .letterDemand].contains(kind) && format == .docx)),
+              let lineage = try? JSONDecoder().decode(GenericDraftAuditLineage.self, from: data),
+              (try? jsonString(lineage)) == record.auditMetadataJSON,
+              lineage.schemaVersion == 1,
+              lineage.kindID == record.artifactKind,
+              lineage.format == record.format,
+              lineage.outputFileName == record.fileName,
+              lineage.outputSHA256 == record.outputSHA256,
+              lineage.outputByteSize == record.outputByteSize else {
+            throw DraftArtifactIntentError.intentIntegrityInvalid
+        }
+        return .generic(lineage)
+    }
+
+    private static func validateMotionLineage(
+        _ lineage: MotionDraftAuditLineage,
+        record: DraftArtifactIntentRecord,
+        current: MotionDraftStoreSnapshot
+    ) throws {
+        var groundKeys: [String] = []
+        for source in current.authorities where !groundKeys.contains(source.groundKey.rawValue) {
+            groundKeys.append(source.groundKey.rawValue)
+        }
+        let factPropositionIDs = current.facts.map { "motion.fact.\($0.chunkID)" }
+        let authorityPropositionIDs = current.authorities.map { "motion.authority.\($0.authorityID)" }
+        guard lineage.sourceSnapshotSHA256 == current.fingerprintSHA256,
+              lineage.sourceSnapshotSHA256 == record.motionSnapshotSHA256,
+              lineage.facts == current.facts.map(MotionDraftAuditLineage.Fact.init),
+              lineage.authorities == current.authorities.map(MotionDraftAuditLineage.Authority.init),
+              lineage.groundKeys == groundKeys,
+              lineage.assistantProfileSHA256 == current.assistantProfile.valueSHA256,
+              lineage.verificationScope.schemaVersion == MotionDraftVerificationScope.schemaVersion,
+              lineage.verificationScope.kindID == MotionDraftAuditEnvelope.kindID,
+              lineage.verificationScope.groundKeys == groundKeys,
+              lineage.verificationScope.factPropositionIDs == factPropositionIDs,
+              lineage.verificationScope.authorityPropositionIDs == authorityPropositionIDs,
+              lineage.verificationScope.bodyContract == MotionDraftVerificationScope.exactSelectedBodyContract else {
             throw DraftArtifactIntentError.intentIntegrityInvalid
         }
     }

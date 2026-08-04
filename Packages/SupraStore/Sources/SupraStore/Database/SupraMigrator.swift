@@ -1688,6 +1688,7 @@ public enum SupraMigrator {
                 table.column("output_sha256", .text).notNull()
                 table.column("output_byte_size", .integer).notNull()
                 table.column("audit_metadata_json", .text).notNull()
+                table.column("audit_metadata_sha256", .text).notNull()
                 table.column("motion_snapshot_request_json", .text)
                 table.column("motion_snapshot_sha256", .text)
                 table.column("status", .text).notNull()

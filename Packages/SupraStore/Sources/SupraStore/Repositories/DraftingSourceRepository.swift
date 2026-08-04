@@ -169,7 +169,7 @@ public struct MotionDraftStoreSnapshot: Sendable {
 /// emitted by SupraSessions. Store validates the full shape before it blesses
 /// the lineage and current source snapshot in one transaction.
 public enum MotionDraftAuditEnvelope {
-    public static let schemaVersion = 2
+    public static let schemaVersion = 3
     public static let kindID = "motionToDismiss"
 }
 

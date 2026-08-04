@@ -18,6 +18,7 @@ final class DraftArtifactIntentMigrationTests: XCTestCase {
                 Set([
                     "id", "matter_id", "artifact_kind", "format", "file_name",
                     "output_sha256", "output_byte_size", "audit_metadata_json",
+                    "audit_metadata_sha256",
                     "motion_snapshot_request_json", "motion_snapshot_sha256",
                     "status", "created_at", "updated_at", "terminal_at",
                 ])
