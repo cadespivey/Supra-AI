@@ -168,22 +168,21 @@ public final class MatterDraftingController: ObservableObject {
     }
 
     public func refreshLegacyDraftReviewState(matterID: String) {
-        legacyDraftsNeedReviewCount = ((try? store.remediationRecovery.pendingItems()) ?? [])
-            .filter {
-                $0.kind == RemediationRecoveryKind.legacyDraftArtifact.rawValue
-                    && $0.matterID == matterID
-            }
-            .count
+        legacyDraftsNeedReviewCount = ((try? store.remediationRecovery.pendingItems(
+            kind: .legacyDraftArtifact,
+            matterID: matterID,
+            limit: 2_000
+        )) ?? []).count
     }
 
     public func refreshDraftReviewState(matterID: String) {
         refreshLegacyDraftReviewState(matterID: matterID)
-        interruptedDraftRecoveries = ((try? store.remediationRecovery.pendingItems()) ?? [])
-            .filter {
-                $0.kind == RemediationRecoveryKind.interruptedDraftArtifact.rawValue
-                    && $0.matterID == matterID
-                    && $0.relatedTable == DraftArtifactIntentRecord.databaseTableName
-            }
+        interruptedDraftRecoveries = ((try? store.remediationRecovery.pendingItems(
+            kind: .interruptedDraftArtifact,
+            matterID: matterID,
+            relatedTable: DraftArtifactIntentRecord.databaseTableName,
+            limit: 2_000
+        )) ?? [])
             .map { item in
                 guard let descriptor = try? store.draftArtifacts.recoveryDescriptor(id: item.relatedID),
                       descriptor.matterID == matterID else {
@@ -208,10 +207,11 @@ public final class MatterDraftingController: ObservableObject {
     /// Explicitly acknowledges review of legacy file-only artifacts. The files
     /// remain untouched; each content-free recovery item receives an audit event.
     public func confirmLegacyDraftArtifactsReviewed(matterID: String) {
-        let items = ((try? store.remediationRecovery.pendingItems()) ?? []).filter {
-            $0.kind == RemediationRecoveryKind.legacyDraftArtifact.rawValue
-                && $0.matterID == matterID
-        }
+        let items = (try? store.remediationRecovery.pendingItems(
+            kind: .legacyDraftArtifact,
+            matterID: matterID,
+            limit: 2_000
+        )) ?? []
         do {
             for item in items {
                 try store.remediationRecovery.resolve(
