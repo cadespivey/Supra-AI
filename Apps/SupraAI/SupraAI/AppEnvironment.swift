@@ -1501,18 +1501,9 @@ final class AppEnvironment: ObservableObject {
     /// recovery row only for the dedicated hosted publication-recovery test.
     /// Both the Store and managed root are hermetic UI-test throwaways.
     private func seedUITestInterruptedDraftRecoveryIfNeeded() {
-        guard let interruptedDraftRecoveryUITestRoot,
+        guard interruptedDraftRecoveryUITestRoot != nil,
               let matterID = mattersController.matters.first?.id else { return }
         do {
-            let matterIDSidecarURL = interruptedDraftRecoveryUITestRoot
-                .appendingPathComponent(".supra-ui-test-store", isDirectory: true)
-                .appendingPathComponent("seeded-matter-id", isDirectory: false)
-            try FileManager.default.createDirectory(
-                at: matterIDSidecarURL.deletingLastPathComponent(),
-                withIntermediateDirectories: true
-            )
-            try matterID.write(to: matterIDSidecarURL, atomically: true, encoding: .utf8)
-
             let validID = "ui-interrupted-draft-valid"
             let validOutput = Data("# Synthetic preserved interrupted publication\n".utf8)
             let validIntent: DraftArtifactIntentRecord
@@ -2179,6 +2170,14 @@ final class AppEnvironment: ObservableObject {
         guard candidate.path.hasPrefix("\(temporaryRoot.path)/") else { return nil }
         return candidate
     }
+
+#if DEBUG
+    /// Allows only the dedicated hosted recovery fixture to inspect its own
+    /// temporary managed root from inside the sandboxed app process.
+    static var interruptedDraftRecoveryUITestManagedRoot: URL? {
+        interruptedDraftRecoveryUITestRoot()
+    }
+#endif
 
     private static func interruptedDraftRecoveryUITestStoreURL() -> URL? {
         interruptedDraftRecoveryUITestRoot()?

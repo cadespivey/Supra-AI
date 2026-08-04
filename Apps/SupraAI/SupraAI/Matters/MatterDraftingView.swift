@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 import SupraCore
 import SupraDraftingCore
 import SupraSessions
@@ -64,6 +65,11 @@ struct MatterDraftingView: View {
     @State private var selectedMotionAuthorityIDs: Set<String> = []
     @State private var generationTask: Task<Void, Never>?
     @State private var generationToken: UUID?
+#if DEBUG
+    /// Retains the URL supplied by the validated recovery row so the hosted
+    /// test can re-read the identical managed artifact after acknowledgement.
+    @State private var interruptedDraftRecoveryUITestRecoveredURL: URL?
+#endif
 
     private enum WorkProductSelection: Hashable {
         case kind(DraftKindID)
@@ -135,6 +141,18 @@ struct MatterDraftingView: View {
                 if !controller.interruptedDraftRecoveries.isEmpty {
                     interruptedDraftRecoverySection
                 }
+#if DEBUG
+                if let evidence = interruptedDraftRecoveryUITestEvidence {
+                    Text("Recovery fixture evidence")
+                        .font(.system(size: 1))
+                        .frame(width: 1, height: 1)
+                        .clipped()
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityIdentifier("drafting.interruptedRecovery.fixtureEvidence")
+                        .accessibilityLabel("Recovery fixture evidence")
+                        .accessibilityValue(evidence)
+                }
+#endif
                 if controller.legacyDraftsNeedReviewCount > 0 {
                     legacyDraftReviewSection
                 }
@@ -167,9 +185,17 @@ struct MatterDraftingView: View {
         .onAppear {
             library.refresh()
             controller.refreshDraftReviewState(matterID: matterID)
+#if DEBUG
+            captureInterruptedDraftRecoveryUITestURLIfNeeded()
+#endif
             if availableKinds.isEmpty { availableKinds = controller.availableDraftKinds() }
             if selection == .kind(.motionToDismiss) { loadMotionSourcesIfNeeded() }
         }
+#if DEBUG
+        .onChange(of: controller.interruptedDraftRecoveries) { _, _ in
+            captureInterruptedDraftRecoveryUITestURLIfNeeded()
+        }
+#endif
         // The result/error banner belongs to one work product — clear it when the
         // user switches to a different kind so a stale notice result doesn't linger
         // over the custom form (and vice versa).
@@ -186,6 +212,79 @@ struct MatterDraftingView: View {
         .onDisappear { invalidateGeneration() }
         .interactiveDismissDisabled(isWorking)
     }
+
+#if DEBUG
+    private func captureInterruptedDraftRecoveryUITestURLIfNeeded() {
+        guard interruptedDraftRecoveryUITestRecoveredURL == nil,
+              AppEnvironment.interruptedDraftRecoveryUITestManagedRoot != nil
+        else { return }
+        let recoveredURLs = controller.interruptedDraftRecoveries.compactMap(\.fileURL)
+        guard recoveredURLs.count == 1 else { return }
+        interruptedDraftRecoveryUITestRecoveredURL = recoveredURLs[0]
+    }
+
+    /// Content-free evidence for the one exact hosted recovery scenario. The
+    /// value intentionally exposes neither an absolute local path nor contents.
+    private var interruptedDraftRecoveryUITestEvidence: String? {
+        guard let recoveredURL = interruptedDraftRecoveryUITestRecoveredURL?
+                .standardizedFileURL
+                .resolvingSymlinksInPath(),
+              let authorizedRoot = AppEnvironment.interruptedDraftRecoveryUITestManagedRoot,
+              let matterUUID = UUID(uuidString: matterID),
+              matterID == matterUUID.uuidString
+        else { return nil }
+
+        let managedRoot = authorizedRoot.standardizedFileURL.resolvingSymlinksInPath()
+        let testStoreRoot = managedRoot
+            .appendingPathComponent(".supra-ui-test-store", isDirectory: true)
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+        let exportsRoot = managedRoot
+            .appendingPathComponent("exports", isDirectory: true)
+            .standardizedFileURL
+        let matterRoot = exportsRoot
+            .appendingPathComponent(matterUUID.uuidString, isDirectory: true)
+            .standardizedFileURL
+        let expectedRecoveredURL = matterRoot
+            .appendingPathComponent("Interrupted-publication.md", isDirectory: false)
+            .standardizedFileURL
+        guard recoveredURL.path == expectedRecoveredURL.path,
+              recoveredURL.deletingLastPathComponent().path == matterRoot.path,
+              recoveredURL.path.hasPrefix("\(exportsRoot.path)/")
+        else { return nil }
+
+        guard let enumerator = FileManager.default.enumerator(
+            at: managedRoot,
+            includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey],
+            options: []
+        ) else { return nil }
+
+        var regularArtifactCount = 0
+        for case let rawArtifactURL as URL in enumerator {
+            let artifactURL = rawArtifactURL.standardizedFileURL.resolvingSymlinksInPath()
+            if artifactURL.path == testStoreRoot.path {
+                enumerator.skipDescendants()
+                continue
+            }
+            guard !artifactURL.path.hasPrefix("\(testStoreRoot.path)/"),
+                  artifactURL.path.hasPrefix("\(managedRoot.path)/"),
+                  let values = try? rawArtifactURL.resourceValues(
+                    forKeys: [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey]
+                  ),
+                  values.isSymbolicLink != true
+            else { return nil }
+            if values.isRegularFile == true {
+                regularArtifactCount += 1
+            }
+        }
+
+        guard let recoveredBytes = try? Data(contentsOf: recoveredURL) else { return nil }
+        let digest = SHA256.hash(data: recoveredBytes)
+            .map { String(format: "%02x", $0) }
+            .joined()
+        return "relative=exports/\(matterUUID.uuidString)/Interrupted-publication.md|bytes=\(recoveredBytes.count)|sha256=\(digest)|regularCount=\(regularArtifactCount)"
+    }
+#endif
 
     private var interruptedDraftRecoverySection: some View {
         Section {
