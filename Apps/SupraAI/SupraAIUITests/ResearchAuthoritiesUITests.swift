@@ -766,9 +766,17 @@ final class InterruptedDraftRecoveryUITests: XCTestCase {
         continueAfterFailure = false
     }
 
-    func testTUIDRAFTREC01Through04NoticeRevealAndAcknowledgementPreserveFiles() {
+    func testTUIDRAFTREC01Through04NoticeRevealAndAcknowledgementPreserveFiles() throws {
         let storageRoot = appSandboxWritableStorageRoot(prefix: "DraftRecoveryUITest")
+        let storeURL = storageRoot
+            .appendingPathComponent(".supra-ui-test-store", isDirectory: true)
+            .appendingPathComponent("SupraAI.sqlite", isDirectory: false)
         let app = XCUIApplication()
+        addTeardownBlock {
+            app.terminate()
+            _ = app.wait(for: .notRunning, timeout: 5)
+            try? FileManager.default.removeItem(at: storageRoot)
+        }
         app.launchArguments += [
             "-ApplePersistenceIgnoreState", "YES",
             "-uiTestMode",
@@ -779,24 +787,72 @@ final class InterruptedDraftRecoveryUITests: XCTestCase {
         ]
         app.launchEnvironment["SUPRA_UI_TEST_DRAFT_STORAGE_ROOT"] = storageRoot.path
 
-        func launchAndDismissRepeatedNotice() {
+        func launchAndDismissRepeatedNotice() throws -> RecoveryLaunchEvidence {
             app.launch()
             app.activate()
             XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 10))
-            let notice = app.alerts["Review previous generated work"]
+
+            // Expected RED on f500e5a: SwiftUI's macOS alert is exposed to
+            // XCUITest as a Sheet whose title is a StaticText value, not as an
+            // Alert titled "Review previous generated work".
+            let notice = app.sheets.firstMatch
             XCTAssertTrue(notice.waitForExistence(timeout: 20), "Interrupted publication notice did not appear")
+            let title = notice.staticTexts.matching(
+                NSPredicate(format: "value == %@", "Review previous generated work")
+            ).firstMatch
+            XCTAssertTrue(title.waitForExistence(timeout: 5), notice.debugDescription)
             XCTAssertTrue(
                 notice.staticTexts.matching(
-                    NSPredicate(format: "label CONTAINS[c] %@", "2 interrupted draft publication(s)")
+                    NSPredicate(format: "value CONTAINS[c] %@", "2 interrupted draft publication(s)")
                 ).firstMatch.exists,
                 notice.debugDescription
             )
             notice.buttons["Continue"].click()
+
+            let warning = app.descendants(matching: .any)["drafting.interruptedRecoveryWarning"]
+            XCTAssertTrue(warning.waitForExistence(timeout: 10), warning.debugDescription)
+            let recoveryItems = app.descendants(matching: .any).matching(
+                NSPredicate(
+                    format: "identifier BEGINSWITH %@",
+                    "drafting.interruptedRecovery.item."
+                )
+            )
+            XCTAssertTrue(recoveryItems.firstMatch.waitForExistence(timeout: 5))
+            XCTAssertEqual(recoveryItems.count, 2, "Both exact recovery rows must remain visible")
+            let recoveryIDs = recoveryItems.allElementsBoundByIndex.map(\.identifier).sorted()
+
+            // Expected RED on f500e5a: makeStore() opens a fresh UUID database
+            // on every launch, so this stable fixture-owned Store does not exist.
+            let attributes = try FileManager.default.attributesOfItem(atPath: storeURL.path)
+            let fileNumber = try XCTUnwrap(
+                (attributes[.systemFileNumber] as? NSNumber)?.uint64Value,
+                "The hosted recovery Store must expose a stable on-disk file identity"
+            )
+            let creationDate = try XCTUnwrap(
+                attributes[.creationDate] as? Date,
+                "The hosted recovery Store must retain its creation date across relaunch"
+            )
+            return RecoveryLaunchEvidence(
+                recoveryIDs: recoveryIDs,
+                databaseFileNumber: fileNumber,
+                databaseCreationDate: creationDate
+            )
         }
 
-        launchAndDismissRepeatedNotice()
+        let firstLaunch = try launchAndDismissRepeatedNotice()
         app.terminate()
-        launchAndDismissRepeatedNotice()
+        let secondLaunch = try launchAndDismissRepeatedNotice()
+        XCTAssertEqual(
+            secondLaunch.recoveryIDs,
+            firstLaunch.recoveryIDs,
+            "Relaunch must reopen the same recovery rows instead of reseeding lookalikes"
+        )
+        XCTAssertEqual(
+            secondLaunch.databaseFileNumber,
+            firstLaunch.databaseFileNumber,
+            "Relaunch must reopen the same hermetic on-disk UI-test Store"
+        )
+        XCTAssertEqual(secondLaunch.databaseCreationDate, firstLaunch.databaseCreationDate)
 
         let warning = app.descendants(matching: .any)["drafting.interruptedRecoveryWarning"]
         XCTAssertTrue(warning.waitForExistence(timeout: 10), warning.debugDescription)
@@ -811,7 +867,10 @@ final class InterruptedDraftRecoveryUITests: XCTestCase {
         XCTAssertEqual(reveal.count, 1, "Only validated recovery lineage may expose a reveal action")
 
         let filesBeforeAcknowledgement = regularArtifacts(beneath: storageRoot)
-        XCTAssertFalse(filesBeforeAcknowledgement.isEmpty)
+        XCTAssertFalse(
+            filesBeforeAcknowledgement.isEmpty,
+            "Expected a preserved draft beneath \(storageRoot.path); root contents: \((try? FileManager.default.contentsOfDirectory(atPath: storageRoot.path)) ?? [])"
+        )
         reveal.firstMatch.click()
         let finder = XCUIApplication(bundleIdentifier: "com.apple.finder")
         XCTAssertTrue(
@@ -831,6 +890,12 @@ final class InterruptedDraftRecoveryUITests: XCTestCase {
         )
     }
 
+    private struct RecoveryLaunchEvidence {
+        let recoveryIDs: [String]
+        let databaseFileNumber: UInt64
+        let databaseCreationDate: Date
+    }
+
     private func appSandboxWritableStorageRoot(prefix: String) -> URL {
         let runnerHome = FileManager.default.homeDirectoryForCurrentUser.path
         let containerMarker = "/Library/Containers/"
@@ -843,6 +908,9 @@ final class InterruptedDraftRecoveryUITests: XCTestCase {
     }
 
     private func regularArtifacts(beneath root: URL) -> [String] {
+        let testStoreRoot = root
+            .appendingPathComponent(".supra-ui-test-store", isDirectory: true)
+            .standardizedFileURL
         guard let enumerator = FileManager.default.enumerator(
             at: root,
             includingPropertiesForKeys: [.isRegularFileKey],
@@ -850,6 +918,7 @@ final class InterruptedDraftRecoveryUITests: XCTestCase {
         ) else { return [] }
         return enumerator.compactMap { item in
             guard let url = item as? URL,
+                  !url.standardizedFileURL.path.hasPrefix("\(testStoreRoot.path)/"),
                   let values = try? url.resourceValues(forKeys: [.isRegularFileKey]),
                   values.isRegularFile == true else { return nil }
             return url.path

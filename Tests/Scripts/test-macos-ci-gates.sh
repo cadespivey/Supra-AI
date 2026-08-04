@@ -465,7 +465,19 @@ printf '%s\n' \
   '  }' \
   '}' \
   'final class InterruptedDraftRecoveryUITests: XCTestCase {' \
-  '  func testTUIDRAFTREC01Through04NoticeRevealAndAcknowledgementPreserveFiles() {}' \
+  '  func testTUIDRAFTREC01Through04NoticeRevealAndAcknowledgementPreserveFiles() {' \
+  '    let notice = app.sheets.firstMatch' \
+  '    _ = NSPredicate(format: "value == %@", "Review previous generated work")' \
+  '    _ = root.appendingPathComponent(".supra-ui-test-store", isDirectory: true)' \
+  '    _ = secondLaunch.recoveryIDs,' \
+  '        firstLaunch.recoveryIDs,' \
+  '    _ = secondLaunch.databaseFileNumber,' \
+  '        firstLaunch.databaseFileNumber' \
+  '    let testStoreRoot = root' \
+  '    _ = !url.standardizedFileURL.path.hasPrefix("\(testStoreRoot.path)/")' \
+  '    app.terminate()' \
+  '    _ = app.wait(for: .notRunning, timeout: 5)' \
+  '  }' \
   '}' \
   >"$accessibility_hook"
 run_case \
@@ -475,6 +487,26 @@ run_case \
   env SUPRA_XPC_INTEGRATION_TEST_FILE="$xpc_hook" \
     SUPRA_ACCESSIBILITY_SMOKE_TEST_FILE="$accessibility_hook" \
     SUPRA_DRAFT_RECOVERY_UI_TEST_FILE="$missing_hook" \
+    SUPRA_RESTORE_UI_TEST_FILE="$restore_hook" \
+    bash "${scripts}/run-app-smoke-tests.sh" --check
+
+recovery_old_selector_hook="${temporary_dir}/InterruptedDraftRecoveryOldSelectorUITests.swift"
+printf '%s\n' \
+  'final class InterruptedDraftRecoveryUITests: XCTestCase {' \
+  '  func testTUIDRAFTREC01Through04NoticeRevealAndAcknowledgementPreserveFiles() {' \
+  '    let notice = app.alerts["Review previous generated work"]' \
+  '  }' \
+  '}' \
+  >"$recovery_old_selector_hook"
+# Expected RED: a method can exist and still query a nonexistent macOS Alert
+# while each launch silently receives a freshly seeded UUID Store.
+run_case \
+  "an alert query and fresh-store relaunch fail the recovery contract" \
+  1 \
+  "interrupted draft recovery smoke must reopen one Store and query the macOS sheet title" \
+  env SUPRA_XPC_INTEGRATION_TEST_FILE="$xpc_hook" \
+    SUPRA_ACCESSIBILITY_SMOKE_TEST_FILE="$accessibility_hook" \
+    SUPRA_DRAFT_RECOVERY_UI_TEST_FILE="$recovery_old_selector_hook" \
     SUPRA_RESTORE_UI_TEST_FILE="$restore_hook" \
     bash "${scripts}/run-app-smoke-tests.sh" --check
 # Standing guard: the exact methods nested in the shipping XCTest class must
@@ -541,6 +573,25 @@ else
   record_failure 'shipping bootstrap does not safely reconcile draft artifact intents before remediation UI'
 fi
 
+# Expected RED on f500e5a: the hosted recovery relaunch used a new UUID Store
+# per process and the filesystem-writing fixture could fall back to the user's
+# default managed-document root when its dedicated root was absent.
+recovery_root_policy="$(sed -n '/private static func interruptedDraftRecoveryUITestRoot()/,/^    }/p' "$app_environment")"
+recovery_store_policy="$(sed -n '/private static func interruptedDraftRecoveryUITestStoreURL()/,/^    }/p' "$app_environment")"
+recovery_seeder="$(sed -n '/private func seedUITestInterruptedDraftRecoveryIfNeeded()/,/^    }/p' "$app_environment")"
+if grep -Fq 'guard isUITestMode,' <<<"$recovery_root_policy" \
+    && grep -Fq 'arguments.contains("-uiTestInterruptedDraftRecovery")' <<<"$recovery_root_policy" \
+    && grep -Fq 'environment["SUPRA_UI_TEST_DRAFT_STORAGE_ROOT"]' <<<"$recovery_root_policy" \
+    && grep -Fq 'candidate.path.hasPrefix("\(temporaryRoot.path)/")' <<<"$recovery_root_policy" \
+    && grep -Fq '.appendingPathComponent(".supra-ui-test-store", isDirectory: true)' <<<"$recovery_store_policy" \
+    && grep -Fq '.appendingPathComponent("SupraAI.sqlite", isDirectory: false)' <<<"$recovery_store_policy" \
+    && grep -Fq 'if let persistentUITestStoreURL = interruptedDraftRecoveryUITestStoreURL()' "$app_environment" \
+    && grep -Fq 'guard interruptedDraftRecoveryUITestRoot != nil,' <<<"$recovery_seeder"; then
+  printf '%s\n' 'PASS: interrupted recovery uses one narrowly authorized hermetic on-disk UI-test Store'
+else
+  record_failure 'interrupted recovery does not require one narrowly authorized hermetic on-disk UI-test Store'
+fi
+
 root_view="${repo_root}/Apps/SupraAI/SupraAI/RootView.swift"
 if grep -Fq '.onChange(of: environment.remediationRecoverySummary)' "$root_view" \
     && grep -Fq 'interruptedNoticePresentedThisLaunch' "$root_view" \
@@ -602,7 +653,7 @@ else
   record_failure 'app smoke does not execute the supported motion hosted guards'
 fi
 
-if grep -Fq -- '-only-testing:SupraAIUITests/InterruptedDraftRecoveryUITests' "$app_smoke_script"; then
+if grep -Eq '^[[:space:]]+-only-testing:SupraAIUITests/InterruptedDraftRecoveryUITests[[:space:]]+\\$' "$app_smoke_script"; then
   printf '%s\n' 'PASS: app smoke executes the interrupted draft recovery hosted guards'
 else
   record_failure 'app smoke does not execute the interrupted draft recovery hosted guards'

@@ -36,6 +36,30 @@ class_contains_test() {
   ' "$file"
 }
 
+class_contains_literal() {
+  local file="$1"
+  local class_name="$2"
+  local literal="$3"
+  awk -v class_name="$class_name" -v literal="$literal" '
+    function count_matches(value, pattern, copy) {
+      copy = value
+      return gsub(pattern, "", copy)
+    }
+    {
+      opens = count_matches($0, "\\{")
+      closes = count_matches($0, "\\}")
+      if ($0 ~ "^[[:space:]]*final[[:space:]]+class[[:space:]]+" class_name "[[:space:]]*:") {
+        in_class = 1
+        class_depth = depth + 1
+      }
+      if (in_class && index($0, literal) > 0) { found = 1 }
+      depth += opens - closes
+      if (in_class && depth < class_depth) { in_class = 0 }
+    }
+    END { exit found ? 0 : 1 }
+  ' "$file"
+}
+
 if [[ ! -f "$restore_test" ]] \
     || ! class_contains_test "$restore_test" RestoreSettingsUITests testInvalidSnapshotShowsFactsAndCannotBeSelected \
     || ! class_contains_test "$restore_test" RestoreSettingsUITests testRestoreConfirmationNamesReplacementAndSupportsKeyboardCancel \
@@ -71,6 +95,21 @@ if ! class_contains_test "$accessibility_test" MotionToDismissWorkspaceUITests t
 fi
 if ! class_contains_test "$recovery_test" InterruptedDraftRecoveryUITests testTUIDRAFTREC01Through04NoticeRevealAndAcknowledgementPreserveFiles; then
   printf '%s\n' 'ERROR: interrupted draft recovery hosted smoke tests are missing' >&2
+  exit 1
+fi
+if ! class_contains_literal "$recovery_test" InterruptedDraftRecoveryUITests 'let notice = app.sheets.firstMatch' \
+    || ! class_contains_literal "$recovery_test" InterruptedDraftRecoveryUITests 'NSPredicate(format: "value == %@", "Review previous generated work")' \
+    || ! class_contains_literal "$recovery_test" InterruptedDraftRecoveryUITests '.appendingPathComponent(".supra-ui-test-store", isDirectory: true)' \
+    || ! class_contains_literal "$recovery_test" InterruptedDraftRecoveryUITests 'secondLaunch.recoveryIDs,' \
+    || ! class_contains_literal "$recovery_test" InterruptedDraftRecoveryUITests 'firstLaunch.recoveryIDs,' \
+    || ! class_contains_literal "$recovery_test" InterruptedDraftRecoveryUITests 'secondLaunch.databaseFileNumber,' \
+    || ! class_contains_literal "$recovery_test" InterruptedDraftRecoveryUITests 'let testStoreRoot = root' \
+    || ! class_contains_literal "$recovery_test" InterruptedDraftRecoveryUITests '!url.standardizedFileURL.path.hasPrefix' \
+    || ! class_contains_literal "$recovery_test" InterruptedDraftRecoveryUITests 'testStoreRoot.path' \
+    || ! class_contains_literal "$recovery_test" InterruptedDraftRecoveryUITests 'app.terminate()' \
+    || ! class_contains_literal "$recovery_test" InterruptedDraftRecoveryUITests 'app.wait(for: .notRunning' \
+    || class_contains_literal "$recovery_test" InterruptedDraftRecoveryUITests 'app.alerts['; then
+  printf '%s\n' 'ERROR: interrupted draft recovery smoke must reopen one Store and query the macOS sheet title' >&2
   exit 1
 fi
 if ! grep -Fq 'regularArtifacts(beneath: storageRoot)' "$accessibility_test" \
