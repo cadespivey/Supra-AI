@@ -390,6 +390,50 @@ final class MatterDraftingControllerTests: XCTestCase {
         )
     }
 
+    // Expected RED: the controller applied the repository's global 500-row
+    // limit before filtering by matter and recovery kind. A newer interrupted
+    // publication could therefore be announced globally but remain absent from
+    // the only matter surface that can reveal or acknowledge it.
+    @MainActor
+    func testInterruptedDraftRecoveryScopesByMatterBeforeApplyingLimit() throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Late interrupted recovery")
+        let intent = try store.draftArtifacts.prepareGenericIntent(
+            matterID: matter.id,
+            artifactKind: .customDescription,
+            format: .markdown,
+            fileName: "Late-interrupted.md",
+            output: Data("# Preserved late draft\n".utf8),
+            id: "late-interrupted-intent"
+        )
+        let oldDate = Date(timeIntervalSinceReferenceDate: 1)
+        try store.database.writer.write { db in
+            for index in 0..<500 {
+                try RemediationRecoveryItemRecord(
+                    id: String(format: "old-recovery-%04d", index),
+                    kind: .legacyStructuredOutput,
+                    matterID: nil,
+                    relatedTable: "structured_outputs",
+                    relatedID: String(format: "old-output-%04d", index),
+                    createdAt: oldDate
+                ).insert(db)
+            }
+        }
+        try store.draftArtifacts.markRecoveryRequired(id: intent.id)
+        let controller = MatterDraftingController(store: store, storage: makeStorage())
+
+        controller.refreshDraftReviewState(matterID: matter.id)
+
+        XCTAssertEqual(controller.interruptedDraftRecoveries.map(\.intentID), [intent.id])
+        controller.confirmInterruptedDraftArtifactsReviewed(matterID: matter.id)
+        XCTAssertNil(
+            try store.remediationRecovery.pendingItem(
+                kind: .interruptedDraftArtifact,
+                relatedID: intent.id
+            )
+        )
+    }
+
     // Expected RED: compact-mapping invalid intent rows hid a permanent pending
     // recovery item; revealing the raw tampered filename would be unsafe.
     @MainActor
