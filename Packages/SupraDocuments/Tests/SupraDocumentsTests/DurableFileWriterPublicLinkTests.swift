@@ -45,10 +45,10 @@ final class DurableFileWriterPublicLinkTests: XCTestCase {
                 }
             )
         ) { error in
-            XCTAssertTrue(
-                String(describing: error).contains("publicDestinationStillLinkedAfterRemoval"),
-                "expected the post-removal exact-link state, got \(error)"
-            )
+            guard case .publicDestinationStillLinkedAfterRemoval =
+                error as? DurableFileWriter.WriterError else {
+                return XCTFail("expected the post-removal exact-link state, got \(error)")
+            }
         }
 
         XCTAssertFalse(FileManager.default.fileExists(atPath: try XCTUnwrap(quarantine).path))

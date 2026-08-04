@@ -55,11 +55,12 @@ final class DurableFileWriterValidatorMutationTests: XCTestCase {
                         }
                     )
                 ) { error in
-                    XCTAssertTrue(
-                        String(describing: error)
-                            .contains("publicDestinationStillLinkedWithoutRetainedQuarantine"),
-                        "call=\(mutationCall), throws=\(throwsAfterMutation), error=\(error)"
-                    )
+                    guard case .publicDestinationStillLinkedWithoutRetainedQuarantine =
+                        error as? DurableFileWriter.WriterError else {
+                        return XCTFail(
+                            "call=\(mutationCall), throws=\(throwsAfterMutation), error=\(error)"
+                        )
+                    }
                 }
 
                 XCTAssertEqual(validationCallCount, mutationCall)
@@ -109,7 +110,14 @@ final class DurableFileWriterValidatorMutationTests: XCTestCase {
                 }
             )
         ) { error in
-            XCTAssertTrue(String(describing: error).contains("retainedQuarantineChanged"), "\(error)")
+            guard case let .retainedQuarantineChanged(name) =
+                error as? DurableFileWriter.WriterError else {
+                return XCTFail("expected retained-quarantine change, got \(error)")
+            }
+            guard let quarantine else {
+                return XCTFail("compensation never exposed its quarantine name")
+            }
+            XCTAssertEqual(name, quarantine.lastPathComponent)
         }
 
         XCTAssertEqual(validationCallCount, 2)

@@ -48,7 +48,14 @@ final class DurableFileWriterSourceReappearanceTests: XCTestCase {
                 }
             )
         ) { error in
-            XCTAssertTrue(String(describing: error).contains("sourceNameReappeared"), "\(error)")
+            guard case let .sourceNameReappeared(name) =
+                error as? DurableFileWriter.WriterError else {
+                return XCTFail("expected source-name reappearance, got \(error)")
+            }
+            guard let quarantine else {
+                return XCTFail("compensation never exposed its quarantine name")
+            }
+            XCTAssertEqual(name, quarantine.lastPathComponent)
         }
         XCTAssertEqual(try Data(contentsOf: XCTUnwrap(quarantine)), fixture.payload)
     }
@@ -76,7 +83,11 @@ final class DurableFileWriterSourceReappearanceTests: XCTestCase {
                 containedIn: fixture.root
             )
         ) { error in
-            XCTAssertTrue(String(describing: error).contains("sourceNameReappeared"), "\(error)")
+            guard case let .sourceNameReappeared(name) =
+                error as? DurableFileWriter.WriterError else {
+                return XCTFail("expected source-name reappearance, got \(error)")
+            }
+            XCTAssertEqual(name, fixture.destination.lastPathComponent)
         }
         XCTAssertEqual(try Data(contentsOf: fixture.destination), fixture.payload)
     }
@@ -113,7 +124,14 @@ final class DurableFileWriterSourceReappearanceTests: XCTestCase {
                 }
             )
         ) { error in
-            XCTAssertTrue(String(describing: error).contains("sourceNameReappeared"), "\(error)")
+            guard case let .sourceNameReappeared(name) =
+                error as? DurableFileWriter.WriterError else {
+                return XCTFail("expected lexical source-name reappearance, got \(error)")
+            }
+            guard let quarantine else {
+                return XCTFail("compensation never exposed its quarantine name")
+            }
+            XCTAssertEqual(name, quarantine.lastPathComponent)
         }
         XCTAssertEqual(try Data(contentsOf: XCTUnwrap(quarantine)), fixture.payload)
     }
@@ -145,7 +163,11 @@ final class DurableFileWriterSourceReappearanceTests: XCTestCase {
                 containedIn: fixture.root
             )
         ) { error in
-            XCTAssertTrue(String(describing: error).contains("sourceNameReappeared"), "\(error)")
+            guard case let .sourceNameReappeared(name) =
+                error as? DurableFileWriter.WriterError else {
+                return XCTFail("expected lexical source-name reappearance, got \(error)")
+            }
+            XCTAssertEqual(name, fixture.destination.lastPathComponent)
         }
         XCTAssertEqual(try Data(contentsOf: fixture.destination), fixture.payload)
     }
