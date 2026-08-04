@@ -347,7 +347,7 @@ struct MatterDraftingView: View {
                             enabled: source.isReady,
                             accessibilityID: "drafting.motion.fact.\(source.chunkID)",
                             title: "\(source.documentName) — \(source.locator)",
-                            detail: source.blockingReason ?? source.displayExcerpt
+                            detail: source.blockingReason ?? source.text
                         ) {
                             toggle(source.chunkID, in: &selectedMotionFactIDs)
                         }

@@ -110,7 +110,12 @@ final class DraftingCoreTypesTests: XCTestCase {
                 citation: "Example v. Fictional, 123 So. 3d 456 (Fla. 1st DCA 2020)",
                 reviewedExcerpt: "A complaint must plead ultimate facts.",
                 groundKey: "mtd.failureToStateClaim"
-            )]
+            )],
+            bodyContract: MotionBodyContract(
+                introduction: "Defendant moves to dismiss.",
+                argumentHeading: "THE COMPLAINT FAILS TO STATE A CLAIM.",
+                conclusion: "WHEREFORE, Defendant requests dismissal."
+            )
         )
 
         let result = await CapturingVerifier().verify(

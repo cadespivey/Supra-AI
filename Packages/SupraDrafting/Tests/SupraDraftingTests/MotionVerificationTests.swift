@@ -33,7 +33,12 @@ final class MotionVerificationTests: XCTestCase {
     private var evidence: MotionVerificationEvidence {
         MotionVerificationEvidence(
             facts: [factOne, factTwo],
-            authorities: [authorityOne, authorityTwo]
+            authorities: [authorityOne, authorityTwo],
+            bodyContract: MotionBodyContract(
+                introduction: "Defendant moves to dismiss the fictional complaint.",
+                argumentHeading: "THE FICTIONAL COMPLAINT FAILS TO STATE A CLAIM.",
+                conclusion: "WHEREFORE, Defendant requests dismissal."
+            )
         )
     }
 
@@ -131,7 +136,11 @@ final class MotionVerificationTests: XCTestCase {
         do {
             _ = try await pipeline.runMotion(
                 model: validModel(),
-                evidence: MotionVerificationEvidence(facts: [], authorities: []),
+                evidence: MotionVerificationEvidence(
+                    facts: [],
+                    authorities: [],
+                    bodyContract: evidence.bodyContract
+                ),
                 style: .defaultFL
             )
             XCTFail("a motion with no selected evidence must block")
@@ -182,7 +191,8 @@ final class MotionVerificationTests: XCTestCase {
         for authority in [unsupportedGround, nonFloridaCitation] {
             let scopedEvidence = MotionVerificationEvidence(
                 facts: [factOne],
-                authorities: [authority]
+                authorities: [authority],
+                bodyContract: evidence.bodyContract
             )
             await assertBlocked(
                 model: validModel(
@@ -239,7 +249,8 @@ final class MotionVerificationTests: XCTestCase {
             )
             let scopedEvidence = MotionVerificationEvidence(
                 facts: [factOne],
-                authorities: [authority]
+                authorities: [authority],
+                bodyContract: evidence.bodyContract
             )
             await assertBlocked(
                 model: validModel(
@@ -266,7 +277,11 @@ final class MotionVerificationTests: XCTestCase {
                 reviewedExcerpt: authorityOne.reviewedExcerpt,
                 groundKey: MotionGroundSpec.failureToStateClaim.key
             )
-            let scopedEvidence = MotionVerificationEvidence(facts: [factOne], authorities: [authority])
+            let scopedEvidence = MotionVerificationEvidence(
+                facts: [factOne],
+                authorities: [authority],
+                bodyContract: evidence.bodyContract
+            )
             let renderer = MotionCountingRenderer(
                 identity: .init(id: "test.state-citation-renderer-\(index)", version: "1")
             )
@@ -274,7 +289,10 @@ final class MotionVerificationTests: XCTestCase {
             _ = try await DraftPipeline(verifier: DraftVerifier(), renderer: renderer).runMotion(
                 model: validModel(
                     numberedFacts: [factOne.text],
-                    authorityParagraphs: [authority.canonicalParagraph]
+                    authorityParagraphs: [authority.canonicalParagraph],
+                    applicationParagraphs: [
+                        factOne.canonicalApplicationParagraph(number: 1)
+                    ]
                 ),
                 evidence: scopedEvidence,
                 style: .defaultFL

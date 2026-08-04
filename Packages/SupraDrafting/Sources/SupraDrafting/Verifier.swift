@@ -8,7 +8,7 @@ import SupraDraftingCore
 public struct DraftVerifier: Verifier, Sendable {
     public let identity = DraftComponentIdentity(
         id: "supra.drafting.draft-verifier",
-        version: "4"
+        version: "5"
     )
     public let citator: CitatorClient?
 
@@ -187,6 +187,32 @@ public struct DraftVerifier: Verifier, Sendable {
             block(
                 .factProvenance,
                 "The argument must apply the reviewed pleading standards to every selected fact exactly once and in order."
+            )
+        }
+
+        let expectedBody: [BodyBlock] =
+            [.paragraph(evidence.bodyContract.introduction), .sectionHeading("STATEMENT OF FACTS")]
+            + evidence.facts.enumerated().map { index, fact in
+                .numberedAllegation(number: index + 1, text: fact.text)
+            }
+            + [
+                .sectionHeading("MEMORANDUM OF LAW"),
+                .pointHeading(
+                    level: 1,
+                    numeral: "I.",
+                    text: evidence.bodyContract.argumentHeading
+                ),
+            ]
+            + expectedAuthorityParagraphs.map(BodyBlock.paragraph)
+            + expectedApplicationParagraphs.map(BodyBlock.paragraph)
+            + [
+                .pointHeading(level: 1, numeral: "II.", text: "CONCLUSION"),
+                .paragraph(evidence.bodyContract.conclusion),
+            ]
+        if model.body != expectedBody {
+            block(
+                .contract,
+                "Motion body contains prose or structure outside the supported selected-evidence contract."
             )
         }
 

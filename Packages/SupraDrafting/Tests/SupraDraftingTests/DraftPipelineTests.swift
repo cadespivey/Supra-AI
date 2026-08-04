@@ -155,7 +155,15 @@ final class DraftPipelineTests: XCTestCase {
                     let model = NoticeAppearance.assemble(noticeInputs, profile: profile)
                     _ = try await pipeline.runMotion(
                         model: model,
-                        evidence: MotionVerificationEvidence(facts: [], authorities: []),
+                        evidence: MotionVerificationEvidence(
+                            facts: [],
+                            authorities: [],
+                            bodyContract: MotionBodyContract(
+                                introduction: "",
+                                argumentHeading: "",
+                                conclusion: ""
+                            )
+                        ),
                         style: .defaultFL
                     )
                 }

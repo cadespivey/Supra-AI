@@ -906,14 +906,36 @@ public struct MotionAuthorityEvidence: Sendable, Equatable {
     public var propositionID: String { "motion.authority.\(authorityID)" }
 }
 
+/// Exact deterministic prose surrounding the selected facts and reviewed
+/// authorities in the first supported one-ground motion. Keeping these values
+/// separate from the assembled model lets verification reject any assembler
+/// mutation instead of treating the model itself as the allow-list.
+public struct MotionBodyContract: Sendable, Equatable {
+    public let introduction: String
+    public let argumentHeading: String
+    public let conclusion: String
+
+    public init(introduction: String, argumentHeading: String, conclusion: String) {
+        self.introduction = introduction
+        self.argumentHeading = argumentHeading
+        self.conclusion = conclusion
+    }
+}
+
 /// Complete ordered evidence contract for one deterministic motion assembly.
 public struct MotionVerificationEvidence: Sendable, Equatable {
     public let facts: [MotionFactEvidence]
     public let authorities: [MotionAuthorityEvidence]
+    public let bodyContract: MotionBodyContract
 
-    public init(facts: [MotionFactEvidence], authorities: [MotionAuthorityEvidence]) {
+    public init(
+        facts: [MotionFactEvidence],
+        authorities: [MotionAuthorityEvidence],
+        bodyContract: MotionBodyContract
+    ) {
         self.facts = facts
         self.authorities = authorities
+        self.bodyContract = bodyContract
     }
 
     public var requiredPropositionIDs: [String] {

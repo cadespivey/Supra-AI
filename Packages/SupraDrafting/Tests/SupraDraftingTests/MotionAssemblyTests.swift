@@ -28,7 +28,12 @@ final class MotionAssemblyTests: XCTestCase {
                     reviewedExcerpt: "A written-instrument claim must set forth its essential terms.",
                     groundKey: "mtd.failureToStateClaim"
                 )
-            ]
+            ],
+            bodyContract: MotionBodyContract(
+                introduction: "Defendant moves to dismiss the Complaint.",
+                argumentHeading: "THE COMPLAINT FAILS TO STATE A CAUSE OF ACTION FOR BREACH OF CONTRACT.",
+                conclusion: "WHEREFORE, Defendant respectfully requests that this Court dismiss the Complaint."
+            )
         )
     }
 
@@ -94,6 +99,29 @@ final class MotionAssemblyTests: XCTestCase {
         )
     }
 
+    private func buildSupportedMotion() -> DocumentModel {
+        MotionToDismiss.assemble(
+            caption: caption,
+            title: MotionToDismiss.title(
+                party: "Liberty Rail, LLC",
+                partyRole: "Defendant",
+                pleading: "Plaintiff's Complaint"
+            ),
+            introduction: [.paragraph(motionEvidence.bodyContract.introduction)],
+            numberedFacts: motionEvidence.facts.map(\.text),
+            argumentPoints: [MotionToDismiss.ArgumentPoint(
+                heading: motionEvidence.bodyContract.argumentHeading,
+                body: (
+                    motionEvidence.authorities.map(\.canonicalParagraph)
+                        + motionEvidence.canonicalApplicationParagraphs
+                ).map(BodyBlock.paragraph)
+            )],
+            conclusion: motionEvidence.bodyContract.conclusion,
+            signature: signature,
+            certificate: certificate()
+        )
+    }
+
     func testMotionTitleUppercased() {
         let model = buildMotion()
         XCTAssertEqual(model.title, "DEFENDANT LIBERTY RAIL, LLC'S MOTION TO DISMISS PLAINTIFF'S COMPLAINT")
@@ -146,7 +174,11 @@ final class MotionAssemblyTests: XCTestCase {
 
     func testMotionPipelineRenders() async throws {
         let pipeline = DraftPipeline(verifier: DraftVerifier(), renderer: CourtFLRenderer())
-        let result = try await pipeline.runMotion(model: buildMotion(), evidence: motionEvidence, style: .defaultFL)
+        let result = try await pipeline.runMotion(
+            model: buildSupportedMotion(),
+            evidence: motionEvidence,
+            style: .defaultFL
+        )
         XCTAssertEqual(Array(result.docx.prefix(2)), [0x50, 0x4B])
         XCTAssertFalse(result.followUps.contains { $0.severity == .blocking })
     }

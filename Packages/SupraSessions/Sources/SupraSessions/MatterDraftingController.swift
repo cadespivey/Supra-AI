@@ -709,15 +709,17 @@ public final class MatterDraftingController: ObservableObject {
             )
             certificate.documentTitle = title
 
-            let introduction = [BodyBlock.paragraph(
+            let introductionText =
                 "\(representedRole), \(representedName), moves to dismiss \(respondingTo) for failure to state a claim. This motion is assembled from the factual excerpts and reviewed authorities selected by counsel."
-            )]
+            let introduction = [BodyBlock.paragraph(introductionText)]
             let packet = Self.motionPacket(snapshot: snapshot, groundSpecs: groundSpecs)
             guard packet.authorities.allSatisfy({
                 FloridaMotionToDismissContract.isSupportedAuthorityCitation($0.citation)
             }) else {
                 return .failure(.motionBlocked(["Every selected authority must have a supported Florida state citation."]))
             }
+            let argumentHeading = "THE \(respondingTo.uppercased()) FAILS TO STATE A CLAIM."
+            let conclusion = "WHEREFORE, \(representedName) respectfully requests \(relief)."
             let evidence = MotionVerificationEvidence(
                 facts: packet.facts.map {
                     MotionFactEvidence(
@@ -734,17 +736,21 @@ public final class MatterDraftingController: ObservableObject {
                         reviewedExcerpt: authority.snippet,
                         groundKey: source.groundKey.rawValue
                     )
-                }
+                },
+                bodyContract: MotionBodyContract(
+                    introduction: introductionText,
+                    argumentHeading: argumentHeading,
+                    conclusion: conclusion
+                )
             )
             let authorityParagraphs = evidence.authorities.map { authority in
                 BodyBlock.paragraph(authority.canonicalParagraph)
             }
             let applicationParagraphs = evidence.canonicalApplicationParagraphs.map(BodyBlock.paragraph)
             let argument = MotionToDismiss.ArgumentPoint(
-                heading: "THE \(respondingTo.uppercased()) FAILS TO STATE A CLAIM.",
+                heading: argumentHeading,
                 body: authorityParagraphs + applicationParagraphs
             )
-            let conclusion = "WHEREFORE, \(representedName) respectfully requests \(relief)."
             let model = MotionToDismiss.assemble(
                 caption: shell.caption,
                 title: title,
