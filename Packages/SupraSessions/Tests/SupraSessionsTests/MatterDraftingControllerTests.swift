@@ -24,11 +24,15 @@ final class MatterDraftingControllerTests: XCTestCase {
 
     private final class DirectorySyncProbe: @unchecked Sendable {
         private let lock = NSLock()
-        private let failOnCall: Int?
+        private let failOnCalls: Set<Int>
         private var directories: [URL] = []
 
         init(failOnCall: Int? = nil) {
-            self.failOnCall = failOnCall
+            self.failOnCalls = failOnCall.map { [$0] } ?? []
+        }
+
+        init(failOnCalls: Set<Int>) {
+            self.failOnCalls = failOnCalls
         }
 
         var callCount: Int {
@@ -44,7 +48,7 @@ final class MatterDraftingControllerTests: XCTestCase {
                 directories.append(directory.standardizedFileURL)
                 return directories.count
             }
-            if call == failOnCall {
+            if failOnCalls.contains(call) {
                 throw DirectorySyncFailure()
             }
         }
@@ -632,6 +636,56 @@ final class MatterDraftingControllerTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
         XCTAssertEqual(syncProbe.callCount, 2, "install rollback must also synchronize the parent directory")
         XCTAssertEqual(Set(syncProbe.synchronizedDirectories), [directory.standardizedFileURL])
+        XCTAssertTrue(try store.auditEvents.fetchEvents(matterID: matter.id).isEmpty)
+    }
+
+    // ACR-EXPORT-016. If installation synchronization fails, rollback removes
+    // the file, and synchronization of that rollback also fails, the namespace
+    // remains crash-uncertain. The prepared intent must stay recoverable rather
+    // than being marked aborted as though absence were durable.
+    @MainActor
+    func testCustomDraftInstallAndRollbackSyncFailuresRequireRecovery() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Double-sync-failure matter")
+        let storage = makeStorage()
+        let directory = storage.exportsDirectory(forMatterID: matter.id)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let destination = directory.appendingPathComponent("Double-sync-fixed.md")
+        let syncProbe = DirectorySyncProbe(failOnCalls: [1, 2])
+        let writer = DurableFileWriter(
+            faultInjector: { _ in },
+            parentDirectorySynchronizer: { try syncProbe.synchronize($0) }
+        )
+        let controller = MatterDraftingController(
+            store: store,
+            storage: storage,
+            fileWriter: writer,
+            fileStampProvider: { "fixed" }
+        )
+
+        let result = await controller.draftCustomDescription(
+            matterID: matter.id,
+            input: .init(
+                title: "Double sync",
+                description: "Keep an uncertain rollback eligible for reconciliation."
+            )
+        )
+
+        guard case let .failure(.renderFailed(message)) = result else {
+            return XCTFail("expected rollback synchronization uncertainty, got \(result)")
+        }
+        XCTAssertTrue(message.contains("rollback directory synchronization"), message)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
+        XCTAssertEqual(syncProbe.callCount, 2)
+        XCTAssertEqual(Set(syncProbe.synchronizedDirectories), [directory.standardizedFileURL])
+        let intentStatuses = try await store.database.writer.read { db in
+            try String.fetchAll(
+                db,
+                sql: "SELECT status FROM draft_artifact_intents WHERE matter_id = ?",
+                arguments: [matter.id]
+            )
+        }
+        XCTAssertEqual(intentStatuses, [DraftArtifactIntentStatus.recoveryRequired.rawValue])
         XCTAssertTrue(try store.auditEvents.fetchEvents(matterID: matter.id).isEmpty)
     }
 
