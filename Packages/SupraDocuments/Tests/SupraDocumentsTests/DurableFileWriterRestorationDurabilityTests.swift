@@ -92,7 +92,7 @@ final class DurableFileWriterRestorationDurabilityTests: XCTestCase {
                 }
             )
         ) { error in
-            guard case .anchoredParentDirectorySynchronizationFailed =
+            guard case .restoredEntrySynchronizationFailed =
                 error as? DurableFileWriter.WriterError else {
                 return XCTFail("Expected uncertain restoration durability, got \(error)")
             }

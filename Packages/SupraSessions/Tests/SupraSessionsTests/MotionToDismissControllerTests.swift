@@ -687,6 +687,47 @@ final class MotionToDismissControllerTests: XCTestCase {
             .contains { $0.eventType == "draft_generated" })
     }
 
+    // T-MTD-28b. A failed sync after compensation restores the quarantined
+    // draft rather than removing it. Recovery copy must describe that restored
+    // state honestly instead of claiming the rollback file was removed.
+    func testTMTD28bRestorationSyncFailureReportsRestoredRecoveryState() async throws {
+        let fixture = try makeFixture()
+        let destination = fixture.storage.exportsDirectory(forMatterID: fixture.matterID)
+            .appendingPathComponent("Motion-to-Dismiss-restore-sync-failure.docx")
+        let syncProbe = DirectorySyncProbe(failOnCall: 2)
+        let writer = DurableFileWriter(
+            faultInjector: { _ in },
+            parentDirectorySynchronizer: { directory in
+                try syncProbe.synchronize(directory: directory, destination: destination)
+            }
+        )
+        let controller = MatterDraftingController(
+            store: fixture.store,
+            storage: fixture.storage,
+            fileWriter: writer,
+            fileStampProvider: { "restore-sync-failure" },
+            motionCompensationCheckpoint: { _, _ in throw InjectedFailure.stop },
+            motionAuditCommitter: { _, _ in throw InjectedFailure.stop }
+        )
+
+        let result = await controller.draft(
+            .motionToDismiss(fixture.selectedInput),
+            matterID: fixture.matterID
+        )
+
+        guard case let .failure(.renderFailed(message)) = result else {
+            return XCTFail("expected a partial restoration failure, got \(result)")
+        }
+        XCTAssertTrue(message.contains("rollback also failed"), message)
+        XCTAssertTrue(message.contains("restored"), message)
+        XCTAssertTrue(message.contains("directory synchronization"), message)
+        XCTAssertFalse(message.contains("rollback was removed"), message)
+        XCTAssertEqual(syncProbe.callCount, 2)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: destination.path))
+        XCTAssertFalse(try fixture.store.auditEvents.fetchEvents(matterID: fixture.matterID)
+            .contains { $0.eventType == "draft_generated" })
+    }
+
     // T-UI-MTD-06 companion — cancellation after the async verifier boundary cannot persist.
     func testTUIMTD06CancellationLeavesNoArtifactOrSuccessAudit() async throws {
         let fixture = try makeFixture()
