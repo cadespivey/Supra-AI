@@ -498,6 +498,103 @@ final class DraftArtifactReconciliationTests: XCTestCase {
         )
     }
 
+    // T-DAR-14. Expected RED: cleanup validates an exact writer temporary and
+    // then calls recursive FileManager removal with no deterministic pre-unlink
+    // checkpoint or identity recheck.
+    func testTDAR14TemporaryCleanupPreservesDirectorySwappedImmediatelyBeforeUnlink() throws {
+        let fixture = try makeFixture()
+        let output = Data("# Prepared temporary\n".utf8)
+        let intent = try fixture.store.draftArtifacts.prepareGenericIntent(
+            matterID: fixture.matter.id,
+            artifactKind: .customDescription,
+            format: .markdown,
+            fileName: "Temporary-swap.md",
+            output: output,
+            id: "temporary-pre-unlink-swap"
+        )
+        let directory = fixture.storage.exportsDirectory(forMatterID: fixture.matter.id)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let temporary = directory.appendingPathComponent(
+            ".\(intent.fileName).supra-tmp-92b44b91-8c30-45db-8870-3ab32e0c9797"
+        )
+        let preservedOriginal = directory.appendingPathComponent("preserved-writer-temporary.md")
+        let canary = Data("directory owner canary".utf8)
+        try output.write(to: temporary)
+        let service = DraftArtifactReconciliationService(
+            store: fixture.store,
+            storage: fixture.storage
+        )
+        service.cleanupPreUnlinkCheckpoint = { candidate in
+            XCTAssertEqual(candidate.standardizedFileURL, temporary.standardizedFileURL)
+            try FileManager.default.moveItem(at: candidate, to: preservedOriginal)
+            try FileManager.default.createDirectory(at: candidate, withIntermediateDirectories: false)
+            try canary.write(to: candidate.appendingPathComponent("owner-canary.txt"))
+        }
+
+        let summary = try service.reconcilePendingIntents()
+
+        XCTAssertEqual(summary.removedTemporaryFileCount, 0)
+        XCTAssertEqual(summary.abortedCount, 0)
+        XCTAssertEqual(summary.recoveryRequiredCount, 1)
+        XCTAssertEqual(try Data(contentsOf: preservedOriginal), output)
+        XCTAssertEqual(
+            try Data(contentsOf: temporary.appendingPathComponent("owner-canary.txt")),
+            canary
+        )
+        XCTAssertEqual(
+            try fixture.store.draftArtifacts.intent(id: intent.id)?.status,
+            DraftArtifactIntentStatus.recoveryRequired.rawValue
+        )
+    }
+
+    // T-DAR-15. Expected RED: exact rollback-quarantine cleanup has the same
+    // validation-to-recursive-removal window as writer-temporary cleanup.
+    func testTDAR15RollbackCleanupPreservesDirectorySwappedImmediatelyBeforeUnlink() throws {
+        let fixture = try makeFixture()
+        let output = Data("# Prepared rollback quarantine\n".utf8)
+        let intent = try fixture.store.draftArtifacts.prepareGenericIntent(
+            matterID: fixture.matter.id,
+            artifactKind: .customDescription,
+            format: .markdown,
+            fileName: "Rollback-swap.md",
+            output: output,
+            id: "rollback-pre-unlink-swap"
+        )
+        let directory = fixture.storage.exportsDirectory(forMatterID: fixture.matter.id)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let quarantine = directory.appendingPathComponent(
+            ".supra-draft-rollback-bbf231d5-d197-47d5-92ec-78ac7f33e593-\(intent.fileName)"
+        )
+        let preservedOriginal = directory.appendingPathComponent("preserved-rollback-quarantine.md")
+        let canary = Data("rollback directory owner canary".utf8)
+        try output.write(to: quarantine)
+        let service = DraftArtifactReconciliationService(
+            store: fixture.store,
+            storage: fixture.storage
+        )
+        service.cleanupPreUnlinkCheckpoint = { candidate in
+            XCTAssertEqual(candidate.standardizedFileURL, quarantine.standardizedFileURL)
+            try FileManager.default.moveItem(at: candidate, to: preservedOriginal)
+            try FileManager.default.createDirectory(at: candidate, withIntermediateDirectories: false)
+            try canary.write(to: candidate.appendingPathComponent("owner-canary.txt"))
+        }
+
+        let summary = try service.reconcilePendingIntents()
+
+        XCTAssertEqual(summary.removedRollbackQuarantineCount, 0)
+        XCTAssertEqual(summary.abortedCount, 0)
+        XCTAssertEqual(summary.recoveryRequiredCount, 1)
+        XCTAssertEqual(try Data(contentsOf: preservedOriginal), output)
+        XCTAssertEqual(
+            try Data(contentsOf: quarantine.appendingPathComponent("owner-canary.txt")),
+            canary
+        )
+        XCTAssertEqual(
+            try fixture.store.draftArtifacts.intent(id: intent.id)?.status,
+            DraftArtifactIntentStatus.recoveryRequired.rawValue
+        )
+    }
+
     private struct Fixture {
         let store: SupraStore
         let matter: MatterRecord

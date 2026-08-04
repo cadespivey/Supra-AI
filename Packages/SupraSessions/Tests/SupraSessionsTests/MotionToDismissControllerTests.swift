@@ -1224,6 +1224,65 @@ final class MotionToDismissControllerTests: XCTestCase {
         }
     }
 
+    // T-MTD-38. Expected RED: compensation has no deterministic checkpoint at
+    // the final unlink boundary, and FileManager.removeItem would recursively
+    // delete a nonempty directory swapped onto the validated quarantine path.
+    func testTMTD38CompensationPreservesDirectorySwappedImmediatelyBeforeUnlink() async throws {
+        let fixture = try makeFixture()
+        var intentID: String?
+        var quarantineURL: URL?
+        var preservedOriginalURL: URL?
+        let directoryCanary = Data("concurrent directory owner".utf8)
+        let controller = MatterDraftingController(
+            store: fixture.store,
+            storage: fixture.storage,
+            fileStampProvider: { "pre-unlink-swap" },
+            draftCompensationPreUnlinkCheckpoint: { quarantine in
+                quarantineURL = quarantine
+                let preserved = quarantine.deletingLastPathComponent()
+                    .appendingPathComponent("preserved-original-\(UUID().uuidString).docx")
+                preservedOriginalURL = preserved
+                try FileManager.default.moveItem(at: quarantine, to: preserved)
+                try FileManager.default.createDirectory(at: quarantine, withIntermediateDirectories: false)
+                try directoryCanary.write(to: quarantine.appendingPathComponent("owner-canary.txt"))
+            },
+            motionAuditCommitter: { event, _ in
+                intentID = String(event.id.dropFirst("draft-artifact-".count))
+                throw InjectedFailure.stop
+            }
+        )
+
+        let result = await controller.draft(
+            .motionToDismiss(fixture.selectedInput),
+            matterID: fixture.matterID
+        )
+
+        guard case let .failure(.renderFailed(message)) = result else {
+            return XCTFail("expected partial rollback failure, got \(result)")
+        }
+        XCTAssertTrue(message.contains("rollback also failed"), message)
+        let quarantine = try XCTUnwrap(quarantineURL)
+        XCTAssertEqual(
+            try Data(contentsOf: quarantine.appendingPathComponent("owner-canary.txt")),
+            directoryCanary
+        )
+        let preservedOriginal = try XCTUnwrap(preservedOriginalURL)
+        try DocumentExportValidator.validate(preservedOriginal, as: .docx)
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: fixture.storage.exportsDirectory(forMatterID: fixture.matterID)
+                    .appendingPathComponent("Motion-to-Dismiss-pre-unlink-swap.docx").path
+            )
+        )
+        let intent = try XCTUnwrap(
+            try fixture.store.draftArtifacts.intent(id: XCTUnwrap(intentID))
+        )
+        XCTAssertEqual(intent.status, DraftArtifactIntentStatus.recoveryRequired.rawValue)
+        XCTAssertTrue(
+            try fixture.store.auditEvents.fetchEvents(matterID: fixture.matterID).isEmpty
+        )
+    }
+
     // MARK: - Fixtures
 
     private struct IndexedFact {
