@@ -11,13 +11,20 @@ final class DurableFileWriterLinkPrecedenceTests: XCTestCase {
         let fixture = try makeLinkPrecedenceFixture(label: "managed-unlink")
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         let alias = fixture.parent.appendingPathComponent("unknown-unlink-survivor.md")
+        let postSyncAlias = fixture.parent.appendingPathComponent(
+            "unknown-unlink-post-sync-survivor.md"
+        )
         let identity = try DurableFileWriter().writeNewOwned(
             fixture.payload,
             to: fixture.destination,
             containedIn: fixture.root,
             validator: { XCTAssertEqual($0, fixture.payload) }
         )
-        let syncProbe = ThrowingAnchoredSyncProbe()
+        let syncProbe = FreshLinkThrowingAnchoredSyncProbe(
+            removedName: fixture.destination,
+            survivingAlias: alias,
+            postSyncAlias: postSyncAlias
+        )
         let writer = DurableFileWriter(
             faultInjector: { _ in },
             anchoredParentDirectorySynchronizer: {
@@ -49,7 +56,7 @@ final class DurableFileWriterLinkPrecedenceTests: XCTestCase {
                 return XCTFail("Expected exact remaining-link error, got \(error)")
             }
             XCTAssertEqual(name, fixture.destination.lastPathComponent)
-            XCTAssertEqual(count, 1)
+            XCTAssertEqual(count, 2)
         }
 
         XCTAssertEqual(syncProbe.callCount, 1)
@@ -57,7 +64,17 @@ final class DurableFileWriterLinkPrecedenceTests: XCTestCase {
         try assertLinkPrecedenceSurvivor(
             alias,
             expected: fixture.payload,
-            expectedLinkCount: 1
+            expectedLinkCount: 2
+        )
+        try assertLinkPrecedenceSurvivor(
+            postSyncAlias,
+            expected: fixture.payload,
+            expectedLinkCount: 2
+        )
+        try assertLinkPrecedenceSameInode(
+            alias,
+            postSyncAlias,
+            expectedLinkCount: 2
         )
     }
 
@@ -204,6 +221,40 @@ private final class ThrowingAnchoredSyncProbe: @unchecked Sendable {
         XCTAssertFalse(parentURL.lastPathComponent.isEmpty)
         var status = stat()
         XCTAssertEqual(Darwin.fstat(parentDescriptor, &status), 0)
+        lock.withLock { calls += 1 }
+        throw LinkPrecedenceInjectedFailure.parentSynchronization
+    }
+}
+
+private final class FreshLinkThrowingAnchoredSyncProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private let removedName: URL
+    private let survivingAlias: URL
+    private let postSyncAlias: URL
+    private var calls = 0
+
+    init(removedName: URL, survivingAlias: URL, postSyncAlias: URL) {
+        self.removedName = removedName
+        self.survivingAlias = survivingAlias
+        self.postSyncAlias = postSyncAlias
+    }
+
+    var callCount: Int { lock.withLock { calls } }
+
+    func synchronize(parentURL: URL, parentDescriptor: Int32) throws {
+        XCTAssertEqual(
+            parentURL.standardizedFileURL,
+            removedName.deletingLastPathComponent().standardizedFileURL
+        )
+        var status = stat()
+        XCTAssertEqual(Darwin.fstat(parentDescriptor, &status), 0)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: removedName.path))
+        try FileManager.default.linkItem(at: survivingAlias, to: postSyncAlias)
+        try assertLinkPrecedenceSameInode(
+            survivingAlias,
+            postSyncAlias,
+            expectedLinkCount: 2
+        )
         lock.withLock { calls += 1 }
         throw LinkPrecedenceInjectedFailure.parentSynchronization
     }
