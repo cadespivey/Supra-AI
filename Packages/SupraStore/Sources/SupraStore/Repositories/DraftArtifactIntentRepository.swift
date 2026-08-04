@@ -255,7 +255,8 @@ public final class DraftArtifactIntentRepository: @unchecked Sendable {
             output: output
         )
         let metadata = GenericDraftAuditLineage(
-            schemaVersion: 1,
+            schemaVersion: 2,
+            matterID: matterID,
             kindID: artifactKind.rawValue,
             format: format.rawValue,
             outputFileName: fileName,
@@ -625,9 +626,13 @@ public final class DraftArtifactIntentRepository: @unchecked Sendable {
             output: Data(repeating: 0, count: 1)
         )
         let data = Data(record.auditMetadataJSON.utf8)
-        if record.motionSnapshotRequestJSON != nil {
+        if let requestJSON = record.motionSnapshotRequestJSON {
             guard record.artifactKind == DraftArtifactIntentKind.motionToDismiss.rawValue,
                   format == .docx,
+                  let requestData = requestJSON.data(using: .utf8),
+                  let request = try? JSONDecoder().decode(MotionDraftSnapshotRequest.self, from: requestData),
+                  (try? jsonString(request)) == requestJSON,
+                  request.matterID == record.matterID,
                   let lineage = try? JSONDecoder().decode(MotionDraftAuditLineage.self, from: data),
                   (try? jsonString(lineage)) == record.auditMetadataJSON,
                   lineage.schemaVersion == MotionDraftAuditEnvelope.schemaVersion,
@@ -663,7 +668,8 @@ public final class DraftArtifactIntentRepository: @unchecked Sendable {
                 || ([DraftArtifactIntentKind.noticeAppearance, .letterDemand].contains(kind) && format == .docx)),
               let lineage = try? JSONDecoder().decode(GenericDraftAuditLineage.self, from: data),
               (try? jsonString(lineage)) == record.auditMetadataJSON,
-              lineage.schemaVersion == 1,
+              lineage.schemaVersion == 2,
+              lineage.matterID == record.matterID,
               lineage.kindID == record.artifactKind,
               lineage.format == record.format,
               lineage.outputFileName == record.fileName,
@@ -762,6 +768,7 @@ public final class DraftArtifactIntentRepository: @unchecked Sendable {
 
     private struct GenericDraftAuditLineage: Codable {
         let schemaVersion: Int
+        let matterID: String
         let kindID: String
         let format: String
         let outputFileName: String
