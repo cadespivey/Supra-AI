@@ -344,6 +344,49 @@ final class MatterDraftingControllerTests: XCTestCase {
         XCTAssertTrue(try store.auditEvents.fetchEvents(matterID: matter.id).isEmpty)
     }
 
+    @MainActor
+    func testInterruptedDraftRecoveryListsFilenameAndAcknowledgesWithoutDeletingBytes() throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Interrupted recovery matter")
+        let storage = makeStorage()
+        let output = Data("# Preserved interrupted draft\n".utf8)
+        let intent = try store.draftArtifacts.prepareGenericIntent(
+            matterID: matter.id,
+            artifactKind: .customDescription,
+            format: .markdown,
+            fileName: "Interrupted-review.md",
+            output: output,
+            id: "interrupted-review-intent"
+        )
+        try store.draftArtifacts.markRecoveryRequired(id: intent.id)
+        let publicURL = storage.exportsDirectory(forMatterID: matter.id)
+            .appendingPathComponent(intent.fileName)
+        try FileManager.default.createDirectory(
+            at: publicURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try output.write(to: publicURL)
+        let controller = MatterDraftingController(store: store, storage: storage)
+
+        controller.refreshDraftReviewState(matterID: matter.id)
+
+        XCTAssertEqual(controller.interruptedDraftRecoveries.map(\.fileName), [intent.fileName])
+        controller.confirmInterruptedDraftArtifactsReviewed(matterID: matter.id)
+        XCTAssertTrue(controller.interruptedDraftRecoveries.isEmpty)
+        XCTAssertEqual(try Data(contentsOf: publicURL), output)
+        XCTAssertEqual(
+            try store.draftArtifacts.intent(id: intent.id)?.status,
+            DraftArtifactIntentStatus.recoveryRequired.rawValue,
+            "acknowledgment resolves the review item but retains historical intent state"
+        )
+        XCTAssertNil(
+            try store.remediationRecovery.pendingItem(
+                kind: .interruptedDraftArtifact,
+                relatedID: intent.id
+            )
+        )
+    }
+
     // ACR-EXPORT-009 follow-on. Expected RED: a replacement install whose
     // parent-directory sync fails currently leaves a new, unaudited markdown
     // artifact visible instead of rolling the namespace change back durably.

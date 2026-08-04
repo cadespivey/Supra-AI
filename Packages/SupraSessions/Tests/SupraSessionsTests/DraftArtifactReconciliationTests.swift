@@ -417,6 +417,83 @@ final class DraftArtifactReconciliationTests: XCTestCase {
         )
     }
 
+    func testTDAR12PublicPathSymlinkSwapAfterRegularCheckNeverFinalizes() throws {
+        let fixture = try makeFixture()
+        let output = Data("# Exact expected draft\n".utf8)
+        let intent = try fixture.store.draftArtifacts.prepareGenericIntent(
+            matterID: fixture.matter.id,
+            artifactKind: .customDescription,
+            format: .markdown,
+            fileName: "Inspection-race.md",
+            output: output,
+            id: "public-inspection-race"
+        )
+        let publicURL = try install(output, intent: intent, storage: fixture.storage)
+        let external = fixture.storage.root.appendingPathComponent("unowned-exact-target.md")
+        try output.write(to: external)
+        let service = DraftArtifactReconciliationService(
+            store: fixture.store,
+            storage: fixture.storage
+        )
+        service.publicArtifactInspectionCheckpoint = { checkedURL in
+            try FileManager.default.removeItem(at: checkedURL)
+            try FileManager.default.createSymbolicLink(at: checkedURL, withDestinationURL: external)
+        }
+
+        let summary = try service.reconcilePendingIntents()
+
+        XCTAssertEqual(summary.recoveryRequiredCount, 1)
+        XCTAssertEqual(summary.finalizedCount, 0)
+        XCTAssertEqual(
+            try fixture.store.draftArtifacts.intent(id: intent.id)?.status,
+            DraftArtifactIntentStatus.recoveryRequired.rawValue
+        )
+        XCTAssertTrue(try fixture.store.auditEvents.fetchEvents(matterID: fixture.matter.id).isEmpty)
+        XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: publicURL.path), external.path)
+        XCTAssertEqual(try Data(contentsOf: external), output)
+    }
+
+    func testTDAR13ReopensOnDiskStoreAndFinalizesInterruptedIntentExactlyOnce() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("supra-draft-process-boundary-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let databaseURL = root.appendingPathComponent("supra.sqlite")
+        let storage = DocumentStorage(root: root.appendingPathComponent("managed", isDirectory: true))
+        let output = Data("# Relaunched exact draft\n".utf8)
+        var firstStore: SupraStore? = try SupraStore(url: databaseURL)
+        let matter = try XCTUnwrap(firstStore).matters.createMatter(name: "On-disk relaunch matter")
+        let intent = try XCTUnwrap(firstStore).draftArtifacts.prepareGenericIntent(
+            matterID: matter.id,
+            artifactKind: .customDescription,
+            format: .markdown,
+            fileName: "On-disk-interrupted.md",
+            output: output,
+            id: "on-disk-interrupted-intent"
+        )
+        let publicURL = try install(output, intent: intent, storage: storage)
+        try XCTUnwrap(firstStore).database.writer.close()
+        firstStore = nil
+
+        let relaunchedStore = try SupraStore(url: databaseURL)
+        let service = DraftArtifactReconciliationService(store: relaunchedStore, storage: storage)
+        let first = try service.reconcilePendingIntents()
+        let second = try service.reconcilePendingIntents()
+
+        XCTAssertEqual(first.finalizedCount, 1)
+        XCTAssertEqual(second.finalizedCount, 0)
+        XCTAssertEqual(try Data(contentsOf: publicURL), output)
+        XCTAssertEqual(
+            try relaunchedStore.draftArtifacts.intent(id: intent.id)?.status,
+            DraftArtifactIntentStatus.completed.rawValue
+        )
+        XCTAssertEqual(
+            try relaunchedStore.auditEvents.fetchEvents(matterID: matter.id)
+                .filter { $0.id == "draft-artifact-\(intent.id)" }.count,
+            1
+        )
+    }
+
     private struct Fixture {
         let store: SupraStore
         let matter: MatterRecord

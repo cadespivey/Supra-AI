@@ -37,6 +37,26 @@ final class DraftArtifactIntentRepositoryTests: XCTestCase {
                 .filter { $0.eventType == "draft_generated" }.count,
             1
         )
+
+        XCTAssertThrowsError(
+            try store.draftArtifacts.finalizeIntent(
+                id: intent.id,
+                installedOutput: Data("wrong completed retry".utf8)
+            )
+        ) { error in
+            XCTAssertEqual(error as? DraftArtifactIntentError, .installedArtifactMismatch)
+        }
+        try store.database.writer.write { db in
+            try db.execute(
+                sql: "UPDATE audit_events SET summary = ? WHERE id = ?",
+                arguments: ["tampered completed audit", "draft-artifact-\(intent.id)"]
+            )
+        }
+        XCTAssertThrowsError(
+            try store.draftArtifacts.finalizeIntent(id: intent.id, installedOutput: expected)
+        ) { error in
+            XCTAssertEqual(error as? DraftArtifactIntentError, .intentIntegrityInvalid)
+        }
     }
 
     func testTDAI03OnlyPreparedIntentReservesFileName() throws {
@@ -131,6 +151,37 @@ final class DraftArtifactIntentRepositoryTests: XCTestCase {
         XCTAssertEqual(
             try store.draftArtifacts.intent(id: intent.id)?.status,
             DraftArtifactIntentStatus.prepared.rawValue
+        )
+    }
+
+    func testTDAI06PermanentMatterDeletionLeavesNoDanglingInterruptedRecoveryItem() throws {
+        let store = try SupraStore.inMemory()
+        let matter = try store.matters.createMatter(name: "Deleted recovery matter")
+        let intent = try store.draftArtifacts.prepareGenericIntent(
+            matterID: matter.id,
+            artifactKind: .customDescription,
+            format: .markdown,
+            fileName: "Preserved-recovery.md",
+            output: Data("# Preserved recovery\n".utf8),
+            id: "deleted-matter-recovery-intent"
+        )
+        try store.draftArtifacts.markRecoveryRequired(id: intent.id)
+        XCTAssertNotNil(
+            try store.remediationRecovery.pendingItem(
+                kind: .interruptedDraftArtifact,
+                relatedID: intent.id
+            )
+        )
+
+        _ = try store.matters.permanentlyDeleteMatter(id: matter.id)
+
+        XCTAssertNil(try store.draftArtifacts.intent(id: intent.id))
+        XCTAssertNil(
+            try store.remediationRecovery.pendingItem(
+                kind: .interruptedDraftArtifact,
+                relatedID: intent.id
+            ),
+            "permanent deletion must not strand an unresolvable pending recovery row"
         )
     }
 }

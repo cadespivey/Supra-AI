@@ -33,6 +33,9 @@ public final class DraftArtifactReconciliationService: @unchecked Sendable {
     private let storage: DocumentStorage
     private let fileWriter: DurableFileWriter
     private let fileManager: FileManager
+    /// Deterministic process-boundary seam used to prove pathname replacement
+    /// after the initial no-follow regular-file check fails closed.
+    var publicArtifactInspectionCheckpoint: (URL) throws -> Void = { _ in }
 
     public init(
         store: SupraStore,
@@ -110,6 +113,7 @@ public final class DraftArtifactReconciliationService: @unchecked Sendable {
                 summary.recoveryRequiredCount += 1
             case .regular:
                 do {
+                    try publicArtifactInspectionCheckpoint(publicURL)
                     let beforeValidation = try Data(contentsOf: publicURL, options: .mappedIfSafe)
                     guard beforeValidation.count == intent.outputByteSize,
                           DocumentStorage.sha256Hex(of: beforeValidation) == intent.outputSHA256 else {
