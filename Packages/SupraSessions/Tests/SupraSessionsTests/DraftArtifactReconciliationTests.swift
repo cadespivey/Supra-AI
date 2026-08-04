@@ -726,6 +726,55 @@ final class DraftArtifactReconciliationTests: XCTestCase {
         )
     }
 
+    // T-DAR-18. Relaunch finalization must authenticate the retained managed
+    // directory chain, not merely accept the same inode hard-linked through a
+    // replacement parent at the expected public pathname.
+    func testTDAR18FinalizationRejectsManagedParentSubstitutionWithHardLinkedInode() throws {
+        let fixture = try makeFixture()
+        let output = Data("# Relaunch parent substitution\n".utf8)
+        let intent = try fixture.store.draftArtifacts.prepareGenericIntent(
+            matterID: fixture.matter.id,
+            artifactKind: .customDescription,
+            format: .markdown,
+            fileName: "Relaunch-parent-race.md",
+            output: output,
+            id: "relaunch-parent-hard-link"
+        )
+        let publicURL = try install(output, intent: intent, storage: fixture.storage)
+        let managedParent = publicURL.deletingLastPathComponent()
+        let preservedParent = fixture.storage.root
+            .appendingPathComponent("preserved-relaunch-parent", isDirectory: true)
+        let preservedCandidate = preservedParent.appendingPathComponent(intent.fileName)
+        let service = DraftArtifactReconciliationService(
+            store: fixture.store,
+            storage: fixture.storage
+        )
+        service.publicArtifactInspectionCheckpoint = { observedCandidate in
+            XCTAssertEqual(observedCandidate.standardizedFileURL, publicURL.standardizedFileURL)
+            try FileManager.default.moveItem(at: managedParent, to: preservedParent)
+            try FileManager.default.createDirectory(
+                at: managedParent,
+                withIntermediateDirectories: true
+            )
+            try FileManager.default.linkItem(
+                at: preservedCandidate,
+                to: publicURL
+            )
+        }
+
+        let summary = try service.reconcilePendingIntents()
+
+        XCTAssertEqual(summary.finalizedCount, 0)
+        XCTAssertEqual(summary.recoveryRequiredCount, 1)
+        XCTAssertEqual(try Data(contentsOf: preservedCandidate), output)
+        XCTAssertEqual(try Data(contentsOf: publicURL), output)
+        XCTAssertEqual(
+            try fixture.store.draftArtifacts.intent(id: intent.id)?.status,
+            DraftArtifactIntentStatus.recoveryRequired.rawValue
+        )
+        XCTAssertTrue(try fixture.store.auditEvents.fetchEvents(matterID: fixture.matter.id).isEmpty)
+    }
+
     private struct Fixture {
         let store: SupraStore
         let matter: MatterRecord
