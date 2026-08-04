@@ -676,6 +676,47 @@ final class DraftingSourceSnapshotTests: XCTestCase {
         )
     }
 
+    // T-MTD-18 RED: a prepared row is durable but not trusted. Tampering its
+    // Store-built JSON after preparation must not survive typed finalization.
+    func testTMDSS09FinalizeRejectsTamperedPreparedMotionLineage() throws {
+        let fixture = try makeFixture()
+        let snapshot = try fixture.store.draftingSources.captureMotionSnapshot(request(for: fixture))
+        let output = Data("synthetic motion".utf8)
+        let intent = try fixture.store.draftArtifacts.prepareMotionIntent(
+            snapshot: snapshot,
+            fileName: "Motion-to-Dismiss-tampered.docx",
+            output: output,
+            auditInput: motionAuditInput(snapshot: snapshot),
+            id: "tampered-motion-intent"
+        )
+        var root = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(intent.auditMetadataJSON.utf8)) as? [String: Any]
+        )
+        var verifier = try XCTUnwrap(root["verifierIdentity"] as? [String: Any])
+        verifier["version"] = "forged"
+        root["verifierIdentity"] = verifier
+        let tampered = String(
+            decoding: try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys]),
+            as: UTF8.self
+        )
+        try fixture.store.database.writer.write { db in
+            try db.execute(
+                sql: "UPDATE draft_artifact_intents SET audit_metadata_json = ? WHERE id = ?",
+                arguments: [tampered, intent.id]
+            )
+        }
+
+        XCTAssertThrowsError(
+            try fixture.store.draftArtifacts.finalizeIntent(
+                id: intent.id,
+                installedOutput: output
+            )
+        ) { error in
+            XCTAssertEqual(error as? DraftArtifactIntentError, .intentIntegrityInvalid)
+        }
+        XCTAssertTrue(try fixture.store.auditEvents.fetchEvents(matterID: fixture.matter.id).isEmpty)
+    }
+
     private struct Fixture {
         let store: SupraStore
         let matter: MatterRecord
