@@ -1,4 +1,5 @@
 import Foundation
+import GRDB
 import SupraCore
 import SupraDrafting
 import SupraDraftingCore
@@ -166,6 +167,76 @@ final class MatterDraftingControllerTests: XCTestCase {
         // Audit event recorded.
         let events = try store.auditEvents.fetchEvents(matterID: matter.id)
         XCTAssertTrue(events.contains { $0.eventType == "draft_generated" })
+    }
+
+    // ACR-EXPORT-013. Expected RED: live generic publication creates managed
+    // directories with FileManager, which follows a preexisting exports or
+    // matter-directory symlink and writes the draft outside managed storage.
+    @MainActor
+    func testGenericDraftRejectsStaticSymlinkedExportsAndMatterParents() async throws {
+        for symlinkExportsDirectory in [true, false] {
+            let store = try makeStore()
+            let matter = try store.matters.createMatter(name: "Symlink containment matter")
+            let fixtureRoot = FileManager.default.temporaryDirectory
+                .appendingPathComponent("DraftSymlinkContainment-\(UUID().uuidString)", isDirectory: true)
+            addTeardownBlock { try? FileManager.default.removeItem(at: fixtureRoot) }
+            let storage = DocumentStorage(
+                root: fixtureRoot.appendingPathComponent("managed", isDirectory: true)
+            )
+            let external = fixtureRoot.appendingPathComponent("external", isDirectory: true)
+            try FileManager.default.createDirectory(at: external, withIntermediateDirectories: true)
+
+            let externalDestination: URL
+            if symlinkExportsDirectory {
+                try FileManager.default.createDirectory(at: storage.root, withIntermediateDirectories: true)
+                try FileManager.default.createSymbolicLink(
+                    at: storage.exportsDirectory,
+                    withDestinationURL: external
+                )
+                externalDestination = external
+                    .appendingPathComponent(matter.id, isDirectory: true)
+                    .appendingPathComponent("Symlink-outline-static-parent-link.md")
+            } else {
+                try FileManager.default.createDirectory(
+                    at: storage.exportsDirectory,
+                    withIntermediateDirectories: true
+                )
+                try FileManager.default.createSymbolicLink(
+                    at: storage.exportsDirectory(forMatterID: matter.id),
+                    withDestinationURL: external
+                )
+                externalDestination = external
+                    .appendingPathComponent("Symlink-outline-static-parent-link.md")
+            }
+            let controller = MatterDraftingController(
+                store: store,
+                storage: storage,
+                fileStampProvider: { "static-parent-link" }
+            )
+
+            let result = await controller.draftCustomDescription(
+                matterID: matter.id,
+                input: .init(
+                    title: "Symlink outline",
+                    description: "Keep this draft inside managed storage."
+                )
+            )
+
+            if case .success = result {
+                XCTFail("a static managed-parent symlink must block generic publication")
+            }
+            XCTAssertFalse(FileManager.default.fileExists(atPath: externalDestination.path))
+            XCTAssertTrue(try store.auditEvents.fetchEvents(matterID: matter.id).isEmpty)
+            let intentStatuses = try await store.database.writer.read { db in
+                try String.fetchAll(
+                    db,
+                    sql: "SELECT status FROM draft_artifact_intents WHERE matter_id = ? ORDER BY created_at, id",
+                    arguments: [matter.id]
+                )
+            }
+            XCTAssertEqual(intentStatuses, [DraftArtifactIntentStatus.aborted.rawValue])
+            XCTAssertTrue(try store.draftArtifacts.pendingIntents().isEmpty)
+        }
     }
 
     // MARK: - Multi-kind request layer

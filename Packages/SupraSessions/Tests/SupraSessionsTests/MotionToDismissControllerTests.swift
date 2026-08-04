@@ -1160,6 +1160,70 @@ final class MotionToDismissControllerTests: XCTestCase {
         )
     }
 
+    // T-MTD-37. Expected RED: live motion publication follows a preexisting
+    // exports or matter-directory symlink and installs the reviewed DOCX outside
+    // the configured managed-storage root.
+    func testTMTD37DraftRejectsStaticSymlinkedExportsAndMatterParents() async throws {
+        for symlinkExportsDirectory in [true, false] {
+            let fixture = try makeFixture()
+            let external = fixture.storage.root.deletingLastPathComponent()
+                .appendingPathComponent("MotionSymlinkContainment-\(UUID().uuidString)", isDirectory: true)
+            addTeardownBlock { try? FileManager.default.removeItem(at: external) }
+            try FileManager.default.createDirectory(at: external, withIntermediateDirectories: true)
+
+            let externalDestination: URL
+            if symlinkExportsDirectory {
+                try FileManager.default.createDirectory(
+                    at: fixture.storage.root,
+                    withIntermediateDirectories: true
+                )
+                try FileManager.default.createSymbolicLink(
+                    at: fixture.storage.exportsDirectory,
+                    withDestinationURL: external
+                )
+                externalDestination = external
+                    .appendingPathComponent(fixture.matterID, isDirectory: true)
+                    .appendingPathComponent("Motion-to-Dismiss-static-parent-link.docx")
+            } else {
+                try FileManager.default.createDirectory(
+                    at: fixture.storage.exportsDirectory,
+                    withIntermediateDirectories: true
+                )
+                try FileManager.default.createSymbolicLink(
+                    at: fixture.storage.exportsDirectory(forMatterID: fixture.matterID),
+                    withDestinationURL: external
+                )
+                externalDestination = external
+                    .appendingPathComponent("Motion-to-Dismiss-static-parent-link.docx")
+            }
+            let controller = MatterDraftingController(
+                store: fixture.store,
+                storage: fixture.storage,
+                fileStampProvider: { "static-parent-link" }
+            )
+
+            let result = await controller.draft(
+                .motionToDismiss(fixture.selectedInput),
+                matterID: fixture.matterID
+            )
+
+            assertFailure(result)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: externalDestination.path))
+            XCTAssertTrue(
+                try fixture.store.auditEvents.fetchEvents(matterID: fixture.matterID).isEmpty
+            )
+            let intentStatuses = try await fixture.store.database.writer.read { db in
+                try String.fetchAll(
+                    db,
+                    sql: "SELECT status FROM draft_artifact_intents WHERE matter_id = ? ORDER BY created_at, id",
+                    arguments: [fixture.matterID]
+                )
+            }
+            XCTAssertEqual(intentStatuses, [DraftArtifactIntentStatus.aborted.rawValue])
+            XCTAssertTrue(try fixture.store.draftArtifacts.pendingIntents().isEmpty)
+        }
+    }
+
     // MARK: - Fixtures
 
     private struct IndexedFact {
