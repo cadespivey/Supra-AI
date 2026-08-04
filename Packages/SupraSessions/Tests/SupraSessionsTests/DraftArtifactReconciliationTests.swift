@@ -664,6 +664,68 @@ final class DraftArtifactReconciliationTests: XCTestCase {
         )
     }
 
+    // T-DAR-17. A retained root descriptor keeps a renamed tree usable, but
+    // relaunch cleanup must prove that tree is still reachable through the
+    // configured managed-root pathname before deleting anything from it.
+    func testTDAR17ValidatedRollbackCleanupRejectsManagedRootSubstitutionAtUnlink() throws {
+        let fixture = try makeFixture()
+        let output = Data("# Prepared rollback quarantine\n".utf8)
+        let intent = try fixture.store.draftArtifacts.prepareGenericIntent(
+            matterID: fixture.matter.id,
+            artifactKind: .customDescription,
+            format: .markdown,
+            fileName: "Rollback-root-swap.md",
+            output: output,
+            id: "rollback-root-substitution"
+        )
+        let directory = fixture.storage.exportsDirectory(forMatterID: fixture.matter.id)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let quarantineName = ".supra-draft-rollback-bbf231d5-d197-47d5-92ec-78ac7f33e593-\(intent.fileName)"
+        let quarantine = directory.appendingPathComponent(quarantineName)
+        try output.write(to: quarantine)
+
+        let preservedRoot = fixture.storage.root.deletingLastPathComponent()
+            .appendingPathComponent("Supra-Reconciliation-Preserved-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: preservedRoot) }
+        let foreignBytes = Data("foreign-root-substitution-canary".utf8)
+        let writer = DurableFileWriter(
+            faultInjector: { _ in },
+            parentDirectorySynchronizer: { _ in },
+            fileUnlinkCheckpoint: { observedCandidate in
+                guard observedCandidate.standardizedFileURL == quarantine.standardizedFileURL else {
+                    throw InjectedParentSubstitutionFailure.unexpectedCandidate
+                }
+                try FileManager.default.moveItem(at: fixture.storage.root, to: preservedRoot)
+                try FileManager.default.createDirectory(
+                    at: directory,
+                    withIntermediateDirectories: true
+                )
+                try foreignBytes.write(to: quarantine)
+            }
+        )
+        let service = DraftArtifactReconciliationService(
+            store: fixture.store,
+            storage: fixture.storage,
+            fileWriter: writer
+        )
+
+        let summary = try service.reconcilePendingIntents()
+
+        let preservedCandidate = preservedRoot
+            .appendingPathComponent("Exports", isDirectory: true)
+            .appendingPathComponent(fixture.matter.id, isDirectory: true)
+            .appendingPathComponent(quarantineName)
+        XCTAssertEqual(summary.removedRollbackQuarantineCount, 0)
+        XCTAssertEqual(summary.abortedCount, 0)
+        XCTAssertEqual(summary.recoveryRequiredCount, 1)
+        XCTAssertEqual(try Data(contentsOf: preservedCandidate), output)
+        XCTAssertEqual(try Data(contentsOf: quarantine), foreignBytes)
+        XCTAssertEqual(
+            try fixture.store.draftArtifacts.intent(id: intent.id)?.status,
+            DraftArtifactIntentStatus.recoveryRequired.rawValue
+        )
+    }
+
     private struct Fixture {
         let store: SupraStore
         let matter: MatterRecord
