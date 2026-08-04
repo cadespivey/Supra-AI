@@ -216,4 +216,33 @@ final class DraftArtifactIntentRepositoryTests: XCTestCase {
             XCTAssertEqual(error as? DraftArtifactIntentError, .intentIntegrityInvalid)
         }
     }
+
+    // Expected RED: generic lineage did not bind the originating matter, so a
+    // terminal row rebound to another active matter yielded a revealable path.
+    func testTDAI08RecoveryDescriptorRejectsGenericMatterRebind() throws {
+        let store = try SupraStore.inMemory()
+        let originalMatter = try store.matters.createMatter(name: "Original recovery matter")
+        let reboundMatter = try store.matters.createMatter(name: "Rebound recovery matter")
+        let intent = try store.draftArtifacts.prepareGenericIntent(
+            matterID: originalMatter.id,
+            artifactKind: .customDescription,
+            format: .markdown,
+            fileName: "Matter-bound-recovery.md",
+            output: Data("# Matter-bound recovery\n".utf8),
+            id: "generic-matter-rebind-recovery"
+        )
+        try store.draftArtifacts.markRecoveryRequired(id: intent.id)
+        try store.database.writer.write { db in
+            try db.execute(
+                sql: "UPDATE draft_artifact_intents SET matter_id = ? WHERE id = ?",
+                arguments: [reboundMatter.id, intent.id]
+            )
+        }
+
+        XCTAssertThrowsError(
+            try store.draftArtifacts.recoveryDescriptor(id: intent.id)
+        ) { error in
+            XCTAssertEqual(error as? DraftArtifactIntentError, .intentIntegrityInvalid)
+        }
+    }
 }

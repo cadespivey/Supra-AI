@@ -769,6 +769,34 @@ final class DraftingSourceSnapshotTests: XCTestCase {
         )
     }
 
+    // Expected RED: terminal motion validation did not decode and bind the
+    // canonical saved request, so matter_id could be rebound before recovery UI.
+    func testTMDSS11RecoveryDescriptorRejectsMotionMatterRebind() throws {
+        let fixture = try makeFixture()
+        let snapshot = try fixture.store.draftingSources.captureMotionSnapshot(request(for: fixture))
+        let reboundMatter = try fixture.store.matters.createMatter(name: "Rebound motion matter")
+        let intent = try fixture.store.draftArtifacts.prepareMotionIntent(
+            snapshot: snapshot,
+            fileName: "Motion-to-Dismiss-matter-bound.docx",
+            output: Data("synthetic motion".utf8),
+            auditInput: motionAuditInput(snapshot: snapshot),
+            id: "motion-matter-rebind-recovery"
+        )
+        try fixture.store.draftArtifacts.markRecoveryRequired(id: intent.id)
+        try fixture.store.database.writer.write { db in
+            try db.execute(
+                sql: "UPDATE draft_artifact_intents SET matter_id = ? WHERE id = ?",
+                arguments: [reboundMatter.id, intent.id]
+            )
+        }
+
+        XCTAssertThrowsError(
+            try fixture.store.draftArtifacts.recoveryDescriptor(id: intent.id)
+        ) { error in
+            XCTAssertEqual(error as? DraftArtifactIntentError, .intentIntegrityInvalid)
+        }
+    }
+
     private struct Fixture {
         let store: SupraStore
         let matter: MatterRecord
