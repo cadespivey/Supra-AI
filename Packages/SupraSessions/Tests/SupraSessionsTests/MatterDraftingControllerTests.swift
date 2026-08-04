@@ -373,6 +373,7 @@ final class MatterDraftingControllerTests: XCTestCase {
         controller.refreshDraftReviewState(matterID: matter.id)
 
         XCTAssertEqual(controller.interruptedDraftRecoveries.map(\.fileName), [intent.fileName])
+        XCTAssertEqual(controller.interruptedDraftRecoveries.map(\.fileURL), [publicURL])
         controller.confirmInterruptedDraftArtifactsReviewed(matterID: matter.id)
         XCTAssertTrue(controller.interruptedDraftRecoveries.isEmpty)
         XCTAssertEqual(try Data(contentsOf: publicURL), output)
@@ -387,6 +388,37 @@ final class MatterDraftingControllerTests: XCTestCase {
                 relatedID: intent.id
             )
         )
+    }
+
+    // Expected RED: compact-mapping invalid intent rows hid a permanent pending
+    // recovery item; revealing the raw tampered filename would be unsafe.
+    @MainActor
+    func testTamperedInterruptedRecoveryStaysVisibleButCannotRevealAPath() throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Corrupt interrupted recovery")
+        let intent = try store.draftArtifacts.prepareGenericIntent(
+            matterID: matter.id,
+            artifactKind: .customDescription,
+            format: .markdown,
+            fileName: "Original.md",
+            output: Data("# Original\n".utf8),
+            id: "corrupt-visible-recovery"
+        )
+        try store.database.writer.write { db in
+            try db.execute(
+                sql: "UPDATE draft_artifact_intents SET file_name = ? WHERE id = ?",
+                arguments: ["../../outside.md", intent.id]
+            )
+        }
+        try store.draftArtifacts.markRecoveryRequired(id: intent.id)
+        let controller = MatterDraftingController(store: store, storage: makeStorage())
+
+        controller.refreshDraftReviewState(matterID: matter.id)
+
+        let recovery = try XCTUnwrap(controller.interruptedDraftRecoveries.first)
+        XCTAssertNil(recovery.fileName)
+        XCTAssertNil(recovery.fileURL)
+        XCTAssertEqual(recovery.intentID, intent.id)
     }
 
     // ACR-EXPORT-009 follow-on. Expected RED: a replacement install whose

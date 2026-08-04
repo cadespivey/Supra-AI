@@ -188,4 +188,32 @@ final class DraftArtifactIntentRepositoryTests: XCTestCase {
             "permanent deletion must not strand an unresolvable pending recovery row"
         )
     }
+
+    // Expected RED: recovery UI could only read the raw row and would derive a
+    // managed URL from a file_name that terminal recovery may have flagged as corrupt.
+    func testTDAI07RecoveryDescriptorRejectsTamperedTerminalFileName() throws {
+        let store = try SupraStore.inMemory()
+        let matter = try store.matters.createMatter(name: "Tampered descriptor matter")
+        let intent = try store.draftArtifacts.prepareGenericIntent(
+            matterID: matter.id,
+            artifactKind: .customDescription,
+            format: .markdown,
+            fileName: "Original-recovery.md",
+            output: Data("# Original\n".utf8),
+            id: "tampered-recovery-descriptor"
+        )
+        try store.database.writer.write { db in
+            try db.execute(
+                sql: "UPDATE draft_artifact_intents SET file_name = ? WHERE id = ?",
+                arguments: ["Tampered-recovery.md", intent.id]
+            )
+        }
+        try store.draftArtifacts.markRecoveryRequired(id: intent.id)
+
+        XCTAssertThrowsError(
+            try store.draftArtifacts.recoveryDescriptor(id: intent.id)
+        ) { error in
+            XCTAssertEqual(error as? DraftArtifactIntentError, .intentIntegrityInvalid)
+        }
+    }
 }
