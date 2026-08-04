@@ -315,6 +315,53 @@ final class DurableFileWriterTests: XCTestCase {
         )
     }
 
+    // Expected RED: unwind cleanup owns the temporary inode it created, not a
+    // reusable UUID pathname. A replacement at that name must remain untouched.
+    func testACRFILE013ContainedWriteUnwindPreservesTemporaryNameReplacement() throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let parent = root
+            .appendingPathComponent("exports", isDirectory: true)
+            .appendingPathComponent("matter-123", isDirectory: true)
+        let destination = parent.appendingPathComponent("motion.docx")
+        let preservedOwned = root.appendingPathComponent("preserved-owned-temp.docx")
+        let ownedBytes = Data("writer-owned-temp".utf8)
+        let foreignBytes = Data("foreign-temp-name-canary".utf8)
+        let writer = DurableFileWriter { stage in
+            guard stage == .beforeValidation else { return }
+            let artifacts = try FileManager.default.contentsOfDirectory(
+                at: parent,
+                includingPropertiesForKeys: nil
+            ).filter { $0.lastPathComponent.contains(".supra-tmp-") }
+            guard let temporary = artifacts.first else {
+                throw InjectedTemporaryMutationFailure.missingTemporary
+            }
+            try FileManager.default.moveItem(at: temporary, to: preservedOwned)
+            try foreignBytes.write(to: temporary)
+            throw InjectedFailure(stage: stage)
+        }
+
+        XCTAssertThrowsError(
+            try writer.writeNewOwned(
+                ownedBytes,
+                to: destination,
+                containedIn: root,
+                validator: { _ in }
+            )
+        ) { error in
+            XCTAssertEqual(
+                (error as? InjectedFailure)?.stage,
+                .beforeValidation
+            )
+        }
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
+        XCTAssertEqual(try Data(contentsOf: preservedOwned), ownedBytes)
+        let replacements = try temporaryArtifacts(in: parent)
+        XCTAssertEqual(replacements.count, 1)
+        XCTAssertEqual(try Data(contentsOf: XCTUnwrap(replacements.first)), foreignBytes)
+    }
+
     private func temporaryDirectory() throws -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("Supra-DurableFileWriter-\(UUID().uuidString)", isDirectory: true)
@@ -332,6 +379,10 @@ final class DurableFileWriterTests: XCTestCase {
 
 private struct InjectedFailure: Error {
     let stage: DurableFileWriter.FaultStage
+}
+
+private enum InjectedTemporaryMutationFailure: Error {
+    case missingTemporary
 }
 
 private enum InjectedDirectorySyncFailure: Error, Equatable {
