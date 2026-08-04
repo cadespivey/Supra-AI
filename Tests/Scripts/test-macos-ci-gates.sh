@@ -455,9 +455,14 @@ printf '%s\n' \
   'final class MotionToDismissWorkspaceUITests: XCTestCase {' \
   '  func testTUIMTD01Through03SupportedMotionProducesResultActionsAndOpenableDOCX() {}' \
   '  func testTUIMTD04Through05BlockedMotionNamesReasonAndHasNoFileActions() {}' \
-  '  func testTUIMTD06CancellingInFlightMotionLeavesNoArtifact() {}' \
+  '  func testTUIMTD06CancellingInFlightMotionLeavesNoArtifact() { XCTAssertEqual(regularArtifacts(beneath: storageRoot), []) }' \
   '  func testTUIAUTH01ReviewedPropositionCanBeRemovedAndRecordedExactly() {}' \
   '  func testTUIAUTH02BlockedAuthorityRemediatesIntoMotionReadiness() {}' \
+  '  private func regularArtifacts(beneath root: URL) -> [String] {' \
+  '    _ = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey], options: [])' \
+  '    _ = values.isRegularFile == true' \
+  '    return []' \
+  '  }' \
   '}' \
   >"$accessibility_hook"
 # Standing guard: the exact methods nested in the shipping XCTest class must
@@ -587,7 +592,11 @@ if grep -Fq 'private var isWorking: Bool { generationTask != nil || controller.i
     && [[ "$(grep -Fc 'guard generationIsCurrent(token, selection: requestedSelection), !Task.isCancelled else { return }' <<<"$letter_generation_function")" -eq 2 ]] \
     && grep -Fq 'drafting.close.header' "$motion_ui_tests" \
     && grep -Fq 'drafting.close.footer' "$motion_ui_tests" \
-    && grep -Fq 'docxArtifacts(beneath: storageRoot)' "$motion_ui_tests"; then
+    && grep -Fq 'regularArtifacts(beneath: storageRoot)' "$motion_ui_tests" \
+    && grep -Fq 'private func regularArtifacts(beneath root: URL) -> [String]' "$motion_ui_tests" \
+    && grep -Fq 'options: []' "$motion_ui_tests" \
+    && grep -Fq 'values.isRegularFile == true' "$motion_ui_tests" \
+    && ! grep -Fq 'options: [.skipsHiddenFiles]' "$motion_ui_tests"; then
   printf '%s\n' 'PASS: view-owned drafting work closes continuation, double-start, and dismissal races with disk proof'
 else
   record_failure 'drafting UI lacks a routed-letter continuation guard, view-owned task token, dismissal lock, or disk-level absence proof'

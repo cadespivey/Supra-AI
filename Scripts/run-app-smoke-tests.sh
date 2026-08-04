@@ -68,7 +68,7 @@ if ! class_contains_test "$accessibility_test" MotionToDismissWorkspaceUITests t
   printf '%s\n' 'ERROR: supported motion hosted smoke tests are missing' >&2
   exit 1
 fi
-if ! grep -Fq 'XCTAssertEqual(regularArtifacts(beneath: storageRoot), []' "$accessibility_test" \
+if ! grep -Fq 'regularArtifacts(beneath: storageRoot)' "$accessibility_test" \
     || ! grep -Fq 'private func regularArtifacts(beneath root: URL) -> [String]' "$accessibility_test" \
     || ! grep -Fq 'options: []' "$accessibility_test" \
     || ! grep -Fq 'values.isRegularFile == true' "$accessibility_test" \

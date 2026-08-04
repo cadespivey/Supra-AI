@@ -880,7 +880,11 @@ final class MotionToDismissWorkspaceUITests: XCTestCase {
         XCTAssertFalse(app.descendants(matching: .any)["drafting.open"].exists)
         XCTAssertFalse(app.descendants(matching: .any)["drafting.reveal"].exists)
         XCTAssertFalse(app.descendants(matching: .any)["drafting.share"].exists)
-        XCTAssertEqual(docxArtifacts(beneath: storageRoot), [], "Cancellation left a DOCX in the injected production storage root")
+        XCTAssertEqual(
+            regularArtifacts(beneath: storageRoot),
+            [],
+            "Cancellation left a file, including a hidden staging artifact, in the injected production storage root"
+        )
     }
 
     func testTUIAUTH01ReviewedPropositionCanBeRemovedAndRecordedExactly() throws {
@@ -1109,14 +1113,18 @@ final class MotionToDismissWorkspaceUITests: XCTestCase {
         }
     }
 
-    private func docxArtifacts(beneath root: URL) -> [String] {
+    private func regularArtifacts(beneath root: URL) -> [String] {
         guard let enumerator = FileManager.default.enumerator(
             at: root,
             includingPropertiesForKeys: [.isRegularFileKey],
-            options: [.skipsHiddenFiles]
+            options: []
         ) else { return [] }
         return enumerator.compactMap { item in
-            guard let url = item as? URL, url.pathExtension.lowercased() == "docx" else { return nil }
+            guard
+                let url = item as? URL,
+                let values = try? url.resourceValues(forKeys: [.isRegularFileKey]),
+                values.isRegularFile == true
+            else { return nil }
             return url.path
         }.sorted()
     }
