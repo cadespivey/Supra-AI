@@ -165,7 +165,7 @@ struct MatterDraftingView: View {
             library.refresh()
             controller.refreshLegacyDraftReviewState(matterID: matterID)
             if availableKinds.isEmpty { availableKinds = controller.availableDraftKinds() }
-            loadMotionSourcesIfNeeded()
+            if selection == .kind(.motionToDismiss) { loadMotionSourcesIfNeeded() }
         }
         // The result/error banner belongs to one work product — clear it when the
         // user switches to a different kind so a stale notice result doesn't linger
@@ -891,7 +891,12 @@ struct MatterDraftingView: View {
     }
 
     private var currentMotionReadiness: MotionDraftReadiness {
-        controller.motionReadiness(input: currentMotionInput, matterID: matterID)
+        controller.motionReadiness(
+            input: currentMotionInput,
+            matterID: matterID,
+            factSources: motionFactSources,
+            authoritySources: motionAuthoritySources
+        )
     }
 
     private func loadMotionSourcesIfNeeded() {

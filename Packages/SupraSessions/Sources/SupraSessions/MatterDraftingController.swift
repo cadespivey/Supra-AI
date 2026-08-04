@@ -502,10 +502,43 @@ public final class MatterDraftingController: ObservableObject {
         }
     }
 
-    /// One fail-closed readiness decision shared by the form and the generate
-    /// boundary. Generation resolves every selected ID again immediately before
-    /// assembly so stale/deleted sources cannot slip through a previously green UI.
+    /// Store-backed readiness used at the generation boundary. Every selected
+    /// source is refreshed immediately before snapshot capture, so cached UI
+    /// state cannot authorize stale or deleted evidence.
     public func motionReadiness(input: MotionToDismissDraftInput, matterID: String) -> MotionDraftReadiness {
+        let factSources = try? loadMotionFactSources(matterID: matterID)
+        let authoritySources = try? loadMotionAuthoritySources(matterID: matterID)
+        return evaluateMotionReadiness(
+            input: input,
+            matterID: matterID,
+            factSources: factSources,
+            authoritySources: authoritySources
+        )
+    }
+
+    /// Interactive readiness over source rows already loaded and displayed by
+    /// the form. Keystrokes and SwiftUI body recomputation must not rescan the
+    /// document and authority libraries.
+    public func motionReadiness(
+        input: MotionToDismissDraftInput,
+        matterID: String,
+        factSources: [MotionDraftFactSource],
+        authoritySources: [MotionDraftAuthoritySource]
+    ) -> MotionDraftReadiness {
+        evaluateMotionReadiness(
+            input: input,
+            matterID: matterID,
+            factSources: factSources,
+            authoritySources: authoritySources
+        )
+    }
+
+    private func evaluateMotionReadiness(
+        input: MotionToDismissDraftInput,
+        matterID: String,
+        factSources: [MotionDraftFactSource]?,
+        authoritySources: [MotionDraftAuthoritySource]?
+    ) -> MotionDraftReadiness {
         var reasons: [String] = []
         let selectedFacts = Self.uniqueMotionFactSelections(input.selectedFacts)
         let selectedFactIDs = selectedFacts.map(\.chunkID)
@@ -556,6 +589,17 @@ public final class MatterDraftingController: ObservableObject {
         if input.reliefSought.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             reasons.append("State the relief sought.")
         }
+        let composedSlots = [
+            ("responding pleading", input.respondingTo),
+            ("requested relief", input.reliefSought),
+            ("represented party name", input.representedPartyName),
+            ("represented party role", input.partyRepresented),
+        ]
+        for (label, value) in composedSlots where Self.motionContainsCitationShape(value) {
+            reasons.append(
+                "Remove citation-shaped text from the \(label). Legal citations must come from a selected fact excerpt or reviewed authority."
+            )
+        }
         if input.grounds.count != 1 {
             reasons.append("Select exactly one supported ground.")
         }
@@ -579,9 +623,9 @@ public final class MatterDraftingController: ObservableObject {
         if selectedFactIDs.isEmpty {
             reasons.append("Select at least one current fact excerpt.")
         }
-        do {
+        if let factSources {
             let availableFacts = Dictionary(
-                uniqueKeysWithValues: try loadMotionFactSources(matterID: matterID).map { ($0.chunkID, $0) }
+                uniqueKeysWithValues: factSources.map { ($0.chunkID, $0) }
             )
             for selection in selectedFacts {
                 guard let source = availableFacts[selection.chunkID] else {
@@ -595,7 +639,7 @@ public final class MatterDraftingController: ObservableObject {
                     reasons.append("Fact source “\(source.documentName)” changed after it was selected. Reload and select it again.")
                 }
             }
-        } catch {
+        } else {
             reasons.append("Selected fact sources could not be verified.")
         }
 
@@ -605,9 +649,9 @@ public final class MatterDraftingController: ObservableObject {
         if selectedAuthorities.isEmpty {
             reasons.append("Select at least one reviewed authority.")
         }
-        do {
+        if let authoritySources {
             let availableAuthorities = Dictionary(
-                uniqueKeysWithValues: try loadMotionAuthoritySources(matterID: matterID).map { ($0.authorityID, $0) }
+                uniqueKeysWithValues: authoritySources.map { ($0.authorityID, $0) }
             )
             for selection in selectedAuthorities {
                 guard let source = availableAuthorities[selection.authorityID] else {
@@ -620,7 +664,7 @@ public final class MatterDraftingController: ObservableObject {
                     reasons.append("Authority “\(source.caseName)” changed after it was selected. Reload and select it again.")
                 }
             }
-        } catch {
+        } else {
             reasons.append("Selected authorities could not be verified.")
         }
 
@@ -1130,6 +1174,25 @@ public final class MatterDraftingController: ObservableObject {
             return ""
         }
         return citations.first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+
+    /// Mirrors the deterministic motion verifier's citation-shape boundary for
+    /// attorney-composed body slots. Selected fact and reviewed-authority text is
+    /// deliberately not inspected here because those exact evidence blocks are
+    /// independently bound and verified.
+    nonisolated private static func motionContainsCitationShape(_ text: String) -> Bool {
+        let patterns = [
+            #"\b[A-Z][\w.'&-]+ v\.? [A-Z][\w.'&-]+"#,
+            #"\b\d{1,4} [A-Z][\w.]*\.?( \d[a-z]{0,2})? \d{1,4}\b"#,
+            #"§\s?\d"#,
+            #"\bU\.?S\.?C\.?\b"#,
+            #"\bC\.?F\.?R\.?\b"#,
+            #"\bFla\.? Stat\.?\b"#,
+            #"\b(statute|statutes|code|rule)\s*(section\s*)?\d"#,
+        ]
+        return patterns.contains {
+            text.range(of: $0, options: [.regularExpression, .caseInsensitive]) != nil
+        }
     }
 
     nonisolated private static func uniqueMotionFactSelections(

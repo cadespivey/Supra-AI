@@ -8,7 +8,7 @@ import SupraExports
 import SupraStore
 import XCTest
 
-/// T-MTD-01...33: the first supported motion vertical. Every fixture is
+/// T-MTD-01...34: the first supported motion vertical. Every fixture is
 /// fictional and every negative assertion checks both the file boundary and the
 /// success-audit boundary.
 @MainActor
@@ -982,6 +982,34 @@ final class MotionToDismissControllerTests: XCTestCase {
             controller.motionReadiness(input: selectedEvidence, matterID: fixture.matterID).canGenerate,
             "an exact citation-bearing fact excerpt remains eligible selected evidence"
         )
+    }
+
+    func testTMTD34InteractiveReadinessUsesCachedSourcesAndFreshPreflightRescans() throws {
+        let fixture = try makeFixture()
+        let controller = MatterDraftingController(store: fixture.store, storage: fixture.storage)
+        var factLoads = 0
+        var authorityLoads = 0
+        controller.motionFactSourceLoadCheckpoint = { factLoads += 1 }
+        controller.motionAuthoritySourceLoadCheckpoint = { authorityLoads += 1 }
+        let facts = controller.motionFactSources(matterID: fixture.matterID)
+        let authorities = controller.motionAuthoritySources(matterID: fixture.matterID)
+        XCTAssertEqual(factLoads, 1)
+        XCTAssertEqual(authorityLoads, 1)
+
+        let cached = controller.motionReadiness(
+            input: fixture.selectedInput,
+            matterID: fixture.matterID,
+            factSources: facts,
+            authoritySources: authorities
+        )
+        XCTAssertTrue(cached.canGenerate, cached.blockingReasons.joined(separator: " "))
+        XCTAssertEqual(factLoads, 1, "interactive readiness must not rescan fact sources")
+        XCTAssertEqual(authorityLoads, 1, "interactive readiness must not rescan authorities")
+
+        let fresh = controller.motionReadiness(input: fixture.selectedInput, matterID: fixture.matterID)
+        XCTAssertTrue(fresh.canGenerate, fresh.blockingReasons.joined(separator: " "))
+        XCTAssertEqual(factLoads, 2, "generation preflight must refresh fact sources")
+        XCTAssertEqual(authorityLoads, 2, "generation preflight must refresh authorities")
     }
 
     // MARK: - Fixtures
