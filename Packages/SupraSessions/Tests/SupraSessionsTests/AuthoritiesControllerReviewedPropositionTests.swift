@@ -218,7 +218,12 @@ final class AuthoritiesControllerReviewedPropositionTests: XCTestCase {
         )
         XCTAssertEqual(adverse, "Mark this authority not adverse before recording proposition support.")
         try fixture.store.authorities.updateReviewState(authorityID: fixture.authority.id, reviewState: .notAdverse)
-        try fixture.store.authorities.updateUseStatus(authorityID: fixture.authority.id, useStatus: .needsCitatorCheck)
+        _ = try fixture.store.authorities.transitionUseStatus(
+            authorityID: fixture.authority.id,
+            matterID: fixture.matterID,
+            to: .needsCitatorCheck,
+            actor: "synthetic-reviewer"
+        )
         let unverified = await controller.recordFailureToStateClaimReview(
             authorityID: fixture.authority.id,
             excerpt: "Repeat passage. Repeat passage."
@@ -329,7 +334,12 @@ final class AuthoritiesControllerReviewedPropositionTests: XCTestCase {
             excerpt: opinion,
             reviewedBy: "Original Reviewer"
         )
-        try fixture.store.authorities.updateUseStatus(authorityID: fixture.authority.id, useStatus: .doNotUse)
+        _ = try fixture.store.authorities.transitionUseStatus(
+            authorityID: fixture.authority.id,
+            matterID: fixture.matterID,
+            to: .doNotUse,
+            actor: "synthetic-reviewer"
+        )
         var profile = AssistantProfile()
         profile.fullName = "  Revoking Reviewer  "
         try fixture.store.appSettings.setSetting(AssistantProfile.profileKey, value: profile)

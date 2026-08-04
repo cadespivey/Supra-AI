@@ -40,7 +40,10 @@ public final class AuthorityRepository: @unchecked Sendable {
         }
     }
 
-    public func updateUseStatus(
+    /// Low-level package-scoped mutation used by Store lifecycle tests that
+    /// deliberately simulate eligibility drift. User-facing transitions must
+    /// use `transitionUseStatus`, which enforces the graph and audit atomically.
+    package func updateUseStatus(
         authorityID: String,
         useStatus: AuthorityUseStatus
     ) throws {
@@ -53,6 +56,64 @@ public final class AuthorityRepository: @unchecked Sendable {
                 """,
                 arguments: [useStatus.rawValue, Date(), authorityID]
             )
+        }
+    }
+
+    /// Applies one user-directed use-status transition to the exact live,
+    /// matter-scoped authority and records its audit in the same transaction.
+    /// The current state is read inside the write transaction so a stale UI or
+    /// research snapshot can neither authorize an illegal edge nor duplicate an
+    /// edge another writer already completed.
+    @discardableResult
+    public func transitionUseStatus(
+        authorityID: String,
+        matterID: String,
+        to target: AuthorityUseStatus,
+        actor: String,
+        changedAt: Date = Date()
+    ) throws -> Bool {
+        try writer.write { db in
+            guard let authority = try AuthorityRecord.fetchOne(db, key: authorityID),
+                  authority.matterID == matterID else {
+                throw AuthorityRepositoryError.authorityNotFound
+            }
+            guard authority.deletedAt == nil else {
+                throw AuthorityRepositoryError.reviewRequiresLiveAuthority
+            }
+            guard let current = AuthorityUseStatus(rawValue: authority.useStatus),
+                  current != target,
+                  current.canTransition(to: target) else {
+                return false
+            }
+            let normalizedActor = actor.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !normalizedActor.isEmpty else {
+                throw AuthorityRepositoryError.reviewerRequired
+            }
+
+            try db.execute(
+                sql: """
+                    UPDATE authorities
+                    SET use_status = ?, updated_at = ?
+                    WHERE id = ?
+                      AND matter_id = ?
+                      AND deleted_at IS NULL
+                      AND use_status = ?
+                    """,
+                arguments: [target.rawValue, changedAt, authorityID, matterID, current.rawValue]
+            )
+            guard db.changesCount == 1 else {
+                throw AuthorityRepositoryError.reviewRequiresLiveAuthority
+            }
+            try AuditEventRecord(
+                matterID: matterID,
+                timestamp: changedAt,
+                eventType: "authority_status_changed",
+                actor: normalizedActor,
+                summary: "“\(authority.caseName)”: \(current.displayName) → \(target.displayName)",
+                relatedTable: AuthorityRecord.databaseTableName,
+                relatedID: authority.id
+            ).insert(db)
+            return true
         }
     }
 

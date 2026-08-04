@@ -378,20 +378,22 @@ public final class AuthoritiesController: ObservableObject {
         load()
     }
 
-    /// Changes use status only when the transition is permitted (spec §11.4),
-    /// writing an authority_status_changed audit event. Returns false if blocked.
+    /// Changes use status only when the exact live matter row permits the
+    /// transition (spec §11.4). The status and audit commit atomically; every
+    /// blocked or failed attempt reloads the controller and returns false.
     @discardableResult
     public func changeUseStatus(authorityID: String, to target: AuthorityUseStatus) -> Bool {
-        guard let item = authorities.first(where: { $0.id == authorityID }),
-              item.useStatus.canTransition(to: target) else { return false }
-        try? store.authorities.updateUseStatus(authorityID: authorityID, useStatus: target)
-        _ = try? store.auditEvents.recordEvent(
-            matterID: matterID, eventType: "authority_status_changed", actor: "user",
-            summary: "“\(item.caseName)”: \(item.useStatus.displayName) → \(target.displayName)",
-            relatedTable: "authorities", relatedID: authorityID
-        )
-        load()
-        return true
+        defer { load() }
+        do {
+            return try store.authorities.transitionUseStatus(
+                authorityID: authorityID,
+                matterID: matterID,
+                to: target,
+                actor: "user"
+            )
+        } catch {
+            return false
+        }
     }
 
     /// Resolves the review-state prerequisite for proposition evidence without

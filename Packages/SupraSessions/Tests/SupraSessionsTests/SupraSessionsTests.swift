@@ -3524,10 +3524,16 @@ final class SupraSessionsTests: XCTestCase {
 
         // Simulate another controller advancing the exact live row after this
         // controller loaded. do_not_use -> user_marked_verified is forbidden.
-        try store.authorities.updateUseStatus(
+        XCTAssertTrue(try store.authorities.transitionUseStatus(
             authorityID: authority.id,
-            useStatus: .doNotUse
-        )
+            matterID: matter.id,
+            to: .doNotUse,
+            actor: "synthetic-concurrent-user"
+        ))
+        let statusAuditCountBeforeBlockedAttempt = try store.auditEvents
+            .fetchEvents(matterID: matter.id)
+            .filter { $0.eventType == "authority_status_changed" }
+            .count
 
         XCTAssertFalse(controller.changeUseStatus(
             authorityID: authority.id,
@@ -3542,10 +3548,12 @@ final class SupraSessionsTests: XCTestCase {
             .doNotUse,
             "a blocked transition must reload the live row"
         )
-        XCTAssertTrue(
+        XCTAssertEqual(
             try store.auditEvents.fetchEvents(matterID: matter.id)
                 .filter { $0.eventType == "authority_status_changed" }
-                .isEmpty
+                .count,
+            statusAuditCountBeforeBlockedAttempt,
+            "a blocked stale transition must not append another audit"
         )
     }
 
@@ -3623,7 +3631,12 @@ final class SupraSessionsTests: XCTestCase {
         controller.reviewResult(resultID, as: .saveAsAuthority)
         let authority = try XCTUnwrap(store.authorities.fetchAuthority(researchResultID: resultID))
         // The user verifies it in the Authorities tab (a legal transition).
-        try store.authorities.updateUseStatus(authorityID: authority.id, useStatus: .userMarkedVerified)
+        XCTAssertTrue(try store.authorities.transitionUseStatus(
+            authorityID: authority.id,
+            matterID: matter.id,
+            to: .userMarkedVerified,
+            actor: "synthetic-authority-reviewer"
+        ))
 
         // Re-reviewing as Needs Later Review would set unverified — an illegal
         // §11.4 transition that must NOT silently downgrade the verified status.
