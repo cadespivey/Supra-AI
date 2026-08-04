@@ -20,6 +20,15 @@ final class ShippingMigrationFixtureTests: XCTestCase {
         XCTAssertTrue(manifest.syntheticDataDeclaration.contains("synthetic"))
         XCTAssertTrue(manifest.fixtures.allSatisfy(\.syntheticData))
         XCTAssertTrue(manifest.fixtures.allSatisfy { $0.sourceCommitSHA.count == 40 })
+        let latestMinusOne = try XCTUnwrap(
+            manifest.fixtures.first { $0.seedVersion == "latest-minus-one" }
+        )
+        XCTAssertEqual(latestMinusOne.sourceRef, "v2.3.4")
+        XCTAssertEqual(
+            latestMinusOne.sourceCommitSHA,
+            "c0a2648b4c65c066f85eb6bf6ae702f9aa779864"
+        )
+        XCTAssertEqual(latestMinusOne.migrationCatalog, "v069")
         for fixture in manifest.fixtures {
             XCTAssertFalse(try manifest.migrationIdentifiers(for: fixture).isEmpty)
         }
