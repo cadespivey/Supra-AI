@@ -534,7 +534,7 @@ if grep -Fq '.onChange(of: environment.remediationRecoverySummary)' "$root_view"
     && grep -Fq 'interruptedNoticePresentedThisLaunch' "$root_view" \
     && grep -Fq 'interruptedDraftsPending' "$root_view" \
     && grep -Fq 'presentRemediationNoticeIfNeeded()' "$root_view" \
-    && grep -Fq 'public or user-visible drafts' "$root_view" \
+    && grep -Fq 'Public or user-visible drafts' "$root_view" \
     && grep -Fq 'internal temporary or owned rollback files' "$root_view"; then
   printf '%s\n' 'PASS: interrupted artifact notice survives legacy acknowledgment and late bootstrap summary'
 else
@@ -544,6 +544,8 @@ fi
 drafting_view="${repo_root}/Apps/SupraAI/SupraAI/Matters/MatterDraftingView.swift"
 if grep -Fq 'controller.interruptedDraftRecoveries' "$drafting_view" \
     && grep -Fq 'controller.confirmInterruptedDraftArtifactsReviewed' "$drafting_view" \
+    && grep -Fq 'NSWorkspace.shared.activateFileViewerSelecting([fileURL])' "$drafting_view" \
+    && grep -Fq 'drafting.interruptedRecovery.reveal.' "$drafting_view" \
     && grep -Fq 'drafting.interruptedRecoveryWarning' "$drafting_view" \
     && grep -Fq 'Regenerate Before Use' "$drafting_view"; then
   printf '%s\n' 'PASS: affected drafting surface names and resolves interrupted artifacts explicitly'

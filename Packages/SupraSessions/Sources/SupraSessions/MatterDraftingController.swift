@@ -54,12 +54,14 @@ public final class MatterDraftingController: ObservableObject {
     public struct InterruptedDraftRecovery: Sendable, Equatable, Identifiable {
         public let id: String
         public let intentID: String
-        public let fileName: String
+        public let fileName: String?
+        public let fileURL: URL?
 
-        public init(id: String, intentID: String, fileName: String) {
+        public init(id: String, intentID: String, fileName: String?, fileURL: URL?) {
             self.id = id
             self.intentID = intentID
             self.fileName = fileName
+            self.fileURL = fileURL
         }
     }
 
@@ -182,14 +184,23 @@ public final class MatterDraftingController: ObservableObject {
                     && $0.matterID == matterID
                     && $0.relatedTable == DraftArtifactIntentRecord.databaseTableName
             }
-            .compactMap { item in
-                guard let intent = try? store.draftArtifacts.intent(id: item.relatedID) else {
-                    return nil
+            .map { item in
+                guard let descriptor = try? store.draftArtifacts.recoveryDescriptor(id: item.relatedID),
+                      descriptor.matterID == matterID else {
+                    return InterruptedDraftRecovery(
+                        id: item.id,
+                        intentID: item.relatedID,
+                        fileName: nil,
+                        fileURL: nil
+                    )
                 }
+                let fileURL = storage.exportsDirectory(forMatterID: descriptor.matterID)
+                    .appendingPathComponent(descriptor.fileName, isDirectory: false)
                 return InterruptedDraftRecovery(
                     id: item.id,
-                    intentID: intent.id,
-                    fileName: intent.fileName
+                    intentID: descriptor.intentID,
+                    fileName: descriptor.fileName,
+                    fileURL: fileURL
                 )
             }
     }

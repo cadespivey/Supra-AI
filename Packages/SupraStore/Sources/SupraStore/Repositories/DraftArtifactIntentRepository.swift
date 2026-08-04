@@ -172,6 +172,18 @@ public struct MotionDraftAuditLineage: Codable, Sendable, Equatable {
     public let outputByteSize: Int
 }
 
+public struct DraftArtifactRecoveryDescriptor: Sendable, Equatable {
+    public let intentID: String
+    public let matterID: String
+    public let fileName: String
+
+    public init(intentID: String, matterID: String, fileName: String) {
+        self.intentID = intentID
+        self.matterID = matterID
+        self.fileName = fileName
+    }
+}
+
 public enum DraftArtifactIntentError: Error, Equatable, Sendable {
     case matterNotFound
     case invalidArtifactKind
@@ -387,6 +399,31 @@ public final class DraftArtifactIntentRepository: @unchecked Sendable {
                 db,
                 sql: "SELECT * FROM draft_artifact_intents WHERE status = ? ORDER BY created_at, id LIMIT ?",
                 arguments: [DraftArtifactIntentStatus.prepared.rawValue, bounded]
+            )
+        }
+    }
+
+    /// Returns only the content-free path coordinates of a terminal recovery
+    /// intent whose complete stored lineage and active matter binding still
+    /// validate. UI must never derive a managed URL from the raw row API.
+    public func recoveryDescriptor(id: String) throws -> DraftArtifactRecoveryDescriptor {
+        try writer.read { db in
+            guard let record = try DraftArtifactIntentRecord.fetchOne(db, key: id) else {
+                throw DraftArtifactIntentError.intentNotFound
+            }
+            guard record.status == DraftArtifactIntentStatus.recoveryRequired.rawValue else {
+                throw DraftArtifactIntentError.invalidIntentState
+            }
+            do {
+                _ = try Self.validateStoredRecord(record)
+                try Self.requireMatter(record.matterID, db: db)
+            } catch {
+                throw DraftArtifactIntentError.intentIntegrityInvalid
+            }
+            return DraftArtifactRecoveryDescriptor(
+                intentID: record.id,
+                matterID: record.matterID,
+                fileName: record.fileName
             )
         }
     }

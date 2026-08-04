@@ -132,6 +132,9 @@ struct MatterDraftingView: View {
             header
             Divider()
             Form {
+                if !controller.interruptedDraftRecoveries.isEmpty {
+                    interruptedDraftRecoverySection
+                }
                 if controller.legacyDraftsNeedReviewCount > 0 {
                     legacyDraftReviewSection
                 }
@@ -163,7 +166,7 @@ struct MatterDraftingView: View {
         .frame(minWidth: 520, idealWidth: 640, maxWidth: .infinity, minHeight: 560, idealHeight: 640, maxHeight: 640)
         .onAppear {
             library.refresh()
-            controller.refreshLegacyDraftReviewState(matterID: matterID)
+            controller.refreshDraftReviewState(matterID: matterID)
             if availableKinds.isEmpty { availableKinds = controller.availableDraftKinds() }
             if selection == .kind(.motionToDismiss) { loadMotionSourcesIfNeeded() }
         }
@@ -182,6 +185,43 @@ struct MatterDraftingView: View {
         }
         .onDisappear { invalidateGeneration() }
         .interactiveDismissDisabled(isWorking)
+    }
+
+    private var interruptedDraftRecoverySection: some View {
+        Section {
+            VStack(alignment: .leading, spacing: 7) {
+                Label("Interrupted draft files are recovery-required", systemImage: "exclamationmark.triangle.fill")
+                    .font(.supraHeadline)
+                    .foregroundStyle(.orange)
+                Text("These unverified files were preserved because publication could not be authenticated. Do not rely on them as completed work. Review the named files, then regenerate anything you plan to use.")
+                    .font(.supraCaption)
+                    .fixedSize(horizontal: false, vertical: true)
+                ForEach(controller.interruptedDraftRecoveries) { recovery in
+                    HStack {
+                        Text(recovery.fileName ?? "Interrupted draft details unavailable")
+                            .font(.system(.caption, design: .monospaced))
+                            .textSelection(.enabled)
+                        Spacer()
+                        if let fileURL = recovery.fileURL {
+                            Button("Reveal in Finder") {
+                                NSWorkspace.shared.activateFileViewerSelecting([fileURL])
+                            }
+                            .accessibilityIdentifier("drafting.interruptedRecovery.reveal.\(recovery.id)")
+                        }
+                    }
+                    .accessibilityLabel(
+                        recovery.fileName.map { "Recovery-required draft file \($0)" }
+                            ?? "Recovery-required interrupted draft with unavailable details"
+                    )
+                }
+                Button("I Understand — Regenerate Before Use") {
+                    controller.confirmInterruptedDraftArtifactsReviewed(matterID: matterID)
+                }
+                .accessibilityHint("Records your review without opening, moving, or deleting any preserved file")
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("drafting.interruptedRecoveryWarning")
+        }
     }
 
     private var legacyDraftReviewSection: some View {

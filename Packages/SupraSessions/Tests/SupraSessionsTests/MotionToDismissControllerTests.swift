@@ -8,7 +8,7 @@ import SupraExports
 import SupraStore
 import XCTest
 
-/// T-MTD-01...34: the first supported motion vertical. Every fixture is
+/// T-MTD-01...36: the first supported motion vertical. Every fixture is
 /// fictional and every negative assertion checks both the file boundary and the
 /// success-audit boundary.
 @MainActor
