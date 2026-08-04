@@ -344,6 +344,8 @@ final class MatterDraftingControllerTests: XCTestCase {
         XCTAssertTrue(try store.auditEvents.fetchEvents(matterID: matter.id).isEmpty)
     }
 
+    // Expected RED: interrupted items had only a global count; the matter draft
+    // surface exposed neither affected filenames nor an explicit resolution.
     @MainActor
     func testInterruptedDraftRecoveryListsFilenameAndAcknowledgesWithoutDeletingBytes() throws {
         let store = try makeStore()

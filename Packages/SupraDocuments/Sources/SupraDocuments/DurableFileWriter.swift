@@ -216,6 +216,13 @@ public struct DurableFileWriter: Sendable {
         try Self.fileIdentity(at: url) == expected
     }
 
+    /// Captures the no-follow identity currently occupying a path. Relaunch
+    /// reconciliation uses this as an inspection token; it conveys no claim that
+    /// the file was installed by this process.
+    public func installedFileIdentity(at url: URL) throws -> InstalledFileIdentity? {
+        try Self.fileIdentity(at: url)
+    }
+
     private static func createExclusiveTemporaryFile(at url: URL) throws -> FileHandle {
         let descriptor = url.path.withCString {
             Darwin.open($0, O_CREAT | O_EXCL | O_WRONLY | O_CLOEXEC, S_IRUSR | S_IWUSR)

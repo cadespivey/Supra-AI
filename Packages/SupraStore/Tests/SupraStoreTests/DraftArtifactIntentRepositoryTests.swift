@@ -16,6 +16,8 @@ final class DraftArtifactIntentRepositoryTests: XCTestCase {
             id: "synthetic-artifact-intent"
         )
 
+        // Expected RED follow-on: completed idempotence returned before checking
+        // retry bytes or the deterministic audit row.
         XCTAssertThrowsError(
             try store.draftArtifacts.finalizeIntent(
                 id: intent.id,
@@ -154,6 +156,8 @@ final class DraftArtifactIntentRepositoryTests: XCTestCase {
         )
     }
 
+    // Expected RED: the intent cascaded but its logical recovery row survived
+    // with a NULL matter and an unresolvable related ID.
     func testTDAI06PermanentMatterDeletionLeavesNoDanglingInterruptedRecoveryItem() throws {
         let store = try SupraStore.inMemory()
         let matter = try store.matters.createMatter(name: "Deleted recovery matter")

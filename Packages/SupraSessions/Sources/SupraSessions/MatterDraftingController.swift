@@ -51,6 +51,18 @@ public final class MatterDraftingController: ObservableObject {
         public let message: String
     }
 
+    public struct InterruptedDraftRecovery: Sendable, Equatable, Identifiable {
+        public let id: String
+        public let intentID: String
+        public let fileName: String
+
+        public init(id: String, intentID: String, fileName: String) {
+            self.id = id
+            self.intentID = intentID
+            self.fileName = fileName
+        }
+    }
+
     public enum DraftError: Error, LocalizedError, Equatable {
         case matterNotFound
         case incompleteFirmProfile(missing: [String])
@@ -97,6 +109,7 @@ public final class MatterDraftingController: ObservableObject {
     @Published public private(set) var isGenerating = false
     @Published public var message: String?
     @Published public private(set) var legacyDraftsNeedReviewCount = 0
+    @Published public private(set) var interruptedDraftRecoveries: [InterruptedDraftRecovery] = []
 
     private let store: SupraStore
     private let storage: DocumentStorage
@@ -161,6 +174,26 @@ public final class MatterDraftingController: ObservableObject {
             .count
     }
 
+    public func refreshDraftReviewState(matterID: String) {
+        refreshLegacyDraftReviewState(matterID: matterID)
+        interruptedDraftRecoveries = ((try? store.remediationRecovery.pendingItems()) ?? [])
+            .filter {
+                $0.kind == RemediationRecoveryKind.interruptedDraftArtifact.rawValue
+                    && $0.matterID == matterID
+                    && $0.relatedTable == DraftArtifactIntentRecord.databaseTableName
+            }
+            .compactMap { item in
+                guard let intent = try? store.draftArtifacts.intent(id: item.relatedID) else {
+                    return nil
+                }
+                return InterruptedDraftRecovery(
+                    id: item.id,
+                    intentID: intent.id,
+                    fileName: intent.fileName
+                )
+            }
+    }
+
     /// Explicitly acknowledges review of legacy file-only artifacts. The files
     /// remain untouched; each content-free recovery item receives an audit event.
     public func confirmLegacyDraftArtifactsReviewed(matterID: String) {
@@ -180,6 +213,25 @@ public final class MatterDraftingController: ObservableObject {
             message = "Legacy draft review recorded. Regenerate any artifact you plan to use."
         } catch {
             message = "Could not record the legacy draft review: \(error.localizedDescription)"
+        }
+    }
+
+    /// Records the attorney's explicit review decision without moving, opening,
+    /// or deleting any artifact. The historical recovery-required intent remains
+    /// terminal; the user must regenerate before relying on the prior file.
+    public func confirmInterruptedDraftArtifactsReviewed(matterID: String) {
+        do {
+            for recovery in interruptedDraftRecoveries {
+                try store.remediationRecovery.resolve(
+                    id: recovery.id,
+                    resolution: .userReviewed,
+                    actor: "user"
+                )
+            }
+            refreshDraftReviewState(matterID: matterID)
+            message = "Interrupted draft review recorded. Regenerate before using any affected file."
+        } catch {
+            message = "Could not record the interrupted draft review: \(error.localizedDescription)"
         }
     }
 

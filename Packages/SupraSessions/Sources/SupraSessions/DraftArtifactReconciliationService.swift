@@ -113,7 +113,20 @@ public final class DraftArtifactReconciliationService: @unchecked Sendable {
                 summary.recoveryRequiredCount += 1
             case .regular:
                 do {
+                    guard let inspectedIdentity = try fileWriter.installedFileIdentity(at: publicURL) else {
+                        throw ReconciliationError.artifactChangedDuringInspection
+                    }
                     try publicArtifactInspectionCheckpoint(publicURL)
+                    guard Self.regularFileState(at: publicURL) == .regular,
+                          Self.isSafeManagedURL(
+                            publicURL,
+                            storage: storage,
+                            matterID: intent.matterID,
+                            fileName: intent.fileName
+                          ),
+                          try fileWriter.matchesInstalledFileIdentity(inspectedIdentity, at: publicURL) else {
+                        throw ReconciliationError.artifactChangedDuringInspection
+                    }
                     let beforeValidation = try Data(contentsOf: publicURL, options: .mappedIfSafe)
                     guard beforeValidation.count == intent.outputByteSize,
                           DocumentStorage.sha256Hex(of: beforeValidation) == intent.outputSHA256 else {
@@ -126,7 +139,15 @@ public final class DraftArtifactReconciliationService: @unchecked Sendable {
                     // Bind finalization to the bytes observed after format
                     // validation as well; replacement during inspection fails.
                     let installed = try Data(contentsOf: publicURL, options: .mappedIfSafe)
-                    guard installed == beforeValidation else {
+                    guard installed == beforeValidation,
+                          Self.regularFileState(at: publicURL) == .regular,
+                          Self.isSafeManagedURL(
+                            publicURL,
+                            storage: storage,
+                            matterID: intent.matterID,
+                            fileName: intent.fileName
+                          ),
+                          try fileWriter.matchesInstalledFileIdentity(inspectedIdentity, at: publicURL) else {
                         throw ReconciliationError.artifactChangedDuringInspection
                     }
                     try store.draftArtifacts.finalizeIntent(

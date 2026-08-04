@@ -411,14 +411,25 @@ public final class DraftArtifactIntentRepository: @unchecked Sendable {
             guard let record = try DraftArtifactIntentRecord.fetchOne(db, key: id) else {
                 throw DraftArtifactIntentError.intentNotFound
             }
-            if record.status == DraftArtifactIntentStatus.completed.rawValue { return }
-            guard record.status == DraftArtifactIntentStatus.prepared.rawValue else {
+            let isCompleted = record.status == DraftArtifactIntentStatus.completed.rawValue
+            guard isCompleted || record.status == DraftArtifactIntentStatus.prepared.rawValue else {
                 throw DraftArtifactIntentError.invalidIntentState
             }
             let storedLineage = try Self.validateStoredRecord(record)
             guard installedOutput.count == record.outputByteSize,
                   Self.sha256(installedOutput) == record.outputSHA256 else {
                 throw DraftArtifactIntentError.installedArtifactMismatch
+            }
+            let event = Self.auditEvent(for: record)
+            if isCompleted {
+                guard let existing = try AuditEventRecord.fetchOne(db, key: event.id),
+                      Self.auditEvent(existing, exactlyMatches: event) else {
+                    throw DraftArtifactIntentError.intentIntegrityInvalid
+                }
+                // Completion already atomically bound this event and output.
+                // Do not revalidate mutable motion sources on an idempotent retry;
+                // they may legitimately change after publication.
+                return
             }
             if case let .motion(lineage) = storedLineage {
                 guard let requestJSON = record.motionSnapshotRequestJSON else {
@@ -446,7 +457,6 @@ public final class DraftArtifactIntentRepository: @unchecked Sendable {
                     current: current
                 )
             }
-            let event = Self.auditEvent(for: record)
             // A prepared intent cannot legitimately have crossed this atomic
             // insert/transition boundary already. Any occupant of the
             // deterministic ID is a collision, even if its fields happen to
@@ -676,6 +686,21 @@ public final class DraftArtifactIntentRepository: @unchecked Sendable {
             relatedID: record.matterID,
             metadataJSON: record.auditMetadataJSON
         )
+    }
+
+    private static func auditEvent(
+        _ lhs: AuditEventRecord,
+        exactlyMatches rhs: AuditEventRecord
+    ) -> Bool {
+        lhs.id == rhs.id
+            && lhs.matterID == rhs.matterID
+            && lhs.timestamp == rhs.timestamp
+            && lhs.eventType == rhs.eventType
+            && lhs.actor == rhs.actor
+            && lhs.summary == rhs.summary
+            && lhs.relatedTable == rhs.relatedTable
+            && lhs.relatedID == rhs.relatedID
+            && lhs.metadataJSON == rhs.metadataJSON
     }
 
     private static func jsonData<T: Encodable>(_ value: T) throws -> Data {

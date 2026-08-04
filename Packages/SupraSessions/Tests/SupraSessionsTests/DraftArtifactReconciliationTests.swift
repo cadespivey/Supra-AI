@@ -417,6 +417,8 @@ final class DraftArtifactReconciliationTests: XCTestCase {
         )
     }
 
+    // Expected RED: a swap after the first lstat made path-based reads follow an
+    // unowned symlink and finalize it as the prepared artifact.
     func testTDAR12PublicPathSymlinkSwapAfterRegularCheckNeverFinalizes() throws {
         let fixture = try makeFixture()
         let output = Data("# Exact expected draft\n".utf8)
@@ -453,6 +455,8 @@ final class DraftArtifactReconciliationTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: external), output)
     }
 
+    // Process-boundary RED proof: an in-memory relaunch simulation cannot prove
+    // the prepared row and exact-once audit survive closing and reopening SQLite.
     func testTDAR13ReopensOnDiskStoreAndFinalizesInterruptedIntentExactlyOnce() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("supra-draft-process-boundary-\(UUID().uuidString)", isDirectory: true)
