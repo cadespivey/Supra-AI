@@ -209,6 +209,8 @@ struct MatterDraftingView: View {
                             .accessibilityIdentifier("drafting.interruptedRecovery.reveal.\(recovery.id)")
                         }
                     }
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("drafting.interruptedRecovery.item.\(recovery.id)")
                     .accessibilityLabel(
                         recovery.fileName.map { "Recovery-required draft file \($0)" }
                             ?? "Recovery-required interrupted draft with unavailable details"

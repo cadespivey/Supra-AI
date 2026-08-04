@@ -126,6 +126,7 @@ final class AppEnvironment: ObservableObject {
     let documentQueue: DocumentProcessingQueue
     private let draftArtifactStorage: DocumentStorage
     private let draftArtifactReconciler: DraftArtifactReconciliationService
+    private let interruptedDraftRecoveryUITestRoot: URL?
 
     private let runtimeStatusController: RuntimeStatusController
     private let runtimeClient: RuntimeClient
@@ -141,6 +142,7 @@ final class AppEnvironment: ObservableObject {
     init() {
         let coldStartRestore = AppEnvironment.prepareColdStartRestore()
         let restoreActivation = coldStartRestore?.activation
+        let interruptedDraftRecoveryUITestRoot = Self.interruptedDraftRecoveryUITestRoot()
         let runtimeClient = RuntimeClient()
         let guidedQAUITestAuthorized = Self.isUITestMode && ProcessInfo.processInfo.arguments.contains("-uiTestGuidedQA")
         let guidedQAUITestModelRoot = guidedQAUITestAuthorized
@@ -172,6 +174,7 @@ final class AppEnvironment: ObservableObject {
         self.runtimeStatusController = RuntimeStatusController(runtimeClient: runtimeClient)
         self.runtimeClient = runtimeClient
         self.guidedQAUITestModelRoot = guidedQAUITestModelRoot
+        self.interruptedDraftRecoveryUITestRoot = interruptedDraftRecoveryUITestRoot
         self.modelLibrary = modelLibrary
         self.chatController = GlobalChatController(
             store: store,
@@ -318,7 +321,9 @@ final class AppEnvironment: ObservableObject {
         }
         self.documentQueue = queue
         let draftingStorage: DocumentStorage?
-        if Self.isUITestMode,
+        if let interruptedDraftRecoveryUITestRoot {
+            draftingStorage = DocumentStorage(root: interruptedDraftRecoveryUITestRoot)
+        } else if Self.isUITestMode,
            let root = ProcessInfo.processInfo.environment["SUPRA_UI_TEST_DRAFT_STORAGE_ROOT"]?
             .trimmingCharacters(in: .whitespacesAndNewlines),
            !root.isEmpty {
@@ -1496,7 +1501,7 @@ final class AppEnvironment: ObservableObject {
     /// recovery row only for the dedicated hosted publication-recovery test.
     /// Both the Store and managed root are hermetic UI-test throwaways.
     private func seedUITestInterruptedDraftRecoveryIfNeeded() {
-        guard ProcessInfo.processInfo.arguments.contains("-uiTestInterruptedDraftRecovery"),
+        guard interruptedDraftRecoveryUITestRoot != nil,
               let matterID = mattersController.matters.first?.id else { return }
         do {
             let validID = "ui-interrupted-draft-valid"
@@ -2142,6 +2147,36 @@ final class AppEnvironment: ObservableObject {
         return document.id
     }
 
+    /// Authorizes the one UI test that must retain Store state across a real
+    /// process boundary. The caller-supplied root is accepted only inside this
+    /// app sandbox's temporary directory; every other UI-test launch retains the
+    /// existing fresh-per-process Store behavior.
+    private static func interruptedDraftRecoveryUITestRoot() -> URL? {
+        let arguments = ProcessInfo.processInfo.arguments
+        let environment = ProcessInfo.processInfo.environment
+        guard isUITestMode,
+              arguments.contains("-uiTestInterruptedDraftRecovery"),
+              let rawRoot = environment["SUPRA_UI_TEST_DRAFT_STORAGE_ROOT"]?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+              !rawRoot.isEmpty
+        else { return nil }
+
+        let temporaryRoot = FileManager.default.temporaryDirectory
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+        let candidate = URL(fileURLWithPath: rawRoot, isDirectory: true)
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+        guard candidate.path.hasPrefix("\(temporaryRoot.path)/") else { return nil }
+        return candidate
+    }
+
+    private static func interruptedDraftRecoveryUITestStoreURL() -> URL? {
+        interruptedDraftRecoveryUITestRoot()?
+            .appendingPathComponent(".supra-ui-test-store", isDirectory: true)
+            .appendingPathComponent("SupraAI.sqlite", isDirectory: false)
+    }
+
     /// Opens the on-disk store, falling back to a temporary store so the app still
     /// launches if the Application Support database cannot be created. `isFallback`
     /// is true for that degraded last-resort store (not for the UI-test store).
@@ -2158,14 +2193,25 @@ final class AppEnvironment: ObservableObject {
             || isDemoMode
             || !headlessProbeResolution.permitsUserStoreOpen
         if requiresHermeticStore {
-            // Fresh, throwaway store per launch so UI tests / demo screenshots are
-            // deterministic and isolated from the user's real Application Support
-            // database. Model-dependent headless probes get the same isolation
+            // UI tests / demo screenshots are isolated from the user's real
+            // Application Support database. Only the dedicated recovery test gets
+            // a stable path under its validated temporary managed root; all other
+            // launches use a fresh UUID Store. Model-dependent headless probes get
+            // the same isolation
             // (measurement qualification, finding #5): a probe launch never opens or
             // migrates the user's real store — which also removes the Debug-build
             // erase-on-schema-change hazard for probe runs.
-            let url = FileManager.default.temporaryDirectory
-                .appendingPathComponent("SupraAI-\(headlessProbeRequiresIsolatedStore ? "Probe" : "UITest")-\(UUID().uuidString).sqlite")
+            let url: URL
+            if let persistentUITestStoreURL = interruptedDraftRecoveryUITestStoreURL() {
+                try? FileManager.default.createDirectory(
+                    at: persistentUITestStoreURL.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
+                url = persistentUITestStoreURL
+            } else {
+                url = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("SupraAI-\(headlessProbeRequiresIsolatedStore ? "Probe" : "UITest")-\(UUID().uuidString).sqlite")
+            }
             if let store = try? SupraStore(url: url) {
 #if DEBUG
                 if isUITestMode,
