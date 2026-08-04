@@ -68,6 +68,14 @@ if ! class_contains_test "$accessibility_test" MotionToDismissWorkspaceUITests t
   printf '%s\n' 'ERROR: supported motion hosted smoke tests are missing' >&2
   exit 1
 fi
+if ! grep -Fq 'XCTAssertEqual(regularArtifacts(beneath: storageRoot), []' "$accessibility_test" \
+    || ! grep -Fq 'private func regularArtifacts(beneath root: URL) -> [String]' "$accessibility_test" \
+    || ! grep -Fq 'options: []' "$accessibility_test" \
+    || ! grep -Fq 'values.isRegularFile == true' "$accessibility_test" \
+    || grep -Fq 'options: [.skipsHiddenFiles]' "$accessibility_test"; then
+  printf '%s\n' 'ERROR: motion cancellation must inspect every regular artifact, including hidden staging files' >&2
+  exit 1
+fi
 printf '%s\n' 'Hosted XPC integration hook passed.'
 (( check_only != 0 )) && exit 0
 
