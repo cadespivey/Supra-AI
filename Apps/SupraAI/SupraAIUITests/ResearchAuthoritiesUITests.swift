@@ -942,6 +942,16 @@ final class MotionToDismissWorkspaceUITests: XCTestCase {
             "The saved authority did not publish its remediated review state"
         )
 
+        // Re-enter through the shipping sidebar and matter navigation. This proves
+        // the eligibility change was durably saved, and avoids relying on a stale
+        // accessibility snapshot from the NavigationStack detail that performed it.
+        returnToGlobalChatsThroughProductionNavigation(in: app)
+        openAuthorityThroughProductionNavigation(
+            in: app,
+            authorityID: "ui-motion-authority-blocked"
+        )
+        XCTAssertFalse(app.buttons["authority.reviewState.markNotAdverse"].exists)
+
         let excerpt = app.descendants(matching: .any)["authority.reviewedProposition.excerpt"]
         XCTAssertTrue(excerpt.waitForExistence(timeout: 5))
         excerpt.click()
@@ -953,12 +963,11 @@ final class MotionToDismissWorkspaceUITests: XCTestCase {
         let status = app.descendants(matching: .any)["authority.reviewedProposition.status"]
         waitForStatus(status, containing: "Ready")
 
-        let draft = app.buttons["matter.draft"]
-        XCTAssertTrue(draft.waitForExistence(timeout: 5))
-        draft.click()
-        let motion = app.buttons["drafting.kind.motionToDismiss"]
-        XCTAssertTrue(motion.waitForExistence(timeout: 5))
-        motion.click()
+        // A NavigationStack detail makes the containing matter header unavailable
+        // to hosted accessibility queries. Exercise a real sidebar transition so
+        // the test returns to the matter workspace before opening its Draft action.
+        returnToGlobalChatsThroughProductionNavigation(in: app)
+        openMotionDraftThroughProductionNavigation(in: app)
         fillMotionInputsAndSelectSources(
             in: app,
             includeAuthority: true,
@@ -988,9 +997,20 @@ final class MotionToDismissWorkspaceUITests: XCTestCase {
         row.click()
     }
 
+    private func returnToGlobalChatsThroughProductionNavigation(in app: XCUIApplication) {
+        let globalChats = app.descendants(matching: .any)["sidebar.route.globalChats"]
+        XCTAssertTrue(globalChats.waitForExistence(timeout: 10))
+        XCTAssertTrue(globalChats.isHittable, globalChats.debugDescription)
+        globalChats.click()
+    }
+
     private func scrollToHittable(_ element: XCUIElement, in app: XCUIApplication) {
-        for _ in 0..<8 where !element.isHittable {
-            let windowWidth = app.windows.firstMatch.frame.width
+        for _ in 0..<8 {
+            let windowFrame = app.windows.firstMatch.frame.insetBy(dx: 8, dy: 8)
+            if element.isHittable, windowFrame.contains(element.frame) {
+                return
+            }
+            let windowWidth = windowFrame.width
             guard let scrollView = app.scrollViews.allElementsBoundByIndex.first(where: {
                 $0.frame.width > windowWidth * 0.5
             }) else { break }
@@ -998,14 +1018,22 @@ final class MotionToDismissWorkspaceUITests: XCTestCase {
         }
     }
 
-    private func waitForStatus(_ element: XCUIElement, containing expected: String) {
+    private func waitForStatus(
+        _ element: XCUIElement,
+        containing expected: String,
+        timeout: TimeInterval = 20
+    ) {
         let predicate = NSPredicate(
             format: "label CONTAINS[c] %@ OR value CONTAINS[c] %@",
             expected,
             expected
         )
         let statusExpectation = expectation(for: predicate, evaluatedWith: element)
-        XCTAssertEqual(XCTWaiter.wait(for: [statusExpectation], timeout: 5), .completed)
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [statusExpectation], timeout: timeout),
+            .completed,
+            element.debugDescription
+        )
     }
 
     private func openMotionDraftThroughProductionNavigation(in app: XCUIApplication) {
