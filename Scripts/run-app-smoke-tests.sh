@@ -108,7 +108,11 @@ if ! class_contains_literal "$recovery_test" InterruptedDraftRecoveryUITests 'le
     || ! class_contains_literal "$recovery_test" InterruptedDraftRecoveryUITests 'drafting.interruptedRecovery.fixtureEvidence' \
     || ! class_contains_literal "$recovery_test" InterruptedDraftRecoveryUITests 'let expectedDigest = SHA256.hash(data: expectedBytes)' \
     || ! class_contains_literal "$recovery_test" InterruptedDraftRecoveryUITests 'secondLaunch.fixtureEvidence.regularArtifactCount, 1' \
-    || ! class_contains_literal "$recovery_test" InterruptedDraftRecoveryUITests 'try recoveryFixtureEvidence(in: app),' \
+    || ! class_contains_literal "$recovery_test" InterruptedDraftRecoveryUITests 'let acknowledgedEvidence = try recoveryFixtureEvidence(in: app)' \
+    || ! class_contains_literal "$recovery_test" InterruptedDraftRecoveryUITests 'acknowledgedEvidence.relativePath, secondLaunch.fixtureEvidence.relativePath' \
+    || ! class_contains_literal "$recovery_test" InterruptedDraftRecoveryUITests 'acknowledgedEvidence.matterID, secondLaunch.fixtureEvidence.matterID' \
+    || ! class_contains_literal "$recovery_test" InterruptedDraftRecoveryUITests 'acknowledgedEvidence.byteCount, secondLaunch.fixtureEvidence.byteCount' \
+    || ! class_contains_literal "$recovery_test" InterruptedDraftRecoveryUITests 'acknowledgedEvidence.sha256, secondLaunch.fixtureEvidence.sha256' \
     || class_contains_literal "$recovery_test" InterruptedDraftRecoveryUITests 'seeded-matter-id' \
     || class_contains_literal "$recovery_test" InterruptedDraftRecoveryUITests 'app.alerts['; then
   printf '%s\n' 'ERROR: interrupted draft recovery smoke must reopen one Store and query the macOS sheet title' >&2

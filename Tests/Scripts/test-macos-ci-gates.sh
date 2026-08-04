@@ -478,7 +478,11 @@ printf '%s\n' \
   '    _ = app.descendants(matching: .any)["drafting.interruptedRecovery.fixtureEvidence"]' \
   '    let expectedDigest = SHA256.hash(data: expectedBytes)' \
   '    XCTAssertEqual(secondLaunch.fixtureEvidence.regularArtifactCount, 1)' \
-  '    _ = try recoveryFixtureEvidence(in: app),' \
+  '    let acknowledgedEvidence = try recoveryFixtureEvidence(in: app)' \
+  '    _ = acknowledgedEvidence.relativePath, secondLaunch.fixtureEvidence.relativePath' \
+  '    _ = acknowledgedEvidence.matterID, secondLaunch.fixtureEvidence.matterID' \
+  '    _ = acknowledgedEvidence.byteCount, secondLaunch.fixtureEvidence.byteCount' \
+  '    _ = acknowledgedEvidence.sha256, secondLaunch.fixtureEvidence.sha256' \
   '  }' \
   '}' \
   >"$accessibility_hook"

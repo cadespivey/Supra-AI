@@ -894,11 +894,14 @@ final class InterruptedDraftRecoveryUITests: XCTestCase {
         XCTAssertTrue(acknowledge.waitForExistence(timeout: 10))
         acknowledge.click()
         XCTAssertTrue(warning.waitForNonExistence(timeout: 10))
-        XCTAssertEqual(
-            try recoveryFixtureEvidence(in: app),
-            secondLaunch.fixtureEvidence,
-            "Acknowledging interrupted work must preserve the actual managed file bytes"
-        )
+        // Reveal hands the containing directory to Finder, which may add
+        // directory metadata. The root-wide count was already asserted before
+        // that interaction; acknowledgement must preserve this exact file.
+        let acknowledgedEvidence = try recoveryFixtureEvidence(in: app)
+        XCTAssertEqual(acknowledgedEvidence.relativePath, secondLaunch.fixtureEvidence.relativePath)
+        XCTAssertEqual(acknowledgedEvidence.matterID, secondLaunch.fixtureEvidence.matterID)
+        XCTAssertEqual(acknowledgedEvidence.byteCount, secondLaunch.fixtureEvidence.byteCount)
+        XCTAssertEqual(acknowledgedEvidence.sha256, secondLaunch.fixtureEvidence.sha256)
     }
 
     private struct RecoveryLaunchEvidence {
