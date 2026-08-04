@@ -1045,11 +1045,11 @@ public struct DurableFileWriter: Sendable {
             if exactFileRemainsPublic {
                 throw WriterError.publicDestinationStillLinkedWithoutRetainedQuarantine
             }
-            guard try Self.restoreOwnedEntry(
+            guard try restoreOwnedEntryDurably(
                 named: quarantineName,
                 to: destination.lastPathComponent,
                 matching: quarantinedIdentity,
-                in: anchor.parentDescriptor
+                anchor: anchor
             ) else {
                 throw WriterError.createOnlyRollbackConflict(quarantineName, ESTALE)
             }
@@ -1096,11 +1096,11 @@ public struct DurableFileWriter: Sendable {
                         == initialQuarantineData else {
                     throw WriterError.retainedQuarantineChanged(quarantineName)
                 }
-                guard try Self.restoreOwnedEntry(
+                guard try restoreOwnedEntryDurably(
                     named: quarantineName,
                     to: destination.lastPathComponent,
                     matching: expected,
-                    in: anchor.parentDescriptor
+                    anchor: anchor
                 ) else {
                     throw WriterError.createOnlyRollbackConflict(quarantineName, ESTALE)
                 }
@@ -1162,11 +1162,11 @@ public struct DurableFileWriter: Sendable {
                         != firstCandidate {
                     throw WriterError.retainedQuarantineChanged(quarantineName)
                 }
-                guard try Self.restoreOwnedEntry(
+                guard try restoreOwnedEntryDurably(
                     named: quarantineName,
                     to: destination.lastPathComponent,
                     matching: expected,
-                    in: anchor.parentDescriptor
+                    anchor: anchor
                 ) else {
                     throw WriterError.createOnlyRollbackConflict(quarantineName, ESTALE)
                 }
@@ -1227,11 +1227,11 @@ public struct DurableFileWriter: Sendable {
                         == validatedQuarantineData else {
                     throw WriterError.retainedQuarantineChanged(quarantineName)
                 }
-                guard try Self.restoreOwnedEntry(
+                guard try restoreOwnedEntryDurably(
                     named: quarantineName,
                     to: destination.lastPathComponent,
                     matching: expected,
-                    in: anchor.parentDescriptor
+                    anchor: anchor
                 ) else {
                     throw WriterError.createOnlyRollbackConflict(quarantineName, ESTALE)
                 }
@@ -1367,6 +1367,36 @@ public struct DurableFileWriter: Sendable {
             throw WriterError.publicDestinationStillLinkedAfterRemoval
         }
         return removed
+    }
+
+    /// Restoring a quarantined entry is itself a namespace mutation. Commit the
+    /// restore through the retained parent descriptor before reporting either a
+    /// not-owned result or the caller error that triggered compensation.
+    private func restoreOwnedEntryDurably(
+        named quarantineName: String,
+        to destinationName: String,
+        matching expected: InstalledFileIdentity,
+        anchor: ManagedFileAnchor
+    ) throws -> Bool {
+        guard try Self.restoreOwnedEntry(
+            named: quarantineName,
+            to: destinationName,
+            matching: expected,
+            in: anchor.parentDescriptor
+        ) else {
+            return false
+        }
+        do {
+            try anchoredParentDirectorySynchronizer(
+                anchor.parentURL,
+                anchor.parentDescriptor
+            )
+        } catch {
+            throw WriterError.anchoredParentDirectorySynchronizationFailed(
+                error.localizedDescription
+            )
+        }
+        return true
     }
 
     fileprivate struct ManagedParent {
