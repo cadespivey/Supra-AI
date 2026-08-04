@@ -153,12 +153,15 @@ public struct DraftVerifier: Verifier, Sendable {
             return text
         }
         let expectedAuthorityParagraphs = evidence.authorities.map(\.canonicalParagraph)
-        let expectedParagraphSet = Set(expectedAuthorityParagraphs)
+        let expectedSelectedFactReviewParagraphs = evidence.canonicalSelectedFactReviewParagraphs
+        let expectedCitationBearingText = Set(expectedAuthorityParagraphs)
+            .union(evidence.facts.map(\.text))
+            .union(expectedSelectedFactReviewParagraphs)
         let unknownCitationParagraphs = allBlockTexts.filter {
-            Self.containsCitationShape($0) && !expectedParagraphSet.contains($0)
+            Self.containsCitationShape($0) && !expectedCitationBearingText.contains($0)
         }
         if !unknownCitationParagraphs.isEmpty {
-            block(.authorityValidity, "Motion contains citation-shaped prose outside the selected reviewed authorities.")
+            block(.authorityValidity, "Motion contains citation-shaped prose outside the selected reviewed authorities or exact selected facts.")
         }
 
         let authorityIndices = expectedAuthorityParagraphs.map { expected -> Int? in
@@ -172,7 +175,6 @@ public struct DraftVerifier: Verifier, Sendable {
             block(.authorityValidity, "Reviewed authority paragraphs are missing, duplicated, changed, or reordered.")
         }
 
-        let expectedSelectedFactReviewParagraphs = evidence.canonicalSelectedFactReviewParagraphs
         let selectedFactReviewIndices = expectedSelectedFactReviewParagraphs.map { expected -> Int? in
             let matches = paragraphTexts.indices.filter { paragraphTexts[$0] == expected }
             return matches.count == 1 ? matches[0] : nil
