@@ -1,5 +1,5 @@
 import Foundation
-import SupraDocuments
+@testable import SupraDocuments
 import SupraStore
 @testable import SupraSessions
 import XCTest
@@ -595,6 +595,75 @@ final class DraftArtifactReconciliationTests: XCTestCase {
         )
     }
 
+    // T-DAR-16. Expected RED: the rollback artifact has passed byte and format
+    // validation, but a managed-parent substitution inside the final unlink
+    // window must not redirect cleanup into a foreign directory.
+    func testTDAR16ValidatedRollbackCleanupRejectsManagedParentSubstitutionAtUnlink() throws {
+        let fixture = try makeFixture()
+        let output = Data("# Prepared rollback quarantine\n".utf8)
+        let intent = try fixture.store.draftArtifacts.prepareGenericIntent(
+            matterID: fixture.matter.id,
+            artifactKind: .customDescription,
+            format: .markdown,
+            fileName: "Rollback-parent-swap.md",
+            output: output,
+            id: "rollback-parent-substitution"
+        )
+        let directory = fixture.storage.exportsDirectory(forMatterID: fixture.matter.id)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let quarantineName = ".supra-draft-rollback-bbf231d5-d197-47d5-92ec-78ac7f33e593-\(intent.fileName)"
+        let quarantine = directory.appendingPathComponent(quarantineName)
+        try output.write(to: quarantine)
+
+        let preservedParent = fixture.storage.root
+            .appendingPathComponent("preserved-matter-parent", isDirectory: true)
+        let externalParent = fixture.storage.root.deletingLastPathComponent()
+            .appendingPathComponent("Supra-Reconciliation-Foreign-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: externalParent) }
+        try FileManager.default.createDirectory(at: externalParent, withIntermediateDirectories: true)
+        let externalCandidate = externalParent.appendingPathComponent(quarantineName)
+        let foreignBytes = Data("foreign-parent-substitution-canary".utf8)
+        try foreignBytes.write(to: externalCandidate)
+
+        let writer = DurableFileWriter(
+            faultInjector: { _ in },
+            parentDirectorySynchronizer: { _ in },
+            fileUnlinkCheckpoint: { observedCandidate in
+                guard observedCandidate.standardizedFileURL == quarantine.standardizedFileURL else {
+                    throw InjectedParentSubstitutionFailure.unexpectedCandidate
+                }
+                try FileManager.default.moveItem(at: directory, to: preservedParent)
+                try FileManager.default.createSymbolicLink(
+                    at: directory,
+                    withDestinationURL: externalParent
+                )
+            }
+        )
+        let service = DraftArtifactReconciliationService(
+            store: fixture.store,
+            storage: fixture.storage,
+            fileWriter: writer
+        )
+
+        let summary = try service.reconcilePendingIntents()
+
+        XCTAssertEqual(summary.removedRollbackQuarantineCount, 0)
+        XCTAssertEqual(summary.abortedCount, 0)
+        XCTAssertEqual(summary.recoveryRequiredCount, 1)
+        XCTAssertEqual(
+            try Data(contentsOf: preservedParent.appendingPathComponent(quarantineName)),
+            output
+        )
+        XCTAssertTrue(FileManager.default.fileExists(atPath: externalCandidate.path))
+        if FileManager.default.fileExists(atPath: externalCandidate.path) {
+            XCTAssertEqual(try Data(contentsOf: externalCandidate), foreignBytes)
+        }
+        XCTAssertEqual(
+            try fixture.store.draftArtifacts.intent(id: intent.id)?.status,
+            DraftArtifactIntentStatus.recoveryRequired.rawValue
+        )
+    }
+
     private struct Fixture {
         let store: SupraStore
         let matter: MatterRecord
@@ -621,4 +690,8 @@ final class DraftArtifactReconciliationTests: XCTestCase {
         try data.write(to: url, options: .withoutOverwriting)
         return url
     }
+}
+
+private enum InjectedParentSubstitutionFailure: Error {
+    case unexpectedCandidate
 }

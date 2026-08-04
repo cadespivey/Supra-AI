@@ -1285,6 +1285,72 @@ final class MotionToDismissControllerTests: XCTestCase {
         )
     }
 
+    // T-MTD-39. Expected RED: compensation must remain bound to the managed
+    // matter directory opened for publication even when that pathname becomes a
+    // symlink after validation and before the failed-audit rollback begins.
+    func testTMTD39CompensationRejectsManagedParentSubstitutionAfterValidation() async throws {
+        let fixture = try makeFixture()
+        let fileName = "Motion-to-Dismiss-parent-substitution.docx"
+        let managedParent = fixture.storage.exportsDirectory(forMatterID: fixture.matterID)
+        let preservedParent = fixture.storage.root
+            .appendingPathComponent("preserved-motion-parent", isDirectory: true)
+        let externalParent = fixture.storage.root.deletingLastPathComponent()
+            .appendingPathComponent("Supra-Motion-Foreign-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: externalParent) }
+        try FileManager.default.createDirectory(at: externalParent, withIntermediateDirectories: true)
+        let externalDestination = externalParent.appendingPathComponent(fileName)
+        let foreignBytes = Data("foreign-controller-parent-canary".utf8)
+        var intentID: String?
+        var compensationCheckpointObserved = false
+        let controller = MatterDraftingController(
+            store: fixture.store,
+            storage: fixture.storage,
+            fileStampProvider: { "parent-substitution" },
+            motionCompensationCheckpoint: { _, _ in
+                compensationCheckpointObserved = true
+                guard FileManager.default.fileExists(atPath: externalDestination.path),
+                      try Data(contentsOf: externalDestination) == foreignBytes else {
+                    throw InjectedFailure.stop
+                }
+            },
+            motionAuditCommitter: { event, _ in
+                intentID = String(event.id.dropFirst("draft-artifact-".count))
+                try FileManager.default.moveItem(at: managedParent, to: preservedParent)
+                try FileManager.default.createSymbolicLink(
+                    at: managedParent,
+                    withDestinationURL: externalParent
+                )
+                try foreignBytes.write(to: externalDestination)
+                throw InjectedFailure.stop
+            }
+        )
+
+        let result = await controller.draft(
+            .motionToDismiss(fixture.selectedInput),
+            matterID: fixture.matterID
+        )
+
+        guard case let .failure(.renderFailed(message)) = result else {
+            return XCTFail("expected audit failure, got \(result)")
+        }
+        XCTAssertFalse(message.contains("rollback also failed"), message)
+        XCTAssertTrue(compensationCheckpointObserved)
+        XCTAssertEqual(try Data(contentsOf: externalDestination), foreignBytes)
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: preservedParent.appendingPathComponent(fileName).path
+            )
+        )
+        XCTAssertEqual(
+            try fixture.store.draftArtifacts.intent(id: XCTUnwrap(intentID))?.status,
+            DraftArtifactIntentStatus.aborted.rawValue
+        )
+        XCTAssertFalse(
+            try fixture.store.auditEvents.fetchEvents(matterID: fixture.matterID)
+                .contains { $0.eventType == "draft_generated" }
+        )
+    }
+
     // MARK: - Fixtures
 
     private struct IndexedFact {
