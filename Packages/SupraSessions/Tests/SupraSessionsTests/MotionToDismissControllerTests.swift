@@ -1351,6 +1351,57 @@ final class MotionToDismissControllerTests: XCTestCase {
         )
     }
 
+    // T-MTD-40. A compensation observer can hard-link the owned quarantine back
+    // to the public destination. Removing only the quarantine name must not be
+    // reported as a complete rollback while the same inode remains public.
+    func testTMTD40CompensationRejectsOwnedQuarantineHardLinkedBackToPublicPath() async throws {
+        let fixture = try makeFixture()
+        let fileName = "Motion-to-Dismiss-compensation-hard-link.docx"
+        let publicURL = fixture.storage.exportsDirectory(forMatterID: fixture.matterID)
+            .appendingPathComponent(fileName)
+        var intentID: String?
+        var quarantineURL: URL?
+        let controller = MatterDraftingController(
+            store: fixture.store,
+            storage: fixture.storage,
+            fileStampProvider: { "compensation-hard-link" },
+            motionCompensationCheckpoint: { observedPublicURL, quarantine in
+                XCTAssertEqual(observedPublicURL.standardizedFileURL, publicURL.standardizedFileURL)
+                quarantineURL = quarantine
+                try FileManager.default.linkItem(at: quarantine, to: observedPublicURL)
+            },
+            motionAuditCommitter: { event, _ in
+                intentID = String(event.id.dropFirst("draft-artifact-".count))
+                throw InjectedFailure.stop
+            }
+        )
+
+        let result = await controller.draft(
+            .motionToDismiss(fixture.selectedInput),
+            matterID: fixture.matterID
+        )
+
+        guard case let .failure(.renderFailed(message)) = result else {
+            return XCTFail("expected compensation failure, got \(result)")
+        }
+        XCTAssertTrue(message.contains("rollback also failed"), message)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: publicURL.path))
+        try DocumentExportValidator.validate(publicURL, as: .docx)
+        let quarantine = try XCTUnwrap(quarantineURL)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: quarantine.path))
+        if FileManager.default.fileExists(atPath: quarantine.path) {
+            try DocumentExportValidator.validate(quarantine, as: .docx)
+        }
+        XCTAssertEqual(
+            try fixture.store.draftArtifacts.intent(id: XCTUnwrap(intentID))?.status,
+            DraftArtifactIntentStatus.recoveryRequired.rawValue
+        )
+        XCTAssertFalse(
+            try fixture.store.auditEvents.fetchEvents(matterID: fixture.matterID)
+                .contains { $0.eventType == "draft_generated" }
+        )
+    }
+
     // MARK: - Fixtures
 
     private struct IndexedFact {
