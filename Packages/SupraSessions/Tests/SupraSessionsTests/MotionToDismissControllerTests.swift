@@ -1,4 +1,5 @@
 import Foundation
+import GRDB
 import SupraCore
 @testable import SupraDocuments
 import SupraDrafting
@@ -969,21 +970,20 @@ final class MotionToDismissControllerTests: XCTestCase {
         XCTAssertEqual(displayed.text, replacement)
     }
 
-    // T-MTD-33. Expected RED: citation-shaped attorney-composed slots currently
-    // pass readiness and then fail the deterministic verifier after generation
-    // begins. Readiness must reject those slots without rejecting citations that
-    // occur inside the exact fact excerpt counsel selected as evidence.
-    func testTMTD33ReadinessRejectsCitationShapedComposedSlotsButAllowsSelectedFactCitations() throws {
-        let fixture = try makeFixture()
-        let controller = MatterDraftingController(store: fixture.store, storage: fixture.storage)
-
+    // T-MTD-33. Expected RED: the abbreviated Florida rule citation is not
+    // recognized in attorney-composed slots, so generation can create a file,
+    // artifact intent, and success audit. Readiness must reject every composed
+    // slot without rejecting the same citation inside exact selected evidence.
+    func testTMTD33ReadinessRejectsCitationShapedComposedSlotsButAllowsSelectedFactCitations() async throws {
         let mutatedInputs: [(String, (inout MotionToDismissDraftInput) -> Void)] = [
-            ("responding pleading", { $0.respondingTo = "Complaint under Fla. Stat. § 95.11" }),
-            ("relief", { $0.reliefSought = "dismissal under Fla. Stat. § 95.11" }),
-            ("represented party name", { $0.representedPartyName = "Gulf Works, Inc., 123 So. 3d 456" }),
-            ("represented role", { $0.partyRepresented = "Defendant under Fla. Stat. § 95.11" }),
+            ("responding pleading", { $0.respondingTo = "Complaint under Fla. R. Civ. P. 1.140(b)(6)" }),
+            ("relief", { $0.reliefSought = "dismissal under Fla. R. Civ. P. 1.140(b)(6)" }),
+            ("represented party name", { $0.representedPartyName = "Gulf Works, Inc., Fla. R. Civ. P. 1.140(b)(6)" }),
+            ("represented role", { $0.partyRepresented = "Defendant under Fla. R. Civ. P. 1.140(b)(6)" }),
         ]
         for (label, mutate) in mutatedInputs {
+            let fixture = try makeFixture()
+            let controller = MatterDraftingController(store: fixture.store, storage: fixture.storage)
             var input = fixture.selectedInput
             mutate(&input)
             let readiness = controller.motionReadiness(input: input, matterID: fixture.matterID)
@@ -992,8 +992,14 @@ final class MotionToDismissControllerTests: XCTestCase {
                 readiness.blockingReasons.contains { $0.localizedCaseInsensitiveContains("citation") },
                 "citation-shaped \(label) needs an actionable readiness reason"
             )
+            assertFailure(
+                await controller.draft(.motionToDismiss(input), matterID: fixture.matterID)
+            )
+            try assertNoSuccessfulMotionSideEffects(fixture)
         }
 
+        let fixture = try makeFixture()
+        let controller = MatterDraftingController(store: fixture.store, storage: fixture.storage)
         let citedFact = try insertFact(
             store: fixture.store,
             matterID: fixture.matterID,
@@ -1553,6 +1559,20 @@ final class MotionToDismissControllerTests: XCTestCase {
             try fixture.store.auditEvents.fetchEvents(matterID: fixture.matterID)
                 .contains { $0.eventType == "draft_generated" },
             "blocking input wrote a success audit",
+            file: file,
+            line: line
+        )
+        let intentCount = try fixture.store.database.writer.read { db in
+            try Int.fetchOne(
+                db,
+                sql: "SELECT COUNT(*) FROM draft_artifact_intents WHERE matter_id = ?",
+                arguments: [fixture.matterID]
+            ) ?? -1
+        }
+        XCTAssertEqual(
+            intentCount,
+            0,
+            "blocking input created a draft artifact intent",
             file: file,
             line: line
         )
