@@ -415,6 +415,60 @@ final class MatterDraftingControllerTests: XCTestCase {
         XCTAssertTrue(try store.auditEvents.fetchEvents(matterID: matter.id).isEmpty)
     }
 
+    // ACR-EXPORT-014. A same-inode hard link at the expected public pathname is
+    // not sufficient authority to finalize after the managed matter directory
+    // itself has been replaced during the successful audit callback.
+    @MainActor
+    func testGenericDraftFinalizationRejectsManagedParentSubstitutionWithHardLinkedInode() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Finalization parent substitution")
+        let storage = makeStorage()
+        addTeardownBlock { try? FileManager.default.removeItem(at: storage.root) }
+        let managedParent = storage.exportsDirectory(forMatterID: matter.id)
+        let destination = managedParent.appendingPathComponent("Finalization-parent-race.md")
+        let preservedParent = storage.root
+            .appendingPathComponent("preserved-finalization-parent", isDirectory: true)
+        let preservedDestination = preservedParent.appendingPathComponent(
+            destination.lastPathComponent
+        )
+        var intentID: String?
+        let controller = MatterDraftingController(
+            store: store,
+            storage: storage,
+            fileStampProvider: { "race" },
+            auditRecorder: { event in
+                intentID = String(event.id.dropFirst("draft-artifact-".count))
+                try FileManager.default.moveItem(at: managedParent, to: preservedParent)
+                try FileManager.default.createDirectory(
+                    at: managedParent,
+                    withIntermediateDirectories: true
+                )
+                try FileManager.default.linkItem(
+                    at: preservedDestination,
+                    to: destination
+                )
+            }
+        )
+
+        let result = await controller.draftCustomDescription(
+            matterID: matter.id,
+            input: .init(
+                title: "Finalization parent",
+                description: "Require the retained managed chain before success."
+            )
+        )
+
+        if case .success = result {
+            XCTFail("a detached installed inode must not authorize success finalization")
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: destination.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: preservedDestination.path))
+        try DocumentExportValidator.validate(destination, as: .markdown)
+        let intent = try XCTUnwrap(try store.draftArtifacts.intent(id: XCTUnwrap(intentID)))
+        XCTAssertEqual(intent.status, DraftArtifactIntentStatus.aborted.rawValue)
+        XCTAssertTrue(try store.auditEvents.fetchEvents(matterID: matter.id).isEmpty)
+    }
+
     // Expected RED: interrupted items had only a global count; the matter draft
     // surface exposed neither affected filenames nor an explicit resolution.
     @MainActor
