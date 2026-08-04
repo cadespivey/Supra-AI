@@ -8,7 +8,7 @@ import SupraExports
 import SupraStore
 import XCTest
 
-/// T-MTD-01...24: the first supported motion vertical. Every fixture is
+/// T-MTD-01...29: the first supported motion vertical. Every fixture is
 /// fictional and every negative assertion checks both the file boundary and the
 /// success-audit boundary.
 @MainActor
@@ -677,6 +677,61 @@ final class MotionToDismissControllerTests: XCTestCase {
         case .failure(let error): XCTFail("expected typed cancellation, got \(error)")
         case .success: XCTFail("cancelled motion unexpectedly produced an artifact")
         }
+        try assertNoSuccessfulMotionSideEffects(fixture)
+    }
+
+    // T-MTD-29. Expected RED: selecting an authority after displaying reviewed
+    // binding A must not silently resolve the same authority ID to replacement
+    // binding B at capture/generation time. The current input carries only the ID,
+    // so this test preserves the failing boundary until the displayed binding is
+    // part of the typed selection contract and revalidated by the controller.
+    func testTMTD29DraftRejectsAuthoritySelectionWhenDisplayedReviewBindingChanged() async throws {
+        let fixture = try makeFixture()
+        let displayedExcerpt = "DISPLAYED_BINDING_A A motion to dismiss for failure to state a claim tests the legal sufficiency of the complaint."
+        let replacementExcerpt = "REPLACEMENT_BINDING_B On a motion to dismiss for failure to state a claim, well-pleaded allegations are accepted as true but conclusory allegations are not."
+        try fixture.store.authorities.updateOpinionText(
+            authorityID: fixture.selectedAuthorityID,
+            text: "\(displayedExcerpt)\n\n\(replacementExcerpt)"
+        )
+        let displayedReview = try fixture.store.authorities.reviewProposition(
+            authorityID: fixture.selectedAuthorityID,
+            groundKey: .failureToStateClaim,
+            excerpt: displayedExcerpt,
+            reviewedBy: "synthetic-motion-reviewer",
+            reviewedAt: Date(timeIntervalSince1970: 1_785_513_700)
+        )
+
+        let controller = MatterDraftingController(store: fixture.store, storage: fixture.storage)
+        let displayedSource = try XCTUnwrap(
+            controller.motionAuthoritySources(matterID: fixture.matterID)
+                .first { $0.authorityID == fixture.selectedAuthorityID }
+        )
+        XCTAssertEqual(displayedSource.snippet, displayedExcerpt)
+        let displayedSnapshot = try fixture.store.draftingSources.captureMotionSnapshot(
+            snapshotRequest(for: fixture)
+        )
+        XCTAssertEqual(displayedSnapshot.authorities.map(\.bindingSHA256), [displayedReview.bindingSHA256])
+
+        // This input represents the user's selection of the row displayed above.
+        // At present it retains the authority ID but loses displayedReview.bindingSHA256.
+        let selectedInput = fixture.selectedInput
+        let replacementReview = try fixture.store.authorities.reviewProposition(
+            authorityID: fixture.selectedAuthorityID,
+            groundKey: .failureToStateClaim,
+            excerpt: replacementExcerpt,
+            reviewedBy: "concurrent-motion-reviewer",
+            reviewedAt: Date(timeIntervalSince1970: 1_785_513_800)
+        )
+        XCTAssertNotEqual(replacementReview.bindingSHA256, displayedReview.bindingSHA256)
+        let currentSnapshot = try fixture.store.draftingSources.captureMotionSnapshot(
+            snapshotRequest(for: fixture)
+        )
+        XCTAssertEqual(currentSnapshot.authorities.map(\.bindingSHA256), [replacementReview.bindingSHA256])
+
+        let readiness = controller.motionReadiness(input: selectedInput, matterID: fixture.matterID)
+        XCTAssertFalse(readiness.canGenerate, "a changed reviewed binding must require reload and reselection")
+        let result = await controller.draft(.motionToDismiss(selectedInput), matterID: fixture.matterID)
+        assertFailure(result)
         try assertNoSuccessfulMotionSideEffects(fixture)
     }
 
