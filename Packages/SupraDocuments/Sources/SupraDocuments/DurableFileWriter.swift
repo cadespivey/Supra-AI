@@ -5,6 +5,15 @@ import Foundation
 /// installing it at its destination. An existing destination is never removed
 /// first: POSIX `rename` performs the only replacement operation.
 public struct DurableFileWriter: Sendable {
+    /// Opaque ownership token captured from the temporary file immediately before
+    /// its atomic create-only install. Callers can later prove a quarantined file
+    /// is still the exact installed inode rather than a same-path replacement.
+    public struct InstalledFileIdentity: Equatable, Sendable {
+        fileprivate let device: dev_t
+        fileprivate let inode: ino_t
+        fileprivate let generation: UInt32
+    }
+
     public enum FaultStage: String, CaseIterable, Sendable {
         case beforeWrite
         case duringWrite
@@ -64,7 +73,7 @@ public struct DurableFileWriter: Sendable {
         to destination: URL,
         validator: (URL) throws -> Void
     ) throws {
-        try performWrite(
+        _ = try performWrite(
             to: destination,
             installPolicy: .replace,
             writer: { sink in try sink.write(data) },
@@ -80,6 +89,16 @@ public struct DurableFileWriter: Sendable {
         to destination: URL,
         validator: (URL) throws -> Void
     ) throws {
+        _ = try writeNewOwned(data, to: destination, validator: validator)
+    }
+
+    /// Create-only write that returns the exact installed file identity for a
+    /// later ownership-safe compensation attempt.
+    public func writeNewOwned(
+        _ data: Data,
+        to destination: URL,
+        validator: (URL) throws -> Void
+    ) throws -> InstalledFileIdentity {
         try performWrite(
             to: destination,
             installPolicy: .createExclusive,
@@ -95,7 +114,7 @@ public struct DurableFileWriter: Sendable {
         writer: (DurableFileSink) throws -> Void,
         validator: (URL) throws -> Void
     ) throws {
-        try performWrite(
+        _ = try performWrite(
             to: destination,
             installPolicy: .replace,
             writer: writer,
@@ -109,7 +128,7 @@ public struct DurableFileWriter: Sendable {
         writer: (DurableFileSink) throws -> Void,
         validator: (URL) throws -> Void
     ) throws {
-        try performWrite(
+        _ = try performWrite(
             to: destination,
             installPolicy: .createExclusive,
             writer: writer,
@@ -122,18 +141,12 @@ public struct DurableFileWriter: Sendable {
         case createExclusive
     }
 
-    private struct FileIdentity: Equatable {
-        let device: dev_t
-        let inode: ino_t
-        let generation: UInt32
-    }
-
     private func performWrite(
         to destination: URL,
         installPolicy: InstallPolicy,
         writer: (DurableFileSink) throws -> Void,
         validator: (URL) throws -> Void
-    ) throws {
+    ) throws -> InstalledFileIdentity {
         try Task.checkCancellation()
         let standardizedDestination = destination.standardizedFileURL
         guard standardizedDestination.isFileURL,
@@ -189,6 +202,18 @@ public struct DurableFileWriter: Sendable {
             }
             throw error
         }
+        return installedFileIdentity
+    }
+
+    /// Compares an already-quarantined path with an install-time ownership token.
+    /// The caller must move the public path out of circulation before invoking
+    /// this check; comparing the public pathname first would leave a race before
+    /// deletion.
+    public func matchesInstalledFileIdentity(
+        _ expected: InstalledFileIdentity,
+        at quarantinedURL: URL
+    ) throws -> Bool {
+        try Self.fileIdentity(at: quarantinedURL) == expected
     }
 
     private static func createExclusiveTemporaryFile(at url: URL) throws -> FileHandle {
@@ -246,7 +271,7 @@ public struct DurableFileWriter: Sendable {
     private static func rollbackCreateExclusiveInstall(
         at destination: URL,
         quarantine: URL,
-        expectedIdentity: FileIdentity
+        expectedIdentity: InstalledFileIdentity
     ) throws -> Bool {
         guard try fileIdentity(at: destination) == expectedIdentity else {
             return false
@@ -263,7 +288,7 @@ public struct DurableFileWriter: Sendable {
             throw WriterError.createOnlyRollbackFailed(code)
         }
 
-        let quarantinedIdentity: FileIdentity?
+        let quarantinedIdentity: InstalledFileIdentity?
         do {
             quarantinedIdentity = try fileIdentity(at: quarantine)
         } catch {
@@ -301,7 +326,7 @@ public struct DurableFileWriter: Sendable {
         }
     }
 
-    private static func fileIdentity(at url: URL) throws -> FileIdentity? {
+    private static func fileIdentity(at url: URL) throws -> InstalledFileIdentity? {
         var status = stat()
         let result = url.path.withCString { Darwin.lstat($0, &status) }
         guard result == 0 else {
@@ -309,7 +334,7 @@ public struct DurableFileWriter: Sendable {
             if code == ENOENT { return nil }
             throw WriterError.fileIdentityInspectionFailed(code)
         }
-        return FileIdentity(
+        return InstalledFileIdentity(
             device: status.st_dev,
             inode: status.st_ino,
             generation: status.st_gen

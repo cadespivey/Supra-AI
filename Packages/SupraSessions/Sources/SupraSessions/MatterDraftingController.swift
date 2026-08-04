@@ -1395,8 +1395,9 @@ public final class MatterDraftingController: ObservableObject {
             let collisionSuffix = attempt == 1 ? "" : "-\(attempt)"
             let fileName = "\(basename)-\(stamp)\(collisionSuffix).\(format.fileExtension)"
             let url = directory.appendingPathComponent(fileName)
+            let installedIdentity: DurableFileWriter.InstalledFileIdentity
             do {
-                try fileWriter.writeNew(data, to: url) { temporaryURL in
+                installedIdentity = try fileWriter.writeNewOwned(data, to: url) { temporaryURL in
                     try DocumentExportValidator.validate(temporaryURL, as: format)
                 }
             } catch DurableFileWriter.WriterError.destinationExists {
@@ -1417,7 +1418,11 @@ public final class MatterDraftingController: ObservableObject {
             } catch {
                 let auditDescription = error.localizedDescription
                 do {
-                    try removeNewDraftFile(at: url)
+                    try removeNewDraftFile(
+                        at: url,
+                        expectedIdentity: installedIdentity,
+                        expectedSHA256: DocumentStorage.sha256Hex(of: data)
+                    )
                 } catch {
                     throw PersistenceError.partialFailure(
                         audit: auditDescription,
@@ -1429,24 +1434,6 @@ public final class MatterDraftingController: ObservableObject {
             return url
         }
         throw PersistenceError.filenameAllocationFailed
-    }
-
-    private func removeNewDraftFile(at url: URL) throws {
-        do {
-            try FileManager.default.removeItem(at: url)
-        } catch {
-            throw MotionCompensationError.deletionFailed(
-                url.lastPathComponent,
-                error.localizedDescription
-            )
-        }
-        do {
-            try fileWriter.synchronizeParentDirectory(of: url)
-        } catch {
-            throw MotionCompensationError.directorySynchronizationFailed(
-                error.localizedDescription
-            )
-        }
     }
 
     /// Motion persistence is create-only. A collision chooses a distinct name;
@@ -1488,8 +1475,9 @@ public final class MatterDraftingController: ObservableObject {
                 relatedID: matterID,
                 metadataJSON: metadataJSON
             )
+            let installedIdentity: DurableFileWriter.InstalledFileIdentity
             do {
-                try fileWriter.writeNew(data, to: url) { temporaryURL in
+                installedIdentity = try fileWriter.writeNewOwned(data, to: url) { temporaryURL in
                     try DocumentExportValidator.validate(temporaryURL, as: .docx)
                 }
             } catch DurableFileWriter.WriterError.destinationExists {
@@ -1500,9 +1488,11 @@ public final class MatterDraftingController: ObservableObject {
             } catch {
                 let auditDescription = error.localizedDescription
                 do {
-                    try removeNewMotionFile(
+                    try removeNewDraftFile(
                         at: url,
-                        expectedSHA256: completedLineage.outputSHA256
+                        expectedIdentity: installedIdentity,
+                        expectedSHA256: completedLineage.outputSHA256,
+                        checkpoint: motionCompensationCheckpoint
                     )
                 } catch {
                     throw PersistenceError.partialFailure(
@@ -1517,7 +1507,7 @@ public final class MatterDraftingController: ObservableObject {
         throw PersistenceError.filenameAllocationFailed
     }
 
-    private enum MotionCompensationError: Error, LocalizedError {
+    private enum DraftCompensationError: Error, LocalizedError {
         case quarantineFailed(Int32)
         case quarantineNameExhausted
         case destinationChanged
@@ -1532,68 +1522,78 @@ public final class MatterDraftingController: ObservableObject {
         var errorDescription: String? {
             switch self {
             case let .quarantineFailed(code):
-                return "The new motion could not be quarantined for rollback (errno \(code))."
+                return "The new draft could not be quarantined for rollback (errno \(code))."
             case .quarantineNameExhausted:
-                return "A unique same-directory motion rollback quarantine could not be allocated."
+                return "A unique same-directory draft rollback quarantine could not be allocated."
             case .destinationChanged:
-                return "The new motion path changed before rollback; the changed file was restored and left untouched."
+                return "The new draft path changed before rollback; the changed file was restored and left untouched."
             case let .destinationChangedAndQuarantined(name, code):
-                return "The new motion path changed before rollback; the concurrent destination was left untouched and the changed file remains preserved as \(name) (restore errno \(code))."
+                return "The new draft path changed before rollback; the concurrent destination was left untouched and the changed file remains preserved as \(name) (restore errno \(code))."
             case let .inspectionFailed(detail):
-                return "The quarantined motion could not be inspected and was restored: \(detail)."
+                return "The quarantined draft could not be inspected and was restored: \(detail)."
             case let .inspectionFailedAndQuarantined(name, code):
-                return "The quarantined motion could not be inspected; the destination was left untouched and the file remains preserved as \(name) (restore errno \(code))."
+                return "The quarantined draft could not be inspected; the destination was left untouched and the file remains preserved as \(name) (restore errno \(code))."
             case let .checkpointFailed(detail):
-                return "Motion rollback stopped before deletion and the file was restored: \(detail)."
+                return "Draft rollback stopped before deletion and the file was restored: \(detail)."
             case let .checkpointFailedAndQuarantined(name, code):
-                return "Motion rollback stopped before deletion; the destination was left untouched and the file remains preserved as \(name) (restore errno \(code))."
+                return "Draft rollback stopped before deletion; the destination was left untouched and the file remains preserved as \(name) (restore errno \(code))."
             case let .deletionFailed(name, detail):
                 return "The verified rollback quarantine \(name) could not be removed: \(detail)."
             case let .directorySynchronizationFailed(detail):
-                return "The motion rollback was removed, but its directory synchronization failed: \(detail)."
+                return "The draft rollback was removed, but its directory synchronization failed: \(detail)."
             }
         }
     }
 
-    private func removeNewMotionFile(at url: URL, expectedSHA256: String) throws {
-        guard let quarantine = try quarantineMotionFile(at: url) else { return }
-        let installed: Data
+    private func removeNewDraftFile(
+        at url: URL,
+        expectedIdentity: DurableFileWriter.InstalledFileIdentity,
+        expectedSHA256: String,
+        checkpoint: MotionCompensationCheckpoint = { _, _ in }
+    ) throws {
+        guard let quarantine = try quarantineDraftFile(at: url) else { return }
         do {
-            installed = try Data(contentsOf: quarantine, options: .mappedIfSafe)
+            try checkpoint(url, quarantine)
         } catch {
-            if let code = restoreQuarantinedMotionFile(quarantine, to: url) {
-                throw MotionCompensationError.inspectionFailedAndQuarantined(
+            if let code = restoreQuarantinedDraftFile(quarantine, to: url) {
+                throw DraftCompensationError.checkpointFailedAndQuarantined(
                     quarantine.lastPathComponent,
                     code
                 )
             }
-            throw MotionCompensationError.inspectionFailed(error.localizedDescription)
+            throw DraftCompensationError.checkpointFailed(error.localizedDescription)
         }
-        let matchesExpected = DocumentStorage.sha256Hex(of: installed) == expectedSHA256
+        let matchesExpected: Bool
         do {
-            try motionCompensationCheckpoint(url, quarantine)
+            let matchesIdentity = try fileWriter.matchesInstalledFileIdentity(
+                expectedIdentity,
+                at: quarantine
+            )
+            let quarantinedData = try Data(contentsOf: quarantine, options: .mappedIfSafe)
+            let matchesContent = DocumentStorage.sha256Hex(of: quarantinedData) == expectedSHA256
+            matchesExpected = matchesIdentity && matchesContent
         } catch {
-            if let code = restoreQuarantinedMotionFile(quarantine, to: url) {
-                throw MotionCompensationError.checkpointFailedAndQuarantined(
+            if let code = restoreQuarantinedDraftFile(quarantine, to: url) {
+                throw DraftCompensationError.inspectionFailedAndQuarantined(
                     quarantine.lastPathComponent,
                     code
                 )
             }
-            throw MotionCompensationError.checkpointFailed(error.localizedDescription)
+            throw DraftCompensationError.inspectionFailed(error.localizedDescription)
         }
         guard matchesExpected else {
-            if let code = restoreQuarantinedMotionFile(quarantine, to: url) {
-                throw MotionCompensationError.destinationChangedAndQuarantined(
+            if let code = restoreQuarantinedDraftFile(quarantine, to: url) {
+                throw DraftCompensationError.destinationChangedAndQuarantined(
                     quarantine.lastPathComponent,
                     code
                 )
             }
-            throw MotionCompensationError.destinationChanged
+            throw DraftCompensationError.destinationChanged
         }
         do {
             try FileManager.default.removeItem(at: quarantine)
         } catch {
-            throw MotionCompensationError.deletionFailed(
+            throw DraftCompensationError.deletionFailed(
                 quarantine.lastPathComponent,
                 error.localizedDescription
             )
@@ -1601,7 +1601,7 @@ public final class MatterDraftingController: ObservableObject {
         do {
             try fileWriter.synchronizeParentDirectory(of: url)
         } catch {
-            throw MotionCompensationError.directorySynchronizationFailed(
+            throw DraftCompensationError.directorySynchronizationFailed(
                 error.localizedDescription
             )
         }
@@ -1609,11 +1609,11 @@ public final class MatterDraftingController: ObservableObject {
 
     /// `RENAME_EXCL` performs one same-directory namespace operation: either the
     /// exact public path is moved out of circulation, or neither path changes.
-    private func quarantineMotionFile(at url: URL) throws -> URL? {
+    private func quarantineDraftFile(at url: URL) throws -> URL? {
         let directory = url.deletingLastPathComponent()
         for _ in 0..<32 {
             let quarantine = directory.appendingPathComponent(
-                ".supra-motion-rollback-\(UUID().uuidString.lowercased())-\(url.lastPathComponent)"
+                ".supra-draft-rollback-\(UUID().uuidString.lowercased())-\(url.lastPathComponent)"
             )
             let result = url.path.withCString { source in
                 quarantine.path.withCString { destination in
@@ -1624,15 +1624,15 @@ public final class MatterDraftingController: ObservableObject {
             let code = errno
             if code == ENOENT { return nil }
             if code == EEXIST { continue }
-            throw MotionCompensationError.quarantineFailed(code)
+            throw DraftCompensationError.quarantineFailed(code)
         }
-        throw MotionCompensationError.quarantineNameExhausted
+        throw DraftCompensationError.quarantineNameExhausted
     }
 
     /// Returns nil only when the quarantine was restored. `RENAME_EXCL` ensures
     /// a concurrent destination is never overwritten; on failure the quarantine
     /// remains at its unique path for recovery.
-    private func restoreQuarantinedMotionFile(_ quarantine: URL, to url: URL) -> Int32? {
+    private func restoreQuarantinedDraftFile(_ quarantine: URL, to url: URL) -> Int32? {
         let result = quarantine.path.withCString { source in
             url.path.withCString { destination in
                 Darwin.renamex_np(source, destination, UInt32(RENAME_EXCL))
