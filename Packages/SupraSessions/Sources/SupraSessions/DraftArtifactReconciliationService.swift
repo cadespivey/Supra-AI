@@ -195,18 +195,22 @@ public final class DraftArtifactReconciliationService: @unchecked Sendable {
                 continue
             }
             guard Self.regularFileState(at: entry) == .regular,
-                  let inspectedIdentity = try fileWriter.installedFileIdentity(at: entry) else {
+                  let inspectedIdentity = try fileWriter.installedFileIdentity(
+                      at: entry,
+                      containedIn: storage.root
+                  ) else {
                 throw ReconciliationError.unsafeOwnedTemporary
             }
             try cleanupPreUnlinkCheckpoint(entry)
             guard Self.regularFileState(at: entry) == .regular,
-                  try fileWriter.unlinkFile(matching: inspectedIdentity, at: entry) else {
+                  try fileWriter.unlinkFile(
+                      matching: inspectedIdentity,
+                      at: entry,
+                      containedIn: storage.root
+                  ) else {
                 throw ReconciliationError.unsafeOwnedTemporary
             }
             removed += 1
-        }
-        if removed > 0 {
-            try fileWriter.synchronizeParentDirectory(of: publicURL)
         }
         return removed
     }
@@ -245,7 +249,10 @@ public final class DraftArtifactReconciliationService: @unchecked Sendable {
         }
         let candidate = candidates[0]
         guard Self.regularFileState(at: candidate) == .regular,
-              let inspectedIdentity = try fileWriter.installedFileIdentity(at: candidate) else {
+              let inspectedIdentity = try fileWriter.installedFileIdentity(
+                  at: candidate,
+                  containedIn: storage.root
+              ) else {
             return .recoveryRequired
         }
         let beforeValidation = try Data(contentsOf: candidate, options: .mappedIfSafe)
@@ -265,10 +272,13 @@ public final class DraftArtifactReconciliationService: @unchecked Sendable {
         guard afterValidation == beforeValidation else { return .recoveryRequired }
         try cleanupPreUnlinkCheckpoint(candidate)
         guard Self.regularFileState(at: candidate) == .regular,
-              try fileWriter.unlinkFile(matching: inspectedIdentity, at: candidate) else {
+              try fileWriter.unlinkFile(
+                  matching: inspectedIdentity,
+                  at: candidate,
+                  containedIn: storage.root
+              ) else {
             return .recoveryRequired
         }
-        try fileWriter.synchronizeParentDirectory(of: publicURL)
         return .removedOwned
     }
 

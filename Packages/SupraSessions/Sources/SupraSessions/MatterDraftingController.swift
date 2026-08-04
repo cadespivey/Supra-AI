@@ -1,5 +1,4 @@
 import Combine
-import Darwin
 import Foundation
 import SupraCore
 import SupraDocuments
@@ -1756,127 +1755,53 @@ public final class MatterDraftingController: ObservableObject {
         expectedSHA256: String,
         checkpoint: MotionCompensationCheckpoint = { _, _ in }
     ) throws {
-        guard let quarantine = try quarantineDraftFile(at: url) else { return }
         do {
-            try checkpoint(url, quarantine)
-        } catch {
-            if let code = restoreQuarantinedDraftFile(quarantine, to: url) {
-                throw DraftCompensationError.checkpointFailedAndQuarantined(
-                    quarantine.lastPathComponent,
-                    code
-                )
-            }
-            throw DraftCompensationError.checkpointFailed(error.localizedDescription)
-        }
-        let matchesExpected: Bool
-        do {
-            let matchesIdentity = try fileWriter.matchesInstalledFileIdentity(
-                expectedIdentity,
-                at: quarantine
+            let removed = try fileWriter.removeInstalledFile(
+                matching: expectedIdentity,
+                at: url,
+                containedIn: storage.root,
+                missingIsSuccess: true,
+                quarantineCheckpoint: { publicURL, quarantineURL in
+                    do {
+                        try checkpoint(publicURL, quarantineURL)
+                    } catch {
+                        throw DraftCompensationError.checkpointFailed(
+                            error.localizedDescription
+                        )
+                    }
+                },
+                contentValidator: { data in
+                    guard DocumentStorage.sha256Hex(of: data) == expectedSHA256 else {
+                        throw DraftCompensationError.destinationChanged
+                    }
+                },
+                preRemovalCheckpoint: { quarantineURL in
+                    do {
+                        try draftCompensationPreUnlinkCheckpoint(quarantineURL)
+                    } catch {
+                        throw DraftCompensationError.checkpointFailed(
+                            error.localizedDescription
+                        )
+                    }
+                }
             )
-            let quarantinedData = try Data(contentsOf: quarantine, options: .mappedIfSafe)
-            let matchesContent = DocumentStorage.sha256Hex(of: quarantinedData) == expectedSHA256
-            matchesExpected = matchesIdentity && matchesContent
-        } catch {
-            if let code = restoreQuarantinedDraftFile(quarantine, to: url) {
-                throw DraftCompensationError.inspectionFailedAndQuarantined(
-                    quarantine.lastPathComponent,
-                    code
-                )
-            }
-            throw DraftCompensationError.inspectionFailed(error.localizedDescription)
-        }
-        guard matchesExpected else {
-            if let code = restoreQuarantinedDraftFile(quarantine, to: url) {
-                throw DraftCompensationError.destinationChangedAndQuarantined(
-                    quarantine.lastPathComponent,
-                    code
-                )
-            }
-            throw DraftCompensationError.destinationChanged
-        }
-        do {
-            try draftCompensationPreUnlinkCheckpoint(quarantine)
-        } catch {
-            if let code = restoreQuarantinedDraftFile(quarantine, to: url) {
-                throw DraftCompensationError.checkpointFailedAndQuarantined(
-                    quarantine.lastPathComponent,
-                    code
-                )
-            }
-            throw DraftCompensationError.checkpointFailed(error.localizedDescription)
-        }
-        let stillMatchesExpected: Bool
-        do {
-            let matchesIdentity = try fileWriter.matchesInstalledFileIdentity(
-                expectedIdentity,
-                at: quarantine
-            )
-            let quarantinedData = try Data(contentsOf: quarantine, options: .mappedIfSafe)
-            stillMatchesExpected = matchesIdentity
-                && DocumentStorage.sha256Hex(of: quarantinedData) == expectedSHA256
-        } catch {
-            throw DraftCompensationError.deletionFailed(
-                quarantine.lastPathComponent,
-                error.localizedDescription
-            )
-        }
-        guard stillMatchesExpected else {
-            throw DraftCompensationError.deletionIdentityChanged(quarantine.lastPathComponent)
-        }
-        do {
-            guard try fileWriter.unlinkFile(matching: expectedIdentity, at: quarantine) else {
-                throw DraftCompensationError.deletionIdentityChanged(quarantine.lastPathComponent)
+            guard removed else {
+                throw DraftCompensationError.deletionIdentityChanged(url.lastPathComponent)
             }
         } catch let error as DraftCompensationError {
             throw error
+        } catch let DurableFileWriter.WriterError.createOnlyRollbackConflict(name, code) {
+            throw DraftCompensationError.destinationChangedAndQuarantined(name, code)
+        } catch let DurableFileWriter.WriterError.anchoredParentDirectorySynchronizationFailed(detail) {
+            throw DraftCompensationError.directorySynchronizationFailed(detail)
+        } catch let DurableFileWriter.WriterError.createOnlyRollbackFailed(code) {
+            throw DraftCompensationError.quarantineFailed(code)
         } catch {
             throw DraftCompensationError.deletionFailed(
-                quarantine.lastPathComponent,
+                url.lastPathComponent,
                 error.localizedDescription
             )
         }
-        do {
-            try fileWriter.synchronizeParentDirectory(of: url)
-        } catch {
-            throw DraftCompensationError.directorySynchronizationFailed(
-                error.localizedDescription
-            )
-        }
-    }
-
-    /// `RENAME_EXCL` performs one same-directory namespace operation: either the
-    /// exact public path is moved out of circulation, or neither path changes.
-    private func quarantineDraftFile(at url: URL) throws -> URL? {
-        let directory = url.deletingLastPathComponent()
-        for _ in 0..<32 {
-            let quarantine = directory.appendingPathComponent(
-                ".supra-draft-rollback-\(UUID().uuidString.lowercased())-\(url.lastPathComponent)"
-            )
-            let result = url.path.withCString { source in
-                quarantine.path.withCString { destination in
-                    Darwin.renamex_np(source, destination, UInt32(RENAME_EXCL))
-                }
-            }
-            if result == 0 { return quarantine }
-            let code = errno
-            if code == ENOENT { return nil }
-            if code == EEXIST { continue }
-            throw DraftCompensationError.quarantineFailed(code)
-        }
-        throw DraftCompensationError.quarantineNameExhausted
-    }
-
-    /// Returns nil only when the quarantine was restored. `RENAME_EXCL` ensures
-    /// a concurrent destination is never overwritten; on failure the quarantine
-    /// remains at its unique path for recovery.
-    private func restoreQuarantinedDraftFile(_ quarantine: URL, to url: URL) -> Int32? {
-        let result = quarantine.path.withCString { source in
-            url.path.withCString { destination in
-                Darwin.renamex_np(source, destination, UInt32(RENAME_EXCL))
-            }
-        }
-        return result == 0 ? nil : errno
     }
 
     private func sanitize(_ title: String) -> String {
