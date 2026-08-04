@@ -768,9 +768,12 @@ final class InterruptedDraftRecoveryUITests: XCTestCase {
 
     func testTUIDRAFTREC01Through04NoticeRevealAndAcknowledgementPreserveFiles() throws {
         let storageRoot = appSandboxWritableStorageRoot(prefix: "DraftRecoveryUITest")
-        let storeURL = storageRoot
+        let testStoreRoot = storageRoot
             .appendingPathComponent(".supra-ui-test-store", isDirectory: true)
+        let storeURL = testStoreRoot
             .appendingPathComponent("SupraAI.sqlite", isDirectory: false)
+        let matterIDSidecarURL = testStoreRoot
+            .appendingPathComponent("seeded-matter-id", isDirectory: false)
         let app = XCUIApplication()
         addTeardownBlock {
             app.terminate()
@@ -832,10 +835,22 @@ final class InterruptedDraftRecoveryUITests: XCTestCase {
                 attributes[.creationDate] as? Date,
                 "The hosted recovery Store must retain its creation date across relaunch"
             )
+            let rawMatterID = try String(contentsOf: matterIDSidecarURL, encoding: .utf8)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let parsedMatterID = try XCTUnwrap(
+                UUID(uuidString: rawMatterID),
+                "The content-free test sidecar must contain one UUID"
+            )
+            XCTAssertEqual(
+                rawMatterID,
+                parsedMatterID.uuidString,
+                "The content-free test sidecar must use the canonical UUID spelling"
+            )
             return RecoveryLaunchEvidence(
                 recoveryIDs: recoveryIDs,
                 databaseFileNumber: fileNumber,
-                databaseCreationDate: creationDate
+                databaseCreationDate: creationDate,
+                seededMatterID: rawMatterID
             )
         }
 
@@ -853,6 +868,7 @@ final class InterruptedDraftRecoveryUITests: XCTestCase {
             "Relaunch must reopen the same hermetic on-disk UI-test Store"
         )
         XCTAssertEqual(secondLaunch.databaseCreationDate, firstLaunch.databaseCreationDate)
+        XCTAssertEqual(secondLaunch.seededMatterID, firstLaunch.seededMatterID)
 
         let warning = app.descendants(matching: .any)["drafting.interruptedRecoveryWarning"]
         XCTAssertTrue(warning.waitForExistence(timeout: 10), warning.debugDescription)
@@ -866,11 +882,20 @@ final class InterruptedDraftRecoveryUITests: XCTestCase {
         )
         XCTAssertEqual(reveal.count, 1, "Only validated recovery lineage may expose a reveal action")
 
-        let filesBeforeAcknowledgement = regularArtifacts(beneath: storageRoot)
-        XCTAssertFalse(
-            filesBeforeAcknowledgement.isEmpty,
-            "Expected a preserved draft beneath \(storageRoot.path); root contents: \((try? FileManager.default.contentsOfDirectory(atPath: storageRoot.path)) ?? [])"
+        let preservedFileURL = storageRoot
+            .appendingPathComponent("exports", isDirectory: true)
+            .appendingPathComponent(secondLaunch.seededMatterID, isDirectory: true)
+            .appendingPathComponent("Interrupted-publication.md", isDirectory: false)
+        let preservedBytesBeforeAcknowledgement = try Data(contentsOf: preservedFileURL)
+        XCTAssertEqual(
+            preservedBytesBeforeAcknowledgement,
+            Data("# Synthetic preserved interrupted publication\n".utf8)
         )
+        let filesBeforeAcknowledgement = regularArtifacts(
+            beneath: storageRoot,
+            knownArtifact: preservedFileURL
+        )
+        XCTAssertEqual(filesBeforeAcknowledgement, [preservedFileURL.path])
         reveal.firstMatch.click()
         let finder = XCUIApplication(bundleIdentifier: "com.apple.finder")
         XCTAssertTrue(
@@ -884,16 +909,18 @@ final class InterruptedDraftRecoveryUITests: XCTestCase {
         acknowledge.click()
         XCTAssertTrue(warning.waitForNonExistence(timeout: 10))
         XCTAssertEqual(
-            regularArtifacts(beneath: storageRoot),
+            regularArtifacts(beneath: storageRoot, knownArtifact: preservedFileURL),
             filesBeforeAcknowledgement,
             "Acknowledging interrupted work must not delete or move preserved files"
         )
+        XCTAssertEqual(try Data(contentsOf: preservedFileURL), preservedBytesBeforeAcknowledgement)
     }
 
     private struct RecoveryLaunchEvidence {
         let recoveryIDs: [String]
         let databaseFileNumber: UInt64
         let databaseCreationDate: Date
+        let seededMatterID: String
     }
 
     private func appSandboxWritableStorageRoot(prefix: String) -> URL {
@@ -907,22 +934,28 @@ final class InterruptedDraftRecoveryUITests: XCTestCase {
             .appendingPathComponent("\(prefix)-\(UUID().uuidString)", isDirectory: true)
     }
 
-    private func regularArtifacts(beneath root: URL) -> [String] {
+    private func regularArtifacts(beneath root: URL, knownArtifact: URL) -> [String] {
         let testStoreRoot = root
             .appendingPathComponent(".supra-ui-test-store", isDirectory: true)
             .standardizedFileURL
-        guard let enumerator = FileManager.default.enumerator(
+        let enumerator = FileManager.default.enumerator(
             at: root,
             includingPropertiesForKeys: [.isRegularFileKey],
             options: []
-        ) else { return [] }
-        return enumerator.compactMap { item in
+        )
+        let enumeratedArtifacts: [String] = enumerator?.compactMap { item in
             guard let url = item as? URL,
                   !url.standardizedFileURL.path.hasPrefix("\(testStoreRoot.path)/"),
                   let values = try? url.resourceValues(forKeys: [.isRegularFileKey]),
                   values.isRegularFile == true else { return nil }
             return url.path
-        }.sorted()
+        } ?? []
+        var artifacts = Set(enumeratedArtifacts)
+        if let values = try? knownArtifact.resourceValues(forKeys: [.isRegularFileKey]),
+           values.isRegularFile == true {
+            artifacts.insert(knownArtifact.path)
+        }
+        return artifacts.sorted()
     }
 }
 

@@ -469,6 +469,7 @@ printf '%s\n' \
   '    let notice = app.sheets.firstMatch' \
   '    _ = NSPredicate(format: "value == %@", "Review previous generated work")' \
   '    _ = root.appendingPathComponent(".supra-ui-test-store", isDirectory: true)' \
+  '    _ = root.appendingPathComponent("seeded-matter-id", isDirectory: false)' \
   '    _ = secondLaunch.recoveryIDs,' \
   '        firstLaunch.recoveryIDs,' \
   '    _ = secondLaunch.databaseFileNumber,' \
@@ -477,6 +478,10 @@ printf '%s\n' \
   '    _ = !url.standardizedFileURL.path.hasPrefix("\(testStoreRoot.path)/")' \
   '    app.terminate()' \
   '    _ = app.wait(for: .notRunning, timeout: 5)' \
+  '    _ = UUID(uuidString: rawMatterID)' \
+  '    _ = preservedBytesBeforeAcknowledgement' \
+  '    XCTAssertEqual(try Data(contentsOf: preservedFileURL), preservedBytesBeforeAcknowledgement)' \
+  '    _ = knownArtifact: preservedFileURL' \
   '  }' \
   '}' \
   >"$accessibility_hook"
@@ -586,7 +591,9 @@ if grep -Fq 'guard isUITestMode,' <<<"$recovery_root_policy" \
     && grep -Fq '.appendingPathComponent(".supra-ui-test-store", isDirectory: true)' <<<"$recovery_store_policy" \
     && grep -Fq '.appendingPathComponent("SupraAI.sqlite", isDirectory: false)' <<<"$recovery_store_policy" \
     && grep -Fq 'if let persistentUITestStoreURL = interruptedDraftRecoveryUITestStoreURL()' "$app_environment" \
-    && grep -Fq 'guard interruptedDraftRecoveryUITestRoot != nil,' <<<"$recovery_seeder"; then
+    && grep -Fq 'guard let interruptedDraftRecoveryUITestRoot,' <<<"$recovery_seeder" \
+    && grep -Fq '.appendingPathComponent("seeded-matter-id", isDirectory: false)' <<<"$recovery_seeder" \
+    && grep -Fq 'try matterID.write(to: matterIDSidecarURL, atomically: true, encoding: .utf8)' <<<"$recovery_seeder"; then
   printf '%s\n' 'PASS: interrupted recovery uses one narrowly authorized hermetic on-disk UI-test Store'
 else
   record_failure 'interrupted recovery does not require one narrowly authorized hermetic on-disk UI-test Store'
