@@ -213,7 +213,8 @@ private func assertRejectedPublicationPreservedOnlyAlias(
 }
 
 private func singleLinkTemporary(in parent: URL) throws -> URL? {
-    try singleLinkTemporaryArtifacts(in: parent).first
+    let artifacts = try singleLinkTemporaryArtifacts(in: parent)
+    return artifacts.count == 1 ? artifacts.first : nil
 }
 
 private func singleLinkTemporaryArtifacts(in parent: URL) throws -> [URL] {

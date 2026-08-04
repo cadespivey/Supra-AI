@@ -85,54 +85,60 @@ final class DurableFileWriterLinkPrecedenceTests: XCTestCase {
         let fixture = try makeLinkPrecedenceFixture(label: "compensation")
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         let alias = fixture.parent.appendingPathComponent("unknown-compensation-survivor.md")
+        let postSyncAlias = fixture.parent.appendingPathComponent(
+            "unknown-compensation-post-sync-survivor.md"
+        )
         let identity = try DurableFileWriter().writeNewOwned(
             fixture.payload,
             to: fixture.destination,
             containedIn: fixture.root,
             validator: { XCTAssertEqual($0, fixture.payload) }
         )
-        let syncProbe = ThrowingAnchoredSyncProbe()
+        let syncProbe = CompensationFreshLinkThrowingSyncProbe(
+            survivingAlias: alias,
+            postSyncAlias: postSyncAlias
+        )
         let writer = DurableFileWriter(
             faultInjector: { _ in },
             anchoredParentDirectorySynchronizer: {
                 try syncProbe.synchronize(parentURL: $0, parentDescriptor: $1)
             }
         )
-        var observedQuarantine: URL?
-
         XCTAssertThrowsError(
             try writer.removeInstalledFile(
                 matching: identity,
                 at: fixture.destination,
                 containedIn: fixture.root,
                 contentValidator: { XCTAssertEqual($0, fixture.payload) },
-                preRemovalCheckpoint: { quarantine in
-                    observedQuarantine = quarantine
-                    try FileManager.default.linkItem(at: quarantine, to: alias)
-                    try assertLinkPrecedenceSameInode(
-                        quarantine,
-                        alias,
-                        expectedLinkCount: 2
-                    )
-                }
+                preRemovalCheckpoint: { try syncProbe.prepare(quarantine: $0) }
             )
         ) { error in
             guard case let .exactFileHasRemainingLinks(name, count) =
                     error as? DurableFileWriter.WriterError else {
                 return XCTFail("Expected exact remaining-link error, got \(error)")
             }
-            XCTAssertEqual(name, observedQuarantine?.lastPathComponent)
-            XCTAssertEqual(count, 1)
+            XCTAssertEqual(name, syncProbe.quarantineURL?.lastPathComponent)
+            XCTAssertEqual(count, 2)
         }
 
         XCTAssertEqual(syncProbe.callCount, 1)
         XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.destination.path))
-        let quarantine = try XCTUnwrap(observedQuarantine)
+        let quarantine = try XCTUnwrap(syncProbe.quarantineURL)
         XCTAssertFalse(FileManager.default.fileExists(atPath: quarantine.path))
         try assertLinkPrecedenceSurvivor(
             alias,
             expected: fixture.payload,
-            expectedLinkCount: 1
+            expectedLinkCount: 2
+        )
+        try assertLinkPrecedenceSurvivor(
+            postSyncAlias,
+            expected: fixture.payload,
+            expectedLinkCount: 2
+        )
+        try assertLinkPrecedenceSameInode(
+            alias,
+            postSyncAlias,
+            expectedLinkCount: 2
         )
     }
 }
@@ -211,21 +217,6 @@ private func assertLinkPrecedenceSameInode(
     XCTAssertEqual(UInt64(rhsStatus.st_nlink), expectedLinkCount, file: file, line: line)
 }
 
-private final class ThrowingAnchoredSyncProbe: @unchecked Sendable {
-    private let lock = NSLock()
-    private var calls = 0
-
-    var callCount: Int { lock.withLock { calls } }
-
-    func synchronize(parentURL: URL, parentDescriptor: Int32) throws {
-        XCTAssertFalse(parentURL.lastPathComponent.isEmpty)
-        var status = stat()
-        XCTAssertEqual(Darwin.fstat(parentDescriptor, &status), 0)
-        lock.withLock { calls += 1 }
-        throw LinkPrecedenceInjectedFailure.parentSynchronization
-    }
-}
-
 private final class FreshLinkThrowingAnchoredSyncProbe: @unchecked Sendable {
     private let lock = NSLock()
     private let removedName: URL
@@ -242,6 +233,51 @@ private final class FreshLinkThrowingAnchoredSyncProbe: @unchecked Sendable {
     var callCount: Int { lock.withLock { calls } }
 
     func synchronize(parentURL: URL, parentDescriptor: Int32) throws {
+        XCTAssertEqual(
+            parentURL.standardizedFileURL,
+            removedName.deletingLastPathComponent().standardizedFileURL
+        )
+        var status = stat()
+        XCTAssertEqual(Darwin.fstat(parentDescriptor, &status), 0)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: removedName.path))
+        try FileManager.default.linkItem(at: survivingAlias, to: postSyncAlias)
+        try assertLinkPrecedenceSameInode(
+            survivingAlias,
+            postSyncAlias,
+            expectedLinkCount: 2
+        )
+        lock.withLock { calls += 1 }
+        throw LinkPrecedenceInjectedFailure.parentSynchronization
+    }
+}
+
+private final class CompensationFreshLinkThrowingSyncProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private let survivingAlias: URL
+    private let postSyncAlias: URL
+    private var quarantine: URL?
+    private var calls = 0
+
+    init(survivingAlias: URL, postSyncAlias: URL) {
+        self.survivingAlias = survivingAlias
+        self.postSyncAlias = postSyncAlias
+    }
+
+    var callCount: Int { lock.withLock { calls } }
+    var quarantineURL: URL? { lock.withLock { quarantine } }
+
+    func prepare(quarantine: URL) throws {
+        try FileManager.default.linkItem(at: quarantine, to: survivingAlias)
+        try assertLinkPrecedenceSameInode(
+            quarantine,
+            survivingAlias,
+            expectedLinkCount: 2
+        )
+        lock.withLock { self.quarantine = quarantine.standardizedFileURL }
+    }
+
+    func synchronize(parentURL: URL, parentDescriptor: Int32) throws {
+        let removedName = try XCTUnwrap(quarantineURL)
         XCTAssertEqual(
             parentURL.standardizedFileURL,
             removedName.deletingLastPathComponent().standardizedFileURL
