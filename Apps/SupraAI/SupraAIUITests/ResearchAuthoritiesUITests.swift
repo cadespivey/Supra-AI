@@ -1,5 +1,6 @@
 import AppKit
 import CoreGraphics
+import CryptoKit
 import XCTest
 
 /// D-06 proves the internal rollback control drives the same complete rollout
@@ -772,8 +773,6 @@ final class InterruptedDraftRecoveryUITests: XCTestCase {
             .appendingPathComponent(".supra-ui-test-store", isDirectory: true)
         let storeURL = testStoreRoot
             .appendingPathComponent("SupraAI.sqlite", isDirectory: false)
-        let matterIDSidecarURL = testStoreRoot
-            .appendingPathComponent("seeded-matter-id", isDirectory: false)
         let app = XCUIApplication()
         addTeardownBlock {
             app.terminate()
@@ -824,6 +823,11 @@ final class InterruptedDraftRecoveryUITests: XCTestCase {
             XCTAssertEqual(recoveryItems.count, 2, "Both exact recovery rows must remain visible")
             let recoveryIDs = recoveryItems.allElementsBoundByIndex.map(\.identifier).sorted()
 
+            // Expected RED on f6e1043: the UI-test runner cannot read even a
+            // 0644 sidecar across the app-container boundary. The exact-scenario
+            // marker must report an app-side probe of the real managed file.
+            let fixtureEvidence = try recoveryFixtureEvidence(in: app)
+
             // Expected RED on f500e5a: makeStore() opens a fresh UUID database
             // on every launch, so this stable fixture-owned Store does not exist.
             let attributes = try FileManager.default.attributesOfItem(atPath: storeURL.path)
@@ -835,22 +839,11 @@ final class InterruptedDraftRecoveryUITests: XCTestCase {
                 attributes[.creationDate] as? Date,
                 "The hosted recovery Store must retain its creation date across relaunch"
             )
-            let rawMatterID = try String(contentsOf: matterIDSidecarURL, encoding: .utf8)
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            let parsedMatterID = try XCTUnwrap(
-                UUID(uuidString: rawMatterID),
-                "The content-free test sidecar must contain one UUID"
-            )
-            XCTAssertEqual(
-                rawMatterID,
-                parsedMatterID.uuidString,
-                "The content-free test sidecar must use the canonical UUID spelling"
-            )
             return RecoveryLaunchEvidence(
                 recoveryIDs: recoveryIDs,
                 databaseFileNumber: fileNumber,
                 databaseCreationDate: creationDate,
-                seededMatterID: rawMatterID
+                fixtureEvidence: fixtureEvidence
             )
         }
 
@@ -868,7 +861,7 @@ final class InterruptedDraftRecoveryUITests: XCTestCase {
             "Relaunch must reopen the same hermetic on-disk UI-test Store"
         )
         XCTAssertEqual(secondLaunch.databaseCreationDate, firstLaunch.databaseCreationDate)
-        XCTAssertEqual(secondLaunch.seededMatterID, firstLaunch.seededMatterID)
+        XCTAssertEqual(secondLaunch.fixtureEvidence, firstLaunch.fixtureEvidence)
 
         let warning = app.descendants(matching: .any)["drafting.interruptedRecoveryWarning"]
         XCTAssertTrue(warning.waitForExistence(timeout: 10), warning.debugDescription)
@@ -882,20 +875,13 @@ final class InterruptedDraftRecoveryUITests: XCTestCase {
         )
         XCTAssertEqual(reveal.count, 1, "Only validated recovery lineage may expose a reveal action")
 
-        let preservedFileURL = storageRoot
-            .appendingPathComponent("exports", isDirectory: true)
-            .appendingPathComponent(secondLaunch.seededMatterID, isDirectory: true)
-            .appendingPathComponent("Interrupted-publication.md", isDirectory: false)
-        let preservedBytesBeforeAcknowledgement = try Data(contentsOf: preservedFileURL)
-        XCTAssertEqual(
-            preservedBytesBeforeAcknowledgement,
-            Data("# Synthetic preserved interrupted publication\n".utf8)
-        )
-        let filesBeforeAcknowledgement = regularArtifacts(
-            beneath: storageRoot,
-            knownArtifact: preservedFileURL
-        )
-        XCTAssertEqual(filesBeforeAcknowledgement, [preservedFileURL.path])
+        let expectedBytes = Data("# Synthetic preserved interrupted publication\n".utf8)
+        let expectedDigest = SHA256.hash(data: expectedBytes)
+            .map { String(format: "%02x", $0) }
+            .joined()
+        XCTAssertEqual(secondLaunch.fixtureEvidence.byteCount, expectedBytes.count)
+        XCTAssertEqual(secondLaunch.fixtureEvidence.sha256, expectedDigest)
+        XCTAssertEqual(secondLaunch.fixtureEvidence.regularArtifactCount, 1)
         reveal.firstMatch.click()
         let finder = XCUIApplication(bundleIdentifier: "com.apple.finder")
         XCTAssertTrue(
@@ -909,18 +895,25 @@ final class InterruptedDraftRecoveryUITests: XCTestCase {
         acknowledge.click()
         XCTAssertTrue(warning.waitForNonExistence(timeout: 10))
         XCTAssertEqual(
-            regularArtifacts(beneath: storageRoot, knownArtifact: preservedFileURL),
-            filesBeforeAcknowledgement,
-            "Acknowledging interrupted work must not delete or move preserved files"
+            try recoveryFixtureEvidence(in: app),
+            secondLaunch.fixtureEvidence,
+            "Acknowledging interrupted work must preserve the actual managed file bytes"
         )
-        XCTAssertEqual(try Data(contentsOf: preservedFileURL), preservedBytesBeforeAcknowledgement)
     }
 
     private struct RecoveryLaunchEvidence {
         let recoveryIDs: [String]
         let databaseFileNumber: UInt64
         let databaseCreationDate: Date
-        let seededMatterID: String
+        let fixtureEvidence: RecoveryFixtureEvidence
+    }
+
+    private struct RecoveryFixtureEvidence: Equatable {
+        let relativePath: String
+        let matterID: String
+        let byteCount: Int
+        let sha256: String
+        let regularArtifactCount: Int
     }
 
     private func appSandboxWritableStorageRoot(prefix: String) -> URL {
@@ -934,28 +927,47 @@ final class InterruptedDraftRecoveryUITests: XCTestCase {
             .appendingPathComponent("\(prefix)-\(UUID().uuidString)", isDirectory: true)
     }
 
-    private func regularArtifacts(beneath root: URL, knownArtifact: URL) -> [String] {
-        let testStoreRoot = root
-            .appendingPathComponent(".supra-ui-test-store", isDirectory: true)
-            .standardizedFileURL
-        let enumerator = FileManager.default.enumerator(
-            at: root,
-            includingPropertiesForKeys: [.isRegularFileKey],
-            options: []
+    private func recoveryFixtureEvidence(in app: XCUIApplication) throws -> RecoveryFixtureEvidence {
+        let marker = app.descendants(matching: .any)["drafting.interruptedRecovery.fixtureEvidence"]
+        XCTAssertTrue(marker.waitForExistence(timeout: 5), marker.debugDescription)
+        let rawValue = try XCTUnwrap(marker.value as? String)
+        let fields = rawValue.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
+        let exactFields = try XCTUnwrap(fields.count == 4 ? fields : nil, "Unexpected fixture evidence: \(rawValue)")
+
+        let relativePath = try XCTUnwrap(
+            exactFields.first(where: { $0.hasPrefix("relative=") }).map { String($0.dropFirst("relative=".count)) }
         )
-        let enumeratedArtifacts: [String] = enumerator?.compactMap { item in
-            guard let url = item as? URL,
-                  !url.standardizedFileURL.path.hasPrefix("\(testStoreRoot.path)/"),
-                  let values = try? url.resourceValues(forKeys: [.isRegularFileKey]),
-                  values.isRegularFile == true else { return nil }
-            return url.path
-        } ?? []
-        var artifacts = Set(enumeratedArtifacts)
-        if let values = try? knownArtifact.resourceValues(forKeys: [.isRegularFileKey]),
-           values.isRegularFile == true {
-            artifacts.insert(knownArtifact.path)
-        }
-        return artifacts.sorted()
+        let components = relativePath.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+        let exactComponents = try XCTUnwrap(
+            components.count == 3 ? components : nil,
+            "Fixture evidence must expose only exports/<UUID>/<file>: \(relativePath)"
+        )
+        XCTAssertEqual(exactComponents[0], "exports")
+        XCTAssertEqual(exactComponents[2], "Interrupted-publication.md")
+        let matterUUID = try XCTUnwrap(UUID(uuidString: exactComponents[1]))
+        XCTAssertEqual(exactComponents[1], matterUUID.uuidString)
+
+        let byteCount = try XCTUnwrap(
+            exactFields.first(where: { $0.hasPrefix("bytes=") })
+                .flatMap { Int($0.dropFirst("bytes=".count)) }
+        )
+        let sha256 = try XCTUnwrap(
+            exactFields.first(where: { $0.hasPrefix("sha256=") })
+                .map { String($0.dropFirst("sha256=".count)) }
+        )
+        XCTAssertEqual(sha256.count, 64)
+        XCTAssertTrue(sha256.allSatisfy { $0.isHexDigit && !$0.isUppercase })
+        let regularArtifactCount = try XCTUnwrap(
+            exactFields.first(where: { $0.hasPrefix("regularCount=") })
+                .flatMap { Int($0.dropFirst("regularCount=".count)) }
+        )
+        return RecoveryFixtureEvidence(
+            relativePath: relativePath,
+            matterID: matterUUID.uuidString,
+            byteCount: byteCount,
+            sha256: sha256,
+            regularArtifactCount: regularArtifactCount
+        )
     }
 }
 

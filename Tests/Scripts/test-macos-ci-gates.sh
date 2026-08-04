@@ -469,19 +469,16 @@ printf '%s\n' \
   '    let notice = app.sheets.firstMatch' \
   '    _ = NSPredicate(format: "value == %@", "Review previous generated work")' \
   '    _ = root.appendingPathComponent(".supra-ui-test-store", isDirectory: true)' \
-  '    _ = root.appendingPathComponent("seeded-matter-id", isDirectory: false)' \
   '    _ = secondLaunch.recoveryIDs,' \
   '        firstLaunch.recoveryIDs,' \
   '    _ = secondLaunch.databaseFileNumber,' \
   '        firstLaunch.databaseFileNumber' \
-  '    let testStoreRoot = root' \
-  '    _ = !url.standardizedFileURL.path.hasPrefix("\(testStoreRoot.path)/")' \
   '    app.terminate()' \
   '    _ = app.wait(for: .notRunning, timeout: 5)' \
-  '    _ = UUID(uuidString: rawMatterID)' \
-  '    _ = preservedBytesBeforeAcknowledgement' \
-  '    XCTAssertEqual(try Data(contentsOf: preservedFileURL), preservedBytesBeforeAcknowledgement)' \
-  '    _ = knownArtifact: preservedFileURL' \
+  '    _ = app.descendants(matching: .any)["drafting.interruptedRecovery.fixtureEvidence"]' \
+  '    let expectedDigest = SHA256.hash(data: expectedBytes)' \
+  '    XCTAssertEqual(secondLaunch.fixtureEvidence.regularArtifactCount, 1)' \
+  '    _ = try recoveryFixtureEvidence(in: app),' \
   '  }' \
   '}' \
   >"$accessibility_hook"
@@ -591,12 +588,32 @@ if grep -Fq 'guard isUITestMode,' <<<"$recovery_root_policy" \
     && grep -Fq '.appendingPathComponent(".supra-ui-test-store", isDirectory: true)' <<<"$recovery_store_policy" \
     && grep -Fq '.appendingPathComponent("SupraAI.sqlite", isDirectory: false)' <<<"$recovery_store_policy" \
     && grep -Fq 'if let persistentUITestStoreURL = interruptedDraftRecoveryUITestStoreURL()' "$app_environment" \
-    && grep -Fq 'guard let interruptedDraftRecoveryUITestRoot,' <<<"$recovery_seeder" \
-    && grep -Fq '.appendingPathComponent("seeded-matter-id", isDirectory: false)' <<<"$recovery_seeder" \
-    && grep -Fq 'try matterID.write(to: matterIDSidecarURL, atomically: true, encoding: .utf8)' <<<"$recovery_seeder"; then
+    && grep -Eq 'guard (let )?interruptedDraftRecoveryUITestRoot( != nil)?,' <<<"$recovery_seeder"; then
   printf '%s\n' 'PASS: interrupted recovery uses one narrowly authorized hermetic on-disk UI-test Store'
 else
   record_failure 'interrupted recovery does not require one narrowly authorized hermetic on-disk UI-test Store'
+fi
+
+# Expected RED after the sidecar proved unreadable across the app-container
+# boundary: the exact scenario needs an app-side byte probe whose accessibility
+# value contains only a validated managed-relative path and content-free facts.
+recovery_drafting_view="${repo_root}/Apps/SupraAI/SupraAI/Matters/MatterDraftingView.swift"
+recovery_fixture_probe="$(sed -n '/private var interruptedDraftRecoveryUITestEvidence:/,/^    }/p' "$recovery_drafting_view")"
+if grep -Fq 'static var interruptedDraftRecoveryUITestManagedRoot: URL?' "$app_environment" \
+    && grep -Fq 'drafting.interruptedRecovery.fixtureEvidence' "$recovery_drafting_view" \
+    && grep -Fq 'FileManager.default.enumerator(' <<<"$recovery_fixture_probe" \
+    && grep -Fq 'options: []' <<<"$recovery_fixture_probe" \
+    && grep -Fq '.appendingPathComponent(".supra-ui-test-store", isDirectory: true)' <<<"$recovery_fixture_probe" \
+    && grep -Fq '!artifactURL.path.hasPrefix("\(testStoreRoot.path)/")' <<<"$recovery_fixture_probe" \
+    && grep -Fq 'Data(contentsOf: recoveredURL)' <<<"$recovery_fixture_probe" \
+    && grep -Fq 'SHA256.hash(data: recoveredBytes)' <<<"$recovery_fixture_probe" \
+    && grep -Fq 'relative=exports/\(matterUUID.uuidString)/Interrupted-publication.md' <<<"$recovery_fixture_probe" \
+    && grep -Fq '|bytes=\(recoveredBytes.count)|sha256=\(digest)|regularCount=\(regularArtifactCount)' <<<"$recovery_fixture_probe" \
+    && ! grep -Fq 'seeded-matter-id' "$app_environment" \
+    && ! grep -Fq 'seeded-matter-id' "$recovery_drafting_view"; then
+  printf '%s\n' 'PASS: hosted recovery evidence probes actual bytes without exposing local paths'
+else
+  record_failure 'hosted recovery evidence does not safely probe the preserved file after acknowledgement'
 fi
 
 root_view="${repo_root}/Apps/SupraAI/SupraAI/RootView.swift"

@@ -100,19 +100,16 @@ fi
 if ! class_contains_literal "$recovery_test" InterruptedDraftRecoveryUITests 'let notice = app.sheets.firstMatch' \
     || ! class_contains_literal "$recovery_test" InterruptedDraftRecoveryUITests 'NSPredicate(format: "value == %@", "Review previous generated work")' \
     || ! class_contains_literal "$recovery_test" InterruptedDraftRecoveryUITests '.appendingPathComponent(".supra-ui-test-store", isDirectory: true)' \
-    || ! class_contains_literal "$recovery_test" InterruptedDraftRecoveryUITests '.appendingPathComponent("seeded-matter-id", isDirectory: false)' \
     || ! class_contains_literal "$recovery_test" InterruptedDraftRecoveryUITests 'secondLaunch.recoveryIDs,' \
     || ! class_contains_literal "$recovery_test" InterruptedDraftRecoveryUITests 'firstLaunch.recoveryIDs,' \
     || ! class_contains_literal "$recovery_test" InterruptedDraftRecoveryUITests 'secondLaunch.databaseFileNumber,' \
-    || ! class_contains_literal "$recovery_test" InterruptedDraftRecoveryUITests 'let testStoreRoot = root' \
-    || ! class_contains_literal "$recovery_test" InterruptedDraftRecoveryUITests '!url.standardizedFileURL.path.hasPrefix' \
-    || ! class_contains_literal "$recovery_test" InterruptedDraftRecoveryUITests 'testStoreRoot.path' \
     || ! class_contains_literal "$recovery_test" InterruptedDraftRecoveryUITests 'app.terminate()' \
     || ! class_contains_literal "$recovery_test" InterruptedDraftRecoveryUITests 'app.wait(for: .notRunning' \
-    || ! class_contains_literal "$recovery_test" InterruptedDraftRecoveryUITests 'UUID(uuidString: rawMatterID)' \
-    || ! class_contains_literal "$recovery_test" InterruptedDraftRecoveryUITests 'preservedBytesBeforeAcknowledgement' \
-    || ! class_contains_literal "$recovery_test" InterruptedDraftRecoveryUITests 'XCTAssertEqual(try Data(contentsOf: preservedFileURL), preservedBytesBeforeAcknowledgement)' \
-    || ! class_contains_literal "$recovery_test" InterruptedDraftRecoveryUITests 'knownArtifact: preservedFileURL' \
+    || ! class_contains_literal "$recovery_test" InterruptedDraftRecoveryUITests 'drafting.interruptedRecovery.fixtureEvidence' \
+    || ! class_contains_literal "$recovery_test" InterruptedDraftRecoveryUITests 'let expectedDigest = SHA256.hash(data: expectedBytes)' \
+    || ! class_contains_literal "$recovery_test" InterruptedDraftRecoveryUITests 'secondLaunch.fixtureEvidence.regularArtifactCount, 1' \
+    || ! class_contains_literal "$recovery_test" InterruptedDraftRecoveryUITests 'try recoveryFixtureEvidence(in: app),' \
+    || class_contains_literal "$recovery_test" InterruptedDraftRecoveryUITests 'seeded-matter-id' \
     || class_contains_literal "$recovery_test" InterruptedDraftRecoveryUITests 'app.alerts['; then
   printf '%s\n' 'ERROR: interrupted draft recovery smoke must reopen one Store and query the macOS sheet title' >&2
   exit 1
