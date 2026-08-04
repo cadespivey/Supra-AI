@@ -113,6 +113,117 @@ final class PublicationTemporaryCleanupTests: XCTestCase {
         XCTAssertEqual(statuses, [DraftArtifactIntentStatus.recoveryRequired.rawValue])
         XCTAssertTrue(try store.auditEvents.fetchEvents(matterID: matter.id).isEmpty)
     }
+
+    // ACR-EXPORT-023. Cleanup must prove absence at the caller-visible temp path,
+    // not only through a descriptor for a parent detached during synchronization.
+    func testACREXPORT023LexicalManagedTemporaryReappearanceRequiresRecovery() async throws {
+        let store = try SupraStore.inMemory()
+        let matter = try store.matters.createMatter(name: "Lexical temporary reappearance")
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Supra-Temp-Lexical-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let storage = DocumentStorage(root: root)
+        let parent = storage.exportsDirectory(forMatterID: matter.id)
+        let injector = TemporaryCleanupLexicalReappearanceInjector(
+            root: root,
+            parent: parent
+        )
+        let writer = DurableFileWriter(
+            faultInjector: { try injector.inject($0) },
+            parentDirectorySynchronizer: { try injector.synchronize($0) }
+        )
+        let controller = MatterDraftingController(
+            store: store,
+            storage: storage,
+            fileWriter: writer,
+            fileStampProvider: { "fixed" }
+        )
+
+        let result = await controller.draftCustomDescription(
+            matterID: matter.id,
+            input: .init(
+                title: "Lexical temporary",
+                description: "A reappearing exact temporary remains recoverable."
+            )
+        )
+
+        guard case let .failure(.renderFailed(message)) = result else {
+            return XCTFail("expected lexical cleanup uncertainty, got \(result)")
+        }
+        XCTAssertTrue(message.contains("temporary cleanup"), message)
+        let residue = try XCTUnwrap(injector.source)
+        let residueData = try Data(contentsOf: residue)
+        let intents = try await store.database.writer.read { db in
+            try DraftArtifactIntentRecord.fetchAll(
+                db,
+                sql: "SELECT * FROM draft_artifact_intents WHERE matter_id = ?",
+                arguments: [matter.id]
+            )
+        }
+        XCTAssertEqual(intents.count, 1)
+        let intent = try XCTUnwrap(intents.first)
+        XCTAssertEqual(residueData.count, intent.outputByteSize)
+        XCTAssertEqual(DocumentStorage.sha256Hex(of: residueData), intent.outputSHA256)
+        XCTAssertEqual(intent.status, DraftArtifactIntentStatus.recoveryRequired.rawValue)
+        XCTAssertTrue(try store.auditEvents.fetchEvents(matterID: matter.id).isEmpty)
+    }
+}
+
+private final class TemporaryCleanupLexicalReappearanceInjector: @unchecked Sendable {
+    private enum InjectedFailure: Error { case beforeValidation }
+
+    private let lock = NSLock()
+    private let root: URL
+    private let parent: URL
+    private let preservedParent: URL
+    private var retained: URL?
+    private var sourceURL: URL?
+    private var replaced = false
+
+    init(root: URL, parent: URL) {
+        self.root = root
+        self.parent = parent
+        self.preservedParent = root.appendingPathComponent(
+            "preserved-temporary-parent-\(UUID().uuidString)",
+            isDirectory: true
+        )
+    }
+
+    var source: URL? { lock.withLock { sourceURL } }
+
+    func inject(_ stage: DurableFileWriter.FaultStage) throws {
+        guard stage == .beforeValidation else { return }
+        let temporary = try XCTUnwrap(
+            FileManager.default.contentsOfDirectory(
+                at: parent,
+                includingPropertiesForKeys: nil
+            ).first { $0.lastPathComponent.contains(".supra-tmp-") }
+        )
+        let retained = root.appendingPathComponent("retained-temporary-\(UUID().uuidString)")
+        try FileManager.default.linkItem(at: temporary, to: retained)
+        lock.withLock {
+            self.retained = retained
+            self.sourceURL = temporary
+        }
+        throw InjectedFailure.beforeValidation
+    }
+
+    func synchronize(_ directory: URL) throws {
+        let state = lock.withLock { () -> (URL, URL)? in
+            guard !replaced,
+                  let retained,
+                  let sourceURL,
+                  !FileManager.default.fileExists(atPath: sourceURL.path) else {
+                return nil
+            }
+            replaced = true
+            return (retained, sourceURL)
+        }
+        guard let (retained, source) = state else { return }
+        try FileManager.default.moveItem(at: parent, to: preservedParent)
+        try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+        try FileManager.default.linkItem(at: retained, to: source)
+    }
 }
 
 private final class TemporaryCleanupSyncFailureInjector: @unchecked Sendable {
