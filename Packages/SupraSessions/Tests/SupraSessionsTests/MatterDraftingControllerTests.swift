@@ -508,6 +508,51 @@ final class MatterDraftingControllerTests: XCTestCase {
         XCTAssertTrue(try store.auditEvents.fetchEvents(matterID: matter.id).isEmpty)
     }
 
+    // ACR-EXPORT-010 content-ownership follow-on. Expected RED: inode identity
+    // alone is insufficient because another actor can truncate and rewrite the
+    // installed inode in place. Compensation must require both install identity
+    // and the original complete-file hash before deletion.
+    @MainActor
+    func testGenericDraftAuditCompensationPreservesInPlaceModifiedInstalledFile() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "In-place compensation matter")
+        let storage = makeStorage()
+        let directory = storage.exportsDirectory(forMatterID: matter.id)
+        let destination = directory.appendingPathComponent("In-place-outline-fixed.md")
+        let modifiedCanary = Data("same-inode-foreign-content".utf8)
+        var auditObservedInstalledDraft = false
+        let controller = MatterDraftingController(
+            store: store,
+            storage: storage,
+            fileStampProvider: { "fixed" },
+            auditRecorder: { event in
+                auditObservedInstalledDraft = event.eventType == "draft_generated"
+                    && (try? DocumentExportValidator.validate(destination, as: .markdown)) != nil
+                let handle = try FileHandle(forWritingTo: destination)
+                try handle.truncate(atOffset: 0)
+                try handle.write(contentsOf: modifiedCanary)
+                try handle.synchronize()
+                try handle.close()
+                throw PersistenceFailure.stop
+            }
+        )
+
+        let result = await controller.draftCustomDescription(
+            matterID: matter.id,
+            input: .init(title: "In-place outline", description: "Preserve modified installed bytes.")
+        )
+
+        guard case let .failure(.renderFailed(message)) = result else {
+            return XCTFail("expected a partial rollback failure, got \(result)")
+        }
+        XCTAssertTrue(auditObservedInstalledDraft)
+        XCTAssertTrue(message.contains("rollback also failed"), message)
+        XCTAssertTrue(message.contains("changed"), message)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: destination.path))
+        XCTAssertEqual(try? Data(contentsOf: destination), modifiedCanary)
+        XCTAssertTrue(try store.auditEvents.fetchEvents(matterID: matter.id).isEmpty)
+    }
+
     // ACR-EXPORT-011: rendered DOCX drafts take the same validated temporary
     // path; an install fault cannot truncate a previously reviewed filing.
     @MainActor
