@@ -245,12 +245,36 @@ final class MotionToDismissControllerTests: XCTestCase {
         XCTAssertTrue(isSHA256(lineage.captionSHA256))
         XCTAssertEqual(lineage.assistantProfileSHA256, snapshot.assistantProfile.valueSHA256)
         XCTAssertTrue(isSHA256(lineage.effectiveStyleSHA256))
-        XCTAssertEqual(lineage.groundContractIdentity, MotionGroundSpec.contractIdentity)
-        XCTAssertEqual(lineage.assemblerIdentity, MotionToDismiss.assemblerIdentity)
-        XCTAssertEqual(lineage.verifierIdentity, DraftVerifier().identity)
-        XCTAssertEqual(lineage.gateIdentity, PreFileGate.identity)
-        XCTAssertEqual(lineage.rendererIdentity, CompositeRenderer().identity)
+        XCTAssertEqual(lineage.groundContractIdentity.id, MotionGroundSpec.contractIdentity.id)
+        XCTAssertEqual(lineage.groundContractIdentity.version, MotionGroundSpec.contractIdentity.version)
+        XCTAssertEqual(lineage.assemblerIdentity.id, MotionToDismiss.assemblerIdentity.id)
+        XCTAssertEqual(lineage.assemblerIdentity.version, MotionToDismiss.assemblerIdentity.version)
+        XCTAssertEqual(lineage.verifierIdentity.id, DraftVerifier().identity.id)
+        XCTAssertEqual(lineage.verifierIdentity.version, DraftVerifier().identity.version)
+        XCTAssertEqual(lineage.gateIdentity.id, PreFileGate.identity.id)
+        XCTAssertEqual(lineage.gateIdentity.version, PreFileGate.identity.version)
+        XCTAssertEqual(lineage.rendererIdentity.id, CompositeRenderer().identity.id)
+        XCTAssertEqual(lineage.rendererIdentity.version, CompositeRenderer().identity.version)
         XCTAssertEqual(lineage.verificationStatus, .passed)
+        XCTAssertEqual(
+            lineage.verificationReceiptScope,
+            .motionSelectedSourceReproductionAndStructure
+        )
+        XCTAssertEqual(lineage.verificationScope.schemaVersion, 1)
+        XCTAssertEqual(lineage.verificationScope.kindID, DraftKindID.motionToDismiss.rawValue)
+        XCTAssertEqual(lineage.verificationScope.groundKeys, [MotionGroundSpec.failureToStateClaim.key])
+        XCTAssertEqual(
+            lineage.verificationScope.factPropositionIDs,
+            ["motion.fact.\(fixture.selectedFact.chunkID)"]
+        )
+        XCTAssertEqual(
+            lineage.verificationScope.authorityPropositionIDs,
+            ["motion.authority.\(fixture.selectedAuthorityID)"]
+        )
+        XCTAssertEqual(
+            lineage.verificationScope.bodyContract,
+            MotionDraftVerificationScope.exactSelectedBodyContract
+        )
         XCTAssertTrue(isSHA256(lineage.verificationReceiptSHA256))
         XCTAssertEqual(lineage.outputFileName, artifact.fileURL.lastPathComponent)
         let output = try Data(contentsOf: artifact.fileURL)
@@ -1423,7 +1447,7 @@ final class MotionToDismissControllerTests: XCTestCase {
 }
 
 private final class CapturingMotionRenderer: Renderer, @unchecked Sendable {
-    let identity = DraftComponentIdentity(id: "test.capturing-motion-renderer", version: "1")
+    let identity = CompositeRenderer().identity
     private(set) var renderCount = 0
     private(set) var capturedCourtModel: DocumentModel?
     private(set) var capturedStyle: HouseStyleSheet?

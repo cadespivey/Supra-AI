@@ -1677,6 +1677,38 @@ public enum SupraMigrator {
             }
         }
 
+        migrator.registerMigration("v071_create_draft_artifact_intents") { db in
+            try db.create(table: "draft_artifact_intents") { table in
+                table.column("id", .text).primaryKey()
+                table.column("matter_id", .text).notNull()
+                    .references("matters", onDelete: .cascade)
+                table.column("artifact_kind", .text).notNull()
+                table.column("format", .text).notNull()
+                table.column("file_name", .text).notNull()
+                table.column("output_sha256", .text).notNull()
+                table.column("output_byte_size", .integer).notNull()
+                table.column("audit_metadata_json", .text).notNull()
+                table.column("motion_snapshot_request_json", .text)
+                table.column("motion_snapshot_sha256", .text)
+                table.column("status", .text).notNull()
+                table.column("created_at", .datetime).notNull()
+                table.column("updated_at", .datetime).notNull()
+                table.column("terminal_at", .datetime)
+            }
+            // Only an active operation owns a filename reservation. Terminal
+            // history remains durable without poisoning future allocation.
+            try db.execute(sql: """
+                CREATE UNIQUE INDEX idx_draft_artifact_intents_matter_file
+                ON draft_artifact_intents (matter_id, file_name)
+                WHERE status = 'prepared'
+                """)
+            try db.create(
+                index: "idx_draft_artifact_intents_status_created",
+                on: "draft_artifact_intents",
+                columns: ["status", "created_at", "id"]
+            )
+        }
+
         return migrator
     }
 

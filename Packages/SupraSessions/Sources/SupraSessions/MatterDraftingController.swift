@@ -141,12 +141,10 @@ public final class MatterDraftingController: ObservableObject {
         self.fileStampProvider = fileStampProvider ?? {
             "\(Self.fileStamp())-\(UUID().uuidString.lowercased())"
         }
-        self.auditRecorder = auditRecorder ?? { event in
-            try store.auditEvents.recordEvent(event)
-        }
-        self.motionAuditCommitter = motionAuditCommitter ?? { event, snapshot in
-            try store.draftingSources.recordMotionAudit(event, requiring: snapshot)
-        }
+        // These injectable closures are observation/fault checkpoints. Store's
+        // intent repository owns the actual success audit transaction.
+        self.auditRecorder = auditRecorder ?? { _ in }
+        self.motionAuditCommitter = motionAuditCommitter ?? { _, _ in }
         self.firmStyleProfile = firmStyleProfile
         // Default: deterministic verifier + the court/letter renderers. Injectable for tests.
         self.pipelineFactory = pipelineFactory ?? { DraftPipeline.makeDefault() }
@@ -276,7 +274,7 @@ public final class MatterDraftingController: ObservableObject {
                 matterID: matterID,
                 title: NoticeAppearance.title,
                 format: .docx,
-                auditLabel: DraftKindID.noticeAppearance.rawValue
+                artifactKind: .noticeAppearance
             )
             let followUps = result.followUps.map { DraftFollowUp(isBlocking: $0.severity == .blocking, message: $0.message) }
             return .success(DraftArtifact(source: .kind(.noticeAppearance), format: .docx, title: NoticeAppearance.title, fileURL: url, followUps: followUps))
@@ -360,7 +358,7 @@ public final class MatterDraftingController: ObservableObject {
                 matterID: matterID,
                 title: title,
                 format: .markdown,
-                auditLabel: "custom work-product description"
+                artifactKind: .customDescription
             )
             let note = DraftFollowUp(
                 isBlocking: false,
@@ -458,7 +456,7 @@ public final class MatterDraftingController: ObservableObject {
                 matterID: matterID,
                 title: title,
                 format: .docx,
-                auditLabel: DraftKindID.letterDemand.rawValue
+                artifactKind: .letterDemand
             )
             let followUps = result.followUps.map { DraftFollowUp(isBlocking: $0.severity == .blocking, message: $0.message) }
             return .success(DraftArtifact(source: .kind(.letterDemand), format: .docx, title: title, fileURL: url, followUps: followUps))
@@ -838,14 +836,8 @@ public final class MatterDraftingController: ObservableObject {
             try await beforeMotionPersistence()
             try Task.checkCancellation()
 
-            let lineage = MotionDraftAuditLineage(
-                schemaVersion: MotionDraftAuditEnvelope.schemaVersion,
-                kindID: DraftKindID.motionToDismiss.rawValue,
-                sourceSnapshotSHA256: snapshot.fingerprintSHA256,
-                facts: snapshot.facts.map(MotionDraftAuditLineage.Fact.init),
-                authorities: snapshot.authorities.map(MotionDraftAuditLineage.Authority.init),
-                groundKeys: groundSpecs.map(\.key),
-                requestSHA256: try Self.motionRequestSHA256(
+            let auditInput = MotionDraftAuditInput(
+                canonicalRequest: try Self.motionRequestData(
                     matterID: matterID,
                     parties: parties,
                     representedRole: representedRole,
@@ -858,27 +850,30 @@ public final class MatterDraftingController: ObservableObject {
                     factIDs: selectedFactIDs,
                     authorityIDs: selectedAuthorityIDs
                 ),
-                captionSHA256: try Self.captionSHA256(shell.caption),
-                assistantProfileSHA256: snapshot.assistantProfile.valueSHA256,
-                effectiveStyleSHA256: try Self.canonicalSHA256(effectiveMotionStyle),
-                groundContractIdentity: MotionGroundSpec.contractIdentity,
-                assemblerIdentity: MotionToDismiss.assemblerIdentity,
-                verifierIdentity: result.verificationReceipt.verifierIdentity,
-                gateIdentity: result.verificationReceipt.gateIdentity,
-                rendererIdentity: result.verificationReceipt.rendererIdentity,
-                verificationReceiptSHA256: try Self.canonicalSHA256(result.verificationReceipt),
-                verificationStatus: result.verificationReceipt.status,
-                outputFileName: "",
-                outputSHA256: DocumentStorage.sha256Hex(of: result.docx),
-                outputByteSize: result.docx.count
+                canonicalCaption: try Self.captionData(shell.caption),
+                canonicalEffectiveStyle: try Self.canonicalData(effectiveMotionStyle),
+                groundContractIdentity: Self.storeIdentity(MotionGroundSpec.contractIdentity),
+                assemblerIdentity: Self.storeIdentity(MotionToDismiss.assemblerIdentity),
+                verificationReceipt: MotionDraftVerificationReceiptInput(
+                    status: .passed,
+                    scope: .motionSelectedSourceReproductionAndStructure,
+                    supportedPropositionIDs: result.verificationReceipt.supportedPropositionIDs,
+                    verifierIdentity: Self.storeIdentity(result.verificationReceipt.verifierIdentity),
+                    gateIdentity: Self.storeIdentity(result.verificationReceipt.gateIdentity),
+                    rendererIdentity: Self.storeIdentity(result.verificationReceipt.rendererIdentity)
+                )
             )
+            guard result.verificationReceipt.scope == .motionSelectedSourceReproductionAndStructure else {
+                return .failure(.verificationBlocked([
+                    "The verification receipt did not cover exact selected-source reproduction and structure."
+                ]))
+            }
             let url = try persistMotion(
                 data: result.docx,
                 matterID: matterID,
                 title: "Motion to Dismiss",
-                auditLabel: DraftKindID.motionToDismiss.rawValue,
                 snapshot: snapshot,
-                lineage: lineage
+                auditInput: auditInput
             )
             let followUps = result.followUps.map {
                 DraftFollowUp(isBlocking: $0.severity == .blocking, message: $0.message)
@@ -999,7 +994,7 @@ public final class MatterDraftingController: ObservableObject {
         )
     }
 
-    nonisolated private static func motionRequestSHA256(
+    nonisolated private static func motionRequestData(
         matterID: String,
         parties: [PartyLine],
         representedRole: String,
@@ -1011,8 +1006,8 @@ public final class MatterDraftingController: ObservableObject {
         groundKeys: [String],
         factIDs: [String],
         authorityIDs: [String]
-    ) throws -> String {
-        try canonicalSHA256(MotionRequestFingerprint(
+    ) throws -> Data {
+        try canonicalData(MotionRequestFingerprint(
             matterID: matterID,
             parties: parties,
             representedRole: representedRole,
@@ -1027,8 +1022,8 @@ public final class MatterDraftingController: ObservableObject {
         ))
     }
 
-    nonisolated private static func captionSHA256(_ caption: CaptionModel) throws -> String {
-        try canonicalSHA256(MotionCaptionFingerprint(
+    nonisolated private static func captionData(_ caption: CaptionModel) throws -> Data {
+        try canonicalData(MotionCaptionFingerprint(
             courtHeader: caption.courtHeader,
             parties: caption.parties,
             caseNumber: caption.caseNumber,
@@ -1037,10 +1032,16 @@ public final class MatterDraftingController: ObservableObject {
         ))
     }
 
-    nonisolated private static func canonicalSHA256<Value: Encodable>(_ value: Value) throws -> String {
+    nonisolated private static func canonicalData<Value: Encodable>(_ value: Value) throws -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        return DocumentStorage.sha256Hex(of: try encoder.encode(value))
+        return try encoder.encode(value)
+    }
+
+    nonisolated private static func storeIdentity(
+        _ identity: DraftComponentIdentity
+    ) -> MotionDraftAuditComponentIdentity {
+        MotionDraftAuditComponentIdentity(id: identity.id, version: identity.version)
     }
 
     nonisolated private static func motionSnapshotFailureMessage(
@@ -1450,7 +1451,7 @@ public final class MatterDraftingController: ObservableObject {
         matterID: String,
         title: String,
         format: DocumentExportFormat,
-        auditLabel: String
+        artifactKind: DraftArtifactIntentKind
     ) throws -> URL {
         let directory = storage.exportsDirectory(forMatterID: matterID)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -1462,35 +1463,52 @@ public final class MatterDraftingController: ObservableObject {
             let collisionSuffix = attempt == 1 ? "" : "-\(attempt)"
             let fileName = "\(basename)-\(stamp)\(collisionSuffix).\(format.fileExtension)"
             let url = directory.appendingPathComponent(fileName)
+            let intentFormat: DraftArtifactIntentFormat = format == .docx ? .docx : .markdown
+            let intent: DraftArtifactIntentRecord
+            do {
+                intent = try store.draftArtifacts.prepareGenericIntent(
+                    matterID: matterID,
+                    artifactKind: artifactKind,
+                    format: intentFormat,
+                    fileName: fileName,
+                    output: data
+                )
+            } catch DraftArtifactIntentError.fileNameReserved {
+                continue
+            }
             let installedIdentity: DurableFileWriter.InstalledFileIdentity
             do {
                 installedIdentity = try fileWriter.writeNewOwned(data, to: url) { temporaryURL in
                     try DocumentExportValidator.validate(temporaryURL, as: format)
                 }
             } catch DurableFileWriter.WriterError.destinationExists {
+                try? store.draftArtifacts.abortIntent(id: intent.id)
                 continue
+            } catch {
+                try? store.draftArtifacts.abortIntent(id: intent.id)
+                throw error
             }
 
-            let event = AuditEventRecord(
-                matterID: matterID,
-                eventType: "draft_generated",
-                actor: "user",
-                summary: "Generated \(auditLabel) draft (\(fileName))",
-                relatedTable: "matters",
-                relatedID: matterID,
-                metadataJSON: nil
-            )
             do {
+                let installed = try Data(contentsOf: url, options: .mappedIfSafe)
+                try DocumentExportValidator.validate(url, as: format)
+                let event = try store.draftArtifacts.auditEventPreview(intentID: intent.id)
                 try auditRecorder(event)
+                try store.draftArtifacts.finalizeIntent(
+                    id: intent.id,
+                    installedOutput: installed
+                )
             } catch {
                 let auditDescription = error.localizedDescription
                 do {
                     try removeNewDraftFile(
                         at: url,
                         expectedIdentity: installedIdentity,
-                        expectedSHA256: DocumentStorage.sha256Hex(of: data)
+                        expectedSHA256: intent.outputSHA256
                     )
+                    try store.draftArtifacts.abortIntent(id: intent.id)
                 } catch {
+                    try? store.draftArtifacts.markRecoveryRequired(id: intent.id)
                     throw PersistenceError.partialFailure(
                         audit: auditDescription,
                         compensation: error.localizedDescription
@@ -1510,9 +1528,8 @@ public final class MatterDraftingController: ObservableObject {
         data: Data,
         matterID: String,
         title: String,
-        auditLabel: String,
         snapshot: MotionDraftStoreSnapshot,
-        lineage: MotionDraftAuditLineage
+        auditInput: MotionDraftAuditInput
     ) throws -> URL {
         let directory = storage.exportsDirectory(forMatterID: matterID)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -1525,43 +1542,50 @@ public final class MatterDraftingController: ObservableObject {
             let collisionSuffix = attempt == 1 ? "" : "-\(attempt)"
             let fileName = "\(basename)-\(stamp)\(collisionSuffix).docx"
             let url = directory.appendingPathComponent(fileName)
-            var completedLineage = lineage
-            completedLineage.outputFileName = fileName
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-            let metadataJSON = String(
-                decoding: try encoder.encode(completedLineage),
-                as: UTF8.self
-            )
-            let event = AuditEventRecord(
-                matterID: matterID,
-                eventType: "draft_generated",
-                actor: "user",
-                summary: "Generated \(auditLabel) draft (\(fileName))",
-                relatedTable: "matters",
-                relatedID: matterID,
-                metadataJSON: metadataJSON
-            )
+            let intent: DraftArtifactIntentRecord
+            do {
+                intent = try store.draftArtifacts.prepareMotionIntent(
+                    snapshot: snapshot,
+                    fileName: fileName,
+                    output: data,
+                    auditInput: auditInput
+                )
+            } catch DraftArtifactIntentError.fileNameReserved {
+                continue
+            }
             let installedIdentity: DurableFileWriter.InstalledFileIdentity
             do {
                 installedIdentity = try fileWriter.writeNewOwned(data, to: url) { temporaryURL in
                     try DocumentExportValidator.validate(temporaryURL, as: .docx)
                 }
             } catch DurableFileWriter.WriterError.destinationExists {
+                try? store.draftArtifacts.abortIntent(id: intent.id)
                 continue
+            } catch {
+                try? store.draftArtifacts.abortIntent(id: intent.id)
+                throw error
             }
             do {
+                let installed = try Data(contentsOf: url, options: .mappedIfSafe)
+                try DocumentExportValidator.validate(url, as: .docx)
+                let event = try store.draftArtifacts.auditEventPreview(intentID: intent.id)
                 try motionAuditCommitter(event, snapshot)
+                try store.draftArtifacts.finalizeIntent(
+                    id: intent.id,
+                    installedOutput: installed
+                )
             } catch {
                 let auditDescription = error.localizedDescription
                 do {
                     try removeNewDraftFile(
                         at: url,
                         expectedIdentity: installedIdentity,
-                        expectedSHA256: completedLineage.outputSHA256,
+                        expectedSHA256: intent.outputSHA256,
                         checkpoint: motionCompensationCheckpoint
                     )
+                    try store.draftArtifacts.abortIntent(id: intent.id)
                 } catch {
+                    try? store.draftArtifacts.markRecoveryRequired(id: intent.id)
                     throw PersistenceError.partialFailure(
                         audit: auditDescription,
                         compensation: error.localizedDescription
@@ -1960,7 +1984,8 @@ struct MotionDraftPacket: Sendable, Equatable {
 /// Stored on the required `draft_generated` audit row. Raw source/profile text
 /// is excluded; immutable row identities and canonical hashes retain the exact
 /// assembly, verification, and output lineage.
-public struct MotionDraftAuditLineage: Codable, Sendable, Equatable {
+@available(*, deprecated, message: "Use the Store-built MotionDraftAuditLineage")
+public struct LegacyMotionDraftAuditLineage: Codable, Sendable, Equatable {
     public struct Fact: Codable, Sendable, Equatable {
         public let chunkID: String
         public let documentID: String

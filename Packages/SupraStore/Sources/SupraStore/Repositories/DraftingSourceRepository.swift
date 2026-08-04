@@ -293,31 +293,16 @@ public final class DraftingSourceRepository: @unchecked Sendable {
         _ event: AuditEventRecord,
         requiring snapshot: MotionDraftStoreSnapshot
     ) throws {
-        guard event.matterID == snapshot.request.matterID else {
-            throw MotionDraftSnapshotError.auditMatterMismatch
-        }
-        guard event.eventType == "draft_generated",
-              event.relatedTable == MatterRecord.databaseTableName,
-              event.relatedID == snapshot.request.matterID,
-              let metadataJSON = event.metadataJSON,
-              Self.validAuditEnvelope(metadataJSON, requiring: snapshot) else {
-            throw MotionDraftSnapshotError.auditEnvelopeInvalid
-        }
-        try writer.write { db in
-            let current: MotionDraftStoreSnapshot
-            do {
-                current = try Self.capture(snapshot.request, db: db)
-            } catch is MotionDraftSnapshotError {
-                throw MotionDraftSnapshotError.sourceSnapshotStale
-            }
-            guard current.fingerprintSHA256 == snapshot.fingerprintSHA256 else {
-                throw MotionDraftSnapshotError.sourceSnapshotStale
-            }
-            try event.insert(db)
-        }
+        _ = event
+        _ = snapshot
+        // An arbitrary AuditEventRecord can only prove JSON shape, never that
+        // its artifact hashes, receipt, and producer coordinates are genuine.
+        // Callers must use DraftArtifactIntentRepository, which constructs the
+        // envelope from typed inputs and actual output bytes.
+        throw MotionDraftSnapshotError.auditEnvelopeInvalid
     }
 
-    private static func capture(
+    static func capture(
         _ request: MotionDraftSnapshotRequest,
         db: Database
     ) throws -> MotionDraftStoreSnapshot {

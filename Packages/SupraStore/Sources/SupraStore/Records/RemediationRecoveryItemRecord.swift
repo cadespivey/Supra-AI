@@ -4,6 +4,7 @@ import GRDB
 public enum RemediationRecoveryKind: String, Codable, CaseIterable, Sendable {
     case legacyStructuredOutput = "legacy_structured_output"
     case legacyDraftArtifact = "legacy_draft_artifact"
+    case interruptedDraftArtifact = "interrupted_draft_artifact"
     case multiMatterBillingDraft = "multi_matter_billing_draft"
     case blobRepair = "blob_repair"
     case modelRedownload = "model_redownload"

@@ -499,34 +499,31 @@ final class DraftingSourceSnapshotTests: XCTestCase {
         XCTAssertEqual(projection[0]["kind"] as? String, "references")
         XCTAssertEqual(projection[0]["projectionOrder"] as? Int, 0)
 
+        let intent = try fixture.store.draftArtifacts.prepareMotionIntent(
+            snapshot: snapshot,
+            fileName: "Motion-to-Dismiss-edge-drift.docx",
+            output: Data("synthetic motion".utf8),
+            auditInput: motionAuditInput(snapshot: snapshot),
+            id: "edge-drift-motion-intent"
+        )
+
         try fixture.store.database.writer.write { db in
             try db.execute(
                 sql: "UPDATE document_structure_edges SET kind = ? WHERE id = ?",
                 arguments: ["responds_to", v2.edgeID]
             )
         }
-        let event = motionAuditEvent(
-            id: "edge-drift-motion-audit",
-            fixture: fixture,
-            metadataJSON: try auditMetadata(snapshot: snapshot, relatedEdges: [
-                [
-                    "edgeID": v2.edgeID,
-                    "fromNodeID": v2.relatedNodeID,
-                    "kind": "references",
-                    "projectionOrder": 0,
-                    "toNodeID": v2.primaryNodeID,
-                ],
-            ])
-        )
-
         XCTAssertThrowsError(
-            try fixture.store.draftingSources.recordMotionAudit(event, requiring: snapshot)
+            try fixture.store.draftArtifacts.finalizeIntent(
+                id: intent.id,
+                installedOutput: Data("synthetic motion".utf8)
+            )
         ) { error in
-            XCTAssertEqual(error as? MotionDraftSnapshotError, .sourceSnapshotStale)
+            XCTAssertEqual(error as? DraftArtifactIntentError, .sourceSnapshotStale)
         }
         XCTAssertFalse(
             try fixture.store.auditEvents.fetchEvents(matterID: fixture.matter.id)
-                .contains { $0.id == event.id }
+                .contains { $0.id == "draft-artifact-\(intent.id)" }
         )
     }
 
@@ -535,24 +532,29 @@ final class DraftingSourceSnapshotTests: XCTestCase {
     func testTMDSS05CommitRejectsDependencyDriftAndWritesNoAudit() throws {
         let fixture = try makeFixture()
         let snapshot = try fixture.store.draftingSources.captureMotionSnapshot(request(for: fixture))
+        let intent = try fixture.store.draftArtifacts.prepareMotionIntent(
+            snapshot: snapshot,
+            fileName: "Motion-to-Dismiss-stale.docx",
+            output: Data("synthetic motion".utf8),
+            auditInput: motionAuditInput(snapshot: snapshot),
+            id: "stale-motion-intent"
+        )
         try fixture.store.appSettings.setSetting(
             assistantKey,
             value: ["firm": "Changed Firm"]
         )
-        let event = motionAuditEvent(
-            id: "stale-motion-audit",
-            fixture: fixture,
-            metadataJSON: try auditMetadata(snapshot: snapshot)
-        )
 
         XCTAssertThrowsError(
-            try fixture.store.draftingSources.recordMotionAudit(event, requiring: snapshot)
+            try fixture.store.draftArtifacts.finalizeIntent(
+                id: intent.id,
+                installedOutput: Data("synthetic motion".utf8)
+            )
         ) { error in
-            XCTAssertEqual(error as? MotionDraftSnapshotError, .sourceSnapshotStale)
+            XCTAssertEqual(error as? DraftArtifactIntentError, .sourceSnapshotStale)
         }
         XCTAssertFalse(
             try fixture.store.auditEvents.fetchEvents(matterID: fixture.matter.id)
-                .contains { $0.id == event.id }
+                .contains { $0.id == "draft-artifact-\(intent.id)" }
         )
     }
 
@@ -561,21 +563,48 @@ final class DraftingSourceSnapshotTests: XCTestCase {
     func testTMDSS06CommitRevalidatesAndInsertsAuditAtomically() throws {
         let fixture = try makeFixture()
         let snapshot = try fixture.store.draftingSources.captureMotionSnapshot(request(for: fixture))
-        let event = motionAuditEvent(
-            id: "current-motion-audit",
-            fixture: fixture,
-            metadataJSON: try auditMetadata(snapshot: snapshot)
+        let intent = try fixture.store.draftArtifacts.prepareMotionIntent(
+            snapshot: snapshot,
+            fileName: "Motion-to-Dismiss-current.docx",
+            output: Data("synthetic motion".utf8),
+            auditInput: motionAuditInput(snapshot: snapshot),
+            id: "current-motion-intent"
         )
 
-        try fixture.store.draftingSources.recordMotionAudit(event, requiring: snapshot)
+        try fixture.store.draftArtifacts.finalizeIntent(
+            id: intent.id,
+            installedOutput: Data("synthetic motion".utf8)
+        )
 
         let stored = try XCTUnwrap(
             fixture.store.auditEvents.fetchEvents(matterID: fixture.matter.id)
-                .first { $0.id == event.id }
+                .first { $0.id == "draft-artifact-\(intent.id)" }
         )
-        XCTAssertEqual(stored.metadataJSON, event.metadataJSON)
+        XCTAssertEqual(stored.metadataJSON, intent.auditMetadataJSON)
         XCTAssertFalse(try XCTUnwrap(stored.metadataJSON).contains(fixture.revision.text))
         XCTAssertFalse(try XCTUnwrap(stored.metadataJSON).contains(authorityExcerpt))
+        let lineage = try JSONDecoder().decode(
+            MotionDraftAuditLineage.self,
+            from: Data(try XCTUnwrap(stored.metadataJSON).utf8)
+        )
+        XCTAssertEqual(
+            lineage.verificationReceiptScope,
+            .motionSelectedSourceReproductionAndStructure
+        )
+        XCTAssertEqual(lineage.verificationScope.schemaVersion, 1)
+        XCTAssertEqual(lineage.verificationScope.kindID, "motionToDismiss")
+        XCTAssertEqual(
+            lineage.verificationScope.factPropositionIDs,
+            snapshot.facts.map { "motion.fact.\($0.chunkID)" }
+        )
+        XCTAssertEqual(
+            lineage.verificationScope.authorityPropositionIDs,
+            snapshot.authorities.map { "motion.authority.\($0.authorityID)" }
+        )
+        XCTAssertEqual(
+            lineage.verificationScope.bodyContract,
+            MotionDraftVerificationScope.exactSelectedBodyContract
+        )
     }
 
     // Expected RED: commit validates only matter_id, so unrelated event shapes,
@@ -1171,6 +1200,26 @@ final class DraftingSourceSnapshotTests: XCTestCase {
         return String(
             decoding: try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]),
             as: UTF8.self
+        )
+    }
+
+    private func motionAuditInput(snapshot: MotionDraftStoreSnapshot) -> MotionDraftAuditInput {
+        MotionDraftAuditInput(
+            canonicalRequest: Data("synthetic canonical request".utf8),
+            canonicalCaption: Data("synthetic canonical caption".utf8),
+            canonicalEffectiveStyle: Data("synthetic canonical style".utf8),
+            groundContractIdentity: DraftArtifactIntentRepository.motionGroundContractIdentity,
+            assemblerIdentity: DraftArtifactIntentRepository.motionAssemblerIdentity,
+            verificationReceipt: MotionDraftVerificationReceiptInput(
+                status: .passed,
+                scope: .motionSelectedSourceReproductionAndStructure,
+                supportedPropositionIDs:
+                    snapshot.facts.map { "motion.fact.\($0.chunkID)" }
+                    + snapshot.authorities.map { "motion.authority.\($0.authorityID)" },
+                verifierIdentity: DraftArtifactIntentRepository.motionVerifierIdentity,
+                gateIdentity: DraftArtifactIntentRepository.motionGateIdentity,
+                rendererIdentity: DraftArtifactIntentRepository.motionRendererIdentity
+            )
         )
     }
 
