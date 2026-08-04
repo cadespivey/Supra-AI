@@ -447,9 +447,14 @@ public final class DraftArtifactIntentRepository: @unchecked Sendable {
                 )
             }
             let event = Self.auditEvent(for: record)
-            if try AuditEventRecord.fetchOne(db, key: event.id) == nil {
-                try event.insert(db)
+            // A prepared intent cannot legitimately have crossed this atomic
+            // insert/transition boundary already. Any occupant of the
+            // deterministic ID is a collision, even if its fields happen to
+            // match the preview, and must fail closed.
+            guard try AuditEventRecord.fetchOne(db, key: event.id) == nil else {
+                throw DraftArtifactIntentError.intentIntegrityInvalid
             }
+            try event.insert(db)
             let now = Date()
             try db.execute(
                 sql: "UPDATE draft_artifact_intents SET status = ?, updated_at = ?, terminal_at = ? WHERE id = ?",
@@ -633,6 +638,15 @@ public final class DraftArtifactIntentRepository: @unchecked Sendable {
         }
         let factPropositionIDs = current.facts.map { "motion.fact.\($0.chunkID)" }
         let authorityPropositionIDs = current.authorities.map { "motion.authority.\($0.authorityID)" }
+        let expectedReceipt = MotionDraftVerificationReceiptInput(
+            status: lineage.verificationStatus,
+            scope: lineage.verificationReceiptScope,
+            supportedPropositionIDs: factPropositionIDs + authorityPropositionIDs,
+            verifierIdentity: lineage.verifierIdentity,
+            gateIdentity: lineage.gateIdentity,
+            rendererIdentity: lineage.rendererIdentity
+        )
+        let expectedReceiptSHA256 = sha256(try jsonData(expectedReceipt))
         guard lineage.sourceSnapshotSHA256 == current.fingerprintSHA256,
               lineage.sourceSnapshotSHA256 == record.motionSnapshotSHA256,
               lineage.facts == current.facts.map(MotionDraftAuditLineage.Fact.init),
@@ -644,7 +658,8 @@ public final class DraftArtifactIntentRepository: @unchecked Sendable {
               lineage.verificationScope.groundKeys == groundKeys,
               lineage.verificationScope.factPropositionIDs == factPropositionIDs,
               lineage.verificationScope.authorityPropositionIDs == authorityPropositionIDs,
-              lineage.verificationScope.bodyContract == MotionDraftVerificationScope.exactSelectedBodyContract else {
+              lineage.verificationScope.bodyContract == MotionDraftVerificationScope.exactSelectedBodyContract,
+              lineage.verificationReceiptSHA256 == expectedReceiptSHA256 else {
             throw DraftArtifactIntentError.intentIntegrityInvalid
         }
     }

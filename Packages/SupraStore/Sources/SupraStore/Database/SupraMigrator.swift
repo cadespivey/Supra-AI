@@ -1875,6 +1875,9 @@ public enum SupraMigrator {
     public static func deleteAllTables(_ db: Database) throws {
         for table in [
             "remediation_recovery_items",
+            // Draft artifact intents are children of matters and must be gone
+            // before the parent table is dropped during an explicit dev reset.
+            "draft_artifact_intents",
             // Milestone 4 ScratchPad / billing tables: drop children before parents.
             "billing_line_items",
             "billing_drafts",

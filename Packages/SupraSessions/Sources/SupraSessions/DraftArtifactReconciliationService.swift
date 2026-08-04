@@ -50,6 +50,15 @@ public final class DraftArtifactReconciliationService: @unchecked Sendable {
     public func reconcilePendingIntents() throws -> DraftArtifactReconciliationSummary {
         var summary = DraftArtifactReconciliationSummary()
         for intent in try store.draftArtifacts.pendingIntents(limit: 2_000) {
+            // Validate the Store-owned row before deriving a managed path or
+            // mutating any filesystem entry named by that row.
+            do {
+                _ = try store.draftArtifacts.auditEventPreview(intentID: intent.id)
+            } catch {
+                try requireRecovery(intent.id)
+                summary.recoveryRequiredCount += 1
+                continue
+            }
             let publicURL = storage.exportsDirectory(forMatterID: intent.matterID)
                 .appendingPathComponent(intent.fileName, isDirectory: false)
             guard Self.isSafeManagedURL(
@@ -158,7 +167,9 @@ public final class DraftArtifactReconciliationService: @unchecked Sendable {
                 continue
             }
             let values = try entry.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
-            guard values.isRegularFile == true, values.isSymbolicLink != true else { continue }
+            guard values.isRegularFile == true, values.isSymbolicLink != true else {
+                throw ReconciliationError.unsafeOwnedTemporary
+            }
             try fileManager.removeItem(at: entry)
             removed += 1
         }
@@ -322,5 +333,6 @@ public final class DraftArtifactReconciliationService: @unchecked Sendable {
         case artifactMismatch
         case artifactChangedDuringInspection
         case invalidFormat
+        case unsafeOwnedTemporary
     }
 }
