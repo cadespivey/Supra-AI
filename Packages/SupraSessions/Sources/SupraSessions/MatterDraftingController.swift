@@ -111,7 +111,7 @@ public final class MatterDraftingController: ObservableObject {
     /// shipping default is inert; tests use it to prove display/evidence reads
     /// cannot be assembled from different database snapshots.
     var motionAuthoritySourceLoadCheckpoint: () throws -> Void = {}
-    var motionFactSourceLoadCheckpoint: (String) throws -> Void = { _ in }
+    var motionFactSourceLoadCheckpoint: () throws -> Void = {}
     /// Present when the app can call the on-device model — required for the LLM-backed
     /// kinds (`letterDemand`). The deterministic notice and supported-motion
     /// paths work without it.
@@ -1005,81 +1005,75 @@ public final class MatterDraftingController: ObservableObject {
     }
 
     private func loadMotionFactSources(matterID: String) throws -> [MotionDraftFactSource] {
-        let documents = try store.documentLibrary.fetchDocuments(matterID: matterID)
-        var sources: [MotionDraftFactSource] = []
-        for document in documents {
-            let partsByID = Dictionary(
-                uniqueKeysWithValues: try store.documentIndex.fetchParts(documentID: document.id).map { ($0.id, $0) }
-            )
-            try motionFactSourceLoadCheckpoint(document.id)
-            for chunk in try store.documentIndex.fetchChunks(documentID: document.id) {
-                var blockers: [String] = []
-                if document.status != MatterDocumentStatus.ready.rawValue {
-                    blockers.append("the document is not ready")
-                }
-                if ![DocumentExtractionStatus.extracted.rawValue, DocumentExtractionStatus.ocrComplete.rawValue, DocumentExtractionStatus.edited.rawValue]
-                    .contains(document.extractionStatus) {
-                    blockers.append("text extraction is not ready")
-                }
-                if ![DocumentIndexStatus.textIndexed.rawValue, DocumentIndexStatus.ready.rawValue]
-                    .contains(document.indexStatus) {
-                    blockers.append("the text index is not current")
-                }
-                let revisionID = chunk.revisionID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                if revisionID.isEmpty {
-                    blockers.append("the excerpt has no immutable revision")
-                }
-                if let partID = chunk.pagePartID, let part = partsByID[partID] {
-                    if part.currentRevisionID != chunk.revisionID {
-                        blockers.append("the excerpt is stale relative to the current revision")
-                    }
-                } else {
-                    blockers.append("the excerpt is not bound to a current document part")
-                }
-                let text = chunk.normalizedText.trimmingCharacters(in: .whitespacesAndNewlines)
-                if text.isEmpty { blockers.append("the excerpt is empty") }
-                if InstructionShapeDetector.isBlocking(text) {
-                    blockers.append("the excerpt contains instruction-shaped text")
-                }
-                let sourceKind = DocumentSourceKind(rawValue: chunk.sourceKind) ?? .text
-                let locator = DocumentSourceLocator(
-                    sourceKind: sourceKind,
-                    pageIndex: chunk.pageIndex,
-                    pageLabel: chunk.pageLabel,
-                    sheetName: chunk.sheetName,
-                    cellRange: chunk.cellRange,
-                    emailPartPath: chunk.emailPartPath,
-                    charStart: chunk.charStart,
-                    charEnd: chunk.charEnd,
-                    boundingBoxesJSON: chunk.boundingBoxesJSON
-                ).displayString
-                sources.append(MotionDraftFactSource(
-                    chunkID: chunk.id,
-                    documentID: document.id,
-                    documentRevisionID: revisionID,
-                    documentName: document.displayName,
-                    locator: locator,
-                    text: text,
-                    isReady: blockers.isEmpty,
-                    blockingReason: blockers.isEmpty ? nil : blockers.joined(separator: ", ")
-                ))
+        try motionFactSourceLoadCheckpoint()
+        return try store.draftingSources.fetchMotionFactSources(matterID: matterID).map { record in
+            let document = record.document
+            let chunk = record.chunk
+            var blockers: [String] = []
+            if document.status != MatterDocumentStatus.ready.rawValue {
+                blockers.append("the document is not ready")
             }
+            if ![DocumentExtractionStatus.extracted.rawValue, DocumentExtractionStatus.ocrComplete.rawValue, DocumentExtractionStatus.edited.rawValue]
+                .contains(document.extractionStatus) {
+                blockers.append("text extraction is not ready")
+            }
+            if ![DocumentIndexStatus.textIndexed.rawValue, DocumentIndexStatus.ready.rawValue]
+                .contains(document.indexStatus) {
+                blockers.append("the text index is not current")
+            }
+            let revisionID = chunk.revisionID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if revisionID.isEmpty {
+                blockers.append("the excerpt has no immutable revision")
+            }
+            if chunk.pagePartID != nil, let part = record.part {
+                if part.currentRevisionID != chunk.revisionID {
+                    blockers.append("the excerpt is stale relative to the current revision")
+                }
+            } else {
+                blockers.append("the excerpt is not bound to a current document part")
+            }
+            let text = chunk.normalizedText.trimmingCharacters(in: .whitespacesAndNewlines)
+            if text.isEmpty { blockers.append("the excerpt is empty") }
+            if InstructionShapeDetector.isBlocking(text) {
+                blockers.append("the excerpt contains instruction-shaped text")
+            }
+            let sourceKind = DocumentSourceKind(rawValue: chunk.sourceKind) ?? .text
+            let locator = DocumentSourceLocator(
+                sourceKind: sourceKind,
+                pageIndex: chunk.pageIndex,
+                pageLabel: chunk.pageLabel,
+                sheetName: chunk.sheetName,
+                cellRange: chunk.cellRange,
+                emailPartPath: chunk.emailPartPath,
+                charStart: chunk.charStart,
+                charEnd: chunk.charEnd,
+                boundingBoxesJSON: chunk.boundingBoxesJSON
+            ).displayString
+            return MotionDraftFactSource(
+                chunkID: chunk.id,
+                documentID: document.id,
+                documentRevisionID: revisionID,
+                documentName: document.displayName,
+                locator: locator,
+                text: text,
+                isReady: blockers.isEmpty,
+                blockingReason: blockers.isEmpty ? nil : blockers.joined(separator: ", ")
+            )
         }
-        return sources
     }
 
     private func loadMotionAuthoritySources(matterID: String) throws -> [MotionDraftAuthoritySource] {
-        let authorities = try store.authorities.fetchAuthorities(matterID: matterID)
         try motionAuthoritySourceLoadCheckpoint()
-        return try authorities.map { authority in
+        return try store.draftingSources.fetchMotionAuthoritySources(
+            matterID: matterID,
+            groundKey: .failureToStateClaim
+        ).map { record in
+            let authority = record.authority
             let citation = Self.motionCitation(from: authority)
             var blockers: [String] = []
             let snippet: String
             let bindingSHA256: String?
-            switch try store.authorities.reviewedPropositionState(
-                authorityID: authority.id,
-                groundKey: .failureToStateClaim
-            ) {
+            switch record.propositionState {
             case let .ready(reviewed):
                 snippet = reviewed.excerpt
                 bindingSHA256 = reviewed.bindingSHA256

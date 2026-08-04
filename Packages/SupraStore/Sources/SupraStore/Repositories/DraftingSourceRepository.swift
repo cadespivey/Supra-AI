@@ -41,6 +41,23 @@ public struct MotionDraftSnapshotRequest: Codable, Equatable, Sendable {
     }
 }
 
+/// Raw fact-source values captured by one Store read. Consumers can derive UI
+/// blockers from these rows without combining document, part, and chunk values
+/// from different database snapshots.
+public struct MotionDraftFactSourceRecord: Sendable {
+    public let document: MatterDocumentRecord
+    public let part: DocumentPagePartRecord?
+    public let chunk: DocumentChunkRecord
+}
+
+/// Raw authority metadata and its recomputed proposition state captured by one
+/// Store read. The displayed citation and selected evidence binding therefore
+/// always describe the same persisted authority version.
+public struct MotionDraftAuthoritySourceRecord: Sendable {
+    public let authority: AuthorityRecord
+    public let propositionState: AuthorityReviewedPropositionState
+}
+
 public struct MotionDraftSettingSnapshot: Codable, Equatable, Sendable {
     public let key: String
     public let valueJSON: String?
@@ -175,6 +192,78 @@ public final class DraftingSourceRepository: @unchecked Sendable {
     ) throws -> MotionDraftStoreSnapshot {
         try writer.read { db in
             try Self.capture(request, db: db)
+        }
+    }
+
+    public func fetchMotionFactSources(
+        matterID: String
+    ) throws -> [MotionDraftFactSourceRecord] {
+        try writer.read { db in
+            let documents = try MatterDocumentRecord.fetchAll(
+                db,
+                sql: """
+                    SELECT * FROM matter_documents
+                    WHERE matter_id = ? AND deleted_at IS NULL
+                    ORDER BY display_name COLLATE NOCASE ASC
+                    """,
+                arguments: [matterID]
+            )
+            var sources: [MotionDraftFactSourceRecord] = []
+            for document in documents {
+                let partsByID = Dictionary(
+                    uniqueKeysWithValues: try DocumentPagePartRecord.fetchAll(
+                        db,
+                        sql: "SELECT * FROM document_pages_parts WHERE document_id = ? ORDER BY part_index ASC",
+                        arguments: [document.id]
+                    ).map { ($0.id, $0) }
+                )
+                let chunks = try DocumentChunkRecord.fetchAll(
+                    db,
+                    sql: "SELECT * FROM document_chunks WHERE document_id = ? ORDER BY chunk_index ASC",
+                    arguments: [document.id]
+                )
+                sources.append(contentsOf: chunks.map { chunk in
+                    MotionDraftFactSourceRecord(
+                        document: document,
+                        part: chunk.pagePartID.flatMap { partsByID[$0] },
+                        chunk: chunk
+                    )
+                })
+            }
+            return sources
+        }
+    }
+
+    public func fetchMotionAuthoritySources(
+        matterID: String,
+        groundKey: AuthorityReviewedPropositionGround
+    ) throws -> [MotionDraftAuthoritySourceRecord] {
+        try writer.read { db in
+            let authorities = try AuthorityRecord.fetchAll(
+                db,
+                sql: """
+                    SELECT * FROM authorities
+                    WHERE matter_id = ? AND deleted_at IS NULL
+                    ORDER BY updated_at DESC
+                    """,
+                arguments: [matterID]
+            )
+            return authorities.map { authority in
+                let state: AuthorityReviewedPropositionState
+                do {
+                    try AuthorityRepository.validateResearchProvenance(authority: authority, db: db)
+                    state = AuthorityRepository.reviewedPropositionState(
+                        authority: authority,
+                        groundKey: groundKey
+                    )
+                } catch {
+                    state = .blocked(.authorityProvenanceInvalid)
+                }
+                return MotionDraftAuthoritySourceRecord(
+                    authority: authority,
+                    propositionState: state
+                )
+            }
         }
     }
 

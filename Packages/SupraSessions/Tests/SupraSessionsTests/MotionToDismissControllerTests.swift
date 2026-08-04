@@ -880,9 +880,10 @@ final class MotionToDismissControllerTests: XCTestCase {
         let replacement = "COHERENT_FACT_B The complaint alleges delivery while omitting a breached contractual duty."
         var replacementRevisionID: String?
         var didInterleave = false
-        controller.motionFactSourceLoadCheckpoint = { documentID in
-            guard documentID == fixture.selectedFact.documentID, !didInterleave else { return }
+        controller.motionFactSourceLoadCheckpoint = {
+            guard !didInterleave else { return }
             didInterleave = true
+            let documentID = fixture.selectedFact.documentID
             let part = DocumentPagePartRecord(
                 documentID: documentID,
                 partIndex: 0,
