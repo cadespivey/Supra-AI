@@ -24,15 +24,11 @@ final class MatterDraftingControllerTests: XCTestCase {
 
     private final class DirectorySyncProbe: @unchecked Sendable {
         private let lock = NSLock()
-        private let failOnCalls: Set<Int>
+        private let failOnCall: Int?
         private var directories: [URL] = []
 
         init(failOnCall: Int? = nil) {
-            self.failOnCalls = failOnCall.map { [$0] } ?? []
-        }
-
-        init(failOnCalls: Set<Int>) {
-            self.failOnCalls = failOnCalls
+            self.failOnCall = failOnCall
         }
 
         var callCount: Int {
@@ -48,7 +44,44 @@ final class MatterDraftingControllerTests: XCTestCase {
                 directories.append(directory.standardizedFileURL)
                 return directories.count
             }
-            if failOnCalls.contains(call) {
+            if call == failOnCall {
+                throw DirectorySyncFailure()
+            }
+        }
+    }
+
+    private final class InstallRollbackSyncProbe: @unchecked Sendable {
+        enum Phase: Equatable {
+            case install
+            case rollback
+        }
+
+        private let lock = NSLock()
+        private let destination: URL
+        private var observedPhases: [Phase] = []
+
+        init(destination: URL) {
+            self.destination = destination
+        }
+
+        var phases: [Phase] {
+            lock.withLock { observedPhases }
+        }
+
+        func synchronize(_ directory: URL) throws {
+            let destinationExists = FileManager.default.fileExists(atPath: destination.path)
+            let phase = lock.withLock { () -> Phase? in
+                if destinationExists, observedPhases.isEmpty {
+                    observedPhases.append(.install)
+                    return .install
+                }
+                if !destinationExists, observedPhases == [.install] {
+                    observedPhases.append(.rollback)
+                    return .rollback
+                }
+                return nil
+            }
+            if phase != nil {
                 throw DirectorySyncFailure()
             }
         }
@@ -651,7 +684,7 @@ final class MatterDraftingControllerTests: XCTestCase {
         let directory = storage.exportsDirectory(forMatterID: matter.id)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let destination = directory.appendingPathComponent("Double-sync-fixed.md")
-        let syncProbe = DirectorySyncProbe(failOnCalls: [1, 2])
+        let syncProbe = InstallRollbackSyncProbe(destination: destination)
         let writer = DurableFileWriter(
             faultInjector: { _ in },
             parentDirectorySynchronizer: { try syncProbe.synchronize($0) }
@@ -676,8 +709,7 @@ final class MatterDraftingControllerTests: XCTestCase {
         }
         XCTAssertTrue(message.contains("rollback directory synchronization"), message)
         XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
-        XCTAssertEqual(syncProbe.callCount, 2)
-        XCTAssertEqual(Set(syncProbe.synchronizedDirectories), [directory.standardizedFileURL])
+        XCTAssertEqual(syncProbe.phases, [.install, .rollback])
         let intentStatuses = try await store.database.writer.read { db in
             try String.fetchAll(
                 db,

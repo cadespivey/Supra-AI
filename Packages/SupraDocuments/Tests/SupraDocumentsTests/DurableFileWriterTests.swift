@@ -487,6 +487,39 @@ final class DurableFileWriterTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: destination), payload)
     }
 
+    // ACR-FILE-019. A mkdir that survived a failed parent fsync can appear on a
+    // retry without being durable. Authenticate and synchronize every existing
+    // managed directory edge on every contained publication, not only the call
+    // that happened to create it.
+    func testACRFILE019ContainedWriteSynchronizesEveryExistingDirectoryComponent() throws {
+        let container = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: container) }
+        let root = container.appendingPathComponent("managed-root", isDirectory: true)
+        let exports = root.appendingPathComponent("exports", isDirectory: true)
+        let matter = exports.appendingPathComponent("matter-123", isDirectory: true)
+        try FileManager.default.createDirectory(at: matter, withIntermediateDirectories: true)
+        let destination = matter.appendingPathComponent("motion.md")
+        let payload = Data("# Durable existing directory chain\n".utf8)
+        let synchronizer = DirectorySynchronizationRecorder()
+        let writer = DurableFileWriter(
+            faultInjector: { _ in },
+            parentDirectorySynchronizer: { synchronizer.synchronize($0) }
+        )
+
+        _ = try writer.writeNewOwned(
+            payload,
+            to: destination,
+            containedIn: root,
+            validator: { _ in }
+        )
+
+        XCTAssertEqual(
+            synchronizer.directories,
+            [container, root, exports, matter].map(\.standardizedFileURL)
+        )
+        XCTAssertEqual(try Data(contentsOf: destination), payload)
+    }
+
     private func assertContainedWriteRejectsTemporaryReplacement(
         at replacementStage: DurableFileWriter.FaultStage
     ) throws {
