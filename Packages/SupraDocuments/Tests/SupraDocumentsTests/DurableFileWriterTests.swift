@@ -254,6 +254,67 @@ final class DurableFileWriterTests: XCTestCase {
         XCTAssertTrue(try temporaryArtifacts(in: directory).isEmpty)
     }
 
+    // Expected RED: replacement after the helper's identity check must never be
+    // unlinked merely because it occupies the same pathname as the owned file.
+    func testACRFILE011FinalUnlinkWindowPreservesRegularFileReplacement() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let candidate = directory.appendingPathComponent("owned.docx")
+        let preservedOwned = directory.appendingPathComponent("preserved-owned.docx")
+        let ownedBytes = Data("writer-owned".utf8)
+        let foreignBytes = Data("foreign-regular-canary".utf8)
+        try ownedBytes.write(to: candidate)
+
+        let writer = DurableFileWriter(
+            faultInjector: { _ in },
+            parentDirectorySynchronizer: { _ in },
+            fileUnlinkCheckpoint: { observedCandidate in
+                try FileManager.default.moveItem(at: observedCandidate, to: preservedOwned)
+                try foreignBytes.write(to: observedCandidate)
+            }
+        )
+        let identity = try XCTUnwrap(writer.installedFileIdentity(at: candidate))
+
+        XCTAssertFalse(try writer.unlinkFile(matching: identity, at: candidate))
+        XCTAssertEqual(try Data(contentsOf: preservedOwned), ownedBytes)
+        XCTAssertEqual(try Data(contentsOf: candidate), foreignBytes)
+    }
+
+    // Expected RED: a symlink substituted in the final check/unlink window is
+    // foreign namespace state and must remain present without being followed.
+    func testACRFILE012FinalUnlinkWindowPreservesSymlinkReplacement() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let candidate = directory.appendingPathComponent("owned.docx")
+        let preservedOwned = directory.appendingPathComponent("preserved-owned.docx")
+        let symlinkTarget = directory.appendingPathComponent("foreign-target.docx")
+        let ownedBytes = Data("writer-owned".utf8)
+        let foreignBytes = Data("foreign-symlink-target-canary".utf8)
+        try ownedBytes.write(to: candidate)
+        try foreignBytes.write(to: symlinkTarget)
+
+        let writer = DurableFileWriter(
+            faultInjector: { _ in },
+            parentDirectorySynchronizer: { _ in },
+            fileUnlinkCheckpoint: { observedCandidate in
+                try FileManager.default.moveItem(at: observedCandidate, to: preservedOwned)
+                try FileManager.default.createSymbolicLink(
+                    at: observedCandidate,
+                    withDestinationURL: symlinkTarget
+                )
+            }
+        )
+        let identity = try XCTUnwrap(writer.installedFileIdentity(at: candidate))
+
+        XCTAssertFalse(try writer.unlinkFile(matching: identity, at: candidate))
+        XCTAssertEqual(try Data(contentsOf: preservedOwned), ownedBytes)
+        XCTAssertEqual(try Data(contentsOf: symlinkTarget), foreignBytes)
+        XCTAssertEqual(
+            try FileManager.default.destinationOfSymbolicLink(atPath: candidate.path),
+            symlinkTarget.path
+        )
+    }
+
     private func temporaryDirectory() throws -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("Supra-DurableFileWriter-\(UUID().uuidString)", isDirectory: true)

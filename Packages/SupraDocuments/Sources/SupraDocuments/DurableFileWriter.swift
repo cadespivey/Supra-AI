@@ -38,10 +38,12 @@ public struct DurableFileWriter: Sendable {
     public typealias FaultInjector = @Sendable (FaultStage) throws -> Void
     typealias ParentDirectorySynchronizer = @Sendable (URL) throws -> Void
     typealias AnchoredParentDirectorySynchronizer = @Sendable (URL, Int32) throws -> Void
+    typealias FileUnlinkCheckpoint = @Sendable (URL) throws -> Void
 
     private let faultInjector: FaultInjector
     private let parentDirectorySynchronizer: ParentDirectorySynchronizer
     private let anchoredParentDirectorySynchronizer: AnchoredParentDirectorySynchronizer
+    private let fileUnlinkCheckpoint: FileUnlinkCheckpoint
 
     public init(faultInjector: @escaping FaultInjector = { _ in }) {
         self.faultInjector = faultInjector
@@ -49,17 +51,20 @@ public struct DurableFileWriter: Sendable {
         self.anchoredParentDirectorySynchronizer = { _, descriptor in
             try Self.synchronizeDirectory(descriptor)
         }
+        self.fileUnlinkCheckpoint = { _ in }
     }
 
     init(
         faultInjector: @escaping FaultInjector,
-        parentDirectorySynchronizer: @escaping ParentDirectorySynchronizer
+        parentDirectorySynchronizer: @escaping ParentDirectorySynchronizer,
+        fileUnlinkCheckpoint: @escaping FileUnlinkCheckpoint = { _ in }
     ) {
         self.faultInjector = faultInjector
         self.parentDirectorySynchronizer = parentDirectorySynchronizer
         self.anchoredParentDirectorySynchronizer = { url, _ in
             try parentDirectorySynchronizer(url)
         }
+        self.fileUnlinkCheckpoint = fileUnlinkCheckpoint
     }
 
     /// Commits a caller-owned namespace change in the same durability domain as
@@ -260,6 +265,7 @@ public struct DurableFileWriter: Sendable {
         at url: URL
     ) throws -> Bool {
         guard try Self.fileIdentity(at: url) == expected else { return false }
+        try fileUnlinkCheckpoint(url)
         let result = url.path.withCString { Darwin.unlink($0) }
         guard result == 0 else {
             let code = errno
