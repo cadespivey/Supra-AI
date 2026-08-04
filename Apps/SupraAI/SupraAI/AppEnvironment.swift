@@ -124,6 +124,7 @@ final class AppEnvironment: ObservableObject {
     let documentSetupController: DocumentIntelligenceSetupController
     let embeddingDownloadController: EmbeddingModelDownloadController
     let documentQueue: DocumentProcessingQueue
+    private let draftArtifactStorage: DocumentStorage
     private let draftArtifactReconciler: DraftArtifactReconciliationService
 
     private let runtimeStatusController: RuntimeStatusController
@@ -326,6 +327,7 @@ final class AppEnvironment: ObservableObject {
             draftingStorage = nil
         }
         let effectiveDraftingStorage = draftingStorage ?? documentStorage
+        self.draftArtifactStorage = effectiveDraftingStorage
         self.draftArtifactReconciler = DraftArtifactReconciliationService(
             store: store,
             storage: effectiveDraftingStorage
@@ -941,6 +943,7 @@ final class AppEnvironment: ObservableObject {
         }
         seedUITestCitationsChatIfNeeded()
         seedUITestRemediationWarningsIfNeeded()
+        seedUITestInterruptedDraftRecoveryIfNeeded()
         seedUITestImportFailureIfNeeded()
         seedUITestInterruptedImportIfNeeded()
         seedUITestDocumentCorrectionIfNeeded()
@@ -1486,6 +1489,62 @@ final class AppEnvironment: ObservableObject {
             _ = try store.documentJobs.activateNextJobIfIdle()
         } catch {
             assertionFailure("Could not seed interrupted import accessibility fixture: \(error)")
+        }
+    }
+
+    /// Seeds one descriptor-valid preserved file and one integrity-invalid
+    /// recovery row only for the dedicated hosted publication-recovery test.
+    /// Both the Store and managed root are hermetic UI-test throwaways.
+    private func seedUITestInterruptedDraftRecoveryIfNeeded() {
+        guard ProcessInfo.processInfo.arguments.contains("-uiTestInterruptedDraftRecovery"),
+              let matterID = mattersController.matters.first?.id else { return }
+        do {
+            let validID = "ui-interrupted-draft-valid"
+            let validOutput = Data("# Synthetic preserved interrupted publication\n".utf8)
+            let validIntent: DraftArtifactIntentRecord
+            if let existing = try store.draftArtifacts.intent(id: validID) {
+                validIntent = existing
+            } else {
+                validIntent = try store.draftArtifacts.prepareGenericIntent(
+                    matterID: matterID,
+                    artifactKind: .customDescription,
+                    format: .markdown,
+                    fileName: "Interrupted-publication.md",
+                    output: validOutput,
+                    id: validID
+                )
+            }
+            let validURL = draftArtifactStorage.exportsDirectory(forMatterID: matterID)
+                .appendingPathComponent(validIntent.fileName, isDirectory: false)
+            try FileManager.default.createDirectory(
+                at: validURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            if !FileManager.default.fileExists(atPath: validURL.path) {
+                try validOutput.write(to: validURL, options: .withoutOverwriting)
+            }
+            try store.draftArtifacts.markRecoveryRequired(id: validIntent.id)
+
+            let corruptID = "ui-interrupted-draft-corrupt"
+            if try store.draftArtifacts.intent(id: corruptID) == nil {
+                _ = try store.draftArtifacts.prepareGenericIntent(
+                    matterID: matterID,
+                    artifactKind: .customDescription,
+                    format: .markdown,
+                    fileName: "Corrupt-interrupted-publication.md",
+                    output: Data("# Synthetic corrupt lineage marker\n".utf8),
+                    id: corruptID
+                )
+                try store.database.writer.write { db in
+                    try db.execute(
+                        sql: "UPDATE draft_artifact_intents SET file_name = ? WHERE id = ?",
+                        arguments: ["../../outside-managed-storage.md", corruptID]
+                    )
+                }
+            }
+            try store.draftArtifacts.markRecoveryRequired(id: corruptID)
+        } catch {
+            assertionFailure("Could not seed interrupted draft recovery fixture: \(error)")
         }
     }
 
