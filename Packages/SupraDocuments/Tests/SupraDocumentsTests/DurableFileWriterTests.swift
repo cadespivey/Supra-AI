@@ -417,6 +417,44 @@ final class DurableFileWriterTests: XCTestCase {
         try assertContainedWriteRejectsTemporaryReplacement(at: .beforeInstall)
     }
 
+    // The validator result must be bound to the writer-created bytes. Swapping
+    // in a valid DOCX only for validation and restoring the original invalid
+    // inode must never authorize installation of those invalid origin bytes.
+    func testACRFILE017ValidatorSwapAndRestoreCannotAuthorizeOriginBytes() throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let destination = root
+            .appendingPathComponent("exports", isDirectory: true)
+            .appendingPathComponent("matter-123", isDirectory: true)
+            .appendingPathComponent("motion.docx")
+        let invalidOrigin = Data("not-an-office-archive".utf8)
+        let validReplacement = try validDOCXData(in: root)
+        let preservedOrigin = root.appendingPathComponent("preserved-invalid-origin.docx")
+        let writer = DurableFileWriter()
+
+        XCTAssertThrowsError(
+            try writer.writeNewOwned(
+                invalidOrigin,
+                to: destination,
+                containedIn: root,
+                validator: { temporaryURL in
+                    try FileManager.default.moveItem(at: temporaryURL, to: preservedOrigin)
+                    try validReplacement.write(to: temporaryURL)
+                    try DocumentExportValidator.validate(temporaryURL, as: .docx)
+                    try FileManager.default.removeItem(at: temporaryURL)
+                    try FileManager.default.moveItem(at: preservedOrigin, to: temporaryURL)
+                }
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? DocumentExportValidator.ValidationError,
+                .unreadableOfficeArchive
+            )
+        }
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
+    }
+
     private func assertContainedWriteRejectsTemporaryReplacement(
         at replacementStage: DurableFileWriter.FaultStage
     ) throws {
@@ -469,6 +507,22 @@ final class DurableFileWriterTests: XCTestCase {
             .appendingPathComponent("Supra-DurableFileWriter-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         return directory
+    }
+
+    private func validDOCXData(in directory: URL) throws -> Data {
+        let url = directory.appendingPathComponent("valid-validator-replacement.docx")
+        try DocumentExportBuilder.write(
+            DocumentExportPayload(
+                title: "Validation replacement",
+                contentMarkdown: "Valid Office package.",
+                reviewWarning: "Test fixture",
+                sources: []
+            ),
+            format: .docx,
+            to: url
+        )
+        defer { try? FileManager.default.removeItem(at: url) }
+        return try Data(contentsOf: url)
     }
 
     private func temporaryArtifacts(in directory: URL) throws -> [URL] {
