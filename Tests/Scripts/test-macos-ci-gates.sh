@@ -591,6 +591,16 @@ else
   printf '%s\n' 'PASS: motion UI-test launch requires explicit source selection'
 fi
 
+motion_controller="${repo_root}/Packages/SupraSessions/Sources/SupraSessions/MatterDraftingController.swift"
+motion_readiness="$(sed -n '/private var currentMotionReadiness: MotionDraftReadiness/,/^    }/p' "$motion_view")"
+if grep -Fq 'factSources: motionFactSources' <<<"$motion_readiness" \
+    && grep -Fq 'authoritySources: motionAuthoritySources' <<<"$motion_readiness" \
+    && grep -Fq 'let readiness = motionReadiness(input: input, matterID: matterID)' "$motion_controller"; then
+  printf '%s\n' 'PASS: interactive motion readiness uses loaded sources while generation refreshes them'
+else
+  record_failure 'interactive motion readiness rescans sources or generation does not refresh them'
+fi
+
 motion_launch_helper="$(sed -n '/private func launchMotionApp(/,/^    }/p' "$motion_ui_tests")"
 if grep -Fq -- '-uiTestSelectFirstMatter' <<<"$motion_launch_helper" \
     || grep -Fq -- '-uiTestOpenDraftSheet' <<<"$motion_launch_helper" \
