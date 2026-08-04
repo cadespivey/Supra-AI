@@ -39,6 +39,12 @@ public final class DraftArtifactReconciliationService: @unchecked Sendable {
     /// Deterministic final-removal seam. Cleanup must recheck the inspected
     /// inode after this checkpoint and use a nonrecursive unlink.
     var cleanupPreUnlinkCheckpoint: (URL) throws -> Void = { _ in }
+    /// Deterministic format-validation seam used to prove a validator result
+    /// cannot be detached from the bytes that reconciliation later finalizes or
+    /// removes. Production uses the complete format-aware validator.
+    var artifactFormatValidator: (URL, DocumentExportFormat) throws -> Void = {
+        try DocumentExportValidator.validate($0, as: $1)
+    }
 
     public init(
         store: SupraStore,
@@ -135,9 +141,9 @@ public final class DraftArtifactReconciliationService: @unchecked Sendable {
                           DocumentStorage.sha256Hex(of: beforeValidation) == intent.outputSHA256 else {
                         throw ReconciliationError.artifactMismatch
                     }
-                    try DocumentExportValidator.validate(
+                    try artifactFormatValidator(
                         publicURL,
-                        as: try Self.exportFormat(intent.format)
+                        try Self.exportFormat(intent.format)
                     )
                     // Bind finalization to the bytes observed after format
                     // validation as well; replacement during inspection fails.
@@ -261,9 +267,9 @@ public final class DraftArtifactReconciliationService: @unchecked Sendable {
             return .recoveryRequired
         }
         do {
-            try DocumentExportValidator.validate(
+            try artifactFormatValidator(
                 candidate,
-                as: try Self.exportFormat(intent.format)
+                try Self.exportFormat(intent.format)
             )
         } catch {
             return .recoveryRequired

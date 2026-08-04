@@ -775,6 +775,57 @@ final class DraftArtifactReconciliationTests: XCTestCase {
         XCTAssertTrue(try fixture.store.auditEvents.fetchEvents(matterID: fixture.matter.id).isEmpty)
     }
 
+    // T-DAR-19. Format validation must consume the immutable bytes that cleanup
+    // later authorizes. A valid file swapped in only for URL validation cannot
+    // authorize deletion of restored invalid origin bytes.
+    func testTDAR19RollbackValidationSwapAndRestoreCannotAuthorizeDeletion() throws {
+        let fixture = try makeFixture()
+        let invalidOrigin = Data("not-an-office-archive".utf8)
+        let intent = try fixture.store.draftArtifacts.prepareGenericIntent(
+            matterID: fixture.matter.id,
+            artifactKind: .noticeAppearance,
+            format: .docx,
+            fileName: "Rollback-validation-race.docx",
+            output: invalidOrigin,
+            id: "rollback-validation-swap"
+        )
+        let directory = fixture.storage.exportsDirectory(forMatterID: fixture.matter.id)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let quarantine = directory.appendingPathComponent(
+            ".supra-draft-rollback-bbf231d5-d197-47d5-92ec-78ac7f33e593-\(intent.fileName)"
+        )
+        try invalidOrigin.write(to: quarantine)
+        let preservedOrigin = fixture.storage.root
+            .appendingPathComponent("preserved-invalid-rollback.docx")
+        let validReplacement = try validDOCXData(in: fixture.storage.root)
+        let service = DraftArtifactReconciliationService(
+            store: fixture.store,
+            storage: fixture.storage
+        )
+        service.artifactFormatValidator = { candidate, format in
+            try FileManager.default.moveItem(at: candidate, to: preservedOrigin)
+            try validReplacement.write(to: candidate)
+            try DocumentExportValidator.validate(candidate, as: format)
+            try FileManager.default.removeItem(at: candidate)
+            try FileManager.default.moveItem(at: preservedOrigin, to: candidate)
+        }
+
+        let summary = try service.reconcilePendingIntents()
+
+        XCTAssertEqual(summary.removedRollbackQuarantineCount, 0)
+        XCTAssertEqual(summary.abortedCount, 0)
+        XCTAssertEqual(summary.recoveryRequiredCount, 1)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: quarantine.path))
+        if FileManager.default.fileExists(atPath: quarantine.path) {
+            XCTAssertEqual(try Data(contentsOf: quarantine), invalidOrigin)
+        }
+        XCTAssertEqual(
+            try fixture.store.draftArtifacts.intent(id: intent.id)?.status,
+            DraftArtifactIntentStatus.recoveryRequired.rawValue
+        )
+        XCTAssertTrue(try fixture.store.auditEvents.fetchEvents(matterID: fixture.matter.id).isEmpty)
+    }
+
     private struct Fixture {
         let store: SupraStore
         let matter: MatterRecord
@@ -800,6 +851,23 @@ final class DraftArtifactReconciliationTests: XCTestCase {
         let url = directory.appendingPathComponent(intent.fileName)
         try data.write(to: url, options: .withoutOverwriting)
         return url
+    }
+
+    private func validDOCXData(in directory: URL) throws -> Data {
+        let url = directory.appendingPathComponent("valid-reconciliation-replacement.docx")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try DocumentExportBuilder.write(
+            DocumentExportPayload(
+                title: "Validation replacement",
+                contentMarkdown: "Valid Office package.",
+                reviewWarning: "Test fixture",
+                sources: []
+            ),
+            format: .docx,
+            to: url
+        )
+        defer { try? FileManager.default.removeItem(at: url) }
+        return try Data(contentsOf: url)
     }
 }
 
