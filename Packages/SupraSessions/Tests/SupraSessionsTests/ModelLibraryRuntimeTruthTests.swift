@@ -216,8 +216,8 @@ final class ModelLibraryRuntimeTruthTests: XCTestCase {
     }
 
     // Expected RED: settleInFlightLoad swallows CancellationError from Task.sleep.
-    // When the first load resolves while ensure is asleep, the cancelled task wakes
-    // and replaces it with the newly assigned model.
+    // A caller cancelled while another model is still loading must return without
+    // replacing that shared load with the newly assigned model.
     @MainActor
     func testCancelledEnsureWaitingOnAnotherLoadDoesNotReplaceIt() async throws {
         let store = try makeStore()
@@ -255,8 +255,6 @@ final class ModelLibraryRuntimeTruthTests: XCTestCase {
         }
         await fulfillment(of: [ensureStarted], timeout: 1)
         try await Task.sleep(nanoseconds: 20_000_000)
-        stub.releaseFirstLoad()
-        await prewarm.value
         ensure.cancel()
         let result = await ensure.value
 
@@ -268,6 +266,12 @@ final class ModelLibraryRuntimeTruthTests: XCTestCase {
             "cancelled wait surfaced a stale load result: \(issue.message)"
         )
         XCTAssertEqual(stub.loadRequestedModelIDs, [firstModelID])
+        XCTAssertEqual(library.loadState, .loading(modelID: first.id))
+        XCTAssertNil(stub.runtimeHeldModelID)
+
+        stub.releaseFirstLoad()
+        await prewarm.value
+
         XCTAssertEqual(stub.runtimeHeldModelID?.rawValue.uuidString, first.id)
         XCTAssertEqual(library.loadedModelID?.rawValue.uuidString, first.id)
     }
