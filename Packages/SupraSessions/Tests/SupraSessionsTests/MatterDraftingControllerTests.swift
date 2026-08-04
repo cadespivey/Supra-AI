@@ -514,6 +514,62 @@ final class MatterDraftingControllerTests: XCTestCase {
         XCTAssertTrue(try store.auditEvents.fetchEvents(matterID: matter.id).isEmpty)
     }
 
+    // ACR-EXPORT-017. If the exact installed inode is moved entirely from the
+    // retained matter directory into a replacement public parent, a missing
+    // retained source is not a successful rollback. The public survivor must
+    // keep the intent recoverable even though no exact quarantine name remains.
+    @MainActor
+    func testGenericDraftCompensationRejectsExactInodeMovedToReplacementParent() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Finalization parent move")
+        let storage = makeStorage()
+        addTeardownBlock { try? FileManager.default.removeItem(at: storage.root) }
+        let managedParent = storage.exportsDirectory(forMatterID: matter.id)
+        let destination = managedParent.appendingPathComponent("Finalization-parent-move.md")
+        let preservedParent = storage.root
+            .appendingPathComponent("preserved-finalization-move", isDirectory: true)
+        let preservedDestination = preservedParent.appendingPathComponent(
+            destination.lastPathComponent
+        )
+        var intentID: String?
+        let controller = MatterDraftingController(
+            store: store,
+            storage: storage,
+            fileStampProvider: { "move" },
+            auditRecorder: { event in
+                intentID = String(event.id.dropFirst("draft-artifact-".count))
+                try FileManager.default.moveItem(at: managedParent, to: preservedParent)
+                try FileManager.default.createDirectory(
+                    at: managedParent,
+                    withIntermediateDirectories: true
+                )
+                try FileManager.default.moveItem(at: preservedDestination, to: destination)
+            }
+        )
+
+        let result = await controller.draftCustomDescription(
+            matterID: matter.id,
+            input: .init(
+                title: "Finalization parent",
+                description: "A moved exact inode remains a recovery artifact."
+            )
+        )
+
+        guard case let .failure(.renderFailed(message)) = result else {
+            return XCTFail("a moved exact artifact must not be reported as rolled back")
+        }
+        XCTAssertTrue(message.contains("rollback also failed"), message)
+        XCTAssertTrue(message.contains("no exact rollback quarantine could be verified"), message)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: destination.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: preservedDestination.path))
+        let intent = try XCTUnwrap(try store.draftArtifacts.intent(id: XCTUnwrap(intentID)))
+        let publicData = try Data(contentsOf: destination)
+        XCTAssertEqual(publicData.count, intent.outputByteSize)
+        XCTAssertEqual(DocumentStorage.sha256Hex(of: publicData), intent.outputSHA256)
+        XCTAssertEqual(intent.status, DraftArtifactIntentStatus.recoveryRequired.rawValue)
+        XCTAssertTrue(try store.auditEvents.fetchEvents(matterID: matter.id).isEmpty)
+    }
+
     // Expected RED: interrupted items had only a global count; the matter draft
     // surface exposed neither affected filenames nor an explicit resolution.
     @MainActor

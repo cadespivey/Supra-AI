@@ -1263,6 +1263,8 @@ final class MotionToDismissControllerTests: XCTestCase {
         }
         XCTAssertTrue(message.contains("rollback also failed"), message)
         let quarantine = try XCTUnwrap(quarantineURL)
+        XCTAssertTrue(message.contains("quarantine path changed"), message)
+        XCTAssertFalse(message.contains("remains preserved as \(quarantine.lastPathComponent)"), message)
         XCTAssertEqual(
             try Data(contentsOf: quarantine.appendingPathComponent("owner-canary.txt")),
             directoryCanary
@@ -1451,6 +1453,58 @@ final class MotionToDismissControllerTests: XCTestCase {
             try fixture.store.draftArtifacts.intent(id: XCTUnwrap(intentID))?.status,
             DraftArtifactIntentStatus.recoveryRequired.rawValue
         )
+        XCTAssertFalse(
+            try fixture.store.auditEvents.fetchEvents(matterID: fixture.matterID)
+                .contains { $0.eventType == "draft_generated" }
+        )
+    }
+
+    // T-MTD-42. A compensation observer can move the exact quarantine back to
+    // the public name and place foreign bytes at the quarantine pathname. The
+    // public survivor requires recovery, but reporting must not claim that the
+    // exact rollback material remains under the now-foreign quarantine name.
+    func testTMTD42PublicExactMoveWithForeignQuarantineReportsNoRetainedExactName() async throws {
+        let fixture = try makeFixture()
+        let fileName = "Motion-to-Dismiss-public-move.docx"
+        let publicURL = fixture.storage.exportsDirectory(forMatterID: fixture.matterID)
+            .appendingPathComponent(fileName)
+        let foreignBytes = Data("foreign-quarantine-path-canary".utf8)
+        var intentID: String?
+        var quarantineURL: URL?
+        let controller = MatterDraftingController(
+            store: fixture.store,
+            storage: fixture.storage,
+            fileStampProvider: { "public-move" },
+            motionCompensationCheckpoint: { observedPublic, quarantine in
+                XCTAssertEqual(observedPublic.standardizedFileURL, publicURL.standardizedFileURL)
+                quarantineURL = quarantine
+                try FileManager.default.moveItem(at: quarantine, to: observedPublic)
+                try foreignBytes.write(to: quarantine)
+            },
+            motionAuditCommitter: { event, _ in
+                intentID = String(event.id.dropFirst("draft-artifact-".count))
+                throw InjectedFailure.stop
+            }
+        )
+
+        let result = await controller.draft(
+            .motionToDismiss(fixture.selectedInput),
+            matterID: fixture.matterID
+        )
+
+        guard case let .failure(.renderFailed(message)) = result else {
+            return XCTFail("expected public-only compensation recovery, got \(result)")
+        }
+        XCTAssertTrue(message.contains("rollback also failed"), message)
+        XCTAssertTrue(message.contains("no exact rollback quarantine could be verified"), message)
+        let intent = try XCTUnwrap(
+            try fixture.store.draftArtifacts.intent(id: XCTUnwrap(intentID))
+        )
+        let publicData = try Data(contentsOf: publicURL)
+        XCTAssertEqual(publicData.count, intent.outputByteSize)
+        XCTAssertEqual(DocumentStorage.sha256Hex(of: publicData), intent.outputSHA256)
+        XCTAssertEqual(try Data(contentsOf: XCTUnwrap(quarantineURL)), foreignBytes)
+        XCTAssertEqual(intent.status, DraftArtifactIntentStatus.recoveryRequired.rawValue)
         XCTAssertFalse(
             try fixture.store.auditEvents.fetchEvents(matterID: fixture.matterID)
                 .contains { $0.eventType == "draft_generated" }

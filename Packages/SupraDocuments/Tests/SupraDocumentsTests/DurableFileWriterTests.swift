@@ -520,6 +520,46 @@ final class DurableFileWriterTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: destination), payload)
     }
 
+    // ACR-FILE-022. Authentication of each managed-directory edge is a
+    // durability boundary, not an advisory observation. A failed sync of the
+    // container, root, or exports edge must stop publication before any final
+    // artifact or writer temporary can remain visible.
+    func testACRFILE022ContainedWritePropagatesEveryManagedEdgeSyncFailure() throws {
+        for failingEdge in 0..<3 {
+            let container = try temporaryDirectory()
+            defer { try? FileManager.default.removeItem(at: container) }
+            let root = container.appendingPathComponent("managed-root", isDirectory: true)
+            let exports = root.appendingPathComponent("exports", isDirectory: true)
+            let matter = exports.appendingPathComponent("matter-123", isDirectory: true)
+            let destination = matter.appendingPathComponent("motion.md")
+            let edges = [container, root, exports].map(\.standardizedFileURL)
+            let failingURL = edges[failingEdge]
+            let writer = DurableFileWriter(
+                faultInjector: { _ in },
+                parentDirectorySynchronizer: { observedURL in
+                    if observedURL.standardizedFileURL == failingURL {
+                        throw InjectedDirectorySyncFailure.injected
+                    }
+                }
+            )
+
+            XCTAssertThrowsError(
+                try writer.writeNewOwned(
+                    Data("# Must not publish\n".utf8),
+                    to: destination,
+                    containedIn: root,
+                    validator: { _ in }
+                ),
+                "edge \(failingEdge) unexpectedly ignored its sync failure"
+            )
+            XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
+            let residues = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil)?
+                .compactMap { $0 as? URL }
+                .filter { $0.lastPathComponent.contains(".supra-tmp-") } ?? []
+            XCTAssertTrue(residues.isEmpty, "edge \(failingEdge) left \(residues)")
+        }
+    }
+
     private func assertContainedWriteRejectsTemporaryReplacement(
         at replacementStage: DurableFileWriter.FaultStage
     ) throws {
