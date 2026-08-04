@@ -311,6 +311,40 @@ final class MotionVerificationTests: XCTestCase {
         }
     }
 
+    // MVS-10b. Exact source excerpts remain facts even when their source text
+    // contains a rule, statute, or case-citation shape. The complete-body
+    // contract still rejects citation-bearing prose outside these exact blocks.
+    func testCitationShapesInsideExactSelectedFactRemainSupported() async throws {
+        let citedFact = MotionFactEvidence(
+            factID: "fact-with-citation",
+            text: "Paragraph 12 quotes rule 1.110 and cites 123 So. 3d 456 in the complaint.",
+            sourceID: "revision-with-citation",
+            locator: "p. 6"
+        )
+        let scopedEvidence = MotionVerificationEvidence(
+            facts: [citedFact],
+            authorities: [authorityOne],
+            bodyContract: evidence.bodyContract
+        )
+        let renderer = MotionCountingRenderer(
+            identity: .init(id: "test.fact-citation-renderer", version: "1")
+        )
+
+        _ = try await DraftPipeline(verifier: DraftVerifier(), renderer: renderer).runMotion(
+            model: validModel(
+                numberedFacts: [citedFact.text],
+                authorityParagraphs: [authorityOne.canonicalParagraph],
+                selectedFactReviewParagraphs: [
+                    citedFact.canonicalSelectedFactReviewParagraph(number: 1)
+                ]
+            ),
+            evidence: scopedEvidence,
+            style: .defaultFL
+        )
+
+        XCTAssertEqual(renderer.renderCount, 1)
+    }
+
     // MVS-11. Expected RED: exact facts may appear only in the statement of facts;
     // the verifier does not require each selected excerpt's neutral counsel-review
     // paragraph to appear exactly once after the reviewed authorities.
