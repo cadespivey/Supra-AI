@@ -10,11 +10,27 @@ public struct DraftPipeline: Sendable {
     public let verifier: Verifier
     public let gate: PreFileGate
     public let renderer: Renderer
+    private let beforeMotionRender: @Sendable () -> Void
 
     public init(verifier: Verifier, gate: PreFileGate = PreFileGate(), renderer: Renderer) {
+        self.init(
+            verifier: verifier,
+            gate: gate,
+            renderer: renderer,
+            beforeMotionRender: {}
+        )
+    }
+
+    init(
+        verifier: Verifier,
+        gate: PreFileGate = PreFileGate(),
+        renderer: Renderer,
+        beforeMotionRender: @escaping @Sendable () -> Void
+    ) {
         self.verifier = verifier
         self.gate = gate
         self.renderer = renderer
+        self.beforeMotionRender = beforeMotionRender
     }
 
     // MARK: - noticeAppearance (no LLM)
@@ -83,6 +99,7 @@ public struct DraftPipeline: Sendable {
             gate: gateResult,
             requiredPropositionIDs: evidence.requiredPropositionIDs
         )
+        beforeMotionRender()
         let docx = try renderer.render(.court(model), style: style)
         return DraftResult(
             docx: docx,

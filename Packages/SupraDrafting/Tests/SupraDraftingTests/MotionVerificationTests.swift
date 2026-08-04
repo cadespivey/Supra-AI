@@ -1,6 +1,6 @@
 import Foundation
 import SupraCore
-import SupraDrafting
+@testable import SupraDrafting
 import SupraDraftingCore
 import XCTest
 
@@ -237,6 +237,43 @@ final class MotionVerificationTests: XCTestCase {
             XCTFail("expected CancellationError, got \(error)")
         }
         XCTAssertEqual(renderer.renderCount, 0)
+    }
+
+    // MVS-09b. Expected RED: runMotion does not inspect cancellation at the
+    // pre-file-gate-to-renderer boundary, so synchronous cancellation delivered there
+    // still invokes the renderer and returns its output.
+    func testCancellationAtMotionRenderBoundaryNeverInvokesRendererOrReturnsOutput() async {
+        let renderer = MotionCountingRenderer(
+            identity: .init(id: "test.render-boundary-cancelled-motion-renderer", version: "1")
+        )
+        let pipeline = DraftPipeline(
+            verifier: CompleteSupportVerifier(
+                identity: .init(id: "test.render-boundary-complete-verifier", version: "1")
+            ),
+            renderer: renderer,
+            beforeMotionRender: {
+                withUnsafeCurrentTask { task in
+                    task?.cancel()
+                }
+            }
+        )
+        let model = validModel()
+        let scopedEvidence = evidence
+
+        let task = Task {
+            try await pipeline.runMotion(model: model, evidence: scopedEvidence, style: .defaultFL)
+        }
+        var returnedOutput: Data?
+        do {
+            returnedOutput = try await task.value.docx
+            XCTFail("render-boundary cancellation unexpectedly returned rendered output")
+        } catch is CancellationError {
+            // Expected before renderer invocation.
+        } catch {
+            XCTFail("expected CancellationError, got \(error)")
+        }
+        XCTAssertEqual(renderer.renderCount, 0)
+        XCTAssertNil(returnedOutput)
     }
 
     // MVS-10. Expected RED: the current substring heuristic treats a Florida party name
