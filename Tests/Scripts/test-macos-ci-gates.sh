@@ -464,7 +464,19 @@ printf '%s\n' \
   '    return []' \
   '  }' \
   '}' \
+  'final class InterruptedDraftRecoveryUITests: XCTestCase {' \
+  '  func testTUIDRAFTREC01Through04NoticeRevealAndAcknowledgementPreserveFiles() {}' \
+  '}' \
   >"$accessibility_hook"
+run_case \
+  "a missing interrupted draft recovery hosted test fails closed" \
+  1 \
+  "interrupted draft recovery hosted smoke tests are missing" \
+  env SUPRA_XPC_INTEGRATION_TEST_FILE="$xpc_hook" \
+    SUPRA_ACCESSIBILITY_SMOKE_TEST_FILE="$accessibility_hook" \
+    SUPRA_DRAFT_RECOVERY_UI_TEST_FILE="$missing_hook" \
+    SUPRA_RESTORE_UI_TEST_FILE="$restore_hook" \
+    bash "${scripts}/run-app-smoke-tests.sh" --check
 # Standing guard: the exact methods nested in the shipping XCTest class must
 # continue to satisfy check-only discovery after the fail-closed hardening.
 run_case \
@@ -588,6 +600,12 @@ if grep -Fq -- '-only-testing:SupraAIUITests/MotionToDismissWorkspaceUITests' "$
   printf '%s\n' 'PASS: app smoke executes the supported motion hosted guards'
 else
   record_failure 'app smoke does not execute the supported motion hosted guards'
+fi
+
+if grep -Fq -- '-only-testing:SupraAIUITests/InterruptedDraftRecoveryUITests' "$app_smoke_script"; then
+  printf '%s\n' 'PASS: app smoke executes the interrupted draft recovery hosted guards'
+else
+  record_failure 'app smoke does not execute the interrupted draft recovery hosted guards'
 fi
 
 motion_view="${repo_root}/Apps/SupraAI/SupraAI/Matters/MatterDraftingView.swift"

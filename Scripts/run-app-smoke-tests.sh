@@ -4,6 +4,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 xpc_test="${SUPRA_XPC_INTEGRATION_TEST_FILE:-${repo_root}/Apps/SupraAI/SupraAIUITests/RuntimeXPCIntegrationTests.swift}"
 accessibility_test="${SUPRA_ACCESSIBILITY_SMOKE_TEST_FILE:-${repo_root}/Apps/SupraAI/SupraAIUITests/ResearchAuthoritiesUITests.swift}"
+recovery_test="${SUPRA_DRAFT_RECOVERY_UI_TEST_FILE:-${accessibility_test}}"
 restore_test="${SUPRA_RESTORE_UI_TEST_FILE:-${repo_root}/Apps/SupraAI/SupraAIUITests/RestoreSettingsUITests.swift}"
 check_only=0
 if [[ "${1:-}" == "--check" ]]; then
@@ -68,6 +69,10 @@ if ! class_contains_test "$accessibility_test" MotionToDismissWorkspaceUITests t
   printf '%s\n' 'ERROR: supported motion hosted smoke tests are missing' >&2
   exit 1
 fi
+if ! class_contains_test "$recovery_test" InterruptedDraftRecoveryUITests testTUIDRAFTREC01Through04NoticeRevealAndAcknowledgementPreserveFiles; then
+  printf '%s\n' 'ERROR: interrupted draft recovery hosted smoke tests are missing' >&2
+  exit 1
+fi
 if ! grep -Fq 'regularArtifacts(beneath: storageRoot)' "$accessibility_test" \
     || ! grep -Fq 'private func regularArtifacts(beneath root: URL) -> [String]' "$accessibility_test" \
     || ! grep -Fq 'options: []' "$accessibility_test" \
@@ -95,6 +100,7 @@ xcodebuild \
   -only-testing:SupraAIUITests/ResearchAuthoritiesUITests/testLegacyBillingWarningAnnouncesReviewAndUnavailableExport \
   -only-testing:SupraAIUITests/GuidedDocumentQAUITests/testGuidedChooserGeneratesPreviewsAndCancelsWithoutReplacingSavedResult \
   -only-testing:SupraAIUITests/RestoreSettingsUITests \
+  -only-testing:SupraAIUITests/InterruptedDraftRecoveryUITests \
   -only-testing:SupraAIUITests/MotionToDismissWorkspaceUITests \
   -only-testing:SupraAIUITests/RuntimeXPCIntegrationTests \
   test

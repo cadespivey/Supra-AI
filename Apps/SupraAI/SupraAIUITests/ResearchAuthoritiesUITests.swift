@@ -757,6 +757,106 @@ final class DraftingBlockedStateUITests: XCTestCase {
     }
 }
 
+/// T-UI-DRAFT-REC-01...04: a relaunch exposes interrupted publication work,
+/// distinguishes a validated reveal path from corrupt lineage, and records the
+/// user's review without deleting preserved bytes.
+@MainActor
+final class InterruptedDraftRecoveryUITests: XCTestCase {
+    override func setUp() {
+        continueAfterFailure = false
+    }
+
+    func testTUIDRAFTREC01Through04NoticeRevealAndAcknowledgementPreserveFiles() {
+        let storageRoot = appSandboxWritableStorageRoot(prefix: "DraftRecoveryUITest")
+        let app = XCUIApplication()
+        app.launchArguments += [
+            "-ApplePersistenceIgnoreState", "YES",
+            "-uiTestMode",
+            "-uiTestEnsureFreshWindow",
+            "-uiTestSelectFirstMatter",
+            "-uiTestOpenDraftSheet",
+            "-uiTestInterruptedDraftRecovery",
+        ]
+        app.launchEnvironment["SUPRA_UI_TEST_DRAFT_STORAGE_ROOT"] = storageRoot.path
+
+        func launchAndDismissRepeatedNotice() {
+            app.launch()
+            app.activate()
+            XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 10))
+            let notice = app.alerts["Review previous generated work"]
+            XCTAssertTrue(notice.waitForExistence(timeout: 20), "Interrupted publication notice did not appear")
+            XCTAssertTrue(
+                notice.staticTexts.matching(
+                    NSPredicate(format: "label CONTAINS[c] %@", "2 interrupted draft publication(s)")
+                ).firstMatch.exists,
+                notice.debugDescription
+            )
+            notice.buttons["Continue"].click()
+        }
+
+        launchAndDismissRepeatedNotice()
+        app.terminate()
+        launchAndDismissRepeatedNotice()
+
+        let warning = app.descendants(matching: .any)["drafting.interruptedRecoveryWarning"]
+        XCTAssertTrue(warning.waitForExistence(timeout: 10), warning.debugDescription)
+        XCTAssertTrue(app.staticTexts["Interrupted-publication.md"].exists)
+        XCTAssertTrue(app.staticTexts["Interrupted draft details unavailable"].exists)
+        let reveal = app.buttons.matching(
+            NSPredicate(
+                format: "identifier BEGINSWITH %@",
+                "drafting.interruptedRecovery.reveal."
+            )
+        )
+        XCTAssertEqual(reveal.count, 1, "Only validated recovery lineage may expose a reveal action")
+
+        let filesBeforeAcknowledgement = regularArtifacts(beneath: storageRoot)
+        XCTAssertFalse(filesBeforeAcknowledgement.isEmpty)
+        reveal.firstMatch.click()
+        let finder = XCUIApplication(bundleIdentifier: "com.apple.finder")
+        XCTAssertTrue(
+            finder.wait(for: .runningForeground, timeout: 10),
+            "Reveal in Finder did not activate Finder for the validated path"
+        )
+        app.activate()
+
+        let acknowledge = app.buttons["I Understand — Regenerate Before Use"]
+        XCTAssertTrue(acknowledge.waitForExistence(timeout: 10))
+        acknowledge.click()
+        XCTAssertTrue(warning.waitForNonExistence(timeout: 10))
+        XCTAssertEqual(
+            regularArtifacts(beneath: storageRoot),
+            filesBeforeAcknowledgement,
+            "Acknowledging interrupted work must not delete or move preserved files"
+        )
+    }
+
+    private func appSandboxWritableStorageRoot(prefix: String) -> URL {
+        let runnerHome = FileManager.default.homeDirectoryForCurrentUser.path
+        let containerMarker = "/Library/Containers/"
+        let hostHome = runnerHome.range(of: containerMarker).map {
+            String(runnerHome[..<$0.lowerBound])
+        } ?? runnerHome
+        return URL(fileURLWithPath: hostHome, isDirectory: true)
+            .appendingPathComponent("Library/Containers/ai.supra.SupraAI/Data/tmp", isDirectory: true)
+            .appendingPathComponent("\(prefix)-\(UUID().uuidString)", isDirectory: true)
+    }
+
+    private func regularArtifacts(beneath root: URL) -> [String] {
+        guard let enumerator = FileManager.default.enumerator(
+            at: root,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: []
+        ) else { return [] }
+        return enumerator.compactMap { item in
+            guard let url = item as? URL,
+                  let values = try? url.resourceValues(forKeys: [.isRegularFileKey]),
+                  values.isRegularFile == true else { return nil }
+            return url.path
+        }.sorted()
+    }
+}
+
 /// T-UI-MTD-01...06: production navigation exposes the complete supported motion
 /// form, produces an independently openable DOCX for the hermetic success fixture,
 /// and keeps deterministic blockers free of file actions.
