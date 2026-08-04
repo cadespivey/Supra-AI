@@ -413,6 +413,43 @@ final class DraftingSourceSnapshotTests: XCTestCase {
         }
     }
 
+    // Expected RED: a legacy/direct-SQL authority can claim the selected matter
+    // while its linked result and session actually belong to another matter.
+    func testTMDSS04BCaptureRejectsLegacyCrossMatterAuthorityProvenance() throws {
+        let fixture = try makeFixture()
+        let foreignDocument = try makeDocumentFixture(
+            store: fixture.store,
+            matterName: "Foreign synthetic drafting matter"
+        )
+        let foreignAuthority = try makeAuthority(
+            store: fixture.store,
+            matter: foreignDocument.matter
+        )
+        try fixture.store.database.writer.write { db in
+            try db.execute(
+                sql: """
+                UPDATE authorities
+                SET research_session_id = ?, research_result_id = ?
+                WHERE id = ?
+                """,
+                arguments: [
+                    foreignAuthority.researchSessionID,
+                    foreignAuthority.researchResultID,
+                    fixture.authority.id,
+                ]
+            )
+        }
+
+        XCTAssertThrowsError(
+            try fixture.store.draftingSources.captureMotionSnapshot(request(for: fixture))
+        ) { error in
+            XCTAssertEqual(
+                error as? MotionDraftSnapshotError,
+                .authorityProvenanceInvalid(fixture.authority.id)
+            )
+        }
+    }
+
     // Expected RED: the source fingerprint omits the exact v2 relation projection.
     // Changing references to responds_to preserves the composed chunk text today, so
     // commit incorrectly accepts a graph different from the one that was verified.

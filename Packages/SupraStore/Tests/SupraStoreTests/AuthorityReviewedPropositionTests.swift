@@ -749,6 +749,173 @@ final class AuthorityReviewedPropositionTests: XCTestCase {
         XCTAssertNil(try fixture.store.authorities.fetchAuthority(id: fixture.authority.id))
     }
 
+    func testTARP13InsertRejectsAuthorityWhoseResearchLineageDoesNotReachMatter() throws {
+        // Expected RED: authorities currently trust three independent foreign keys.
+        // A caller can combine a matter, session, and result that do not form the
+        // result -> query -> session -> matter chain represented by the authority.
+        let fixture = try makeFixture()
+        let foreign = try makeResearchLineage(
+            store: fixture.store,
+            matterName: "Foreign synthetic authority matter"
+        )
+        let forgedAuthorities: [AuthorityRecord] = [
+            {
+                var forged = fixture.authority
+                forged.id = "foreign-result-authority"
+                forged.researchResultID = foreign.result.id
+                return forged
+            }(),
+            {
+                var forged = fixture.authority
+                forged.id = "foreign-session-authority"
+                forged.researchSessionID = foreign.session.id
+                return forged
+            }(),
+            {
+                var forged = fixture.authority
+                forged.id = "foreign-lineage-authority"
+                forged.researchSessionID = foreign.session.id
+                forged.researchResultID = foreign.result.id
+                return forged
+            }(),
+        ]
+
+        for forged in forgedAuthorities {
+            XCTAssertThrowsError(try fixture.store.authorities.insertAuthority(forged)) { error in
+                XCTAssertEqual(
+                    error as? AuthorityRepositoryError,
+                    .authorityProvenanceMismatch
+                )
+            }
+            XCTAssertNil(try fixture.store.authorities.fetchAuthority(id: forged.id))
+        }
+    }
+
+    func testTARP14ConflictingInsertNeverReturnsPhantomCallerRecord() throws {
+        // Expected RED: INSERT OR IGNORE currently returns the caller's transient
+        // value even when SQLite kept a different persisted authority.
+        let fixture = try makeFixture()
+        var duplicateSource = fixture.authority
+        duplicateSource.id = "phantom-authority-id"
+
+        XCTAssertThrowsError(
+            try fixture.store.authorities.insertAuthority(duplicateSource)
+        ) { error in
+            XCTAssertEqual(error as? AuthorityRepositoryError, .authorityConflict)
+        }
+        XCTAssertNil(try fixture.store.authorities.fetchAuthority(id: duplicateSource.id))
+        XCTAssertEqual(
+            try fixture.store.authorities.fetchAuthority(
+                researchResultID: fixture.authority.researchResultID
+            )?.id,
+            fixture.authority.id
+        )
+
+        // A primary-key collision with a different, otherwise valid source chain
+        // is also a conflict; it must not be reported as the caller's record.
+        let secondResult = try appendResult(
+            store: fixture.store,
+            researchSessionID: fixture.authority.researchSessionID,
+            queryIndex: 1,
+            caseName: "Second Synthetic Authority"
+        )
+        var primaryKeyConflict = fixture.authority
+        primaryKeyConflict.researchResultID = secondResult.id
+        primaryKeyConflict.caseName = secondResult.caseName
+        primaryKeyConflict.citationJSON = secondResult.citationJSON
+
+        XCTAssertThrowsError(
+            try fixture.store.authorities.insertAuthority(primaryKeyConflict)
+        ) { error in
+            XCTAssertEqual(error as? AuthorityRepositoryError, .authorityConflict)
+        }
+        XCTAssertNil(try fixture.store.authorities.fetchAuthority(researchResultID: secondResult.id))
+        XCTAssertEqual(
+            try fixture.store.authorities.fetchAuthority(id: fixture.authority.id)?.researchResultID,
+            fixture.authority.researchResultID
+        )
+
+        // The exact idempotent retry returns the row SQLite actually persisted.
+        XCTAssertEqual(
+            try fixture.store.authorities.insertAuthority(fixture.authority).id,
+            fixture.authority.id
+        )
+    }
+
+    func testTARP15MarkNotAdverseRollsBackWhenLinkedResultOrAuditWriteFails() throws {
+        // Expected RED: the UI currently performs three best-effort writes. A
+        // linked-result or audit failure can leave split review state with no audit.
+        let resultFailure = try makeFixture(reviewState: .needsLaterReview)
+        try installResultReviewFailureTrigger(store: resultFailure.store)
+
+        XCTAssertThrowsError(try resultFailure.store.authorities.markNotAdverse(
+            authorityID: resultFailure.authority.id,
+            matterID: resultFailure.authority.matterID,
+            actor: "synthetic-reviewer",
+            markedAt: fixedReviewDate
+        ))
+        try assertReviewStateRolledBack(resultFailure)
+
+        let auditFailure = try makeFixture(reviewState: .needsLaterReview)
+        try installAuditFailureTrigger(
+            eventType: "authority_review_state_changed",
+            store: auditFailure.store
+        )
+
+        XCTAssertThrowsError(try auditFailure.store.authorities.markNotAdverse(
+            authorityID: auditFailure.authority.id,
+            matterID: auditFailure.authority.matterID,
+            actor: "synthetic-reviewer",
+            markedAt: fixedReviewDate
+        ))
+        try assertReviewStateRolledBack(auditFailure)
+    }
+
+    func testTARP16MarkNotAdverseAtomicallyMirrorsResultAndAuditsOnce() throws {
+        let fixture = try makeFixture(reviewState: .needsLaterReview)
+
+        XCTAssertTrue(try fixture.store.authorities.markNotAdverse(
+            authorityID: fixture.authority.id,
+            matterID: fixture.authority.matterID,
+            actor: "synthetic-reviewer",
+            markedAt: fixedReviewDate
+        ))
+        XCTAssertEqual(
+            try fixture.store.authorities.fetchAuthority(id: fixture.authority.id)?.reviewState,
+            ResearchResultReviewState.notAdverse.rawValue
+        )
+        XCTAssertEqual(
+            try fixture.store.research.fetchResult(
+                resultID: fixture.authority.researchResultID
+            )?.reviewState,
+            ResearchResultReviewState.notAdverse.rawValue
+        )
+        let audits = try fixture.store.auditEvents.fetchEvents(
+            relatedTable: AuthorityRecord.databaseTableName,
+            relatedID: fixture.authority.id,
+            eventType: "authority_review_state_changed"
+        )
+        XCTAssertEqual(audits.count, 1)
+        XCTAssertEqual(audits.first?.matterID, fixture.authority.matterID)
+        XCTAssertEqual(audits.first?.actor, "synthetic-reviewer")
+        XCTAssertEqual(audits.first?.timestamp, fixedReviewDate)
+
+        XCTAssertFalse(try fixture.store.authorities.markNotAdverse(
+            authorityID: fixture.authority.id,
+            matterID: fixture.authority.matterID,
+            actor: "synthetic-reviewer",
+            markedAt: fixedReviewDate.addingTimeInterval(1)
+        ))
+        XCTAssertEqual(
+            try fixture.store.auditEvents.fetchEvents(
+                relatedTable: AuthorityRecord.databaseTableName,
+                relatedID: fixture.authority.id,
+                eventType: "authority_review_state_changed"
+            ).count,
+            1
+        )
+    }
+
     private struct Fixture {
         let store: SupraStore
         let authority: AuthorityRecord
@@ -819,6 +986,98 @@ final class AuthorityReviewedPropositionTests: XCTestCase {
             )
         }
         return fixture
+    }
+
+    private func makeResearchLineage(
+        store: SupraStore,
+        matterName: String
+    ) throws -> (session: ResearchSessionRecord, result: ResearchResultRecord) {
+        let matter = try store.matters.createMatter(
+            name: matterName,
+            jurisdiction: "Florida",
+            partyPerspective: .defendant,
+            court: court
+        )
+        let session = try store.research.createSession(
+            matterID: matter.id,
+            title: "Foreign synthetic research",
+            issueText: "Whether another fictional complaint states a claim",
+            jurisdiction: "Florida",
+            status: .complete
+        )
+        let result = try appendResult(
+            store: store,
+            researchSessionID: session.id,
+            queryIndex: 0,
+            caseName: "Foreign Synthetic Authority"
+        )
+        return (session, result)
+    }
+
+    private func appendResult(
+        store: SupraStore,
+        researchSessionID: String,
+        queryIndex: Int,
+        caseName: String
+    ) throws -> ResearchResultRecord {
+        let query = try store.research.createQuery(
+            researchSessionID: researchSessionID,
+            queryText: "synthetic provenance query \(queryIndex)",
+            queryIndex: queryIndex,
+            status: .completed
+        )
+        return try store.research.insertResult(ResearchResultRecord(
+            researchQueryID: query.id,
+            caseName: caseName,
+            citationJSON: try JSONCoding.encode([citation]),
+            preferredCitation: citation,
+            court: court,
+            courtID: courtID,
+            reviewState: ResearchResultReviewState.needsLaterReview.rawValue,
+            rawResultJSON: #"{"source":"synthetic"}"#
+        ))
+    }
+
+    private func assertReviewStateRolledBack(
+        _ fixture: Fixture,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) throws {
+        XCTAssertEqual(
+            try fixture.store.authorities.fetchAuthority(id: fixture.authority.id)?.reviewState,
+            ResearchResultReviewState.needsLaterReview.rawValue,
+            file: file,
+            line: line
+        )
+        XCTAssertEqual(
+            try fixture.store.research.fetchResult(
+                resultID: fixture.authority.researchResultID
+            )?.reviewState,
+            ResearchResultReviewState.needsLaterReview.rawValue,
+            file: file,
+            line: line
+        )
+        XCTAssertTrue(
+            try fixture.store.auditEvents.fetchEvents(
+                relatedTable: AuthorityRecord.databaseTableName,
+                relatedID: fixture.authority.id,
+                eventType: "authority_review_state_changed"
+            ).isEmpty,
+            file: file,
+            line: line
+        )
+    }
+
+    private func installResultReviewFailureTrigger(store: SupraStore) throws {
+        try store.database.writer.write { db in
+            try db.execute(sql: """
+                CREATE TRIGGER synthetic_authority_result_review_failure
+                BEFORE UPDATE OF review_state ON research_results
+                BEGIN
+                    SELECT RAISE(ABORT, 'synthetic result review failure');
+                END
+                """)
+        }
     }
 
     private func tryReview(_ fixture: Fixture) throws -> AuthorityReviewedProposition {
