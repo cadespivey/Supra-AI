@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import GRDB
 import SupraCore
@@ -974,6 +975,141 @@ final class MatterDraftingControllerTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: destination.path))
         XCTAssertEqual(try? Data(contentsOf: destination), modifiedCanary)
         XCTAssertTrue(try store.auditEvents.fetchEvents(matterID: matter.id).isEmpty)
+    }
+
+    // Expected RED: generic audit compensation currently treats a missing
+    // public pathname as a complete rollback and aborts the intent even when
+    // the audit callback moved the exact installed inode to another hidden name.
+    @MainActor
+    func testGenericDraftAuditMoveOfExactInodeRequiresRecovery() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Moved audit residue matter")
+        let storage = makeStorage()
+        addTeardownBlock { try? FileManager.default.removeItem(at: storage.root) }
+        let directory = storage.exportsDirectory(forMatterID: matter.id)
+        let destination = directory.appendingPathComponent("Moved-audit-fixed.md")
+        let residue = directory.appendingPathComponent(".unrelated-moved-audit-residue")
+        var intentID: String?
+        var installedDevice: dev_t?
+        var installedInode: ino_t?
+        let controller = MatterDraftingController(
+            store: store,
+            storage: storage,
+            fileStampProvider: { "fixed" },
+            auditRecorder: { event in
+                intentID = String(event.id.dropFirst("draft-artifact-".count))
+                var installedStatus = stat()
+                XCTAssertEqual(
+                    destination.path.withCString { Darwin.lstat($0, &installedStatus) },
+                    0
+                )
+                installedDevice = installedStatus.st_dev
+                installedInode = installedStatus.st_ino
+                try FileManager.default.moveItem(at: destination, to: residue)
+                throw PersistenceFailure.stop
+            }
+        )
+
+        let result = await controller.draftCustomDescription(
+            matterID: matter.id,
+            input: .init(
+                title: "Moved audit",
+                description: "A moved exact inode must remain recoverable."
+            )
+        )
+
+        guard case let .failure(.renderFailed(message)) = result else {
+            return XCTFail("expected recovery-required audit compensation failure, got \(result)")
+        }
+        XCTAssertTrue(message.contains("rollback also failed"), message)
+        XCTAssertTrue(message.lowercased().contains("recovery is required"), message)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
+        let intent = try XCTUnwrap(
+            try store.draftArtifacts.intent(id: XCTUnwrap(intentID))
+        )
+        let residueData = try Data(contentsOf: residue)
+        XCTAssertEqual(residueData.count, intent.outputByteSize)
+        XCTAssertEqual(DocumentStorage.sha256Hex(of: residueData), intent.outputSHA256)
+        var residueStatus = stat()
+        XCTAssertEqual(residue.path.withCString { Darwin.lstat($0, &residueStatus) }, 0)
+        XCTAssertEqual(residueStatus.st_dev, try XCTUnwrap(installedDevice))
+        XCTAssertEqual(residueStatus.st_ino, try XCTUnwrap(installedInode))
+        XCTAssertEqual(intent.status, DraftArtifactIntentStatus.recoveryRequired.rawValue)
+        XCTAssertFalse(
+            try store.auditEvents.fetchEvents(matterID: matter.id)
+                .contains { $0.eventType == "draft_generated" }
+        )
+    }
+
+    // Expected RED: generic audit compensation currently removes its known
+    // pathname and aborts the intent without detecting an unrelated hidden hard
+    // link that still names the exact installed inode in the managed directory.
+    @MainActor
+    func testGenericDraftAuditUnrelatedHardLinkRequiresRecovery() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Hard-link audit residue matter")
+        let storage = makeStorage()
+        addTeardownBlock { try? FileManager.default.removeItem(at: storage.root) }
+        let directory = storage.exportsDirectory(forMatterID: matter.id)
+        let destination = directory.appendingPathComponent("Hard-link-audit-fixed.md")
+        let residue = directory.appendingPathComponent(".unrelated-hard-link-audit-residue")
+        var intentID: String?
+        var installedDevice: dev_t?
+        var installedInode: ino_t?
+        var linkCountAtAudit: nlink_t?
+        let controller = MatterDraftingController(
+            store: store,
+            storage: storage,
+            fileStampProvider: { "fixed" },
+            auditRecorder: { event in
+                intentID = String(event.id.dropFirst("draft-artifact-".count))
+                var installedStatus = stat()
+                XCTAssertEqual(
+                    destination.path.withCString { Darwin.lstat($0, &installedStatus) },
+                    0
+                )
+                installedDevice = installedStatus.st_dev
+                installedInode = installedStatus.st_ino
+                XCTAssertEqual(installedStatus.st_nlink, 1)
+                try FileManager.default.linkItem(at: destination, to: residue)
+                var linkedStatus = stat()
+                XCTAssertEqual(residue.path.withCString { Darwin.lstat($0, &linkedStatus) }, 0)
+                XCTAssertEqual(linkedStatus.st_dev, installedStatus.st_dev)
+                XCTAssertEqual(linkedStatus.st_ino, installedStatus.st_ino)
+                linkCountAtAudit = linkedStatus.st_nlink
+                throw PersistenceFailure.stop
+            }
+        )
+
+        let result = await controller.draftCustomDescription(
+            matterID: matter.id,
+            input: .init(
+                title: "Hard link audit",
+                description: "An unrelated exact hard link must remain recoverable."
+            )
+        )
+
+        guard case let .failure(.renderFailed(message)) = result else {
+            return XCTFail("expected recovery-required audit compensation failure, got \(result)")
+        }
+        XCTAssertTrue(message.contains("rollback also failed"), message)
+        XCTAssertTrue(message.lowercased().contains("recovery is required"), message)
+        XCTAssertEqual(try XCTUnwrap(linkCountAtAudit), 2)
+        let intent = try XCTUnwrap(
+            try store.draftArtifacts.intent(id: XCTUnwrap(intentID))
+        )
+        let residueData = try Data(contentsOf: residue)
+        XCTAssertEqual(residueData.count, intent.outputByteSize)
+        XCTAssertEqual(DocumentStorage.sha256Hex(of: residueData), intent.outputSHA256)
+        var residueStatus = stat()
+        XCTAssertEqual(residue.path.withCString { Darwin.lstat($0, &residueStatus) }, 0)
+        XCTAssertEqual(residueStatus.st_dev, try XCTUnwrap(installedDevice))
+        XCTAssertEqual(residueStatus.st_ino, try XCTUnwrap(installedInode))
+        XCTAssertEqual(intent.status, DraftArtifactIntentStatus.recoveryRequired.rawValue)
+        XCTAssertFalse(
+            try store.auditEvents.fetchEvents(matterID: matter.id)
+                .contains { $0.eventType == "draft_generated" }
+        )
     }
 
     // ACR-EXPORT-011: rendered DOCX drafts take the same validated temporary
