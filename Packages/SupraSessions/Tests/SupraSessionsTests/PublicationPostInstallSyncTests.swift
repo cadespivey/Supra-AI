@@ -22,6 +22,61 @@ final class PublicationPostInstallSyncTests: XCTestCase {
         try await assertPostInstallParentReplacementFailsClosed(throwsAfterReplacement: true)
     }
 
+    // ACR-EXPORT-020. The final directory-sync callback can mutate the installed
+    // inode without changing its identity. Success still has to bind the bytes
+    // returned by validation to the bytes present after that last callback.
+    func testACREXPORT020PostInstallSyncContentMutationStopsBeforeAudit() async throws {
+        let store = try SupraStore.inMemory()
+        let matter = try store.matters.createMatter(name: "Post-install content mutation")
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Supra-PostInstallMutation-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let storage = DocumentStorage(root: root)
+        let destination = storage.exportsDirectory(forMatterID: matter.id)
+            .appendingPathComponent("Post-sync-mutation-fixed.md")
+        let mutated = Data("# Mutated during final synchronization\n".utf8)
+        let injector = FinalSyncContentMutationInjector(
+            destination: destination,
+            replacement: mutated
+        )
+        let writer = DurableFileWriter(
+            faultInjector: { _ in },
+            parentDirectorySynchronizer: { try injector.synchronize($0) }
+        )
+        var auditCallCount = 0
+        let controller = MatterDraftingController(
+            store: store,
+            storage: storage,
+            fileWriter: writer,
+            fileStampProvider: { "fixed" },
+            auditRecorder: { _ in auditCallCount += 1 }
+        )
+
+        let result = await controller.draftCustomDescription(
+            matterID: matter.id,
+            input: .init(
+                title: "Post sync mutation",
+                description: "Final synchronization must not detach validation from bytes."
+            )
+        )
+
+        if case .success = result {
+            XCTFail("post-install content mutation unexpectedly published successfully")
+        }
+        XCTAssertTrue(injector.didMutate)
+        XCTAssertEqual(auditCallCount, 0)
+        XCTAssertEqual(try Data(contentsOf: destination), mutated)
+        let statuses = try await store.database.writer.read { db in
+            try String.fetchAll(
+                db,
+                sql: "SELECT status FROM draft_artifact_intents WHERE matter_id = ?",
+                arguments: [matter.id]
+            )
+        }
+        XCTAssertEqual(statuses, [DraftArtifactIntentStatus.recoveryRequired.rawValue])
+        XCTAssertTrue(try store.auditEvents.fetchEvents(matterID: matter.id).isEmpty)
+    }
+
     private func assertPostInstallParentReplacementFailsClosed(
         throwsAfterReplacement: Bool
     ) async throws {
@@ -90,6 +145,36 @@ final class PublicationPostInstallSyncTests: XCTestCase {
         }
         XCTAssertEqual(intent.status, DraftArtifactIntentStatus.recoveryRequired.rawValue)
         XCTAssertTrue(try store.auditEvents.fetchEvents(matterID: matter.id).isEmpty)
+    }
+}
+
+private final class FinalSyncContentMutationInjector: @unchecked Sendable {
+    private let lock = NSLock()
+    private let destination: URL
+    private let replacement: Data
+    private var mutated = false
+
+    init(destination: URL, replacement: Data) {
+        self.destination = destination
+        self.replacement = replacement
+    }
+
+    var didMutate: Bool { lock.withLock { mutated } }
+
+    func synchronize(_ directory: URL) throws {
+        let shouldMutate = lock.withLock { () -> Bool in
+            guard !mutated, FileManager.default.fileExists(atPath: destination.path) else {
+                return false
+            }
+            mutated = true
+            return true
+        }
+        guard shouldMutate else { return }
+        let handle = try FileHandle(forWritingTo: destination)
+        defer { try? handle.close() }
+        try handle.truncate(atOffset: 0)
+        try handle.write(contentsOf: replacement)
+        try handle.synchronize()
     }
 }
 
