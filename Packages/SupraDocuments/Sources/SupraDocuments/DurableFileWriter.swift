@@ -175,6 +175,7 @@ public struct DurableFileWriter: Sendable {
         case atomicInstallFailed(Int32)
         case parentDirectorySynchronizationFailed(Int32)
         case anchoredParentDirectorySynchronizationFailed(String)
+        case restoredEntrySynchronizationFailed(String)
         case fileIdentityInspectionFailed(Int32)
         case unsafeManagedParent(Int32)
         case fileUnlinkFailed(Int32)
@@ -1392,7 +1393,7 @@ public struct DurableFileWriter: Sendable {
                 anchor.parentDescriptor
             )
         } catch {
-            throw WriterError.anchoredParentDirectorySynchronizationFailed(
+            throw WriterError.restoredEntrySynchronizationFailed(
                 error.localizedDescription
             )
         }

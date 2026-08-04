@@ -1743,6 +1743,7 @@ public final class MatterDraftingController: ObservableObject {
         case deletionIdentityChanged(String)
         case deletionFailed(String, String)
         case directorySynchronizationFailed(String)
+        case restorationSynchronizationFailed(String)
         case publicDestinationStillLinked(String)
         case publicDestinationStillLinkedWithoutRetainedQuarantine
         case publicDestinationStillLinkedAfterRemoval
@@ -1777,6 +1778,8 @@ public final class MatterDraftingController: ObservableObject {
                 return "The verified rollback quarantine \(name) could not be removed: \(detail)."
             case let .directorySynchronizationFailed(detail):
                 return "The draft rollback was removed, but its directory synchronization failed: \(detail)."
+            case let .restorationSynchronizationFailed(detail):
+                return "The destination entry was restored from rollback quarantine, but its directory synchronization failed: \(detail). Recovery is required."
             case let .publicDestinationStillLinked(name):
                 return "The exact installed draft remains at the public destination and rollback material remains preserved as \(name)."
             case .publicDestinationStillLinkedWithoutRetainedQuarantine:
@@ -1862,6 +1865,8 @@ public final class MatterDraftingController: ObservableObject {
             throw DraftCompensationError.exactFileLinkStateUncertain(name, detail)
         } catch let DurableFileWriter.WriterError.retainedQuarantineChanged(name) {
             throw DraftCompensationError.deletionIdentityChanged(name)
+        } catch let DurableFileWriter.WriterError.restoredEntrySynchronizationFailed(detail) {
+            throw DraftCompensationError.restorationSynchronizationFailed(detail)
         } catch let DurableFileWriter.WriterError.anchoredParentDirectorySynchronizationFailed(detail) {
             throw DraftCompensationError.directorySynchronizationFailed(detail)
         } catch let DurableFileWriter.WriterError.createOnlyRollbackFailed(code) {
