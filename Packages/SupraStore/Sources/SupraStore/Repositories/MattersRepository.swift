@@ -345,6 +345,26 @@ public final class MattersRepository: @unchecked Sendable {
             for docID in docIDs {
                 try db.execute(sql: "DELETE FROM document_chunk_fts WHERE document_id = ?", arguments: [docID])
             }
+            // The recovery queue has a logical relation to artifact intents, not
+            // a foreign key. Clear those internal queue entries transactionally
+            // before the intent cascade so permanent matter deletion cannot
+            // strand an unresolvable pending item. Managed export files are not
+            // touched by this Store operation.
+            try db.execute(
+                sql: """
+                DELETE FROM remediation_recovery_items
+                WHERE kind = ?
+                  AND related_table = ?
+                  AND related_id IN (
+                    SELECT id FROM draft_artifact_intents WHERE matter_id = ?
+                  )
+                """,
+                arguments: [
+                    RemediationRecoveryKind.interruptedDraftArtifact.rawValue,
+                    DraftArtifactIntentRecord.databaseTableName,
+                    id,
+                ]
+            )
             try db.execute(sql: "DELETE FROM matters WHERE id = ?", arguments: [id])
 
             var removedPaths: [String] = []

@@ -124,6 +124,9 @@ final class AppEnvironment: ObservableObject {
     let documentSetupController: DocumentIntelligenceSetupController
     let embeddingDownloadController: EmbeddingModelDownloadController
     let documentQueue: DocumentProcessingQueue
+    private let draftArtifactStorage: DocumentStorage
+    private let draftArtifactReconciler: DraftArtifactReconciliationService
+    private let interruptedDraftRecoveryUITestRoot: URL?
 
     private let runtimeStatusController: RuntimeStatusController
     private let runtimeClient: RuntimeClient
@@ -139,6 +142,7 @@ final class AppEnvironment: ObservableObject {
     init() {
         let coldStartRestore = AppEnvironment.prepareColdStartRestore()
         let restoreActivation = coldStartRestore?.activation
+        let interruptedDraftRecoveryUITestRoot = Self.interruptedDraftRecoveryUITestRoot()
         let runtimeClient = RuntimeClient()
         let guidedQAUITestAuthorized = Self.isUITestMode && ProcessInfo.processInfo.arguments.contains("-uiTestGuidedQA")
         let guidedQAUITestModelRoot = guidedQAUITestAuthorized
@@ -170,6 +174,7 @@ final class AppEnvironment: ObservableObject {
         self.runtimeStatusController = RuntimeStatusController(runtimeClient: runtimeClient)
         self.runtimeClient = runtimeClient
         self.guidedQAUITestModelRoot = guidedQAUITestModelRoot
+        self.interruptedDraftRecoveryUITestRoot = interruptedDraftRecoveryUITestRoot
         self.modelLibrary = modelLibrary
         self.chatController = GlobalChatController(
             store: store,
@@ -315,12 +320,40 @@ final class AppEnvironment: ObservableObject {
             _ = queue?.enqueueReindex(matterID: matterID)
         }
         self.documentQueue = queue
+        let draftingStorage: DocumentStorage?
+        if let interruptedDraftRecoveryUITestRoot {
+            draftingStorage = DocumentStorage(root: interruptedDraftRecoveryUITestRoot)
+        } else if Self.isUITestMode,
+           let root = ProcessInfo.processInfo.environment["SUPRA_UI_TEST_DRAFT_STORAGE_ROOT"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !root.isEmpty {
+            draftingStorage = DocumentStorage(root: URL(fileURLWithPath: root, isDirectory: true))
+        } else {
+            draftingStorage = nil
+        }
+        let effectiveDraftingStorage = draftingStorage ?? documentStorage
+        self.draftArtifactStorage = effectiveDraftingStorage
+        self.draftArtifactReconciler = DraftArtifactReconciliationService(
+            store: store,
+            storage: effectiveDraftingStorage
+        )
+        let beforeMotionPersistence: MatterDraftingController.AsyncDraftCheckpoint?
+        if Self.isUITestMode,
+           ProcessInfo.processInfo.arguments.contains("-uiTestMotionDraftDelayed") {
+            beforeMotionPersistence = {
+                try await Task.sleep(for: .seconds(30))
+            }
+        } else {
+            beforeMotionPersistence = nil
+        }
         self.mattersController = MattersController(
             store: store,
             runtimeClient: taskRuntimeClient,
             defaultSystemPrompt: systemPrompt,
             documentQueue: queue,
-            isImportReady: { documentSetup.isReadyForImport }
+            isImportReady: { documentSetup.isReadyForImport },
+            draftingStorage: draftingStorage,
+            beforeMotionPersistence: beforeMotionPersistence
         )
         // Keep the ScratchPad `@matter` autocomplete in lockstep with the matter list,
         // so a matter created while the app is running is mentionable right away
@@ -444,6 +477,12 @@ final class AppEnvironment: ObservableObject {
         // Reconcile any validation run abandoned by a previous quit/crash so it
         // surfaces as cancelled rather than lingering as in-progress.
         try? store.validation.markUnfinishedRunsCancelled()
+        // Complete or surface a publication interrupted after its durable
+        // intent was recorded. Recovery/fallback launches are intentionally
+        // read-only with respect to the user's normal managed storage.
+        if !usingFallbackStore, databaseRecoveryState == nil {
+            _ = try? draftArtifactReconciler.reconcilePendingIntents()
+        }
         remediationRecoverySummary = (try? store.remediationRecovery.summary())
             ?? RemediationRecoverySummary(pendingCount: 0, pendingByKind: [:])
         modelLibrary.refresh()
@@ -909,11 +948,13 @@ final class AppEnvironment: ObservableObject {
         }
         seedUITestCitationsChatIfNeeded()
         seedUITestRemediationWarningsIfNeeded()
+        seedUITestInterruptedDraftRecoveryIfNeeded()
         seedUITestImportFailureIfNeeded()
         seedUITestInterruptedImportIfNeeded()
         seedUITestDocumentCorrectionIfNeeded()
         seedUITestDocumentRelationsIfNeeded()
         seedUITestGuidedQAIfNeeded()
+        seedUITestMotionDraftIfNeeded()
     }
 
     /// Seeds one ready and one review-required revision-bound passage plus a
@@ -1071,6 +1112,184 @@ final class AppEnvironment: ObservableObject {
         ))
         modelLibrary.refresh()
         modelLibrary.assignModel(modelID, to: .legalReasoning)
+    }
+
+    /// A fully fictional, revision-bound motion fixture used only by the hosted
+    /// motion XCUITests. The success and blocked variants share the same complete
+    /// Florida caption/service inputs; only authority readiness differs.
+    private func seedUITestMotionDraftIfNeeded() {
+        let arguments = ProcessInfo.processInfo.arguments
+        let success = arguments.contains("-uiTestMotionDraftSuccess")
+        let blocked = arguments.contains("-uiTestMotionDraftBlocked")
+        guard success || blocked, let matterID = mattersController.matters.first?.id else { return }
+
+        do {
+            if var draft = mattersController.draft(forMatter: matterID) {
+                draft.jurisdiction = "Florida"
+                draft.partyPerspective = .defendant
+                draft.court = "IN THE CIRCUIT COURT OF THE FOURTH JUDICIAL CIRCUIT,\nIN AND FOR DUVAL COUNTY, FLORIDA"
+                draft.judge = "Hon. Jane Smith"
+                draft.docketNumber = "2026-CA-001847"
+                try mattersController.updateMatter(id: matterID, draft: draft)
+            }
+
+            var profile = AssistantProfile()
+            profile.fullName = "Harvey Specter"
+            profile.organization = "Pearson Specter Litt"
+            profile.barNumber = "100847"
+            profile.officeStreet = "200 West Forsyth Street"
+            profile.officeSuite = "Suite 1400"
+            profile.officeCity = "Jacksonville"
+            profile.officeState = "Florida"
+            profile.officeZip = "32202"
+            profile.officePhone = "(904) 555-0142"
+            profile.officeFax = "(904) 555-0143"
+            profile.primaryEmail = "hspecter@pearsonspecterlitt.example"
+            profile.secondaryEmails = ["litdocket@pearsonspecterlitt.example"]
+            try store.appSettings.setSetting(AssistantProfile.profileKey, value: profile)
+
+            let factName = "Motion Draft First Amended Complaint.txt"
+            if !(try store.documentLibrary.fetchDocuments(matterID: matterID)).contains(where: { $0.displayName == factName }) {
+                let text = "The fictional pleading alleges that Liberty Rail received rail components, without alleging a breached contractual duty. "
+                    + "It identifies a shipment, describes the component category, and alleges receipt at the fictional project location, but it does not identify a contractual promise that Liberty Rail failed to perform. "
+                    + "Full review tail: the fictional pleading alleges no damages amount."
+                let blob = try store.documentLibrary.upsertBlob(DocumentBlobRecord(
+                    sha256: DocumentStorage.sha256Hex(of: Data("uitest-motion-fact".utf8)),
+                    byteSize: text.utf8.count,
+                    originalExtension: "txt",
+                    managedRelativePath: "uitest/\(factName)"
+                )).blob
+                let document = try store.documentLibrary.insertDocument(MatterDocumentRecord(
+                    matterID: matterID,
+                    blobID: blob.id,
+                    displayName: factName,
+                    status: MatterDocumentStatus.ready.rawValue,
+                    extractionStatus: DocumentExtractionStatus.extracted.rawValue,
+                    indexStatus: DocumentIndexStatus.textIndexed.rawValue,
+                    extractionMethod: "synthetic@toolchain:motion-uitest"
+                ))
+                let part = DocumentPagePartRecord(
+                    id: "ui-motion-fact-part",
+                    documentID: document.id,
+                    partIndex: 0,
+                    sourceKind: DocumentSourceKind.text.rawValue,
+                    normalizedText: text,
+                    charCount: text.count
+                )
+                let revision = DocumentPartRevisionRecord(
+                    id: "ui-motion-fact-revision",
+                    documentID: document.id,
+                    partIndex: 0,
+                    derivationKey: "motion-uitest:\(document.id)",
+                    origin: "parser",
+                    method: "synthetic",
+                    text: text,
+                    charCount: text.count
+                )
+                let selection = DocumentPartSelectionRecord(
+                    id: "ui-motion-fact-selection",
+                    documentID: document.id,
+                    partIndex: 0,
+                    selectedRevisionID: revision.id,
+                    selectionKey: "motion-uitest:\(document.id)",
+                    selectedBy: "policy",
+                    policyVersion: 1,
+                    decisionJSON: #"{"rule":"synthetic_motion_ui_fixture"}"#
+                )
+                _ = try store.documentRevisions.replacePartsAndPersistLineage(
+                    documentID: document.id,
+                    parts: [part],
+                    revisions: [revision],
+                    selections: [selection]
+                )
+                try store.documentIndex.replaceChunks(documentID: document.id, chunks: [
+                    DocumentChunkRecord(
+                        id: "ui-motion-fact-chunk",
+                        documentID: document.id,
+                        pagePartID: part.id,
+                        revisionID: revision.id,
+                        // This hand-authored hosted fixture uses the stable chunk ID
+                        // asserted by XCUITest. Keep it on the supported v1 exact-slice
+                        // contract; v2 IDs are owned by the production chunk producer.
+                        chunkerVersion: 1,
+                        chunkIndex: 0,
+                        sourceKind: DocumentSourceKind.text.rawValue,
+                        charStart: 0,
+                        charEnd: text.count,
+                        normalizedText: text,
+                        displayExcerpt: text,
+                        tokenCount: 24
+                    )
+                ])
+            }
+
+            let authorityName = blocked
+                ? "Fictional Motion Authority — Review Required"
+                : "Fictional Marine, LLC v. Harbor Works, Inc."
+            let authority: AuthorityRecord
+            if let existing = (try store.authorities.fetchAuthorities(matterID: matterID)).first(where: {
+                $0.caseName == authorityName
+            }) {
+                authority = existing
+            } else {
+                let session = try store.research.createSession(
+                    matterID: matterID,
+                    title: "Fictional motion authority fixture",
+                    issueText: "Failure to state a claim",
+                    jurisdiction: "Florida",
+                    status: .approved
+                )
+                let query = try store.research.createQuery(
+                    researchSessionID: session.id,
+                    queryText: "Florida motion to dismiss standard",
+                    queryIndex: 0,
+                    status: .approved
+                )
+                let result = try store.research.insertResult(ResearchResultRecord(
+                    researchQueryID: query.id,
+                    caseName: authorityName
+                ))
+                let citation = "Fictional Marine, LLC v. Harbor Works, Inc., 345 So. 3d 100, 104 (Fla. 1st DCA 2025)"
+                let support = "A motion to dismiss for failure to state a cause of action tests legal sufficiency, accepts well-pleaded allegations as true, and does not accept conclusory allegations."
+                authority = try store.authorities.insertAuthority(AuthorityRecord(
+                    id: blocked ? "ui-motion-authority-blocked" : "ui-motion-authority-success",
+                    matterID: matterID,
+                    researchSessionID: session.id,
+                    researchResultID: result.id,
+                    caseName: authorityName,
+                    citationJSON: String(decoding: try JSONEncoder().encode([citation]), as: UTF8.self),
+                    preferredCitation: citation,
+                    court: "Florida District Court of Appeal",
+                    courtID: "fladistctapp",
+                    reviewState: blocked
+                        ? ResearchResultReviewState.needsLaterReview.rawValue
+                        : ResearchResultReviewState.notAdverse.rawValue,
+                    useStatus: AuthorityUseStatus.userMarkedVerified.rawValue,
+                    opinionText: support,
+                    caseSummary: support
+                ))
+            }
+            if success {
+                let support = "A motion to dismiss for failure to state a cause of action tests legal sufficiency, accepts well-pleaded allegations as true, and does not accept conclusory allegations."
+                switch try store.authorities.reviewedPropositionState(
+                    authorityID: authority.id,
+                    groundKey: .failureToStateClaim
+                ) {
+                case .ready:
+                    break
+                case .notReviewed, .blocked(_):
+                    _ = try store.authorities.reviewProposition(
+                        authorityID: authority.id,
+                        groundKey: .failureToStateClaim,
+                        excerpt: support,
+                        reviewedBy: profile.fullName
+                    )
+                }
+            }
+            mattersController.loadMatters()
+        } catch {
+            assertionFailure("Could not seed motion drafting UI fixture: \(error)")
+        }
     }
 
     /// Seeds one completed encrypted-source rejection for the T-OPS-07 warning
@@ -1275,6 +1494,62 @@ final class AppEnvironment: ObservableObject {
             _ = try store.documentJobs.activateNextJobIfIdle()
         } catch {
             assertionFailure("Could not seed interrupted import accessibility fixture: \(error)")
+        }
+    }
+
+    /// Seeds one descriptor-valid preserved file and one integrity-invalid
+    /// recovery row only for the dedicated hosted publication-recovery test.
+    /// Both the Store and managed root are hermetic UI-test throwaways.
+    private func seedUITestInterruptedDraftRecoveryIfNeeded() {
+        guard interruptedDraftRecoveryUITestRoot != nil,
+              let matterID = mattersController.matters.first?.id else { return }
+        do {
+            let validID = "ui-interrupted-draft-valid"
+            let validOutput = Data("# Synthetic preserved interrupted publication\n".utf8)
+            let validIntent: DraftArtifactIntentRecord
+            if let existing = try store.draftArtifacts.intent(id: validID) {
+                validIntent = existing
+            } else {
+                validIntent = try store.draftArtifacts.prepareGenericIntent(
+                    matterID: matterID,
+                    artifactKind: .customDescription,
+                    format: .markdown,
+                    fileName: "Interrupted-publication.md",
+                    output: validOutput,
+                    id: validID
+                )
+            }
+            let validURL = draftArtifactStorage.exportsDirectory(forMatterID: matterID)
+                .appendingPathComponent(validIntent.fileName, isDirectory: false)
+            try FileManager.default.createDirectory(
+                at: validURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            if !FileManager.default.fileExists(atPath: validURL.path) {
+                try validOutput.write(to: validURL, options: .withoutOverwriting)
+            }
+            try store.draftArtifacts.markRecoveryRequired(id: validIntent.id)
+
+            let corruptID = "ui-interrupted-draft-corrupt"
+            if try store.draftArtifacts.intent(id: corruptID) == nil {
+                _ = try store.draftArtifacts.prepareGenericIntent(
+                    matterID: matterID,
+                    artifactKind: .customDescription,
+                    format: .markdown,
+                    fileName: "Corrupt-interrupted-publication.md",
+                    output: Data("# Synthetic corrupt lineage marker\n".utf8),
+                    id: corruptID
+                )
+                try store.database.writer.write { db in
+                    try db.execute(
+                        sql: "UPDATE draft_artifact_intents SET file_name = ? WHERE id = ?",
+                        arguments: ["../../outside-managed-storage.md", corruptID]
+                    )
+                }
+            }
+            try store.draftArtifacts.markRecoveryRequired(id: corruptID)
+        } catch {
+            assertionFailure("Could not seed interrupted draft recovery fixture: \(error)")
         }
     }
 
@@ -1872,6 +2147,44 @@ final class AppEnvironment: ObservableObject {
         return document.id
     }
 
+    /// Authorizes the one UI test that must retain Store state across a real
+    /// process boundary. The caller-supplied root is accepted only inside this
+    /// app sandbox's temporary directory; every other UI-test launch retains the
+    /// existing fresh-per-process Store behavior.
+    private static func interruptedDraftRecoveryUITestRoot() -> URL? {
+        let arguments = ProcessInfo.processInfo.arguments
+        let environment = ProcessInfo.processInfo.environment
+        guard isUITestMode,
+              arguments.contains("-uiTestInterruptedDraftRecovery"),
+              let rawRoot = environment["SUPRA_UI_TEST_DRAFT_STORAGE_ROOT"]?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+              !rawRoot.isEmpty
+        else { return nil }
+
+        let temporaryRoot = FileManager.default.temporaryDirectory
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+        let candidate = URL(fileURLWithPath: rawRoot, isDirectory: true)
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+        guard candidate.path.hasPrefix("\(temporaryRoot.path)/") else { return nil }
+        return candidate
+    }
+
+#if DEBUG
+    /// Allows only the dedicated hosted recovery fixture to inspect its own
+    /// temporary managed root from inside the sandboxed app process.
+    static var interruptedDraftRecoveryUITestManagedRoot: URL? {
+        interruptedDraftRecoveryUITestRoot()
+    }
+#endif
+
+    private static func interruptedDraftRecoveryUITestStoreURL() -> URL? {
+        interruptedDraftRecoveryUITestRoot()?
+            .appendingPathComponent(".supra-ui-test-store", isDirectory: true)
+            .appendingPathComponent("SupraAI.sqlite", isDirectory: false)
+    }
+
     /// Opens the on-disk store, falling back to a temporary store so the app still
     /// launches if the Application Support database cannot be created. `isFallback`
     /// is true for that degraded last-resort store (not for the UI-test store).
@@ -1888,14 +2201,25 @@ final class AppEnvironment: ObservableObject {
             || isDemoMode
             || !headlessProbeResolution.permitsUserStoreOpen
         if requiresHermeticStore {
-            // Fresh, throwaway store per launch so UI tests / demo screenshots are
-            // deterministic and isolated from the user's real Application Support
-            // database. Model-dependent headless probes get the same isolation
+            // UI tests / demo screenshots are isolated from the user's real
+            // Application Support database. Only the dedicated recovery test gets
+            // a stable path under its validated temporary managed root; all other
+            // launches use a fresh UUID Store. Model-dependent headless probes get
+            // the same isolation
             // (measurement qualification, finding #5): a probe launch never opens or
             // migrates the user's real store — which also removes the Debug-build
             // erase-on-schema-change hazard for probe runs.
-            let url = FileManager.default.temporaryDirectory
-                .appendingPathComponent("SupraAI-\(headlessProbeRequiresIsolatedStore ? "Probe" : "UITest")-\(UUID().uuidString).sqlite")
+            let url: URL
+            if let persistentUITestStoreURL = interruptedDraftRecoveryUITestStoreURL() {
+                try? FileManager.default.createDirectory(
+                    at: persistentUITestStoreURL.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
+                url = persistentUITestStoreURL
+            } else {
+                url = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("SupraAI-\(headlessProbeRequiresIsolatedStore ? "Probe" : "UITest")-\(UUID().uuidString).sqlite")
+            }
             if let store = try? SupraStore(url: url) {
 #if DEBUG
                 if isUITestMode,

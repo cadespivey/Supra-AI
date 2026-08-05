@@ -672,12 +672,15 @@ public final class ResearchSessionController: ObservableObject {
             upsertAuthority(from: result, sessionID: sessionID, reviewState: .needsLaterReview, useStatus: .unverified)
             recordReviewAudit("authority_saved", result: result, summary: "Marked needs-later-review: “\(result.caseName)”")
         case .notAdverse:
-            try? store.research.updateResultReviewState(resultID: resultID, reviewState: .notAdverse)
-            // §10.3: only update an existing authority — do not create one.
-            if let existing = try? store.authorities.fetchAuthority(researchResultID: resultID) {
-                try? store.authorities.updateReviewState(authorityID: existing.id, reviewState: .notAdverse)
-            }
-            recordReviewAudit("research_result_reviewed", result: result, summary: "Marked not adverse: “\(result.caseName)”")
+            // §10.3: update an existing authority, but never create one. The
+            // result, optional authority, and audit move atomically and are bound
+            // to the exact open session/matter.
+            try? store.authorities.markResearchResultNotAdverse(
+                resultID: resultID,
+                researchSessionID: sessionID,
+                matterID: matterID,
+                actor: "user"
+            )
         }
         reloadOpenSession()
     }
@@ -704,21 +707,17 @@ public final class ResearchSessionController: ObservableObject {
                 persistOpinionText(authorityID: existing.id, opinionID: existing.opinionID)
             }
             // The review classification (review_state) always reflects the latest
-            // action. Use-status, however, is library-managed: on an existing
-            // authority it may only change along the §11.4 transition graph, so a
-            // re-review never silently downgrades a user-set status (e.g.
-            // user_marked_verified → unverified). Legal changes are audited like
-            // any other status change; illegal ones are preserved.
+            // action. Use-status, however, is library-managed: the Store refetches
+            // the exact live authority and atomically applies + audits only a
+            // legal §11.4 transition. A stale research snapshot therefore cannot
+            // downgrade or duplicate a transition completed by another surface.
             try? store.authorities.updateReviewState(authorityID: existing.id, reviewState: reviewState)
-            let current = AuthorityUseStatus(rawValue: existing.useStatus) ?? .unverified
-            if current != useStatus, current.canTransition(to: useStatus) {
-                try? store.authorities.updateUseStatus(authorityID: existing.id, useStatus: useStatus)
-                _ = try? store.auditEvents.recordEvent(
-                    matterID: matterID, eventType: "authority_status_changed", actor: "user",
-                    summary: "“\(existing.caseName)”: \(current.rawValue) → \(useStatus.rawValue)",
-                    relatedTable: "authorities", relatedID: existing.id
-                )
-            }
+            _ = try? store.authorities.transitionUseStatus(
+                authorityID: existing.id,
+                matterID: matterID,
+                to: useStatus,
+                actor: "user"
+            )
             return
         }
         let authority = AuthorityRecord(

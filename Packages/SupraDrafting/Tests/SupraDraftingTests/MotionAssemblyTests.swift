@@ -8,6 +8,35 @@ import XCTest
 /// houseMotionFL sequence lays out numbered facts and hanging-indent point headings per the golden.
 final class MotionAssemblyTests: XCTestCase {
 
+    private var motionEvidence: MotionVerificationEvidence {
+        MotionVerificationEvidence(
+            facts: [
+                MotionFactEvidence(factID: "fact-1", text: "The parties are alleged to have entered an agreement.", sourceID: "revision-1", locator: "p. 1"),
+                MotionFactEvidence(factID: "fact-2", text: "The Complaint does not attach the agreement.", sourceID: "revision-2", locator: "p. 2"),
+                MotionFactEvidence(factID: "fact-3", text: "The breach allegation is conclusory.", sourceID: "revision-3", locator: "p. 3")
+            ],
+            authorities: [
+                MotionAuthorityEvidence(
+                    authorityID: "authority-1",
+                    citation: "Example v. Fictional, 123 So. 3d 456 (Fla. 1st DCA 2020)",
+                    reviewedExcerpt: "A plaintiff must allege a valid contract, breach, and damages.",
+                    groundKey: "mtd.failureToStateClaim"
+                ),
+                MotionAuthorityEvidence(
+                    authorityID: "authority-2",
+                    citation: "Sample v. Placeholder, 789 So. 3d 101 (Fla. 2d DCA 2021)",
+                    reviewedExcerpt: "A written-instrument claim must set forth its essential terms.",
+                    groundKey: "mtd.failureToStateClaim"
+                )
+            ],
+            bodyContract: MotionBodyContract(
+                introduction: "Defendant moves to dismiss the Complaint.",
+                argumentHeading: "THE COMPLAINT FAILS TO STATE A CAUSE OF ACTION FOR BREACH OF CONTRACT.",
+                conclusion: "WHEREFORE, Defendant respectfully requests that this Court dismiss the Complaint."
+            )
+        )
+    }
+
     private var signature: SignatureBlockModel {
         SignatureBlockModel(
             respectfullySubmitted: DateOnly(year: 2026, month: 6, day: 25),
@@ -51,10 +80,12 @@ final class MotionAssemblyTests: XCTestCase {
             argumentPoints: [
                 MotionToDismiss.ArgumentPoint(
                     heading: "THE COMPLAINT FAILS TO STATE A CAUSE OF ACTION FOR BREACH OF CONTRACT.",
-                    body: [.paragraph("To state a claim, a plaintiff must allege a valid contract, breach, and damages. [cite]")],
+                    body: [.paragraph(motionEvidence.authorities[0].canonicalParagraph)],
                     subPoints: [MotionToDismiss.ArgumentPoint(
                         heading: "McKernon Fails to Allege the Essential Terms of a Valid Contract.",
-                        body: [.paragraph("A claim on a written instrument must set forth its essential terms. [cite]")]
+                        body: ([motionEvidence.authorities[1].canonicalParagraph]
+                            + motionEvidence.canonicalSelectedFactReviewParagraphs)
+                            .map(BodyBlock.paragraph)
                     )]
                 ),
                 MotionToDismiss.ArgumentPoint(
@@ -63,6 +94,29 @@ final class MotionAssemblyTests: XCTestCase {
                 )
             ],
             conclusion: "WHEREFORE, Defendant respectfully requests that this Court dismiss the Complaint.",
+            signature: signature,
+            certificate: certificate()
+        )
+    }
+
+    private func buildSupportedMotion() -> DocumentModel {
+        MotionToDismiss.assemble(
+            caption: caption,
+            title: MotionToDismiss.title(
+                party: "Liberty Rail, LLC",
+                partyRole: "Defendant",
+                pleading: "Plaintiff's Complaint"
+            ),
+            introduction: [.paragraph(motionEvidence.bodyContract.introduction)],
+            numberedFacts: motionEvidence.facts.map(\.text),
+            argumentPoints: [MotionToDismiss.ArgumentPoint(
+                heading: motionEvidence.bodyContract.argumentHeading,
+                body: (
+                    motionEvidence.authorities.map(\.canonicalParagraph)
+                        + motionEvidence.canonicalSelectedFactReviewParagraphs
+                ).map(BodyBlock.paragraph)
+            )],
+            conclusion: motionEvidence.bodyContract.conclusion,
             signature: signature,
             certificate: certificate()
         )
@@ -120,7 +174,11 @@ final class MotionAssemblyTests: XCTestCase {
 
     func testMotionPipelineRenders() async throws {
         let pipeline = DraftPipeline(verifier: DraftVerifier(), renderer: CourtFLRenderer())
-        let result = try await pipeline.runMotion(model: buildMotion(), style: .defaultFL)
+        let result = try await pipeline.runMotion(
+            model: buildSupportedMotion(),
+            evidence: motionEvidence,
+            style: .defaultFL
+        )
         XCTAssertEqual(Array(result.docx.prefix(2)), [0x50, 0x4B])
         XCTAssertFalse(result.followUps.contains { $0.severity == .blocking })
     }

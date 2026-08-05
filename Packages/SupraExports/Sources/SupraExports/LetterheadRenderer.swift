@@ -5,6 +5,11 @@ import SupraDraftingCore
 // LOCKED against letterDemand-golden.docx (Letter §3 / Exports §5). No caption / certificate / footer.
 
 public struct LetterheadRenderer: Renderer {
+    public let identity = DraftComponentIdentity(
+        id: "supra.exports.letterhead-renderer",
+        version: "1"
+    )
+
     public init() {}
 
     public func render(_ input: RenderInput, style: HouseStyleSheet) throws -> Data {

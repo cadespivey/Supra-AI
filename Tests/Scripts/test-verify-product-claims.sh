@@ -90,6 +90,28 @@ run_case \
     in_claim && /^    publication_anchor:/ { exit }
   ' "$claims"
 
+# Expected RED: motion-specific assurances were appended to the older generic
+# drafting claim while retaining its 2.2.0 version boundary.
+run_case \
+  "supported motion gate has a next-release controlled claim" \
+  0 \
+  'applicable_version: "Next release after 2.3.4"' \
+  awk '
+    /^  - id: "MOTION-DISMISSAL-PREFILE-GATE"/ { in_claim = 1 }
+    in_claim { print }
+    in_claim && /^    publication_anchor:/ { exit }
+  ' "$claims"
+
+# Expected RED: latest-minus-one still generated a pre-2.3.4 v058 schema even
+# though v2.3.4 is the current published release and ships through v069.
+run_case \
+  "latest-minus-one generator targets the authenticated v2.3.4 tag" \
+  0 \
+  'latest-minus-one|v2.3.4|c0a2648b4c65c066f85eb6bf6ae702f9aa779864|' \
+  grep -F \
+    'latest-minus-one|v2.3.4|c0a2648b4c65c066f85eb6bf6ae702f9aa779864|' \
+    "${repo_root}/Scripts/generate-shipping-migration-fixtures.sh"
+
 drifted_count="${temporary_dir}/drifted-count.yml"
 awk '!changed && sub(/expected: "14"/, "expected: \"13\"") { changed = 1 } { print }' \
   "$claims" >"$drifted_count"

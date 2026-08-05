@@ -53,6 +53,7 @@ public enum ModelRouteResolutionIssue: Error, Equatable, Sendable {
     case roleUnassigned(role: ModelRole, configuredIdentifier: String)
     case assignedModelMissing(role: ModelRole, modelID: String)
     case assignedModelLoadFailed(role: ModelRole, displayName: String, message: String)
+    case cancelled(role: ModelRole)
 
     public var message: String {
         switch self {
@@ -64,6 +65,8 @@ public enum ModelRouteResolutionIssue: Error, Equatable, Sendable {
             "The model assigned to \(role.displayName) is no longer registered. Choose another model in the Models tab."
         case let .assignedModelLoadFailed(role, displayName, message):
             "The \(role.displayName) model \(displayName) failed to load: \(message)"
+        case let .cancelled(role):
+            "Loading the \(role.displayName) model was cancelled."
         }
     }
 }

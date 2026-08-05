@@ -71,6 +71,53 @@ public final class RemediationRecoveryRepository: @unchecked Sendable {
         }
     }
 
+    /// Returns pending work for one matter-owned recovery surface. Scoping is
+    /// applied in SQL before the bounded result limit so unrelated older rows
+    /// cannot hide an actionable item from the screen that resolves it.
+    public func pendingItems(
+        kind: RemediationRecoveryKind,
+        matterID: String,
+        relatedTable: String? = nil,
+        limit: Int = 500
+    ) throws -> [RemediationRecoveryItemRecord] {
+        let bounded = min(max(limit, 1), 2_000)
+        return try writer.read { db in
+            if let relatedTable {
+                return try RemediationRecoveryItemRecord.fetchAll(
+                    db,
+                    sql: """
+                        SELECT * FROM remediation_recovery_items
+                        WHERE status = ? AND kind = ? AND matter_id = ? AND related_table = ?
+                        ORDER BY created_at, id
+                        LIMIT ?
+                        """,
+                    arguments: [
+                        RemediationRecoveryStatus.pending.rawValue,
+                        kind.rawValue,
+                        matterID,
+                        relatedTable,
+                        bounded,
+                    ]
+                )
+            }
+            return try RemediationRecoveryItemRecord.fetchAll(
+                db,
+                sql: """
+                    SELECT * FROM remediation_recovery_items
+                    WHERE status = ? AND kind = ? AND matter_id = ?
+                    ORDER BY created_at, id
+                    LIMIT ?
+                    """,
+                arguments: [
+                    RemediationRecoveryStatus.pending.rawValue,
+                    kind.rawValue,
+                    matterID,
+                    bounded,
+                ]
+            )
+        }
+    }
+
     public func summary() throws -> RemediationRecoverySummary {
         let items = try pendingItems(limit: 2_000)
         let counts = Dictionary(grouping: items.compactMap { RemediationRecoveryKind(rawValue: $0.kind) }, by: { $0 })

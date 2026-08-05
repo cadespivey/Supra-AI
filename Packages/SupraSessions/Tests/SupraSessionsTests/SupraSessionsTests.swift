@@ -2542,6 +2542,164 @@ final class SupraSessionsTests: XCTestCase {
         XCTAssertTrue(controller.canCompleteSession)
     }
 
+    // Expected RED: the Research Results not-adverse action still performs the
+    // result, authority, and audit writes independently with suppressed errors.
+    // A failed result update must roll back the whole action rather than leave a
+    // split authority state and a false success audit.
+    func testResearchResultNotAdverseRollsBackAuthorityAndAuditOnResultFailure() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Atomic review matter")
+        let session = try store.research.createSession(
+            matterID: matter.id,
+            title: "Atomic review session",
+            issueText: "Synthetic issue",
+            jurisdiction: "Florida",
+            status: .resultsReady
+        )
+        let query = try store.research.createQuery(
+            researchSessionID: session.id,
+            queryText: "synthetic query",
+            queryIndex: 0,
+            status: .completed
+        )
+        let result = try store.research.insertResult(ResearchResultRecord(
+            researchQueryID: query.id,
+            caseName: "Synthetic Atomic Authority",
+            reviewState: ResearchResultReviewState.needsLaterReview.rawValue
+        ))
+        let authority = try store.authorities.insertAuthority(AuthorityRecord(
+            matterID: matter.id,
+            researchSessionID: session.id,
+            researchResultID: result.id,
+            caseName: result.caseName,
+            reviewState: ResearchResultReviewState.needsLaterReview.rawValue
+        ))
+        try await store.database.writer.write { db in
+            try db.execute(sql: """
+                CREATE TRIGGER synthetic_research_result_review_failure
+                BEFORE UPDATE OF review_state ON research_results
+                BEGIN
+                    SELECT RAISE(ABORT, 'synthetic research result review failure');
+                END
+                """)
+        }
+        let controller = makeRunController(
+            store: store,
+            matterID: matter.id,
+            client: StubCourtListenerClient()
+        )
+        controller.openSession(session.id)
+
+        controller.reviewResult(result.id, as: .notAdverse)
+
+        XCTAssertEqual(
+            try store.research.fetchResult(resultID: result.id)?.reviewState,
+            ResearchResultReviewState.needsLaterReview.rawValue
+        )
+        XCTAssertEqual(
+            try store.authorities.fetchAuthority(id: authority.id)?.reviewState,
+            ResearchResultReviewState.needsLaterReview.rawValue
+        )
+        XCTAssertTrue(
+            try store.auditEvents.fetchEvents(matterID: matter.id)
+                .filter { $0.eventType == "research_result_reviewed" }
+                .isEmpty
+        )
+    }
+
+    // Expected RED: reviewResult currently accepts any result ID while a session
+    // is open. Both a same-matter/different-session result and a foreign-matter
+    // result must remain untouched and must not be audited under the open matter.
+    func testResearchResultNotAdverseRejectsResultsOutsideOpenMatterAndSession() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Scoped review matter")
+        let openSession = try store.research.createSession(
+            matterID: matter.id,
+            title: "Open review session",
+            issueText: "Synthetic issue",
+            jurisdiction: "Florida",
+            status: .resultsReady
+        )
+        _ = try store.research.createQuery(
+            researchSessionID: openSession.id,
+            queryText: "open query",
+            queryIndex: 0,
+            status: .completed
+        )
+
+        func makeOutOfScopeResult(
+            matterID: String,
+            sessionTitle: String
+        ) throws -> (ResearchResultRecord, AuthorityRecord) {
+            let session = try store.research.createSession(
+                matterID: matterID,
+                title: sessionTitle,
+                issueText: "Out-of-scope issue",
+                jurisdiction: "Florida",
+                status: .resultsReady
+            )
+            let query = try store.research.createQuery(
+                researchSessionID: session.id,
+                queryText: "out-of-scope query",
+                queryIndex: 0,
+                status: .completed
+            )
+            let result = try store.research.insertResult(ResearchResultRecord(
+                researchQueryID: query.id,
+                caseName: "Out-of-Scope Synthetic Authority",
+                reviewState: ResearchResultReviewState.needsLaterReview.rawValue
+            ))
+            let authority = try store.authorities.insertAuthority(AuthorityRecord(
+                matterID: matterID,
+                researchSessionID: session.id,
+                researchResultID: result.id,
+                caseName: result.caseName,
+                reviewState: ResearchResultReviewState.needsLaterReview.rawValue
+            ))
+            return (result, authority)
+        }
+
+        let sameMatterOtherSession = try makeOutOfScopeResult(
+            matterID: matter.id,
+            sessionTitle: "Other same-matter session"
+        )
+        let foreignMatter = try store.matters.createMatter(name: "Foreign review matter")
+        let foreign = try makeOutOfScopeResult(
+            matterID: foreignMatter.id,
+            sessionTitle: "Foreign session"
+        )
+        let controller = makeRunController(
+            store: store,
+            matterID: matter.id,
+            client: StubCourtListenerClient()
+        )
+        controller.openSession(openSession.id)
+
+        controller.reviewResult(sameMatterOtherSession.0.id, as: .notAdverse)
+        controller.reviewResult(foreign.0.id, as: .notAdverse)
+
+        for (result, authority) in [sameMatterOtherSession, foreign] {
+            XCTAssertEqual(
+                try store.research.fetchResult(resultID: result.id)?.reviewState,
+                ResearchResultReviewState.needsLaterReview.rawValue
+            )
+            XCTAssertEqual(
+                try store.authorities.fetchAuthority(id: authority.id)?.reviewState,
+                ResearchResultReviewState.needsLaterReview.rawValue
+            )
+        }
+        XCTAssertTrue(
+            try store.auditEvents.fetchEvents(matterID: matter.id)
+                .filter { $0.eventType == "research_result_reviewed" }
+                .isEmpty
+        )
+        XCTAssertTrue(
+            try store.auditEvents.fetchEvents(matterID: foreignMatter.id)
+                .filter { $0.eventType == "research_result_reviewed" }
+                .isEmpty
+        )
+    }
+
     // MARK: - Local-first research (tiered retrieval spec §4)
 
     func testLocalFirstResearchAnswersFromSavedAuthoritiesAndOffersNetwork() async throws {
@@ -3330,6 +3488,135 @@ final class SupraSessionsTests: XCTestCase {
         XCTAssertEqual(controller.authorities[0].userNotes, "key holding")
     }
 
+    // T-AUTH-STATUS-01. Expected RED: changeUseStatus validates the controller's
+    // cached AuthorityItem, so a transition that became illegal in the live row
+    // is still written and reported successful instead of reloading that row.
+    func testAuthorityUseStatusTransitionRefetchesLiveStateAndReloadsWhenBlocked() throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Stale authority state")
+        let session = try store.research.createSession(
+            matterID: matter.id,
+            title: "Synthetic session",
+            issueText: "Synthetic issue",
+            jurisdiction: "Florida",
+            status: .approved
+        )
+        let query = try store.research.createQuery(
+            researchSessionID: session.id,
+            queryText: "synthetic query",
+            queryIndex: 0,
+            status: .approved
+        )
+        let result = try store.research.insertResult(ResearchResultRecord(
+            researchQueryID: query.id,
+            caseName: "Synthetic Stale Authority"
+        ))
+        let authority = try store.authorities.insertAuthority(AuthorityRecord(
+            matterID: matter.id,
+            researchSessionID: session.id,
+            researchResultID: result.id,
+            caseName: result.caseName,
+            useStatus: AuthorityUseStatus.retrievedFromCourtListener.rawValue
+        ))
+        let controller = AuthoritiesController(store: store, matterID: matter.id)
+        controller.load()
+        XCTAssertEqual(controller.authorities.first?.useStatus, .retrievedFromCourtListener)
+
+        // Simulate another controller advancing the exact live row after this
+        // controller loaded. do_not_use -> user_marked_verified is forbidden.
+        XCTAssertTrue(try store.authorities.transitionUseStatus(
+            authorityID: authority.id,
+            matterID: matter.id,
+            to: .doNotUse,
+            actor: "synthetic-concurrent-user"
+        ))
+        let statusAuditCountBeforeBlockedAttempt = try store.auditEvents
+            .fetchEvents(matterID: matter.id)
+            .filter { $0.eventType == "authority_status_changed" }
+            .count
+
+        XCTAssertFalse(controller.changeUseStatus(
+            authorityID: authority.id,
+            to: .userMarkedVerified
+        ))
+        XCTAssertEqual(
+            try store.authorities.fetchAuthority(id: authority.id)?.useStatus,
+            AuthorityUseStatus.doNotUse.rawValue
+        )
+        XCTAssertEqual(
+            controller.authorities.first?.useStatus,
+            .doNotUse,
+            "a blocked transition must reload the live row"
+        )
+        XCTAssertEqual(
+            try store.auditEvents.fetchEvents(matterID: matter.id)
+                .filter { $0.eventType == "authority_status_changed" }
+                .count,
+            statusAuditCountBeforeBlockedAttempt,
+            "a blocked stale transition must not append another audit"
+        )
+    }
+
+    // T-AUTH-STATUS-02. Expected RED: the authority status update commits before
+    // the separately suppressed audit insert, so an audit trigger failure leaves
+    // the live row changed and the controller returns true.
+    func testAuthorityUseStatusTransitionRollsBackAndReloadsWhenAuditInsertFails() throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Atomic authority status")
+        let session = try store.research.createSession(
+            matterID: matter.id,
+            title: "Synthetic session",
+            issueText: "Synthetic issue",
+            jurisdiction: "Florida",
+            status: .approved
+        )
+        let query = try store.research.createQuery(
+            researchSessionID: session.id,
+            queryText: "synthetic query",
+            queryIndex: 0,
+            status: .approved
+        )
+        let result = try store.research.insertResult(ResearchResultRecord(
+            researchQueryID: query.id,
+            caseName: "Synthetic Atomic Authority"
+        ))
+        let authority = try store.authorities.insertAuthority(AuthorityRecord(
+            matterID: matter.id,
+            researchSessionID: session.id,
+            researchResultID: result.id,
+            caseName: result.caseName,
+            useStatus: AuthorityUseStatus.retrievedFromCourtListener.rawValue
+        ))
+        let controller = AuthoritiesController(store: store, matterID: matter.id)
+        controller.load()
+        try store.database.writer.write { db in
+            try db.execute(sql: """
+                CREATE TRIGGER synthetic_authority_status_audit_failure
+                BEFORE INSERT ON audit_events
+                WHEN NEW.event_type = 'authority_status_changed'
+                BEGIN
+                    SELECT RAISE(ABORT, 'synthetic authority status audit failure');
+                END
+                """)
+        }
+
+        XCTAssertFalse(controller.changeUseStatus(
+            authorityID: authority.id,
+            to: .needsCitatorCheck
+        ))
+        XCTAssertEqual(
+            try store.authorities.fetchAuthority(id: authority.id)?.useStatus,
+            AuthorityUseStatus.retrievedFromCourtListener.rawValue,
+            "the status write must roll back with its failed audit"
+        )
+        XCTAssertEqual(controller.authorities.first?.useStatus, .retrievedFromCourtListener)
+        XCTAssertTrue(
+            try store.auditEvents.fetchEvents(matterID: matter.id)
+                .filter { $0.eventType == "authority_status_changed" }
+                .isEmpty
+        )
+    }
+
     func testReReviewDoesNotIllegallyDowngradeVerifiedAuthority() async throws {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "Acme")
@@ -3344,7 +3631,12 @@ final class SupraSessionsTests: XCTestCase {
         controller.reviewResult(resultID, as: .saveAsAuthority)
         let authority = try XCTUnwrap(store.authorities.fetchAuthority(researchResultID: resultID))
         // The user verifies it in the Authorities tab (a legal transition).
-        try store.authorities.updateUseStatus(authorityID: authority.id, useStatus: .userMarkedVerified)
+        XCTAssertTrue(try store.authorities.transitionUseStatus(
+            authorityID: authority.id,
+            matterID: matter.id,
+            to: .userMarkedVerified,
+            actor: "synthetic-authority-reviewer"
+        ))
 
         // Re-reviewing as Needs Later Review would set unverified — an illegal
         // §11.4 transition that must NOT silently downgrade the verified status.
@@ -3352,6 +3644,71 @@ final class SupraSessionsTests: XCTestCase {
         let after = try XCTUnwrap(store.authorities.fetchAuthority(researchResultID: resultID))
         XCTAssertEqual(after.useStatus, AuthorityUseStatus.userMarkedVerified.rawValue)
         XCTAssertEqual(after.reviewState, ResearchResultReviewState.needsLaterReview.rawValue, "review classification still updates")
+    }
+
+    // T-AUTH-STATUS-03. Expected RED: ResearchSessionController snapshots the
+    // existing authority before its review-state write. If that write observes a
+    // concurrent status transition to the requested target, the stale snapshot
+    // still emits a duplicate status transition audit.
+    func testResearchReReviewRefetchesLiveUseStatusBeforeTransitionAudit() throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Research stale authority")
+        let session = try store.research.createSession(
+            matterID: matter.id,
+            title: "Synthetic session",
+            issueText: "Synthetic issue",
+            jurisdiction: "Florida",
+            status: .resultsReady
+        )
+        let query = try store.research.createQuery(
+            researchSessionID: session.id,
+            queryText: "synthetic query",
+            queryIndex: 0,
+            status: .completed
+        )
+        let result = try store.research.insertResult(ResearchResultRecord(
+            researchQueryID: query.id,
+            caseName: "Synthetic Interleaved Authority",
+            reviewState: ResearchResultReviewState.saved.rawValue
+        ))
+        let authority = try store.authorities.insertAuthority(AuthorityRecord(
+            matterID: matter.id,
+            researchSessionID: session.id,
+            researchResultID: result.id,
+            caseName: result.caseName,
+            reviewState: ResearchResultReviewState.saved.rawValue,
+            useStatus: AuthorityUseStatus.retrievedFromCourtListener.rawValue
+        ))
+        try store.database.writer.write { db in
+            try db.execute(sql: """
+                CREATE TRIGGER synthetic_research_authority_status_interleaving
+                BEFORE UPDATE OF review_state ON authorities
+                WHEN OLD.id = '\(authority.id)'
+                BEGIN
+                    UPDATE authorities
+                    SET use_status = 'needs_citator_check'
+                    WHERE id = OLD.id;
+                END
+                """)
+        }
+        let controller = makeRunController(
+            store: store,
+            matterID: matter.id,
+            client: StubCourtListenerClient()
+        )
+        controller.openSession(session.id)
+
+        controller.reviewResult(result.id, as: .potentiallyAdverse)
+
+        let persisted = try XCTUnwrap(store.authorities.fetchAuthority(id: authority.id))
+        XCTAssertEqual(persisted.useStatus, AuthorityUseStatus.needsCitatorCheck.rawValue)
+        XCTAssertEqual(persisted.reviewState, ResearchResultReviewState.potentiallyAdverse.rawValue)
+        XCTAssertTrue(
+            try store.auditEvents.fetchEvents(matterID: matter.id)
+                .filter { $0.eventType == "authority_status_changed" }
+                .isEmpty,
+            "a transition already applied to the live row must not be audited again"
+        )
     }
 
     // MARK: - Structured outputs (WO 28)

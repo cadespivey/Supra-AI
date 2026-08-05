@@ -153,7 +153,19 @@ final class DraftPipelineTests: XCTestCase {
                     _ = try await pipeline.runNotice(noticeInputs, profile: profile, style: .defaultFL)
                 } else {
                     let model = NoticeAppearance.assemble(noticeInputs, profile: profile)
-                    _ = try await pipeline.runMotion(model: model, style: .defaultFL)
+                    _ = try await pipeline.runMotion(
+                        model: model,
+                        evidence: MotionVerificationEvidence(
+                            facts: [],
+                            authorities: [],
+                            bodyContract: MotionBodyContract(
+                                introduction: "",
+                                argumentHeading: "",
+                                conclusion: ""
+                            )
+                        ),
+                        style: .defaultFL
+                    )
                 }
                 XCTFail("a verifier failure must throw before rendering \(operation)")
             } catch {
@@ -350,9 +362,133 @@ final class DraftPipelineTests: XCTestCase {
         }
         XCTAssertEqual(renderer.renderCount, 0)
     }
+
+    // ACR-DRAFT-07. Expected RED: runNotice does not inspect task cancellation after
+    // its async verifier returns, so a verifier that leaves cancellation pending still
+    // reaches the synchronous gate and renderer.
+    func testCancellationAfterNoticeVerifierNeverReachesRenderer() async {
+        let renderer = CountingRenderer()
+        let pipeline = DraftPipeline(verifier: CancellingVerifier(), renderer: renderer)
+        let inputs = noticeInputs
+        let firm = profile
+
+        let task = Task {
+            try await pipeline.runNotice(inputs, profile: firm, style: .defaultFL)
+        }
+        do {
+            _ = try await task.value
+            XCTFail("cancelled notice verification unexpectedly reached rendering")
+        } catch is CancellationError {
+            // Expected at the verifier-to-gate boundary.
+        } catch {
+            XCTFail("expected CancellationError, got \(error)")
+        }
+        XCTAssertEqual(renderer.renderCount, 0)
+    }
+
+    // ACR-DRAFT-08. Expected RED: runLetter has the same missing cancellation
+    // boundary, so a cancelled verification task still renders a demand letter.
+    func testCancellationAfterLetterVerifierNeverReachesRenderer() async {
+        let renderer = CountingRenderer()
+        let pipeline = DraftPipeline(verifier: CancellingVerifier(), renderer: renderer)
+        let text = "The invoice remains unpaid under the supply agreement."
+        let generated = GeneratedLetter(paragraphProvenance: [
+            GeneratedLetterParagraph(text: text, factLabels: ["claim"], citationLabels: [])
+        ])
+        let facts = [GroundedFact(
+            text: text,
+            label: "claim",
+            docId: "user-input",
+            locator: "claim"
+        )]
+        let inputs = letterInputs
+        let firm = profile
+
+        let task = Task {
+            try await pipeline.runLetter(
+                inputs,
+                generated: generated,
+                facts: facts,
+                profile: firm,
+                style: .defaultFL
+            )
+        }
+        do {
+            _ = try await task.value
+            XCTFail("cancelled letter verification unexpectedly reached rendering")
+        } catch is CancellationError {
+            // Expected at the verifier-to-gate boundary.
+        } catch {
+            XCTFail("expected CancellationError, got \(error)")
+        }
+        XCTAssertEqual(renderer.renderCount, 0)
+    }
+
+    // ACR-DRAFT-09. Expected RED: cancellation raised synchronously by the notice
+    // renderer remains pending, but runNotice returns a DraftResult instead of
+    // honoring it at the renderer boundary.
+    func testCancellationDuringNoticeRendererNeverReturnsDraftResult() async {
+        let renderer = CountingRenderer(cancelsCurrentTask: true)
+        let pipeline = DraftPipeline(verifier: DraftVerifier(), renderer: renderer)
+        let inputs = noticeInputs
+        let firm = profile
+
+        let task = Task {
+            try await pipeline.runNotice(inputs, profile: firm, style: .defaultFL)
+        }
+        do {
+            _ = try await task.value
+            XCTFail("cancelled notice rendering unexpectedly returned a draft result")
+        } catch is CancellationError {
+            // Expected immediately after rendering.
+        } catch {
+            XCTFail("expected CancellationError, got \(error)")
+        }
+        XCTAssertEqual(renderer.renderCount, 1)
+    }
+
+    // ACR-DRAFT-10. Expected RED: runLetter likewise returns normally when
+    // cancellation arrives inside its synchronous renderer.
+    func testCancellationDuringLetterRendererNeverReturnsDraftResult() async {
+        let renderer = CountingRenderer(cancelsCurrentTask: true)
+        let pipeline = DraftPipeline(verifier: DraftVerifier(), renderer: renderer)
+        let text = "The invoice remains unpaid under the supply agreement."
+        let generated = GeneratedLetter(paragraphProvenance: [
+            GeneratedLetterParagraph(text: text, factLabels: ["claim"], citationLabels: [])
+        ])
+        let facts = [GroundedFact(
+            text: text,
+            label: "claim",
+            docId: "user-input",
+            locator: "claim"
+        )]
+        let inputs = letterInputs
+        let firm = profile
+
+        let task = Task {
+            try await pipeline.runLetter(
+                inputs,
+                generated: generated,
+                facts: facts,
+                profile: firm,
+                style: .defaultFL
+            )
+        }
+        do {
+            _ = try await task.value
+            XCTFail("cancelled letter rendering unexpectedly returned a draft result")
+        } catch is CancellationError {
+            // Expected immediately after rendering.
+        } catch {
+            XCTFail("expected CancellationError, got \(error)")
+        }
+        XCTAssertEqual(renderer.renderCount, 1)
+    }
 }
 
 private struct AlwaysBlockingVerifier: Verifier {
+    let identity = DraftComponentIdentity(id: "test.always-blocking-verifier", version: "1")
+
     func verify(_ unit: VerifyUnit, kind: DraftKindID, style: HouseStyleSheet) async -> VerificationResult {
         VerificationResult(
             failures: [GateFailure(gate: .factProvenance, detail: "unsupported proposition", repair: .stripToPlaceholderAndFlag)],
@@ -362,6 +498,8 @@ private struct AlwaysBlockingVerifier: Verifier {
 }
 
 private struct BlockingFollowUpVerifier: Verifier {
+    let identity = DraftComponentIdentity(id: "test.blocking-follow-up-verifier", version: "1")
+
     func verify(_ unit: VerifyUnit, kind: DraftKindID, style: HouseStyleSheet) async -> VerificationResult {
         VerificationResult(
             failures: [],
@@ -370,11 +508,34 @@ private struct BlockingFollowUpVerifier: Verifier {
     }
 }
 
+private struct CancellingVerifier: Verifier {
+    let identity = DraftComponentIdentity(id: "test.cancelling-verifier", version: "1")
+
+    func verify(_ unit: VerifyUnit, kind: DraftKindID, style: HouseStyleSheet) async -> VerificationResult {
+        let result = await DraftVerifier().verify(unit, kind: kind, style: style)
+        withUnsafeCurrentTask { task in
+            task?.cancel()
+        }
+        return result
+    }
+}
+
 private final class CountingRenderer: Renderer, @unchecked Sendable {
+    let identity = DraftComponentIdentity(id: "test.counting-renderer", version: "1")
     private(set) var renderCount = 0
+    private let cancelsCurrentTask: Bool
+
+    init(cancelsCurrentTask: Bool = false) {
+        self.cancelsCurrentTask = cancelsCurrentTask
+    }
 
     func render(_ input: RenderInput, style: HouseStyleSheet) throws -> Data {
         renderCount += 1
+        if cancelsCurrentTask {
+            withUnsafeCurrentTask { task in
+                task?.cancel()
+            }
+        }
         return Data("rendered".utf8)
     }
 }

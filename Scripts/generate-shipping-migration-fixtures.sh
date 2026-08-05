@@ -26,7 +26,7 @@ FIXTURES=(
   "v2.1.0|v2.1.0|c21cff69d7268a21724853cad4396bb0d8678a84|"
   "v2.1.3|v2.1.3|67f8707fcd3d2e6c151b244919f2a065ce1ab5ff|"
   "v2.2.0|v2.2.0|4c2a8ff21d5765751651a82129304f1bc6257029|"
-  "latest-minus-one|260f6f5a48046476ce6ef4f2b598ac4dd43c2525|260f6f5a48046476ce6ef4f2b598ac4dd43c2525|v058_add_document_job_kind"
+  "latest-minus-one|v2.3.4|c0a2648b4c65c066f85eb6bf6ae702f9aa779864|"
 )
 
 for specification in "${FIXTURES[@]}"; do

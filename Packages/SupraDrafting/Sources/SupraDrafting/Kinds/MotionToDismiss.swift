@@ -2,10 +2,15 @@ import Foundation
 import SupraDraftingCore
 
 // The `motionToDismiss` kind — contract/Auth: generation per section, authority firewall, the
-// houseMotionFL skeleton. The slice ships the deterministic spine (caption/title/skeleton/
-// assembly + the firewall plumbing); a live Generator drives the prose.
+// houseMotionFL skeleton. The supported workflow deterministically assembles prose from
+// reviewed selected-source evidence and validates it through the drafting pipeline.
 
 public enum MotionToDismiss {
+    public static let assemblerIdentity = DraftComponentIdentity(
+        id: "supra.drafting.motion-to-dismiss-assembler",
+        version: "3"
+    )
+
     public struct SectionDef: Sendable, Equatable {
         public var id: Section
         public var generate: Bool

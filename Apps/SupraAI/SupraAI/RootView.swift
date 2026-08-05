@@ -7,6 +7,7 @@ struct RootView: View {
     @EnvironmentObject private var environment: AppEnvironment
     @AppStorage("supra.remediationNoticeV057Acknowledged") private var remediationNoticeAcknowledged = false
     @State private var showingRemediationNotice = false
+    @State private var interruptedNoticePresentedThisLaunch = false
 
     @ViewBuilder
     var body: some View {
@@ -70,12 +71,13 @@ struct RootView: View {
         }
         .background(environment.isShowingSplash ? BrandColors.navy : Color.clear)
         .task { await environment.bootstrap() }
-        .onChange(of: environment.isShowingSplash) { _, showingSplash in
-            if !showingSplash,
-               environment.remediationRecoverySummary.pendingCount > 0,
-               !remediationNoticeAcknowledged {
-                showingRemediationNotice = true
-            }
+        .onChange(of: environment.isShowingSplash) { _, _ in
+            presentRemediationNoticeIfNeeded()
+        }
+        .onChange(of: environment.remediationRecoverySummary) { _, _ in
+            // Bootstrap may publish the durable summary after the splash has
+            // already dismissed. Evaluate both event orders.
+            presentRemediationNoticeIfNeeded()
         }
         .alert("Review previous generated work", isPresented: $showingRemediationNotice) {
             Button("Continue") { remediationNoticeAcknowledged = true }
@@ -96,12 +98,34 @@ struct RootView: View {
     }
 #endif
 
+    private var interruptedDraftsPending: Bool {
+        environment.remediationRecoverySummary
+            .pendingByKind[.interruptedDraftArtifact, default: 0] > 0
+    }
+
+    private func presentRemediationNoticeIfNeeded() {
+        guard !environment.isShowingSplash,
+              environment.remediationRecoverySummary.pendingCount > 0,
+              !showingRemediationNotice else { return }
+        if interruptedDraftsPending {
+            // Unlike the one-time v057 migration notice, a newly interrupted
+            // publication must surface once on every launch until its explicit
+            // matter-level recovery item is resolved.
+            guard !interruptedNoticePresentedThisLaunch else { return }
+            interruptedNoticePresentedThisLaunch = true
+            showingRemediationNotice = true
+        } else if !remediationNoticeAcknowledged {
+            showingRemediationNotice = true
+        }
+    }
+
     private var remediationNoticeMessage: String {
         let summary = environment.remediationRecoverySummary
         let outputs = summary.pendingByKind[.legacyStructuredOutput, default: 0]
         let drafts = summary.pendingByKind[.legacyDraftArtifact, default: 0]
+        let interruptedDrafts = summary.pendingByKind[.interruptedDraftArtifact, default: 0]
         let billing = summary.pendingByKind[.multiMatterBillingDraft, default: 0]
-        return "A security update changed how generated work is verified. \(outputs) saved output(s), \(drafts) draft artifact(s), and \(billing) multi-matter billing draft(s) need review. Nothing was deleted. Affected screens identify the item and provide reverify, regenerate, or confirmation actions."
+        return "A security update changed how generated work is verified. \(outputs) saved output(s), \(drafts) legacy draft artifact(s), \(interruptedDrafts) interrupted draft publication(s), and \(billing) multi-matter billing draft(s) need review. Public or user-visible drafts are preserved whenever ownership or integrity is uncertain; Supra AI may clean only exact internal temporary or owned rollback files left by an interrupted write. Affected screens identify the item and provide reverify, regenerate, or confirmation actions."
     }
 }
 

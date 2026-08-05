@@ -1,11 +1,13 @@
+import Darwin
 import Foundation
+import GRDB
 import SupraCore
 import SupraDrafting
 import SupraDraftingCore
 import SupraExports
 import SupraRuntimeInterface
 @testable import SupraSessions
-import SupraDocuments
+@testable import SupraDocuments
 import SupraStore
 import XCTest
 
@@ -16,6 +18,49 @@ import XCTest
 final class MatterDraftingControllerTests: XCTestCase {
 
     private enum PersistenceFailure: Error { case stop }
+
+    private struct DirectorySyncFailure: LocalizedError {
+        var errorDescription: String? { "injected directory synchronization failure" }
+    }
+
+    private final class InstallRollbackSyncProbe: @unchecked Sendable {
+        enum Phase: Hashable {
+            case install
+            case rollback
+        }
+
+        private let lock = NSLock()
+        private let destination: URL
+        private let failingPhases: Set<Phase>
+        private var observedPhases: [Phase] = []
+
+        init(destination: URL, failingPhases: Set<Phase> = [.install, .rollback]) {
+            self.destination = destination
+            self.failingPhases = failingPhases
+        }
+
+        var phases: [Phase] {
+            lock.withLock { observedPhases }
+        }
+
+        func synchronize(_ directory: URL) throws {
+            let destinationExists = FileManager.default.fileExists(atPath: destination.path)
+            let phase = lock.withLock { () -> Phase? in
+                if destinationExists, observedPhases.isEmpty {
+                    observedPhases.append(.install)
+                    return .install
+                }
+                if !destinationExists, observedPhases == [.install] {
+                    observedPhases.append(.rollback)
+                    return .rollback
+                }
+                return nil
+            }
+            if phase.map(failingPhases.contains) == true {
+                throw DirectorySyncFailure()
+            }
+        }
+    }
 
     // MARK: - Helpers
 
@@ -136,10 +181,80 @@ final class MatterDraftingControllerTests: XCTestCase {
         XCTAssertTrue(events.contains { $0.eventType == "draft_generated" })
     }
 
+    // ACR-EXPORT-013. Expected RED: live generic publication creates managed
+    // directories with FileManager, which follows a preexisting exports or
+    // matter-directory symlink and writes the draft outside managed storage.
+    @MainActor
+    func testGenericDraftRejectsStaticSymlinkedExportsAndMatterParents() async throws {
+        for symlinkExportsDirectory in [true, false] {
+            let store = try makeStore()
+            let matter = try store.matters.createMatter(name: "Symlink containment matter")
+            let fixtureRoot = FileManager.default.temporaryDirectory
+                .appendingPathComponent("DraftSymlinkContainment-\(UUID().uuidString)", isDirectory: true)
+            addTeardownBlock { try? FileManager.default.removeItem(at: fixtureRoot) }
+            let storage = DocumentStorage(
+                root: fixtureRoot.appendingPathComponent("managed", isDirectory: true)
+            )
+            let external = fixtureRoot.appendingPathComponent("external", isDirectory: true)
+            try FileManager.default.createDirectory(at: external, withIntermediateDirectories: true)
+
+            let externalDestination: URL
+            if symlinkExportsDirectory {
+                try FileManager.default.createDirectory(at: storage.root, withIntermediateDirectories: true)
+                try FileManager.default.createSymbolicLink(
+                    at: storage.exportsDirectory,
+                    withDestinationURL: external
+                )
+                externalDestination = external
+                    .appendingPathComponent(matter.id, isDirectory: true)
+                    .appendingPathComponent("Symlink-outline-static-parent-link.md")
+            } else {
+                try FileManager.default.createDirectory(
+                    at: storage.exportsDirectory,
+                    withIntermediateDirectories: true
+                )
+                try FileManager.default.createSymbolicLink(
+                    at: storage.exportsDirectory(forMatterID: matter.id),
+                    withDestinationURL: external
+                )
+                externalDestination = external
+                    .appendingPathComponent("Symlink-outline-static-parent-link.md")
+            }
+            let controller = MatterDraftingController(
+                store: store,
+                storage: storage,
+                fileStampProvider: { "static-parent-link" }
+            )
+
+            let result = await controller.draftCustomDescription(
+                matterID: matter.id,
+                input: .init(
+                    title: "Symlink outline",
+                    description: "Keep this draft inside managed storage."
+                )
+            )
+
+            if case .success = result {
+                XCTFail("a static managed-parent symlink must block generic publication")
+            }
+            XCTAssertFalse(FileManager.default.fileExists(atPath: externalDestination.path))
+            XCTAssertTrue(try store.auditEvents.fetchEvents(matterID: matter.id).isEmpty)
+            let intentStatuses = try await store.database.writer.read { db in
+                try String.fetchAll(
+                    db,
+                    sql: "SELECT status FROM draft_artifact_intents WHERE matter_id = ? ORDER BY created_at, id",
+                    arguments: [matter.id]
+                )
+            }
+            XCTAssertEqual(intentStatuses, [DraftArtifactIntentStatus.aborted.rawValue])
+            XCTAssertTrue(try store.draftArtifacts.pendingIntents().isEmpty)
+        }
+    }
+
     // MARK: - Multi-kind request layer
 
     @MainActor
-    func testAvailableDraftKindsEnablesOnlyWiredNoticeWithReasons() throws {
+    func testAvailableDraftKindsEnablesWiredNoticeAndMotionWithReasons() throws {
         let store = try makeStore()
         let controller = MatterDraftingController(store: store, storage: makeStorage())
         let kinds = controller.availableDraftKinds()
@@ -148,13 +263,12 @@ final class MatterDraftingControllerTests: XCTestCase {
         let notice = kinds.first { $0.id == .noticeAppearance }
         XCTAssertEqual(notice?.isEnabled, true)
         XCTAssertNil(notice?.disabledReason)
-        // The other kinds exist in the registry but are NOT wired, so they must be
-        // disabled with a reason — not silently hidden or wrongly enabled.
-        for kind in [DraftKindID.motionToDismiss, .letterDemand] {
-            let availability = kinds.first { $0.id == kind }
-            XCTAssertEqual(availability?.isEnabled, false, "\(kind) should be disabled")
-            XCTAssertNotNil(availability?.disabledReason, "\(kind) needs a disabled reason")
-        }
+        let motion = kinds.first { $0.id == .motionToDismiss }
+        XCTAssertEqual(motion?.isEnabled, true)
+        XCTAssertNil(motion?.disabledReason)
+        let letter = kinds.first { $0.id == .letterDemand }
+        XCTAssertEqual(letter?.isEnabled, false)
+        XCTAssertNotNil(letter?.disabledReason)
     }
 
     @MainActor
@@ -238,7 +352,7 @@ final class MatterDraftingControllerTests: XCTestCase {
     }
 
     // ACR-EXPORT-010: a required audit failure is explicitly compensated after
-    // install, restoring a preexisting draft byte-for-byte.
+    // a create-only collision allocation, leaving the preexisting draft untouched.
     @MainActor
     func testDraftAuditFailureRestoresCanary() async throws {
         let store = try makeStore()
@@ -247,6 +361,7 @@ final class MatterDraftingControllerTests: XCTestCase {
         let directory = storage.exportsDirectory(forMatterID: matter.id)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let destination = directory.appendingPathComponent("Atomic-outline-fixed.md")
+        let allocatedDestination = directory.appendingPathComponent("Atomic-outline-fixed-2.md")
         let canary = Data("reviewed-canary".utf8)
         try canary.write(to: destination)
         var auditObservedInstalledFile = false
@@ -256,7 +371,8 @@ final class MatterDraftingControllerTests: XCTestCase {
             fileStampProvider: { "fixed" },
             auditRecorder: { event in
                 auditObservedInstalledFile = event.eventType == "draft_generated"
-                    && (try? DocumentExportValidator.validate(destination, as: .markdown)) != nil
+                    && event.summary.contains("(\(allocatedDestination.lastPathComponent))")
+                    && (try? DocumentExportValidator.validate(allocatedDestination, as: .markdown)) != nil
                 throw PersistenceFailure.stop
             }
         )
@@ -268,7 +384,732 @@ final class MatterDraftingControllerTests: XCTestCase {
         guard case .failure = result else { return XCTFail("expected audit failure") }
         XCTAssertTrue(auditObservedInstalledFile)
         XCTAssertEqual(try Data(contentsOf: destination), canary)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: allocatedDestination.path))
         XCTAssertTrue(try store.auditEvents.fetchEvents(matterID: matter.id).isEmpty)
+    }
+
+    // ACR-EXPORT-012. The audit callback is a process-boundary seam. If another
+    // process replaces the installed path while that callback runs, Store must
+    // never finalize from bytes read before the callback or remove the replacement.
+    @MainActor
+    func testGenericDraftCheckpointReplacementIsPreservedWithoutCompletedIntentOrAudit() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Checkpoint replacement matter")
+        let storage = makeStorage()
+        let destination = storage.exportsDirectory(forMatterID: matter.id)
+            .appendingPathComponent("Checkpoint-replacement-race.md")
+        let replacement = Data("concurrent reviewed replacement".utf8)
+        var intentID: String?
+        let controller = MatterDraftingController(
+            store: store,
+            storage: storage,
+            fileStampProvider: { "race" },
+            auditRecorder: { event in
+                intentID = String(event.id.dropFirst("draft-artifact-".count))
+                try replacement.write(to: destination, options: .atomic)
+            }
+        )
+
+        let result = await controller.draftCustomDescription(
+            matterID: matter.id,
+            input: .init(
+                title: "Checkpoint replacement",
+                description: "Authenticate the final installed bytes."
+            )
+        )
+
+        if case .success = result {
+            XCTFail("a replaced public artifact must not be reported as finalized")
+        }
+        XCTAssertEqual(try Data(contentsOf: destination), replacement)
+        let intent = try XCTUnwrap(try store.draftArtifacts.intent(id: XCTUnwrap(intentID)))
+        XCTAssertEqual(intent.status, DraftArtifactIntentStatus.recoveryRequired.rawValue)
+        XCTAssertTrue(try store.auditEvents.fetchEvents(matterID: matter.id).isEmpty)
+    }
+
+    // ACR-EXPORT-014. A same-inode hard link at the expected public pathname is
+    // not sufficient authority to finalize after the managed matter directory
+    // itself has been replaced during the successful audit callback.
+    @MainActor
+    func testGenericDraftFinalizationRejectsManagedParentSubstitutionWithHardLinkedInode() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Finalization parent substitution")
+        let storage = makeStorage()
+        addTeardownBlock { try? FileManager.default.removeItem(at: storage.root) }
+        let managedParent = storage.exportsDirectory(forMatterID: matter.id)
+        let destination = managedParent.appendingPathComponent("Finalization-parent-race.md")
+        let preservedParent = storage.root
+            .appendingPathComponent("preserved-finalization-parent", isDirectory: true)
+        let preservedDestination = preservedParent.appendingPathComponent(
+            destination.lastPathComponent
+        )
+        var intentID: String?
+        let controller = MatterDraftingController(
+            store: store,
+            storage: storage,
+            fileStampProvider: { "race" },
+            auditRecorder: { event in
+                intentID = String(event.id.dropFirst("draft-artifact-".count))
+                try FileManager.default.moveItem(at: managedParent, to: preservedParent)
+                try FileManager.default.createDirectory(
+                    at: managedParent,
+                    withIntermediateDirectories: true
+                )
+                try FileManager.default.linkItem(
+                    at: preservedDestination,
+                    to: destination
+                )
+            }
+        )
+
+        let result = await controller.draftCustomDescription(
+            matterID: matter.id,
+            input: .init(
+                title: "Finalization parent",
+                description: "Require the retained managed chain before success."
+            )
+        )
+
+        guard case let .failure(.renderFailed(message)) = result else {
+            return XCTFail("a detached installed inode must not authorize success finalization")
+        }
+        XCTAssertTrue(message.contains("rollback also failed"), message)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: destination.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: preservedDestination.path))
+        let intent = try XCTUnwrap(try store.draftArtifacts.intent(id: XCTUnwrap(intentID)))
+        let publicData = try Data(contentsOf: destination)
+        XCTAssertEqual(publicData.count, intent.outputByteSize)
+        XCTAssertEqual(DocumentStorage.sha256Hex(of: publicData), intent.outputSHA256)
+        let retainedQuarantines = try FileManager.default.contentsOfDirectory(
+            at: preservedParent,
+            includingPropertiesForKeys: nil
+        ).filter { $0.lastPathComponent.hasPrefix(".supra-draft-rollback-") }
+        XCTAssertEqual(retainedQuarantines.count, 1)
+        let quarantineData = try Data(contentsOf: XCTUnwrap(retainedQuarantines.first))
+        XCTAssertEqual(quarantineData.count, intent.outputByteSize)
+        XCTAssertEqual(DocumentStorage.sha256Hex(of: quarantineData), intent.outputSHA256)
+        XCTAssertEqual(intent.status, DraftArtifactIntentStatus.recoveryRequired.rawValue)
+        XCTAssertTrue(try store.auditEvents.fetchEvents(matterID: matter.id).isEmpty)
+    }
+
+    // ACR-EXPORT-017. If the exact installed inode is moved entirely from the
+    // retained matter directory into a replacement public parent, a missing
+    // retained source is not a successful rollback. The public survivor must
+    // keep the intent recoverable even though no exact quarantine name remains.
+    @MainActor
+    func testGenericDraftCompensationRejectsExactInodeMovedToReplacementParent() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Finalization parent move")
+        let storage = makeStorage()
+        addTeardownBlock { try? FileManager.default.removeItem(at: storage.root) }
+        let managedParent = storage.exportsDirectory(forMatterID: matter.id)
+        let destination = managedParent.appendingPathComponent("Finalization-parent-move.md")
+        let preservedParent = storage.root
+            .appendingPathComponent("preserved-finalization-move", isDirectory: true)
+        let preservedDestination = preservedParent.appendingPathComponent(
+            destination.lastPathComponent
+        )
+        var intentID: String?
+        let controller = MatterDraftingController(
+            store: store,
+            storage: storage,
+            fileStampProvider: { "move" },
+            auditRecorder: { event in
+                intentID = String(event.id.dropFirst("draft-artifact-".count))
+                try FileManager.default.moveItem(at: managedParent, to: preservedParent)
+                try FileManager.default.createDirectory(
+                    at: managedParent,
+                    withIntermediateDirectories: true
+                )
+                try FileManager.default.moveItem(at: preservedDestination, to: destination)
+            }
+        )
+
+        let result = await controller.draftCustomDescription(
+            matterID: matter.id,
+            input: .init(
+                title: "Finalization parent",
+                description: "A moved exact inode remains a recovery artifact."
+            )
+        )
+
+        guard case let .failure(.renderFailed(message)) = result else {
+            return XCTFail("a moved exact artifact must not be reported as rolled back")
+        }
+        XCTAssertTrue(message.contains("rollback also failed"), message)
+        XCTAssertTrue(message.contains("no exact rollback quarantine could be verified"), message)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: destination.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: preservedDestination.path))
+        let intent = try XCTUnwrap(try store.draftArtifacts.intent(id: XCTUnwrap(intentID)))
+        let publicData = try Data(contentsOf: destination)
+        XCTAssertEqual(publicData.count, intent.outputByteSize)
+        XCTAssertEqual(DocumentStorage.sha256Hex(of: publicData), intent.outputSHA256)
+        XCTAssertEqual(intent.status, DraftArtifactIntentStatus.recoveryRequired.rawValue)
+        XCTAssertTrue(try store.auditEvents.fetchEvents(matterID: matter.id).isEmpty)
+    }
+
+    // Expected RED: interrupted items had only a global count; the matter draft
+    // surface exposed neither affected filenames nor an explicit resolution.
+    @MainActor
+    func testInterruptedDraftRecoveryListsFilenameAndAcknowledgesWithoutDeletingBytes() throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Interrupted recovery matter")
+        let storage = makeStorage()
+        let output = Data("# Preserved interrupted draft\n".utf8)
+        let intent = try store.draftArtifacts.prepareGenericIntent(
+            matterID: matter.id,
+            artifactKind: .customDescription,
+            format: .markdown,
+            fileName: "Interrupted-review.md",
+            output: output,
+            id: "interrupted-review-intent"
+        )
+        try store.draftArtifacts.markRecoveryRequired(id: intent.id)
+        let publicURL = storage.exportsDirectory(forMatterID: matter.id)
+            .appendingPathComponent(intent.fileName)
+        try FileManager.default.createDirectory(
+            at: publicURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try output.write(to: publicURL)
+        let controller = MatterDraftingController(store: store, storage: storage)
+
+        controller.refreshDraftReviewState(matterID: matter.id)
+
+        XCTAssertEqual(controller.interruptedDraftRecoveries.map(\.fileName), [intent.fileName])
+        XCTAssertEqual(controller.interruptedDraftRecoveries.map(\.fileURL), [publicURL])
+        controller.confirmInterruptedDraftArtifactsReviewed(matterID: matter.id)
+        XCTAssertTrue(controller.interruptedDraftRecoveries.isEmpty)
+        XCTAssertEqual(try Data(contentsOf: publicURL), output)
+        XCTAssertEqual(
+            try store.draftArtifacts.intent(id: intent.id)?.status,
+            DraftArtifactIntentStatus.recoveryRequired.rawValue,
+            "acknowledgment resolves the review item but retains historical intent state"
+        )
+        XCTAssertNil(
+            try store.remediationRecovery.pendingItem(
+                kind: .interruptedDraftArtifact,
+                relatedID: intent.id
+            )
+        )
+    }
+
+    // Expected RED: the controller applied the repository's global 500-row
+    // limit before filtering by matter and recovery kind. A newer interrupted
+    // publication could therefore be announced globally but remain absent from
+    // the only matter surface that can reveal or acknowledge it.
+    @MainActor
+    func testInterruptedDraftRecoveryScopesByMatterBeforeApplyingLimit() throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Late interrupted recovery")
+        let intent = try store.draftArtifacts.prepareGenericIntent(
+            matterID: matter.id,
+            artifactKind: .customDescription,
+            format: .markdown,
+            fileName: "Late-interrupted.md",
+            output: Data("# Preserved late draft\n".utf8),
+            id: "late-interrupted-intent"
+        )
+        let oldDate = Date(timeIntervalSinceReferenceDate: 1)
+        try store.database.writer.write { db in
+            for index in 0..<500 {
+                try RemediationRecoveryItemRecord(
+                    id: String(format: "old-recovery-%04d", index),
+                    kind: .legacyStructuredOutput,
+                    matterID: nil,
+                    relatedTable: "structured_outputs",
+                    relatedID: String(format: "old-output-%04d", index),
+                    createdAt: oldDate
+                ).insert(db)
+            }
+        }
+        try store.draftArtifacts.markRecoveryRequired(id: intent.id)
+        let controller = MatterDraftingController(store: store, storage: makeStorage())
+
+        controller.refreshDraftReviewState(matterID: matter.id)
+
+        XCTAssertEqual(controller.interruptedDraftRecoveries.map(\.intentID), [intent.id])
+        controller.confirmInterruptedDraftArtifactsReviewed(matterID: matter.id)
+        XCTAssertNil(
+            try store.remediationRecovery.pendingItem(
+                kind: .interruptedDraftArtifact,
+                relatedID: intent.id
+            )
+        )
+    }
+
+    // Expected RED: compact-mapping invalid intent rows hid a permanent pending
+    // recovery item; revealing the raw tampered filename would be unsafe.
+    @MainActor
+    func testTamperedInterruptedRecoveryStaysVisibleButCannotRevealAPath() throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Corrupt interrupted recovery")
+        let intent = try store.draftArtifacts.prepareGenericIntent(
+            matterID: matter.id,
+            artifactKind: .customDescription,
+            format: .markdown,
+            fileName: "Original.md",
+            output: Data("# Original\n".utf8),
+            id: "corrupt-visible-recovery"
+        )
+        try store.database.writer.write { db in
+            try db.execute(
+                sql: "UPDATE draft_artifact_intents SET file_name = ? WHERE id = ?",
+                arguments: ["../../outside.md", intent.id]
+            )
+        }
+        try store.draftArtifacts.markRecoveryRequired(id: intent.id)
+        let controller = MatterDraftingController(store: store, storage: makeStorage())
+
+        controller.refreshDraftReviewState(matterID: matter.id)
+
+        let recovery = try XCTUnwrap(controller.interruptedDraftRecoveries.first)
+        XCTAssertNil(recovery.fileName)
+        XCTAssertNil(recovery.fileURL)
+        XCTAssertEqual(recovery.intentID, intent.id)
+    }
+
+    // ACR-EXPORT-009 follow-on. Expected RED: a replacement install whose
+    // parent-directory sync fails currently leaves a new, unaudited markdown
+    // artifact visible instead of rolling the namespace change back durably.
+    @MainActor
+    func testCustomDraftDirectorySyncFailureLeavesNoNewArtifactOrAudit() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Directory-sync matter")
+        let storage = makeStorage()
+        let directory = storage.exportsDirectory(forMatterID: matter.id)
+        let destination = directory.appendingPathComponent("Sync-outline-fixed.md")
+        let syncProbe = InstallRollbackSyncProbe(
+            destination: destination,
+            failingPhases: [.install]
+        )
+        let writer = DurableFileWriter(
+            faultInjector: { _ in },
+            parentDirectorySynchronizer: { try syncProbe.synchronize($0) }
+        )
+        let controller = MatterDraftingController(
+            store: store,
+            storage: storage,
+            fileWriter: writer,
+            fileStampProvider: { "fixed" }
+        )
+
+        let result = await controller.draftCustomDescription(
+            matterID: matter.id,
+            input: .init(title: "Sync outline", description: "Do not publish an unsynchronized draft.")
+        )
+
+        guard case let .failure(.renderFailed(message)) = result else {
+            return XCTFail("expected directory-sync persistence failure, got \(result)")
+        }
+        XCTAssertTrue(message.contains("directory synchronization"), message)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
+        XCTAssertEqual(syncProbe.phases, [.install, .rollback])
+        XCTAssertTrue(try store.auditEvents.fetchEvents(matterID: matter.id).isEmpty)
+    }
+
+    // ACR-EXPORT-016. If installation synchronization fails, rollback removes
+    // the file, and synchronization of that rollback also fails, the namespace
+    // remains crash-uncertain. The prepared intent must stay recoverable rather
+    // than being marked aborted as though absence were durable.
+    @MainActor
+    func testCustomDraftInstallAndRollbackSyncFailuresRequireRecovery() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Double-sync-failure matter")
+        let storage = makeStorage()
+        let directory = storage.exportsDirectory(forMatterID: matter.id)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let destination = directory.appendingPathComponent("Double-sync-fixed.md")
+        let syncProbe = InstallRollbackSyncProbe(destination: destination)
+        let writer = DurableFileWriter(
+            faultInjector: { _ in },
+            parentDirectorySynchronizer: { try syncProbe.synchronize($0) }
+        )
+        let controller = MatterDraftingController(
+            store: store,
+            storage: storage,
+            fileWriter: writer,
+            fileStampProvider: { "fixed" }
+        )
+
+        let result = await controller.draftCustomDescription(
+            matterID: matter.id,
+            input: .init(
+                title: "Double sync",
+                description: "Keep an uncertain rollback eligible for reconciliation."
+            )
+        )
+
+        guard case let .failure(.renderFailed(message)) = result else {
+            return XCTFail("expected rollback synchronization uncertainty, got \(result)")
+        }
+        XCTAssertTrue(message.contains("rollback directory synchronization"), message)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
+        XCTAssertEqual(syncProbe.phases, [.install, .rollback])
+        let intentStatuses = try await store.database.writer.read { db in
+            try String.fetchAll(
+                db,
+                sql: "SELECT status FROM draft_artifact_intents WHERE matter_id = ?",
+                arguments: [matter.id]
+            )
+        }
+        XCTAssertEqual(intentStatuses, [DraftArtifactIntentStatus.recoveryRequired.rawValue])
+        XCTAssertTrue(try store.auditEvents.fetchEvents(matterID: matter.id).isEmpty)
+    }
+
+    // ACR-EXPORT-009/011 follow-on. Expected RED: a failed parent-directory
+    // sync after a notice install currently replaces a reviewed canary even
+    // though draft generation reports failure and records no success audit.
+    @MainActor
+    func testNoticeDirectorySyncFailurePreservesCanaryAndWritesNoAudit() async throws {
+        let store = try makeStore()
+        try store.appSettings.setSetting(AssistantProfile.profileKey, value: completeProfile())
+        let matter = try store.matters.createMatter(
+            name: "Directory-sync filing",
+            court: "IN THE CIRCUIT COURT OF DUVAL COUNTY, FLORIDA",
+            docketNumber: "2026-CA-001847"
+        )
+        let storage = makeStorage()
+        let directory = storage.exportsDirectory(forMatterID: matter.id)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let destination = directory.appendingPathComponent("Notice-of-Appearance-fixed.docx")
+        let canary = Data("previous-reviewed-docx".utf8)
+        try canary.write(to: destination)
+        let installedDestination = directory
+            .appendingPathComponent("Notice-of-Appearance-fixed-2.docx")
+        let syncProbe = InstallRollbackSyncProbe(
+            destination: installedDestination,
+            failingPhases: [.install]
+        )
+        let writer = DurableFileWriter(
+            faultInjector: { _ in },
+            parentDirectorySynchronizer: { try syncProbe.synchronize($0) }
+        )
+        let controller = MatterDraftingController(
+            store: store,
+            storage: storage,
+            fileWriter: writer,
+            fileStampProvider: { "fixed" }
+        )
+
+        let result = await controller.draftNoticeOfAppearance(
+            matterID: matter.id,
+            parties: sampleParties(),
+            partyRepresented: "Defendant",
+            representedPartyName: "Liberty Rail, LLC",
+            recipients: sampleRecipients()
+        )
+
+        guard case let .failure(.renderFailed(message)) = result else {
+            return XCTFail("expected directory-sync persistence failure, got \(result)")
+        }
+        XCTAssertTrue(message.contains("directory synchronization"), message)
+        XCTAssertEqual(try Data(contentsOf: destination), canary)
+        XCTAssertEqual(
+            try FileManager.default.contentsOfDirectory(atPath: directory.path),
+            [destination.lastPathComponent]
+        )
+        XCTAssertEqual(syncProbe.phases, [.install, .rollback])
+        XCTAssertTrue(try store.auditEvents.fetchEvents(matterID: matter.id).isEmpty)
+    }
+
+    // ACR-EXPORT-010 follow-on. Expected RED: removing a newly installed
+    // generic draft after its required audit fails currently omits the parent
+    // directory sync and can report a rollback that is not durable.
+    @MainActor
+    func testGenericDraftAuditCompensationSynchronizesParentAfterRemoval() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Audit-compensation matter")
+        let storage = makeStorage()
+        let directory = storage.exportsDirectory(forMatterID: matter.id)
+        let destination = directory.appendingPathComponent("Audit-outline-fixed.md")
+        let syncProbe = InstallRollbackSyncProbe(
+            destination: destination,
+            failingPhases: []
+        )
+        let writer = DurableFileWriter(
+            faultInjector: { _ in },
+            parentDirectorySynchronizer: { try syncProbe.synchronize($0) }
+        )
+        let controller = MatterDraftingController(
+            store: store,
+            storage: storage,
+            fileWriter: writer,
+            fileStampProvider: { "fixed" },
+            auditRecorder: { _ in throw PersistenceFailure.stop }
+        )
+
+        let result = await controller.draftCustomDescription(
+            matterID: matter.id,
+            input: .init(title: "Audit outline", description: "Install then compensate durably.")
+        )
+
+        guard case .failure = result else { return XCTFail("expected audit failure") }
+        XCTAssertEqual(syncProbe.phases, [.install, .rollback])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
+        XCTAssertTrue(try store.auditEvents.fetchEvents(matterID: matter.id).isEmpty)
+    }
+
+    // ACR-EXPORT-010 follow-on. Expected RED: a failed sync after generic audit
+    // compensation currently cannot be surfaced as a partial rollback failure
+    // because the parent directory is never synchronized after removal.
+    @MainActor
+    func testGenericDraftAuditCompensationSyncFailureReportsPartialRollback() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Partial-rollback matter")
+        let storage = makeStorage()
+        let directory = storage.exportsDirectory(forMatterID: matter.id)
+        let destination = directory.appendingPathComponent("Partial-rollback-fixed.md")
+        let syncProbe = InstallRollbackSyncProbe(
+            destination: destination,
+            failingPhases: [.rollback]
+        )
+        let writer = DurableFileWriter(
+            faultInjector: { _ in },
+            parentDirectorySynchronizer: { try syncProbe.synchronize($0) }
+        )
+        let controller = MatterDraftingController(
+            store: store,
+            storage: storage,
+            fileWriter: writer,
+            fileStampProvider: { "fixed" },
+            auditRecorder: { _ in throw PersistenceFailure.stop }
+        )
+
+        let result = await controller.draftCustomDescription(
+            matterID: matter.id,
+            input: .init(title: "Partial rollback", description: "Surface rollback durability failure.")
+        )
+
+        guard case let .failure(.renderFailed(message)) = result else {
+            return XCTFail("expected a partial rollback failure, got \(result)")
+        }
+        XCTAssertTrue(message.contains("rollback also failed"), message)
+        XCTAssertTrue(message.contains("directory synchronization"), message)
+        XCTAssertEqual(syncProbe.phases, [.install, .rollback])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
+        XCTAssertTrue(try store.auditEvents.fetchEvents(matterID: matter.id).isEmpty)
+    }
+
+    // ACR-EXPORT-010 ownership follow-on. Expected RED: generic audit
+    // compensation currently unlinks by pathname, so a concurrent owner that
+    // replaces the installed draft during the failed audit loses its file.
+    @MainActor
+    func testGenericDraftAuditCompensationPreservesConcurrentReplacement() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Concurrent compensation matter")
+        let storage = makeStorage()
+        let directory = storage.exportsDirectory(forMatterID: matter.id)
+        let destination = directory.appendingPathComponent("Concurrent-outline-fixed.md")
+        let concurrentCanary = Data("concurrent-owner-canary".utf8)
+        var auditObservedInstalledDraft = false
+        let controller = MatterDraftingController(
+            store: store,
+            storage: storage,
+            fileStampProvider: { "fixed" },
+            auditRecorder: { event in
+                auditObservedInstalledDraft = event.eventType == "draft_generated"
+                    && (try? DocumentExportValidator.validate(destination, as: .markdown)) != nil
+                try FileManager.default.removeItem(at: destination)
+                try concurrentCanary.write(to: destination)
+                throw PersistenceFailure.stop
+            }
+        )
+
+        let result = await controller.draftCustomDescription(
+            matterID: matter.id,
+            input: .init(title: "Concurrent outline", description: "Preserve a later path owner.")
+        )
+
+        guard case let .failure(.renderFailed(message)) = result else {
+            return XCTFail("expected a partial rollback failure, got \(result)")
+        }
+        XCTAssertTrue(auditObservedInstalledDraft)
+        XCTAssertTrue(message.contains("rollback also failed"), message)
+        XCTAssertTrue(message.contains("could not verify"), message)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: destination.path))
+        XCTAssertEqual(try? Data(contentsOf: destination), concurrentCanary)
+        XCTAssertTrue(try store.auditEvents.fetchEvents(matterID: matter.id).isEmpty)
+    }
+
+    // ACR-EXPORT-010 content-ownership follow-on. Expected RED: inode identity
+    // alone is insufficient because another actor can truncate and rewrite the
+    // installed inode in place. Compensation must require both install identity
+    // and the original complete-file hash before deletion.
+    @MainActor
+    func testGenericDraftAuditCompensationPreservesInPlaceModifiedInstalledFile() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "In-place compensation matter")
+        let storage = makeStorage()
+        let directory = storage.exportsDirectory(forMatterID: matter.id)
+        let destination = directory.appendingPathComponent("In-place-outline-fixed.md")
+        let modifiedCanary = Data("same-inode-foreign-content".utf8)
+        var auditObservedInstalledDraft = false
+        let controller = MatterDraftingController(
+            store: store,
+            storage: storage,
+            fileStampProvider: { "fixed" },
+            auditRecorder: { event in
+                auditObservedInstalledDraft = event.eventType == "draft_generated"
+                    && (try? DocumentExportValidator.validate(destination, as: .markdown)) != nil
+                let handle = try FileHandle(forWritingTo: destination)
+                try handle.truncate(atOffset: 0)
+                try handle.write(contentsOf: modifiedCanary)
+                try handle.synchronize()
+                try handle.close()
+                throw PersistenceFailure.stop
+            }
+        )
+
+        let result = await controller.draftCustomDescription(
+            matterID: matter.id,
+            input: .init(title: "In-place outline", description: "Preserve modified installed bytes.")
+        )
+
+        guard case let .failure(.renderFailed(message)) = result else {
+            return XCTFail("expected a partial rollback failure, got \(result)")
+        }
+        XCTAssertTrue(auditObservedInstalledDraft)
+        XCTAssertTrue(message.contains("rollback also failed"), message)
+        XCTAssertTrue(message.contains("changed"), message)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: destination.path))
+        XCTAssertEqual(try? Data(contentsOf: destination), modifiedCanary)
+        XCTAssertTrue(try store.auditEvents.fetchEvents(matterID: matter.id).isEmpty)
+    }
+
+    // Expected RED: generic audit compensation currently treats a missing
+    // public pathname as a complete rollback and aborts the intent even when
+    // the audit callback moved the exact installed inode to another hidden name.
+    @MainActor
+    func testGenericDraftAuditMoveOfExactInodeRequiresRecovery() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Moved audit residue matter")
+        let storage = makeStorage()
+        addTeardownBlock { try? FileManager.default.removeItem(at: storage.root) }
+        let directory = storage.exportsDirectory(forMatterID: matter.id)
+        let destination = directory.appendingPathComponent("Moved-audit-fixed.md")
+        let residue = directory.appendingPathComponent(".unrelated-moved-audit-residue")
+        var intentID: String?
+        var installedDevice: dev_t?
+        var installedInode: ino_t?
+        let controller = MatterDraftingController(
+            store: store,
+            storage: storage,
+            fileStampProvider: { "fixed" },
+            auditRecorder: { event in
+                intentID = String(event.id.dropFirst("draft-artifact-".count))
+                var installedStatus = stat()
+                XCTAssertEqual(
+                    destination.path.withCString { Darwin.lstat($0, &installedStatus) },
+                    0
+                )
+                installedDevice = installedStatus.st_dev
+                installedInode = installedStatus.st_ino
+                try FileManager.default.moveItem(at: destination, to: residue)
+                throw PersistenceFailure.stop
+            }
+        )
+
+        let result = await controller.draftCustomDescription(
+            matterID: matter.id,
+            input: .init(
+                title: "Moved audit",
+                description: "A moved exact inode must remain recoverable."
+            )
+        )
+
+        guard case let .failure(.renderFailed(message)) = result else {
+            return XCTFail("expected recovery-required audit compensation failure, got \(result)")
+        }
+        XCTAssertTrue(message.contains("rollback also failed"), message)
+        XCTAssertTrue(message.lowercased().contains("recovery is required"), message)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
+        let intent = try XCTUnwrap(
+            try store.draftArtifacts.intent(id: XCTUnwrap(intentID))
+        )
+        let residueData = try Data(contentsOf: residue)
+        XCTAssertEqual(residueData.count, intent.outputByteSize)
+        XCTAssertEqual(DocumentStorage.sha256Hex(of: residueData), intent.outputSHA256)
+        var residueStatus = stat()
+        XCTAssertEqual(residue.path.withCString { Darwin.lstat($0, &residueStatus) }, 0)
+        XCTAssertEqual(residueStatus.st_dev, try XCTUnwrap(installedDevice))
+        XCTAssertEqual(residueStatus.st_ino, try XCTUnwrap(installedInode))
+        XCTAssertEqual(intent.status, DraftArtifactIntentStatus.recoveryRequired.rawValue)
+        XCTAssertFalse(
+            try store.auditEvents.fetchEvents(matterID: matter.id)
+                .contains { $0.eventType == "draft_generated" }
+        )
+    }
+
+    // Expected RED: generic audit compensation currently removes its known
+    // pathname and aborts the intent without detecting an unrelated hidden hard
+    // link that still names the exact installed inode in the managed directory.
+    @MainActor
+    func testGenericDraftAuditUnrelatedHardLinkRequiresRecovery() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Hard-link audit residue matter")
+        let storage = makeStorage()
+        addTeardownBlock { try? FileManager.default.removeItem(at: storage.root) }
+        let directory = storage.exportsDirectory(forMatterID: matter.id)
+        let destination = directory.appendingPathComponent("Hard-link-audit-fixed.md")
+        let residue = directory.appendingPathComponent(".unrelated-hard-link-audit-residue")
+        var intentID: String?
+        var installedDevice: dev_t?
+        var installedInode: ino_t?
+        var linkCountAtAudit: nlink_t?
+        let controller = MatterDraftingController(
+            store: store,
+            storage: storage,
+            fileStampProvider: { "fixed" },
+            auditRecorder: { event in
+                intentID = String(event.id.dropFirst("draft-artifact-".count))
+                var installedStatus = stat()
+                XCTAssertEqual(
+                    destination.path.withCString { Darwin.lstat($0, &installedStatus) },
+                    0
+                )
+                installedDevice = installedStatus.st_dev
+                installedInode = installedStatus.st_ino
+                XCTAssertEqual(installedStatus.st_nlink, 1)
+                try FileManager.default.linkItem(at: destination, to: residue)
+                var linkedStatus = stat()
+                XCTAssertEqual(residue.path.withCString { Darwin.lstat($0, &linkedStatus) }, 0)
+                XCTAssertEqual(linkedStatus.st_dev, installedStatus.st_dev)
+                XCTAssertEqual(linkedStatus.st_ino, installedStatus.st_ino)
+                linkCountAtAudit = linkedStatus.st_nlink
+                throw PersistenceFailure.stop
+            }
+        )
+
+        let result = await controller.draftCustomDescription(
+            matterID: matter.id,
+            input: .init(
+                title: "Hard link audit",
+                description: "An unrelated exact hard link must remain recoverable."
+            )
+        )
+
+        guard case let .failure(.renderFailed(message)) = result else {
+            return XCTFail("expected recovery-required audit compensation failure, got \(result)")
+        }
+        XCTAssertTrue(message.contains("rollback also failed"), message)
+        XCTAssertTrue(message.lowercased().contains("recovery is required"), message)
+        XCTAssertEqual(try XCTUnwrap(linkCountAtAudit), 2)
+        let intent = try XCTUnwrap(
+            try store.draftArtifacts.intent(id: XCTUnwrap(intentID))
+        )
+        let residueData = try Data(contentsOf: residue)
+        XCTAssertEqual(residueData.count, intent.outputByteSize)
+        XCTAssertEqual(DocumentStorage.sha256Hex(of: residueData), intent.outputSHA256)
+        var residueStatus = stat()
+        XCTAssertEqual(residue.path.withCString { Darwin.lstat($0, &residueStatus) }, 0)
+        XCTAssertEqual(residueStatus.st_dev, try XCTUnwrap(installedDevice))
+        XCTAssertEqual(residueStatus.st_ino, try XCTUnwrap(installedInode))
+        XCTAssertEqual(intent.status, DraftArtifactIntentStatus.recoveryRequired.rawValue)
+        XCTAssertFalse(
+            try store.auditEvents.fetchEvents(matterID: matter.id)
+                .contains { $0.eventType == "draft_generated" }
+        )
     }
 
     // ACR-EXPORT-011: rendered DOCX drafts take the same validated temporary
@@ -463,6 +1304,101 @@ final class MatterDraftingControllerTests: XCTestCase {
         guard case .failure = result else {
             return XCTFail("expected failure when the claim is empty")
         }
+    }
+
+    // T-DRAFT-CANCEL-01. Expected RED: if cancellation arrives after the notice
+    // renderer returns, the controller does not inspect it before persistence and
+    // creates both a file and success audit.
+    @MainActor
+    func testCancelledNoticeLeavesNoArtifactOrSuccessAudit() async throws {
+        let store = try makeStore()
+        try store.appSettings.setSetting(AssistantProfile.profileKey, value: completeProfile())
+        let matter = try store.matters.createMatter(
+            name: "McKernon Motors v. Liberty Rail",
+            court: "IN THE CIRCUIT COURT OF THE FOURTH JUDICIAL CIRCUIT,\nIN AND FOR DUVAL COUNTY, FLORIDA",
+            docketNumber: "2026-CA-001847"
+        )
+        let storage = makeStorage()
+        let renderer = CancellingDraftRenderer()
+        let controller = MatterDraftingController(
+            store: store,
+            storage: storage,
+            pipelineFactory: {
+                DraftPipeline(verifier: DraftVerifier(), renderer: renderer)
+            }
+        )
+
+        let task = Task {
+            await controller.draftNoticeOfAppearance(
+                matterID: matter.id,
+                parties: sampleParties(),
+                partyRepresented: "Defendant",
+                representedPartyName: "Liberty Rail, LLC",
+                recipients: sampleRecipients()
+            )
+        }
+        let result = await task.value
+
+        guard case .failure(.cancelled) = result else {
+            return XCTFail("cancelled notice must return the typed cancellation result, got \(result)")
+        }
+        XCTAssertEqual(renderer.renderCount, 1, "fixture must cancel only after producing valid render bytes")
+        let exports = storage.exportsDirectory(forMatterID: matter.id)
+        XCTAssertTrue((try? FileManager.default.contentsOfDirectory(atPath: exports.path).isEmpty) ?? true)
+        XCTAssertFalse(try store.auditEvents.fetchEvents(matterID: matter.id)
+            .contains { $0.eventType == "draft_generated" })
+    }
+
+    // T-DRAFT-CANCEL-02. Expected RED: the letter controller has the same unchecked
+    // renderer-to-persistence boundary and can create a file and success audit after
+    // cancellation.
+    @MainActor
+    func testCancelledLetterGenerationLeavesNoArtifactOrSuccessAudit() async throws {
+        let store = try makeStore()
+        try store.appSettings.setSetting(AssistantProfile.profileKey, value: completeProfile())
+        let matter = try store.matters.createMatter(name: "McKernon Motors v. Liberty Rail")
+        let body = #"{"paragraphs":[{"text":"The invoice remains unpaid under the supply agreement.","factLabels":["claim"],"citationLabels":[]}] }"#
+        let runtime = StubRuntimeClient(outcome: { request in
+            return .events([
+                .event(request, 0, .token, token: body),
+                .event(request, 1, .generationCompleted)
+            ])
+        })
+        let storage = makeStorage()
+        let renderer = CancellingDraftRenderer()
+        let controller = MatterDraftingController(
+            store: store,
+            runtimeClient: runtime,
+            storage: storage,
+            pipelineFactory: { DraftPipeline(verifier: DraftVerifier(), renderer: renderer) }
+        )
+        let input = LetterDraftInput(
+            recipientName: "Daniel Hardman, Esq.",
+            recipientStreet: "1 Independent Drive",
+            recipientCity: "Jacksonville",
+            recipientState: "Florida",
+            recipientZip: "32202",
+            claimSummary: "The invoice remains unpaid under the supply agreement."
+        )
+
+        let task = Task {
+            await controller.draftLetterDemand(
+                matterID: matter.id,
+                input: input,
+                modelID: ModelID(),
+                route: ModelRouter().route(for: .drafting)
+            )
+        }
+        let result = await task.value
+
+        guard case .failure(.cancelled) = result else {
+            return XCTFail("cancelled letter must return the typed cancellation result, got \(result)")
+        }
+        XCTAssertEqual(renderer.renderCount, 1, "fixture must cancel only after producing valid render bytes")
+        let exports = storage.exportsDirectory(forMatterID: matter.id)
+        XCTAssertTrue((try? FileManager.default.contentsOfDirectory(atPath: exports.path).isEmpty) ?? true)
+        XCTAssertFalse(try store.auditEvents.fetchEvents(matterID: matter.id)
+            .contains { $0.eventType == "draft_generated" })
     }
 
     // MARK: - Firewall: never invents identity
@@ -812,11 +1748,26 @@ final class MatterDraftingControllerTests: XCTestCase {
 /// dummy bytes — the tests inspect the captured sheet, not the document. `@unchecked Sendable`
 /// is safe here: the render happens on the controller's @MainActor and the test awaits it.
 final class StyleSpyRenderer: Renderer, @unchecked Sendable {
+    let identity = DraftComponentIdentity(id: "test.style-spy-renderer", version: "1")
     private(set) var captured: HouseStyleSheet?
     private(set) var renderCount = 0
     func render(_ input: RenderInput, style: HouseStyleSheet) throws -> Data {
         renderCount += 1
         captured = style
         return try CompositeRenderer().render(input, style: style)
+    }
+}
+
+private final class CancellingDraftRenderer: Renderer, @unchecked Sendable {
+    let identity = DraftComponentIdentity(id: "test.cancelling-draft-renderer", version: "1")
+    private(set) var renderCount = 0
+
+    func render(_ input: RenderInput, style: HouseStyleSheet) throws -> Data {
+        renderCount += 1
+        let data = try CompositeRenderer().render(input, style: style)
+        withUnsafeCurrentTask { task in
+            task?.cancel()
+        }
+        return data
     }
 }

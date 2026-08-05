@@ -1,6 +1,7 @@
 import Combine
 import Foundation
 import SupraCore
+import SupraDocuments
 import SupraRuntimeClient
 import SupraStore
 
@@ -207,6 +208,8 @@ public final class MattersController: ObservableObject {
     private let documentQueue: DocumentProcessingQueue?
     private let isImportReady: (@MainActor () -> Bool)?
     private let defaults: UserDefaults
+    private let draftingStorage: DocumentStorage?
+    private let beforeMotionPersistence: MatterDraftingController.AsyncDraftCheckpoint?
 
     private static let sortModeKey = "supra.matterSortMode"
 
@@ -216,6 +219,8 @@ public final class MattersController: ObservableObject {
         defaultSystemPrompt: String? = nil,
         documentQueue: DocumentProcessingQueue? = nil,
         isImportReady: (@MainActor () -> Bool)? = nil,
+        draftingStorage: DocumentStorage? = nil,
+        beforeMotionPersistence: MatterDraftingController.AsyncDraftCheckpoint? = nil,
         defaults: UserDefaults = .standard
     ) {
         self.store = store
@@ -223,6 +228,8 @@ public final class MattersController: ObservableObject {
         self.defaultSystemPrompt = defaultSystemPrompt
         self.documentQueue = documentQueue
         self.isImportReady = isImportReady
+        self.draftingStorage = draftingStorage
+        self.beforeMotionPersistence = beforeMotionPersistence
         self.defaults = defaults
         self.sortMode = defaults.string(forKey: Self.sortModeKey)
             .flatMap(MatterSortMode.init(rawValue:)) ?? .dateModified
@@ -462,7 +469,12 @@ public final class MattersController: ObservableObject {
             queue: documentQueue,
             isImportReady: isImportReady ?? { true }
         )
-        draftingController = MatterDraftingController(store: store, runtimeClient: runtimeClient)
+        draftingController = MatterDraftingController(
+            store: store,
+            runtimeClient: runtimeClient,
+            storage: draftingStorage ?? .makeDefault(),
+            beforeMotionPersistence: beforeMotionPersistence
+        )
     }
 
     /// Pins or unpins a matter; pinned matters float to the top of the sidebar

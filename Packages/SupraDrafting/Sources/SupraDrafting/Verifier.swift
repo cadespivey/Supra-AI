@@ -6,6 +6,10 @@ import SupraDraftingCore
 // Pure, synchronous-where-possible checks; authority validation is async (CitatorClient).
 
 public struct DraftVerifier: Verifier, Sendable {
+    public let identity = DraftComponentIdentity(
+        id: "supra.drafting.draft-verifier",
+        version: "6"
+    )
     public let citator: CitatorClient?
 
     public init(citator: CitatorClient? = nil) {
@@ -20,6 +24,8 @@ public struct DraftVerifier: Verifier, Sendable {
             return await verifySection(section, requirement: requirement, facts: facts, authorities: authorities)
         case let .letter(letter, _, facts):
             return verifyLetter(letter, facts: facts)
+        case let .motion(model, evidence):
+            return verifyMotion(model, evidence: evidence, kind: kind)
         }
     }
 
@@ -43,6 +49,269 @@ public struct DraftVerifier: Verifier, Sendable {
             followUps.append(FollowUp(severity: .blocking, kind: .structure, message: "A certificate of service is required for a filed document."))
         }
         return VerificationResult(failures: failures, followUps: followUps)
+    }
+
+    // MARK: - Motion (exact deterministic evidence binding)
+
+    private func verifyMotion(
+        _ model: DocumentModel,
+        evidence: MotionVerificationEvidence,
+        kind: DraftKindID
+    ) -> VerificationResult {
+        let wholeDocument = verifyWholeDocument(model, kind: kind)
+        var failures = wholeDocument.failures
+        var followUps = wholeDocument.followUps
+        var supportResults: [PropositionSupportResult] = []
+
+        func block(_ gate: Gate, _ detail: String) {
+            failures.append(GateFailure(
+                gate: gate,
+                detail: detail,
+                repair: .stripToPlaceholderAndFlag
+            ))
+            followUps.append(FollowUp(
+                severity: .blocking,
+                kind: .verify,
+                message: "Motion generation blocked because its selected evidence was not reproduced exactly."
+            ))
+        }
+
+        guard kind == .motionToDismiss else {
+            block(.contract, "Motion evidence was supplied for the wrong draft kind.")
+            return VerificationResult(failures: failures, followUps: followUps)
+        }
+
+        if evidence.facts.isEmpty {
+            block(.factProvenance, "Motion has no selected fact evidence.")
+        }
+        if evidence.authorities.isEmpty {
+            block(.authorityValidity, "Motion has no reviewed authority evidence.")
+        }
+
+        let factIDs = evidence.facts.map(\.factID)
+        if factIDs.contains(where: Self.isBlank) || Set(factIDs).count != factIDs.count {
+            block(.factProvenance, "Motion fact evidence contains a blank or duplicate identity.")
+        }
+        let authorityIDs = evidence.authorities.map(\.authorityID)
+        if authorityIDs.contains(where: Self.isBlank) || Set(authorityIDs).count != authorityIDs.count {
+            block(.authorityValidity, "Motion authority evidence contains a blank or duplicate identity.")
+        }
+
+        let numberedFacts = model.body.compactMap { block -> (Int, String)? in
+            guard case let .numberedAllegation(number, text) = block else { return nil }
+            return (number, text)
+        }
+        let expectedNumbers = Array(evidence.facts.indices).map { $0 + 1 }
+        let actualNumbers = numberedFacts.map(\.0)
+        let actualFactTexts = numberedFacts.map(\.1)
+        let expectedFactTexts = evidence.facts.map(\.text)
+        let factsAreExact = actualNumbers == expectedNumbers && actualFactTexts == expectedFactTexts
+        if !factsAreExact {
+            block(.factProvenance, "Numbered allegations do not exactly match the selected facts in order.")
+        }
+
+        for (index, fact) in evidence.facts.enumerated() {
+            let complete = ![fact.factID, fact.text, fact.sourceID, fact.locator].contains(where: Self.isBlank)
+                && !InstructionShapeDetector.isBlocking(fact.text)
+            guard complete,
+                  numberedFacts.indices.contains(index),
+                  numberedFacts[index].0 == index + 1,
+                  numberedFacts[index].1 == fact.text
+            else {
+                if !complete {
+                    block(.factProvenance, "Selected fact \(index + 1) is incomplete or instruction-shaped.")
+                }
+                continue
+            }
+            appendSupported(
+                propositionID: fact.propositionID,
+                sourceID: fact.sourceID,
+                sourceLabel: fact.factID,
+                locator: fact.locator,
+                retainedExcerpt: fact.text,
+                reason: "numbered allegation exactly matches the selected fact excerpt",
+                gate: .factProvenance,
+                failures: &failures,
+                followUps: &followUps,
+                supportResults: &supportResults
+            )
+        }
+
+        let allBlockTexts = model.body.map { block -> String in
+            switch block {
+            case let .paragraph(text), let .numberedAllegation(_, text),
+                 let .pointHeading(_, _, text), let .sectionHeading(text):
+                return text
+            }
+        }
+        if allBlockTexts.contains(where: Self.containsPlaceholder) {
+            block(.authorityValidity, "Motion contains an unresolved citation or fact placeholder.")
+        }
+
+        let paragraphTexts = model.body.compactMap { block -> String? in
+            guard case let .paragraph(text) = block else { return nil }
+            return text
+        }
+        let expectedAuthorityParagraphs = evidence.authorities.map(\.canonicalParagraph)
+        let expectedSelectedFactReviewParagraphs = evidence.canonicalSelectedFactReviewParagraphs
+        let expectedCitationBearingText = Set(expectedAuthorityParagraphs)
+            .union(evidence.facts.map(\.text))
+            .union(expectedSelectedFactReviewParagraphs)
+        let unknownCitationParagraphs = allBlockTexts.filter {
+            Self.containsCitationShape($0) && !expectedCitationBearingText.contains($0)
+        }
+        if !unknownCitationParagraphs.isEmpty {
+            block(.authorityValidity, "Motion contains citation-shaped prose outside the selected reviewed authorities or exact selected facts.")
+        }
+
+        let authorityIndices = expectedAuthorityParagraphs.map { expected -> Int? in
+            let matches = paragraphTexts.indices.filter { paragraphTexts[$0] == expected }
+            return matches.count == 1 ? matches[0] : nil
+        }
+        let exactAuthorityOrder = authorityIndices.allSatisfy { $0 != nil }
+            && zip(authorityIndices.compactMap { $0 }, authorityIndices.compactMap { $0 }.dropFirst())
+                .allSatisfy(<)
+        if !exactAuthorityOrder {
+            block(.authorityValidity, "Reviewed authority paragraphs are missing, duplicated, changed, or reordered.")
+        }
+
+        let selectedFactReviewIndices = expectedSelectedFactReviewParagraphs.map { expected -> Int? in
+            let matches = paragraphTexts.indices.filter { paragraphTexts[$0] == expected }
+            return matches.count == 1 ? matches[0] : nil
+        }
+        let exactSelectedFactReviewOrder = selectedFactReviewIndices.allSatisfy { $0 != nil }
+            && zip(
+                selectedFactReviewIndices.compactMap { $0 },
+                selectedFactReviewIndices.compactMap { $0 }.dropFirst()
+            )
+                .allSatisfy(<)
+        let selectedFactReviewFollowsAuthorities = authorityIndices.compactMap { $0 }.last.map { lastAuthority in
+            selectedFactReviewIndices.compactMap { $0 }.first.map { $0 > lastAuthority } ?? false
+        } ?? false
+        if !exactSelectedFactReviewOrder || !selectedFactReviewFollowsAuthorities {
+            block(
+                .factProvenance,
+                "The argument must reproduce every selected fact for counsel’s review exactly once and in order after the reviewed authorities."
+            )
+        }
+
+        let expectedBody: [BodyBlock] =
+            [.paragraph(evidence.bodyContract.introduction), .sectionHeading("STATEMENT OF FACTS")]
+            + evidence.facts.enumerated().map { index, fact in
+                .numberedAllegation(number: index + 1, text: fact.text)
+            }
+            + [
+                .sectionHeading("MEMORANDUM OF LAW"),
+                .pointHeading(
+                    level: 1,
+                    numeral: "I.",
+                    text: evidence.bodyContract.argumentHeading
+                ),
+            ]
+            + expectedAuthorityParagraphs.map(BodyBlock.paragraph)
+            + expectedSelectedFactReviewParagraphs.map(BodyBlock.paragraph)
+            + [
+                .pointHeading(level: 1, numeral: "II.", text: "CONCLUSION"),
+                .paragraph(evidence.bodyContract.conclusion),
+            ]
+        if model.body != expectedBody {
+            block(
+                .contract,
+                "Motion body contains prose or structure outside the supported selected-evidence contract."
+            )
+        }
+
+        for (index, authority) in evidence.authorities.enumerated() {
+            let complete = ![
+                authority.authorityID,
+                authority.citation,
+                authority.reviewedExcerpt,
+                authority.groundKey
+            ].contains(where: Self.isBlank)
+                && !InstructionShapeDetector.isBlocking(authority.reviewedExcerpt)
+            let supportedContract = authority.groundKey == MotionGroundSpec.failureToStateClaim.key
+                && FloridaMotionToDismissContract.isSupportedAuthorityCitation(authority.citation)
+            guard complete,
+                  supportedContract,
+                  authorityIndices.indices.contains(index),
+                  authorityIndices[index] != nil
+            else {
+                if !complete {
+                    block(.authorityValidity, "Selected authority \(index + 1) is incomplete or instruction-shaped.")
+                } else if !supportedContract {
+                    block(.authorityValidity, "Selected authority \(index + 1) is outside the supported Florida failure-to-state-a-claim contract.")
+                }
+                continue
+            }
+            appendSupported(
+                propositionID: authority.propositionID,
+                sourceID: authority.authorityID,
+                sourceLabel: authority.citation,
+                locator: authority.groundKey,
+                retainedExcerpt: authority.reviewedExcerpt,
+                reason: "authority paragraph exactly matches the reviewed citation and excerpt",
+                gate: .authorityValidity,
+                failures: &failures,
+                followUps: &followUps,
+                supportResults: &supportResults
+            )
+        }
+
+        return VerificationResult(
+            failures: failures,
+            followUps: followUps,
+            propositionSupport: supportResults
+        )
+    }
+
+    private func appendSupported(
+        propositionID: String,
+        sourceID: String,
+        sourceLabel: String,
+        locator: String,
+        retainedExcerpt: String,
+        reason: String,
+        gate: Gate,
+        failures: inout [GateFailure],
+        followUps: inout [FollowUp],
+        supportResults: inout [PropositionSupportResult]
+    ) {
+        do {
+            supportResults.append(try PropositionSupportResult(
+                propositionID: propositionID,
+                status: .supported,
+                reasons: [reason],
+                evidence: [SupportEvidence(
+                    sourceID: sourceID,
+                    sourceLabel: sourceLabel,
+                    locator: locator,
+                    retainedExcerpt: retainedExcerpt,
+                    verifierName: identity.id,
+                    verifierVersion: identity.version
+                )],
+                timestamp: Date()
+            ))
+        } catch {
+            failures.append(GateFailure(
+                gate: gate,
+                detail: "Motion support evidence was incomplete for \(propositionID).",
+                repair: .stripToPlaceholderAndFlag
+            ))
+            followUps.append(FollowUp(
+                severity: .blocking,
+                kind: .verify,
+                message: "Motion generation blocked because support evidence was incomplete."
+            ))
+        }
+    }
+
+    private static func isBlank(_ value: String) -> Bool {
+        value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private static func containsPlaceholder(_ value: String) -> Bool {
+        value.localizedCaseInsensitiveContains("[cite]")
+            || value.localizedCaseInsensitiveContains("[fact?]")
     }
 
     // MARK: - Per-Auth-section (motion)
@@ -366,18 +635,7 @@ public struct DraftVerifier: Verifier, Sendable {
     }
 
     private static func containsCitationShape(_ text: String) -> Bool {
-        let patterns = [
-            #"\b[A-Z][\w.'&-]+ v\.? [A-Z][\w.'&-]+"#,
-            #"\b\d{1,4} [A-Z][\w.]*\.?( \d[a-z]{0,2})? \d{1,4}\b"#,
-            #"§\s?\d"#,
-            #"\bU\.?S\.?C\.?\b"#,
-            #"\bC\.?F\.?R\.?\b"#,
-            #"\bFla\.? Stat\.?\b"#,
-            #"\b(statute|statutes|code|rule)\s*(section\s*)?\d"#
-        ]
-        return patterns.contains {
-            text.range(of: $0, options: [.regularExpression, .caseInsensitive]) != nil
-        }
+        MotionCitationShapeDetector.containsCitationShape(in: text)
     }
 
     private static func isNonMaterialBoilerplate(_ text: String) -> Bool {

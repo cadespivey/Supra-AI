@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "syntheticDataDeclaration": "Every fixture contains deterministic synthetic records only; no user or production data is permitted.",
-  "currentMigration": "v069_add_verification_dimensions",
+  "currentMigration": "v071_create_draft_artifact_intents",
   "supportedVersions": [
     "v1.4.1",
     "v1.5.2",
@@ -105,6 +105,22 @@
         "v057_add_remediation_recovery_queue",
         "v058_add_document_job_kind"
       ]
+    },
+    "v069": {
+      "extends": "v058",
+      "identifiers": [
+        "v059_create_document_import_sources",
+        "v060_create_document_part_lineage",
+        "v061_bind_document_output_source_revisions",
+        "v062_create_document_structure",
+        "v063_add_chunk_structure_binding",
+        "v064_create_corpus_analysis_ledger",
+        "v065_create_document_relations",
+        "v066_add_document_source_lineage",
+        "v067_add_output_generation_lineage",
+        "v068_add_document_classification_lineage",
+        "v069_add_verification_dimensions"
+      ]
     }
   },
   "fixtures": [
@@ -180,12 +196,12 @@
     },
     {
       "seedVersion": "latest-minus-one",
-      "sourceRef": "260f6f5a48046476ce6ef4f2b598ac4dd43c2525",
-      "sourceCommitSHA": "260f6f5a48046476ce6ef4f2b598ac4dd43c2525",
+      "sourceRef": "v2.3.4",
+      "sourceCommitSHA": "c0a2648b4c65c066f85eb6bf6ae702f9aa779864",
       "fileName": "latest-minus-one.sqlite.gz",
-      "compressedSHA256": "c3347cc48571523276590a2087442292906aa183faebb07b7fcb0d23aec46ebb",
-      "databaseSHA256": "68b249858c4063b16b809aa56a57f6e5a4311354cef3e87165491fb20600b0c5",
-      "migrationCatalog": "v058",
+      "compressedSHA256": "3c27c8f8adf950a28bdbbac1f7fa8755be05955a4631d800cb83d513b98dc7bd",
+      "databaseSHA256": "12b13538905073ac145a645bbada2e3f5ce97b35beab659ac65d80185c3b8bcd",
+      "migrationCatalog": "v069",
       "syntheticData": true
     }
   ]

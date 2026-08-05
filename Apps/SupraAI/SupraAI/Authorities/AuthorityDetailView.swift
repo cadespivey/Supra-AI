@@ -3,6 +3,7 @@ import PDFKit
 import SupraCore
 import SupraResearch
 import SupraSessions
+import SupraStore
 import SwiftUI
 import UniformTypeIdentifiers
 import WebKit
@@ -37,6 +38,9 @@ struct AuthorityDetailView: View {
     @State private var downloadingPDF = false
     @State private var pdfExporting = false
     @State private var summaryError: String?
+    @State private var propositionExcerpt = ""
+    @State private var propositionError: String?
+    @State private var propositionActionInFlight = false
 
     var body: some View {
         Group {
@@ -179,6 +183,18 @@ struct AuthorityDetailView: View {
 
             Section("Status") {
                 LabeledContent("Review") { ReviewBadge(state: authority.reviewState) }
+                if authority.reviewState != ResearchResultReviewState.notAdverse.rawValue {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("Proposition support can be recorded only after counsel marks this authority not adverse.")
+                            .font(.supraCaption)
+                            .foregroundStyle(.secondary)
+                        Button("Mark Not Adverse") {
+                            markAuthorityNotAdverse(authorityID: authority.id)
+                        }
+                        .disabled(propositionActionInFlight)
+                        .accessibilityIdentifier("authority.reviewState.markNotAdverse")
+                    }
+                }
                 LabeledContent("Use status", value: authority.useStatus.displayName)
                 let allowed = authority.useStatus.allowedTransitions
                 if allowed.isEmpty {
@@ -192,6 +208,10 @@ struct AuthorityDetailView: View {
                         Label("Change Use Status", systemImage: "arrow.triangle.2.circlepath")
                     }
                 }
+            }
+
+            Section("Reviewed proposition") {
+                reviewedPropositionEditor(authority)
             }
 
             Section("Notes") {
@@ -241,8 +261,156 @@ struct AuthorityDetailView: View {
             // Loaded ONCE: fetching every saved authority's full text from the
             // form body would re-read megabytes on each keystroke in Notes.
             storedText = controller.storedOpinionText(authorityID: authority.id)
+            syncPropositionExcerpt(from: authority.failureToStateClaimReviewState)
             loadOpinionIfPossible(authority)
         }
+        .onChange(of: authority.failureToStateClaimReviewState) { _, state in
+            syncPropositionExcerpt(from: state)
+        }
+    }
+
+    @ViewBuilder
+    private func reviewedPropositionEditor(_ authority: AuthoritiesController.AuthorityItem) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Failure to state a claim")
+                .font(.supraHeadline)
+            Text(propositionStatus(authority.failureToStateClaimReviewState))
+                .font(.supraSubheadline)
+                .foregroundStyle(propositionStatusColor(authority.failureToStateClaimReviewState))
+                .accessibilityIdentifier("authority.reviewedProposition.status")
+
+            if case .ready(let reviewed)? = authority.failureToStateClaimReviewState {
+                Text(
+                    "Reviewed by \(reviewed.reviewedBy) on "
+                        + reviewed.reviewedAt.formatted(date: .abbreviated, time: .shortened)
+                )
+                .font(.supraCaption)
+                .foregroundStyle(.secondary)
+            }
+
+            Text("Paste an exact, unique excerpt from the stored opinion. Whitespace and punctuation must match.")
+                .font(.supraCaption)
+                .foregroundStyle(.secondary)
+            MultilineField(
+                placeholder: "Exact supporting excerpt",
+                text: $propositionExcerpt,
+                minLines: 4,
+                accessibilityID: "authority.reviewedProposition.excerpt"
+            )
+            Text(
+                "\(propositionExcerpt.utf8.count) of "
+                    + "\(AuthorityReviewedProposition.maximumExcerptUTF8Bytes.formatted()) UTF-8 bytes"
+            )
+            .font(.supraCaption)
+            .foregroundStyle(
+                propositionExcerpt.utf8.count > AuthorityReviewedProposition.maximumExcerptUTF8Bytes
+                    ? Color.orange : Color.secondary
+            )
+
+            HStack(spacing: 8) {
+                Button(reviewButtonTitle(authority.failureToStateClaimReviewState)) {
+                    recordPropositionReview(authorityID: authority.id)
+                }
+                .disabled(!canRecordPropositionReview)
+                .accessibilityIdentifier("authority.reviewedProposition.save")
+
+                if canRevokePropositionReview(authority.failureToStateClaimReviewState) {
+                    Button("Remove Review", role: .destructive) {
+                        revokePropositionReview(authorityID: authority.id)
+                    }
+                    .disabled(propositionActionInFlight)
+                    .accessibilityIdentifier("authority.reviewedProposition.remove")
+                }
+            }
+
+            if let propositionError {
+                Text(propositionError)
+                    .font(.supraCaption)
+                    .foregroundStyle(.orange)
+                    .accessibilityIdentifier("authority.reviewedProposition.error")
+            }
+        }
+    }
+
+    private var canRecordPropositionReview: Bool {
+        !propositionActionInFlight
+            && storedText != nil
+            && !propositionExcerpt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && propositionExcerpt.utf8.count <= AuthorityReviewedProposition.maximumExcerptUTF8Bytes
+    }
+
+    private func canRevokePropositionReview(_ state: AuthorityReviewedPropositionState?) -> Bool {
+        switch state {
+        case .ready?, .blocked?: true
+        case .notReviewed?, nil: false
+        }
+    }
+
+    private func reviewButtonTitle(_ state: AuthorityReviewedPropositionState?) -> String {
+        if case .ready? = state { "Update Review" } else { "Record Review" }
+    }
+
+    private func propositionStatus(_ state: AuthorityReviewedPropositionState?) -> String {
+        switch state {
+        case .notReviewed?:
+            "Not reviewed"
+        case .ready?:
+            "Ready — exact excerpt reviewed"
+        case .blocked(let reason)?:
+            switch reason {
+            case .authorityNotFound: "Blocked — authority not found"
+            case .authorityNotLive: "Blocked — authority is no longer in the library"
+            case .authorityProvenanceInvalid: "Blocked — authority source linkage is invalid"
+            case .authorityEligibilityChanged: "Blocked — authority review or verification changed"
+            case .malformedEvidence: "Blocked — saved review evidence is malformed"
+            case .unsupportedEvidence: "Blocked — saved review evidence uses an unsupported version"
+            case .forgedEvidence: "Blocked — saved review evidence failed its integrity check"
+            case .staleEvidence: "Blocked — the opinion, citation, or court changed"
+            }
+        case nil:
+            "Review state unavailable"
+        }
+    }
+
+    private func propositionStatusColor(_ state: AuthorityReviewedPropositionState?) -> Color {
+        switch state {
+        case .ready?: .green
+        case .blocked?, nil: .orange
+        case .notReviewed?: .secondary
+        }
+    }
+
+    private func syncPropositionExcerpt(from state: AuthorityReviewedPropositionState?) {
+        if case .ready(let reviewed)? = state {
+            propositionExcerpt = reviewed.excerpt
+        }
+    }
+
+    private func recordPropositionReview(authorityID: String) {
+        guard !propositionActionInFlight else { return }
+        propositionActionInFlight = true
+        propositionError = nil
+        Task { @MainActor in
+            propositionError = await controller.recordFailureToStateClaimReview(
+                authorityID: authorityID,
+                excerpt: propositionExcerpt
+            )
+            propositionActionInFlight = false
+        }
+    }
+
+    private func revokePropositionReview(authorityID: String) {
+        guard !propositionActionInFlight else { return }
+        propositionActionInFlight = true
+        propositionError = controller.revokeFailureToStateClaimReview(authorityID: authorityID)
+        propositionActionInFlight = false
+    }
+
+    private func markAuthorityNotAdverse(authorityID: String) {
+        guard !propositionActionInFlight else { return }
+        propositionActionInFlight = true
+        propositionError = controller.markAuthorityNotAdverse(authorityID: authorityID)
+        propositionActionInFlight = false
     }
 
     /// Whether the reader has ANYTHING to show: fetched HTML, a downloaded PDF,
@@ -256,11 +424,19 @@ struct AuthorityDetailView: View {
     }
 
     private func loadOpinionIfPossible(_ authority: AuthoritiesController.AuthorityItem) {
-        guard opinion == nil, !loadingOpinion,
-              authority.opinionID != nil, controller.hasCourtListenerToken else { return }
+        guard opinion == nil, !loadingOpinion else { return }
         loadingOpinion = true
         Task { @MainActor in
-            opinion = await controller.fetchOpinionDetail(opinionID: authority.opinionID)
+            switch await controller.prepareOpinionForPropositionReview(authorityID: authority.id) {
+            case .ready(let text, let fetchedDetail):
+                storedText = text
+                opinion = fetchedDetail
+                if opinion == nil, authority.opinionID != nil, controller.hasCourtListenerToken {
+                    opinion = await controller.fetchOpinionDetail(opinionID: authority.opinionID)
+                }
+            case .unavailable(let message):
+                if storedText == nil { propositionError = message }
+            }
             loadingOpinion = false
         }
     }

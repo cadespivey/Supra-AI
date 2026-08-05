@@ -29,6 +29,11 @@ public struct AuthorityRecord: Codable, FetchableRecord, PersistableRecord, Send
     /// §8.3) — grounds local-first research and the offline [A#] reader.
     public var opinionText: String?
     public var caseSummary: String?
+    /// Versioned proposition-review evidence. Callers must use
+    /// `AuthorityRepository.reviewedPropositionState` rather than trusting this
+    /// raw envelope directly. Only SupraStore may assign it; new records always
+    /// begin unreviewed and the audited repository lifecycle owns later writes.
+    public internal(set) var reviewedPropositionJSON: String?
     public var rawMetadataJSON: String
     public var createdAt: Date
     public var updatedAt: Date
@@ -84,6 +89,7 @@ public struct AuthorityRecord: Codable, FetchableRecord, PersistableRecord, Send
         self.userNotes = userNotes
         self.opinionText = opinionText
         self.caseSummary = caseSummary
+        self.reviewedPropositionJSON = nil
         self.rawMetadataJSON = rawMetadataJSON
         self.createdAt = createdAt
         self.updatedAt = updatedAt
@@ -113,6 +119,7 @@ public struct AuthorityRecord: Codable, FetchableRecord, PersistableRecord, Send
         case userNotes = "user_notes"
         case opinionText = "opinion_text"
         case caseSummary = "case_summary"
+        case reviewedPropositionJSON = "reviewed_proposition_json"
         case rawMetadataJSON = "raw_metadata_json"
         case createdAt = "created_at"
         case updatedAt = "updated_at"

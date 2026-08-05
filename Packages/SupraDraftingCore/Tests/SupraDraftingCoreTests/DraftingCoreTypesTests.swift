@@ -82,15 +82,66 @@ final class DraftingCoreTypesTests: XCTestCase {
 
         XCTAssertTrue(result.failures.isEmpty)
     }
+
+    // MVS-01. Expected RED: MotionVerificationEvidence and VerifyUnit.motion do not exist.
+    func testVerifyUnitCarriesOrderedMotionEvidence() async {
+        let model = DocumentModel(
+            caption: CaptionModel(
+                courtHeader: "FICTIONAL COURT",
+                parties: [PartyLine(name: "Alpha", designation: "Plaintiff"), PartyLine(name: "Beta", designation: "Defendant")],
+                caseNumber: "2026-CV-001",
+                division: nil,
+                judge: nil
+            ),
+            title: "MOTION TO DISMISS",
+            body: [],
+            signature: nil,
+            certificate: nil
+        )
+        let evidence = MotionVerificationEvidence(
+            facts: [MotionFactEvidence(
+                factID: "fact-nondefault",
+                text: "The fictional complaint alleges a written agreement.",
+                sourceID: "revision-nondefault",
+                locator: "p. 7"
+            )],
+            authorities: [MotionAuthorityEvidence(
+                authorityID: "authority-nondefault",
+                citation: "Example v. Fictional, 123 So. 3d 456 (Fla. 1st DCA 2020)",
+                reviewedExcerpt: "A complaint must plead ultimate facts.",
+                groundKey: "mtd.failureToStateClaim"
+            )],
+            bodyContract: MotionBodyContract(
+                introduction: "Defendant moves to dismiss.",
+                argumentHeading: "THE COMPLAINT FAILS TO STATE A CLAIM.",
+                conclusion: "WHEREFORE, Defendant requests dismissal."
+            )
+        )
+
+        let result = await CapturingVerifier().verify(
+            .motion(model: model, evidence: evidence),
+            kind: .motionToDismiss,
+            style: .defaultFL
+        )
+
+        XCTAssertTrue(result.failures.isEmpty)
+    }
 }
 
 private struct CapturingVerifier: Verifier {
+    let identity = DraftComponentIdentity(id: "test.capturing-verifier", version: "1")
+
     func verify(_ unit: VerifyUnit, kind: DraftKindID, style: HouseStyleSheet) async -> VerificationResult {
         switch unit {
         case let .section(section, _, facts, authorities):
             XCTAssertEqual(section.assertedFacts, [FactRef(label: "[S1]")])
             XCTAssertEqual(facts.first?.label, "[S1]")
             XCTAssertTrue(authorities.isEmpty)
+        case let .motion(_, evidence):
+            XCTAssertEqual(evidence.facts.map(\.factID), ["fact-nondefault"])
+            XCTAssertEqual(evidence.authorities.map(\.authorityID), ["authority-nondefault"])
+            XCTAssertEqual(evidence.authorities.first?.canonicalParagraph,
+                           "Example v. Fictional, 123 So. 3d 456 (Fla. 1st DCA 2020): A complaint must plead ultimate facts.")
         default:
             XCTFail("Expected section verification")
         }

@@ -395,6 +395,129 @@ printf '%s\n' \
   '}' \
   >"$restore_hook"
 run_case \
+  "missing supported motion hosted smoke tests fail closed" \
+  1 \
+  "supported motion hosted smoke tests are missing" \
+  env SUPRA_XPC_INTEGRATION_TEST_FILE="$xpc_hook" \
+    SUPRA_ACCESSIBILITY_SMOKE_TEST_FILE="$accessibility_hook" \
+    bash "${scripts}/run-app-smoke-tests.sh" --check
+
+printf '%s\n' \
+  'func testDiagnosticsShowsPromptClassifierAvailability() {}' \
+  'func testLegacyOutputWarningAnnouncesStatusAndUnavailableExport() {}' \
+  'func testLegacyBillingWarningAnnouncesReviewAndUnavailableExport() {}' \
+  'final class GuidedDocumentQAUITests: XCTestCase {' \
+  '  func testGuidedChooserGeneratesPreviewsAndCancelsWithoutReplacingSavedResult() {}' \
+  '}' \
+  'func testTUIMTD01Through03SupportedMotionProducesResultActionsAndOpenableDOCX() {}' \
+  'func testTUIMTD04Through05BlockedMotionNamesReasonAndHasNoFileActions() {}' \
+  'func testTUIMTD06CancellingInFlightMotionLeavesNoArtifact() {}' \
+  >"$accessibility_hook"
+# Standing guard: the existing class-name check already rejects classless
+# functions; this fixture ensures the class-scope hardening keeps doing so.
+run_case \
+  "classless motion methods fail the shipping class selector" \
+  1 \
+  "supported motion hosted smoke tests are missing" \
+  env SUPRA_XPC_INTEGRATION_TEST_FILE="$xpc_hook" \
+    SUPRA_ACCESSIBILITY_SMOKE_TEST_FILE="$accessibility_hook" \
+    bash "${scripts}/run-app-smoke-tests.sh" --check
+
+printf '%s\n' \
+  'func testDiagnosticsShowsPromptClassifierAvailability() {}' \
+  'func testLegacyOutputWarningAnnouncesStatusAndUnavailableExport() {}' \
+  'func testLegacyBillingWarningAnnouncesReviewAndUnavailableExport() {}' \
+  'final class GuidedDocumentQAUITests: XCTestCase {' \
+  '  func testGuidedChooserGeneratesPreviewsAndCancelsWithoutReplacingSavedResult() {}' \
+  '}' \
+  'final class MotionToDismissWorkspaceUITests: XCTestCase {}' \
+  'func testTUIMTD01Through03SupportedMotionProducesResultActionsAndOpenableDOCX() {}' \
+  'func testTUIMTD04Through05BlockedMotionNamesReasonAndHasNoFileActions() {}' \
+  'func testTUIMTD06CancellingInFlightMotionLeavesNoArtifact() {}' \
+  >"$accessibility_hook"
+# Expected RED: independent class and method greps accept methods placed after
+# an empty shipping class, but the selected XCTest class still runs none of them.
+run_case \
+  "motion methods after an empty shipping class fail the selector" \
+  1 \
+  "supported motion hosted smoke tests are missing" \
+  env SUPRA_XPC_INTEGRATION_TEST_FILE="$xpc_hook" \
+    SUPRA_ACCESSIBILITY_SMOKE_TEST_FILE="$accessibility_hook" \
+    bash "${scripts}/run-app-smoke-tests.sh" --check
+
+printf '%s\n' \
+  'func testDiagnosticsShowsPromptClassifierAvailability() {}' \
+  'func testLegacyOutputWarningAnnouncesStatusAndUnavailableExport() {}' \
+  'func testLegacyBillingWarningAnnouncesReviewAndUnavailableExport() {}' \
+  'final class GuidedDocumentQAUITests: XCTestCase {' \
+  '  func testGuidedChooserGeneratesPreviewsAndCancelsWithoutReplacingSavedResult() {}' \
+  '}' \
+  'final class MotionToDismissWorkspaceUITests: XCTestCase {' \
+  '  func testTUIMTD01Through03SupportedMotionProducesResultActionsAndOpenableDOCX() {}' \
+  '  func testTUIMTD04Through05BlockedMotionNamesReasonAndHasNoFileActions() {}' \
+  '  func testTUIMTD06CancellingInFlightMotionLeavesNoArtifact() { XCTAssertEqual(regularArtifacts(beneath: storageRoot), []) }' \
+  '  func testTUIAUTH01ReviewedPropositionCanBeRemovedAndRecordedExactly() {}' \
+  '  func testTUIAUTH02BlockedAuthorityRemediatesIntoMotionReadiness() {}' \
+  '  private func regularArtifacts(beneath root: URL) -> [String] {' \
+  '    _ = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey], options: [])' \
+  '    _ = values.isRegularFile == true' \
+  '    return []' \
+  '  }' \
+  '}' \
+  'final class InterruptedDraftRecoveryUITests: XCTestCase {' \
+  '  func testTUIDRAFTREC01Through04NoticeRevealAndAcknowledgementPreserveFiles() {' \
+  '    let notice = app.sheets.firstMatch' \
+  '    _ = NSPredicate(format: "value == %@", "Review previous generated work")' \
+  '    _ = root.appendingPathComponent(".supra-ui-test-store", isDirectory: true)' \
+  '    _ = secondLaunch.recoveryIDs,' \
+  '        firstLaunch.recoveryIDs,' \
+  '    _ = secondLaunch.databaseFileNumber,' \
+  '        firstLaunch.databaseFileNumber' \
+  '    app.terminate()' \
+  '    _ = app.wait(for: .notRunning, timeout: 5)' \
+  '    _ = app.descendants(matching: .any)["drafting.interruptedRecovery.fixtureEvidence"]' \
+  '    let expectedDigest = SHA256.hash(data: expectedBytes)' \
+  '    XCTAssertEqual(secondLaunch.fixtureEvidence.regularArtifactCount, 1)' \
+  '    let acknowledgedEvidence = try recoveryFixtureEvidence(in: app)' \
+  '    _ = acknowledgedEvidence.relativePath, secondLaunch.fixtureEvidence.relativePath' \
+  '    _ = acknowledgedEvidence.matterID, secondLaunch.fixtureEvidence.matterID' \
+  '    _ = acknowledgedEvidence.byteCount, secondLaunch.fixtureEvidence.byteCount' \
+  '    _ = acknowledgedEvidence.sha256, secondLaunch.fixtureEvidence.sha256' \
+  '  }' \
+  '}' \
+  >"$accessibility_hook"
+run_case \
+  "a missing interrupted draft recovery hosted test fails closed" \
+  1 \
+  "interrupted draft recovery hosted smoke tests are missing" \
+  env SUPRA_XPC_INTEGRATION_TEST_FILE="$xpc_hook" \
+    SUPRA_ACCESSIBILITY_SMOKE_TEST_FILE="$accessibility_hook" \
+    SUPRA_DRAFT_RECOVERY_UI_TEST_FILE="$missing_hook" \
+    SUPRA_RESTORE_UI_TEST_FILE="$restore_hook" \
+    bash "${scripts}/run-app-smoke-tests.sh" --check
+
+recovery_old_selector_hook="${temporary_dir}/InterruptedDraftRecoveryOldSelectorUITests.swift"
+printf '%s\n' \
+  'final class InterruptedDraftRecoveryUITests: XCTestCase {' \
+  '  func testTUIDRAFTREC01Through04NoticeRevealAndAcknowledgementPreserveFiles() {' \
+  '    let notice = app.alerts["Review previous generated work"]' \
+  '  }' \
+  '}' \
+  >"$recovery_old_selector_hook"
+# Expected RED: a method can exist and still query a nonexistent macOS Alert
+# while each launch silently receives a freshly seeded UUID Store.
+run_case \
+  "an alert query and fresh-store relaunch fail the recovery contract" \
+  1 \
+  "interrupted draft recovery smoke must reopen one Store and query the macOS sheet title" \
+  env SUPRA_XPC_INTEGRATION_TEST_FILE="$xpc_hook" \
+    SUPRA_ACCESSIBILITY_SMOKE_TEST_FILE="$accessibility_hook" \
+    SUPRA_DRAFT_RECOVERY_UI_TEST_FILE="$recovery_old_selector_hook" \
+    SUPRA_RESTORE_UI_TEST_FILE="$restore_hook" \
+    bash "${scripts}/run-app-smoke-tests.sh" --check
+# Standing guard: the exact methods nested in the shipping XCTest class must
+# continue to satisfy check-only discovery after the fail-closed hardening.
+run_case \
   "the exact hosted XPC and accessibility selectors satisfy the hook" \
   0 \
   "Hosted XPC integration hook passed." \
@@ -444,6 +567,92 @@ fi
 # ordinary launch flags. They must require the hermetic XCUITest launch and keep
 # their artifacts out of the user's managed model directory.
 app_environment="${repo_root}/Apps/SupraAI/SupraAI/AppEnvironment.swift"
+bootstrap_body="$(sed -n '/^    func bootstrap() async {/,/^    }/p' "$app_environment")"
+reconcile_line="$(grep -nF '_ = try? draftArtifactReconciler.reconcilePendingIntents()' <<<"$bootstrap_body" | cut -d: -f1 || true)"
+remediation_line="$(grep -nF 'remediationRecoverySummary = (try? store.remediationRecovery.summary())' <<<"$bootstrap_body" | cut -d: -f1 || true)"
+if grep -Fq 'let effectiveDraftingStorage = draftingStorage ?? documentStorage' "$app_environment" \
+    && grep -Fq 'storage: effectiveDraftingStorage' "$app_environment" \
+    && grep -Fq 'if !usingFallbackStore, databaseRecoveryState == nil {' <<<"$bootstrap_body" \
+    && [[ -n "$reconcile_line" && -n "$remediation_line" && "$reconcile_line" -lt "$remediation_line" ]]; then
+  printf '%s\n' 'PASS: shipping bootstrap reconciles draft artifact intents before remediation UI'
+else
+  record_failure 'shipping bootstrap does not safely reconcile draft artifact intents before remediation UI'
+fi
+
+# Expected RED on f500e5a: the hosted recovery relaunch used a new UUID Store
+# per process and the filesystem-writing fixture could fall back to the user's
+# default managed-document root when its dedicated root was absent.
+recovery_root_policy="$(sed -n '/private static func interruptedDraftRecoveryUITestRoot()/,/^    }/p' "$app_environment")"
+recovery_store_policy="$(sed -n '/private static func interruptedDraftRecoveryUITestStoreURL()/,/^    }/p' "$app_environment")"
+recovery_seeder="$(sed -n '/private func seedUITestInterruptedDraftRecoveryIfNeeded()/,/^    }/p' "$app_environment")"
+if grep -Fq 'guard isUITestMode,' <<<"$recovery_root_policy" \
+    && grep -Fq 'arguments.contains("-uiTestInterruptedDraftRecovery")' <<<"$recovery_root_policy" \
+    && grep -Fq 'environment["SUPRA_UI_TEST_DRAFT_STORAGE_ROOT"]' <<<"$recovery_root_policy" \
+    && grep -Fq 'candidate.path.hasPrefix("\(temporaryRoot.path)/")' <<<"$recovery_root_policy" \
+    && grep -Fq '.appendingPathComponent(".supra-ui-test-store", isDirectory: true)' <<<"$recovery_store_policy" \
+    && grep -Fq '.appendingPathComponent("SupraAI.sqlite", isDirectory: false)' <<<"$recovery_store_policy" \
+    && grep -Fq 'if let persistentUITestStoreURL = interruptedDraftRecoveryUITestStoreURL()' "$app_environment" \
+    && grep -Eq 'guard (let )?interruptedDraftRecoveryUITestRoot( != nil)?,' <<<"$recovery_seeder"; then
+  printf '%s\n' 'PASS: interrupted recovery uses one narrowly authorized hermetic on-disk UI-test Store'
+else
+  record_failure 'interrupted recovery does not require one narrowly authorized hermetic on-disk UI-test Store'
+fi
+
+# Expected RED after the sidecar proved unreadable across the app-container
+# boundary: the exact scenario needs an app-side byte probe whose accessibility
+# marker contains only a validated managed-relative path and content-free facts.
+recovery_drafting_view="${repo_root}/Apps/SupraAI/SupraAI/Matters/MatterDraftingView.swift"
+recovery_ui_tests="${repo_root}/Apps/SupraAI/SupraAIUITests/ResearchAuthoritiesUITests.swift"
+recovery_fixture_probe="$(sed -n '/private var interruptedDraftRecoveryUITestEvidence:/,/^    }/p' "$recovery_drafting_view")"
+recovery_fixture_marker="$(sed -n '/if let evidence = interruptedDraftRecoveryUITestEvidence/,/^                }/p' "$recovery_drafting_view")"
+recovery_fixture_parser="$(sed -n '/private func recoveryFixtureEvidence(in app:/,/^    }/p' "$recovery_ui_tests")"
+if grep -Fq 'static var interruptedDraftRecoveryUITestManagedRoot: URL?' "$app_environment" \
+    && grep -Fq 'drafting.interruptedRecovery.fixtureEvidence' "$recovery_drafting_view" \
+    && grep -Fq '.accessibilityLabel(evidence)' <<<"$recovery_fixture_marker" \
+    && grep -Fq 'let rawValue = marker.label' <<<"$recovery_fixture_parser" \
+    && grep -Fq '@State private var interruptedDraftRecoveryUITestRecoveredURL: URL?' "$recovery_drafting_view" \
+    && grep -Fq 'controller.interruptedDraftRecoveries.compactMap(\.fileURL)' "$recovery_drafting_view" \
+    && grep -Fq '.onChange(of: controller.interruptedDraftRecoveries)' "$recovery_drafting_view" \
+    && grep -Fq 'guard let recoveredURL = interruptedDraftRecoveryUITestRecoveredURL' <<<"$recovery_fixture_probe" \
+    && grep -Fq 'FileManager.default.enumerator(' <<<"$recovery_fixture_probe" \
+    && grep -Fq 'options: []' <<<"$recovery_fixture_probe" \
+    && grep -Fq '.appendingPathComponent(".supra-ui-test-store", isDirectory: true)' <<<"$recovery_fixture_probe" \
+    && grep -Fq '!artifactURL.path.hasPrefix("\(testStoreRoot.path)/")' <<<"$recovery_fixture_probe" \
+    && grep -Fq 'Data(contentsOf: recoveredURL)' <<<"$recovery_fixture_probe" \
+    && grep -Fq 'SHA256.hash(data: recoveredBytes)' <<<"$recovery_fixture_probe" \
+    && grep -Fq 'relative=exports/\(matterUUID.uuidString)/Interrupted-publication.md' <<<"$recovery_fixture_probe" \
+    && grep -Fq '|bytes=\(recoveredBytes.count)|sha256=\(digest)|regularCount=\(regularArtifactCount)' <<<"$recovery_fixture_probe" \
+    && ! grep -Fq 'seeded-matter-id' "$app_environment" \
+    && ! grep -Fq 'seeded-matter-id' "$recovery_drafting_view"; then
+  printf '%s\n' 'PASS: hosted recovery evidence probes actual bytes without exposing local paths'
+else
+  record_failure 'hosted recovery evidence is not safely exposed and parsed through a reliable content-free accessibility label'
+fi
+
+root_view="${repo_root}/Apps/SupraAI/SupraAI/RootView.swift"
+if grep -Fq '.onChange(of: environment.remediationRecoverySummary)' "$root_view" \
+    && grep -Fq 'interruptedNoticePresentedThisLaunch' "$root_view" \
+    && grep -Fq 'interruptedDraftsPending' "$root_view" \
+    && grep -Fq 'presentRemediationNoticeIfNeeded()' "$root_view" \
+    && grep -Fq 'Public or user-visible drafts' "$root_view" \
+    && grep -Fq 'internal temporary or owned rollback files' "$root_view"; then
+  printf '%s\n' 'PASS: interrupted artifact notice survives legacy acknowledgment and late bootstrap summary'
+else
+  record_failure 'interrupted artifact notice can be hidden by legacy acknowledgment or late bootstrap timing'
+fi
+
+drafting_view="${repo_root}/Apps/SupraAI/SupraAI/Matters/MatterDraftingView.swift"
+if grep -Fq 'controller.interruptedDraftRecoveries' "$drafting_view" \
+    && grep -Fq 'controller.confirmInterruptedDraftArtifactsReviewed' "$drafting_view" \
+    && grep -Fq 'NSWorkspace.shared.activateFileViewerSelecting([fileURL])' "$drafting_view" \
+    && grep -Fq 'drafting.interruptedRecovery.reveal.' "$drafting_view" \
+    && grep -Fq 'drafting.interruptedRecoveryWarning' "$drafting_view" \
+    && grep -Fq 'Regenerate Before Use' "$drafting_view"; then
+  printf '%s\n' 'PASS: affected drafting surface names and resolves interrupted artifacts explicitly'
+else
+  record_failure 'affected drafting surface lacks interrupted artifact filenames or explicit resolution'
+fi
+
 if grep -Eq 'guidedQAUITestAuthorized[[:space:]]*=[[:space:]]*Self\.isUITestMode[[:space:]]*&&' "$app_environment" \
     && grep -Fq 'guidedQAUITestAuthorized ? GuidedQAUITestRuntimeClient() : runtimeClient' "$app_environment"; then
   printf '%s\n' 'PASS: guided Q&A synthetic runtime requires hermetic UI-test authority'
@@ -473,6 +682,162 @@ if grep -Fq -- '-only-testing:SupraAIUITests/RestoreSettingsUITests' "$app_smoke
   printf '%s\n' 'PASS: app smoke executes the restore Settings and recovery hosted guards'
 else
   record_failure 'app smoke does not execute the restore Settings and recovery hosted guards'
+fi
+
+if grep -Fq -- '-only-testing:SupraAIUITests/MotionToDismissWorkspaceUITests' "$app_smoke_script"; then
+  printf '%s\n' 'PASS: app smoke executes the supported motion hosted guards'
+else
+  record_failure 'app smoke does not execute the supported motion hosted guards'
+fi
+
+if grep -Eq '^[[:space:]]+-only-testing:SupraAIUITests/InterruptedDraftRecoveryUITests[[:space:]]+\\$' "$app_smoke_script"; then
+  printf '%s\n' 'PASS: app smoke executes the interrupted draft recovery hosted guards'
+else
+  record_failure 'app smoke does not execute the interrupted draft recovery hosted guards'
+fi
+
+motion_view="${repo_root}/Apps/SupraAI/SupraAI/Matters/MatterDraftingView.swift"
+motion_ui_tests="${repo_root}/Apps/SupraAI/SupraAIUITests/ResearchAuthoritiesUITests.swift"
+letter_generation_function="$(sed -n '/private func generateLetter(token:/,/^    }/p' "$motion_view")"
+if grep -Fq 'drafting.motion.fact.\(source.chunkID)' "$motion_view" \
+    && grep -Fq 'drafting.motion.authority.\(source.authorityID)' "$motion_view" \
+    && grep -Fq 'drafting.motion.fact.ui-motion-fact-chunk' "$motion_ui_tests" \
+    && grep -Fq 'ui-motion-authority-success' "$motion_ui_tests" \
+    && grep -Fq 'expectedBindingSHA256: bindingSHA256' "$motion_view" \
+    && grep -Fq 'displayedAuthorityBindings[authorityID]' "$motion_view" \
+    && grep -Fq 'return displayed == current' "$motion_view" \
+    && grep -Fq 'source.bindingSHA256 != selection.expectedBindingSHA256' \
+      "${repo_root}/Packages/SupraSessions/Sources/SupraSessions/MatterDraftingController.swift"; then
+  printf '%s\n' 'PASS: motion smoke selects exact identified, review-bound production source rows'
+else
+  record_failure 'motion smoke does not select exact identified, review-bound production source rows'
+fi
+
+motion_core="${repo_root}/Packages/SupraDraftingCore/Sources/SupraDraftingCore/DraftingCore.swift"
+motion_claims="${repo_root}/Docs/Verified-Product-Claims.yml"
+if grep -Fq 'is reproduced for counsel’s analysis under the reviewed pleading standards' "$motion_core" \
+    && ! grep -Fq 'does not plead the ultimate facts necessary to state a legally sufficient claim' "$motion_core" \
+    && grep -Fq 'It does not decide fact-to-ground applicability, legal sufficiency, or filing readiness.' "$motion_view" \
+    && grep -Fq 'For the supported motion, the gate checks required structure and exact selected-source reproduction; it does not determine fact-to-ground applicability, legal sufficiency, or filing readiness.' "$motion_claims"; then
+  printf '%s\n' 'PASS: motion verification stays scoped to structure and selected-source reproduction'
+else
+  record_failure 'motion verification copy overstates applicability, legal sufficiency, or filing readiness'
+fi
+
+motion_source_loader="$(sed -n '/private func loadMotionSourcesIfNeeded()/,/^    }/p' "$motion_view")"
+if grep -Fq -- '-uiTestMotionDraftSuccess' <<<"$motion_source_loader" \
+    || grep -Fq 'selectedMotionFactIDs.insert' <<<"$motion_source_loader" \
+    || grep -Fq 'selectedMotionAuthorityIDs.insert' <<<"$motion_source_loader"; then
+  record_failure 'motion UI-test launch still auto-selects filing sources'
+else
+  printf '%s\n' 'PASS: motion UI-test launch requires explicit source selection'
+fi
+
+motion_controller="${repo_root}/Packages/SupraSessions/Sources/SupraSessions/MatterDraftingController.swift"
+motion_readiness="$(sed -n '/private var currentMotionReadiness: MotionDraftReadiness/,/^    }/p' "$motion_view")"
+if grep -Fq 'factSources: motionFactSources' <<<"$motion_readiness" \
+    && grep -Fq 'authoritySources: motionAuthoritySources' <<<"$motion_readiness" \
+    && grep -Fq 'let readiness = motionReadiness(input: input, matterID: matterID)' "$motion_controller"; then
+  printf '%s\n' 'PASS: interactive motion readiness uses loaded sources while generation refreshes them'
+else
+  record_failure 'interactive motion readiness rescans sources or generation does not refresh them'
+fi
+
+motion_on_appear="$(sed -n '/\.onAppear {/,/^        }/p' "$motion_view")"
+if grep -Fq 'if selection == .kind(.motionToDismiss) { loadMotionSourcesIfNeeded() }' <<<"$motion_on_appear"; then
+  printf '%s\n' 'PASS: default non-motion drafting appearance performs no motion source load'
+else
+  record_failure 'default non-motion drafting appearance still loads motion sources'
+fi
+
+motion_launch_helper="$(sed -n '/private func launchMotionApp(/,/^    }/p' "$motion_ui_tests")"
+if grep -Fq -- '-uiTestSelectFirstMatter' <<<"$motion_launch_helper" \
+    || grep -Fq -- '-uiTestOpenDraftSheet' <<<"$motion_launch_helper" \
+    || ! grep -Fq 'matter.click()' "$motion_ui_tests" \
+    || ! grep -Fq 'draft.click()' "$motion_ui_tests"; then
+  record_failure 'motion hosted smoke bypasses production matter and Draft navigation'
+else
+  printf '%s\n' 'PASS: motion hosted smoke uses production matter and Draft navigation'
+fi
+
+if grep -Fq 'private var isWorking: Bool { generationTask != nil || controller.isGenerating }' "$motion_view" \
+    && grep -Fq 'guard !isWorking else { return }' "$motion_view" \
+    && grep -Fq '.interactiveDismissDisabled(isWorking)' "$motion_view" \
+    && grep -Fq 'generationToken' "$motion_view" \
+    && [[ "$(grep -Fc 'guard generationIsCurrent(token, selection: requestedSelection), !Task.isCancelled else { return }' <<<"$letter_generation_function")" -eq 2 ]] \
+    && grep -Fq 'drafting.close.header' "$motion_ui_tests" \
+    && grep -Fq 'drafting.close.footer' "$motion_ui_tests" \
+    && grep -Fq 'regularArtifacts(beneath: storageRoot)' "$motion_ui_tests" \
+    && grep -Fq 'private func regularArtifacts(beneath root: URL) -> [String]' "$motion_ui_tests" \
+    && grep -Fq 'options: []' "$motion_ui_tests" \
+    && grep -Fq 'values.isRegularFile == true' "$motion_ui_tests" \
+    && ! grep -Fq 'options: [.skipsHiddenFiles]' "$motion_ui_tests"; then
+  printf '%s\n' 'PASS: view-owned drafting work closes continuation, double-start, and dismissal races with disk proof'
+else
+  record_failure 'drafting UI lacks a routed-letter continuation guard, view-owned task token, dismissal lock, or disk-level absence proof'
+fi
+
+if grep -Fq '.accessibilityLabel(sourceAccessibilityLabel' "$motion_view" \
+    && grep -Fq '.accessibilityValue(sourceAccessibilityValue' "$motion_view" \
+    && grep -Fq 'source.blockingReason ?? source.text' "$motion_view" \
+    && grep -Fq 'localizedCaseInsensitiveContains("Selected")' "$motion_ui_tests" \
+    && grep -Fq 'fact.label.contains(exactMotionFactTail)' "$motion_ui_tests" \
+    && grep -Fq 'authority.label.contains(exactMotionAuthorityExcerpt)' "$motion_ui_tests"; then
+  printf '%s\n' 'PASS: motion source rows announce literal state and expose complete selected text'
+else
+  record_failure 'motion source rows lack literal accessibility state or complete selected text'
+fi
+
+if grep -Fq 'motionFactLoadError' "$motion_view" \
+    && grep -Fq 'motionAuthorityLoadError' "$motion_view" \
+    && grep -Fq 'drafting.motion.sources.retry' "$motion_view"; then
+  printf '%s\n' 'PASS: motion source load failures remain distinct from empty libraries and expose retry'
+else
+  record_failure 'motion source load failures are still presented as empty libraries or have no retry'
+fi
+
+if grep -Fq 'The court, judge where applicable, and case number come from the matter.' "$motion_view" \
+    && ! grep -Fq 'The court, division, and case number come from the matter.' "$motion_view"; then
+  printf '%s\n' 'PASS: motion caption guidance names only fields the controller uses'
+else
+  record_failure 'motion caption guidance still promises an unused division field'
+fi
+
+authority_detail_view="${repo_root}/Apps/SupraAI/SupraAI/Authorities/AuthorityDetailView.swift"
+authorities_controller="${repo_root}/Packages/SupraSessions/Sources/SupraSessions/AuthoritiesController.swift"
+motion_ui_class="$(sed -n '/final class MotionToDismissWorkspaceUITests:/,/^}/p' "$motion_ui_tests")"
+motion_authority_remediation_ui="$(sed -n '/func testTUIAUTH02BlockedAuthorityRemediatesIntoMotionReadiness()/,/^    }/p' "$motion_ui_tests")"
+if grep -Fq 'authority.reviewedProposition.status' "$authority_detail_view" \
+    && grep -Fq 'authority.reviewedProposition.excerpt' "$authority_detail_view" \
+    && grep -Fq 'authority.reviewedProposition.save' "$authority_detail_view" \
+    && grep -Fq 'authority.reviewedProposition.remove' "$authority_detail_view" \
+    && grep -Fq 'testTUIAUTH01ReviewedPropositionCanBeRemovedAndRecordedExactly' <<<"$motion_ui_class" \
+    && grep -Fq 'authorityID: "ui-motion-authority-success"' <<<"$motion_ui_class" \
+    && grep -Fq 'exactMotionAuthorityExcerpt' <<<"$motion_ui_class"; then
+  printf '%s\n' 'PASS: hosted authority editor proves exact reviewed evidence lifecycle'
+else
+  record_failure 'hosted authority editor does not prove the exact reviewed evidence lifecycle'
+fi
+
+if grep -Fq 'authority.reviewState.markNotAdverse' "$authority_detail_view" \
+    && grep -Fq 'markAuthorityNotAdverse' "$authorities_controller" \
+    && grep -Fq 'testTUIAUTH02BlockedAuthorityRemediatesIntoMotionReadiness' <<<"$motion_ui_class" \
+    && grep -Fq 'ui-motion-authority-blocked' <<<"$motion_ui_class" \
+    && grep -Fq 'scrollToHittable(excerpt, in: app)' <<<"$motion_authority_remediation_ui" \
+    && grep -Fq 'XCTAssertTrue(excerpt.isHittable, excerpt.debugDescription)' <<<"$motion_authority_remediation_ui"; then
+  printf '%s\n' 'PASS: blocked saved authority has an in-context hosted remediation path'
+else
+  record_failure 'blocked saved authority remediation does not make the exact-excerpt editor visibly hittable before interaction'
+fi
+
+matter_workspace_view="${repo_root}/Apps/SupraAI/SupraAI/Matters/MatterWorkspaceView.swift"
+if grep -Fq 'prewarm(role: .drafting)' "$matter_workspace_view"; then
+  record_failure 'opening Draft still eagerly loads a model before the user selects a model-backed kind'
+elif grep -Fq 'selection == .kind(.letterDemand)' "$motion_view" \
+    && grep -Fq 'library.prewarm(role: .drafting)' "$motion_view"; then
+  printf '%s\n' 'PASS: drafting model prewarm is deferred to the model-backed demand-letter kind'
+else
+  record_failure 'demand-letter selection no longer prewarms its assigned drafting model'
 fi
 
 if grep -Fq 'CODE_SIGNING_ALLOWED=NO' "$app_smoke_script" \

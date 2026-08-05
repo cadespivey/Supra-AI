@@ -26,7 +26,18 @@ public final class AuthoritiesController: ObservableObject {
         public let useStatus: AuthorityUseStatus
         public let userNotes: String?
         public let caseSummary: String?
+        /// Recomputed against the live authority row. Nil means the state could
+        /// not be read; callers must never infer readiness from raw JSON.
+        public let failureToStateClaimReviewState: AuthorityReviewedPropositionState?
         public let rawMetadataJSON: String
+    }
+
+    /// The exact persisted opinion bytes available to the proposition editor.
+    /// When CourtListener had to be consulted, the detail is returned as well so
+    /// the authority reader can reuse the same response instead of fetching twice.
+    public enum OpinionReviewPreparation: Sendable, Equatable {
+        case ready(text: String, fetchedDetail: CourtListenerOpinionDetailDTO?)
+        case unavailable(message: String)
     }
 
     @Published public private(set) var authorities: [AuthorityItem] = []
@@ -86,6 +97,109 @@ public final class AuthoritiesController: ObservableObject {
         return (text?.isEmpty == false) ? text : nil
     }
 
+    /// Resolves the byte-authoritative opinion used for proposition review. A
+    /// remotely hydrated body is persisted before it is returned, and the exact
+    /// stored bytes are re-read and compared before the UI may review an excerpt.
+    public func prepareOpinionForPropositionReview(
+        authorityID: String
+    ) async -> OpinionReviewPreparation {
+        let authority: AuthorityRecord
+        do {
+            guard let stored = try store.authorities.fetchAuthority(id: authorityID),
+                  stored.matterID == matterID,
+                  stored.deletedAt == nil else {
+                return .unavailable(message: "Authority not found.")
+            }
+            authority = stored
+        } catch {
+            return .unavailable(message: "Couldn't load the authority. Try again.")
+        }
+
+        if let text = authority.opinionText, !text.isEmpty {
+            return .ready(text: text, fetchedDetail: nil)
+        }
+        guard let rawOpinionID = authority.opinionID,
+              let opinionID = Int(rawOpinionID) else {
+            return .unavailable(message: "No opinion text is available for this authority.")
+        }
+        guard hasCourtListenerToken else {
+            return .unavailable(message: "Add a CourtListener token in Settings to fetch this opinion.")
+        }
+
+        let detail: CourtListenerOpinionDetailDTO
+        do {
+            detail = try await courtListenerClient.fetchOpinion(id: opinionID)
+        } catch {
+            return .unavailable(message: "Couldn't fetch the opinion from CourtListener. Try again.")
+        }
+        guard let fetchedText = detail.bodyText,
+              !fetchedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return .unavailable(message: "CourtListener did not return readable opinion text.")
+        }
+
+        do {
+            let persisted = try store.authorities.storeFetchedOpinionTextIfAbsent(
+                authorityID: authorityID,
+                matterID: matterID,
+                fetchedText: fetchedText
+            )
+            load()
+            let fetchedDetail = Data(persisted.utf8) == Data(fetchedText.utf8) ? detail : nil
+            return .ready(text: persisted, fetchedDetail: fetchedDetail)
+        } catch let error as AuthorityRepositoryError {
+            return .unavailable(message: Self.reviewMessage(for: error))
+        } catch {
+            return .unavailable(message: "Couldn't store the opinion text. Try again.")
+        }
+    }
+
+    /// Records the supported motion proposition against the exact editor string.
+    /// Preparation is repeated defensively so no caller can review a merely fetched,
+    /// unpersisted opinion body.
+    public func recordFailureToStateClaimReview(
+        authorityID: String,
+        excerpt: String
+    ) async -> String? {
+        switch await prepareOpinionForPropositionReview(authorityID: authorityID) {
+        case .ready:
+            break
+        case .unavailable(let message):
+            return message
+        }
+        defer { load() }
+        do {
+            _ = try store.authorities.reviewProposition(
+                authorityID: authorityID,
+                groundKey: .failureToStateClaim,
+                excerpt: excerpt,
+                reviewedBy: propositionReviewActor()
+            )
+            return nil
+        } catch let error as AuthorityRepositoryError {
+            return Self.reviewMessage(for: error)
+        } catch {
+            return "Couldn't save the proposition review. Try again."
+        }
+    }
+
+    /// Removes ready or blocked proposition evidence through the audited Store
+    /// lifecycle. Blocked evidence deliberately remains revocable.
+    public func revokeFailureToStateClaimReview(authorityID: String) -> String? {
+        defer { load() }
+        do {
+            try store.authorities.revokePropositionReview(
+                authorityID: authorityID,
+                matterID: matterID,
+                revokedBy: propositionReviewActor()
+            )
+            return nil
+        } catch let error as AuthorityRepositoryError {
+            return Self.reviewMessage(for: error)
+        } catch {
+            return "Couldn't remove the proposition review. Try again."
+        }
+    }
+
     /// The app-managed location of a previously-downloaded opinion PDF, or nil if
     /// none has been downloaded for this opinion.
     public func storedOpinionPDF(opinionID: String?) -> URL? {
@@ -127,6 +241,10 @@ public final class AuthoritiesController: ObservableObject {
     public func load() {
         authorities = ((try? store.authorities.fetchAuthorities(matterID: matterID)) ?? []).map { record in
             let citations = (try? JSONDecoder().decode([String].self, from: Data(record.citationJSON.utf8))) ?? []
+            let propositionState = try? store.authorities.reviewedPropositionState(
+                authorityID: record.id,
+                groundKey: .failureToStateClaim
+            )
             // Defensive: authorities saved before CourtListener-text sanitization
             // can still carry `<mark>` highlight markup / HTML entities.
             return AuthorityItem(
@@ -144,6 +262,7 @@ public final class AuthoritiesController: ObservableObject {
                 useStatus: AuthorityUseStatus(rawValue: record.useStatus) ?? .unverified,
                 userNotes: record.userNotes,
                 caseSummary: CourtListenerText.clean(record.caseSummary),
+                failureToStateClaimReviewState: propositionState,
                 rawMetadataJSON: record.rawMetadataJSON
             )
         }
@@ -259,20 +378,55 @@ public final class AuthoritiesController: ObservableObject {
         load()
     }
 
-    /// Changes use status only when the transition is permitted (spec §11.4),
-    /// writing an authority_status_changed audit event. Returns false if blocked.
+    /// Changes use status only when the exact live matter row permits the
+    /// transition (spec §11.4). The status and audit commit atomically; every
+    /// blocked or failed attempt reloads the controller and returns false.
     @discardableResult
     public func changeUseStatus(authorityID: String, to target: AuthorityUseStatus) -> Bool {
-        guard let item = authorities.first(where: { $0.id == authorityID }),
-              item.useStatus.canTransition(to: target) else { return false }
-        try? store.authorities.updateUseStatus(authorityID: authorityID, useStatus: target)
-        _ = try? store.auditEvents.recordEvent(
-            matterID: matterID, eventType: "authority_status_changed", actor: "user",
-            summary: "“\(item.caseName)”: \(item.useStatus.displayName) → \(target.displayName)",
-            relatedTable: "authorities", relatedID: authorityID
-        )
-        load()
-        return true
+        defer { load() }
+        do {
+            return try store.authorities.transitionUseStatus(
+                authorityID: authorityID,
+                matterID: matterID,
+                to: target,
+                actor: "user"
+            )
+        } catch {
+            return false
+        }
+    }
+
+    /// Resolves the review-state prerequisite for proposition evidence without
+    /// forcing the user to rediscover the authority's originating research session.
+    /// The matter-scoped authority, linked research result, and audit entry commit
+    /// together so the UI never reports a partially applied review state.
+    public func markAuthorityNotAdverse(authorityID: String) -> String? {
+        guard authorities.contains(where: { $0.id == authorityID }) else {
+            return "Authority not found."
+        }
+        defer { load() }
+        do {
+            _ = try store.authorities.markNotAdverse(
+                authorityID: authorityID,
+                matterID: matterID,
+                actor: "user",
+                markedAt: Date()
+            )
+            return nil
+        } catch let error as AuthorityRepositoryError {
+            switch error {
+            case .authorityNotFound:
+                return "Authority not found."
+            case .reviewRequiresLiveAuthority:
+                return "This authority is no longer in the library."
+            case .authorityProvenanceMismatch:
+                return "This authority is no longer linked to its originating research result."
+            default:
+                return "Couldn't mark this authority not adverse. Try again."
+            }
+        } catch {
+            return "Couldn't mark this authority not adverse. Try again."
+        }
     }
 
     public func updatePreferredCitation(authorityID: String, _ citation: String) {
@@ -283,5 +437,48 @@ public final class AuthoritiesController: ObservableObject {
     public func updateUserNotes(authorityID: String, _ notes: String) {
         try? store.authorities.updateUserNotes(authorityID: authorityID, userNotes: notes)
         load()
+    }
+
+    private func propositionReviewActor() -> String {
+        let profile: AssistantProfile = (
+            try? store.appSettings.getSetting(AssistantProfile.profileKey, as: AssistantProfile.self)
+        ) ?? .empty
+        let name = profile.fullName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty ? "Local user" : name
+    }
+
+    private static func reviewMessage(for error: AuthorityRepositoryError) -> String {
+        switch error {
+        case .untrustedPropositionEvidenceOnInsert:
+            "Couldn't save the proposition review. Try again."
+        case .authorityProvenanceMismatch:
+            "This authority is no longer linked to its originating research result."
+        case .authorityConflict:
+            "This authority conflicts with another saved authority."
+        case .authorityNotFound:
+            "Authority not found."
+        case .reviewRequiresLiveAuthority:
+            "This authority is no longer in the library."
+        case .reviewRequiresNotAdverse:
+            "Mark this authority not adverse before recording proposition support."
+        case .reviewRequiresUserMarkedVerified:
+            "Mark this authority verified before recording proposition support."
+        case .opinionTextUnavailable:
+            "No opinion text is available for this authority."
+        case .effectiveCitationUnavailable:
+            "Add a citation before recording proposition support."
+        case .reviewerRequired:
+            "A reviewer name is required."
+        case .excerptEmpty:
+            "Enter an exact excerpt from the stored opinion."
+        case .excerptTooLong(let maximumUTF8Bytes):
+            "The excerpt must be \(maximumUTF8Bytes == 2_000 ? "2,000" : String(maximumUTF8Bytes)) UTF-8 bytes or fewer."
+        case .excerptNotFound:
+            "That exact excerpt was not found in the stored opinion."
+        case .excerptNotUnique:
+            "That excerpt appears more than once. Select a longer unique excerpt."
+        case .propositionReviewNotFound:
+            "There is no proposition review to remove."
+        }
     }
 }

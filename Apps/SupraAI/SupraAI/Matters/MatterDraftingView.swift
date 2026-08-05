@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 import SupraCore
 import SupraDraftingCore
 import SupraSessions
@@ -52,6 +53,23 @@ struct MatterDraftingView: View {
     @State private var letterTone = "firm"
     @State private var letterDelivery = ""
     @State private var routingMessage: String?
+
+    // Supported Florida motion inputs and exact source selections.
+    @State private var motionRespondingTo = ""
+    @State private var motionRelief = ""
+    @State private var motionFactSources: [MotionDraftFactSource] = []
+    @State private var motionAuthoritySources: [MotionDraftAuthoritySource] = []
+    @State private var motionFactLoadError: String?
+    @State private var motionAuthorityLoadError: String?
+    @State private var selectedMotionFactIDs: Set<String> = []
+    @State private var selectedMotionAuthorityIDs: Set<String> = []
+    @State private var generationTask: Task<Void, Never>?
+    @State private var generationToken: UUID?
+#if DEBUG
+    /// Retains the URL supplied by the validated recovery row so the hosted
+    /// test can re-read the identical managed artifact after acknowledgement.
+    @State private var interruptedDraftRecoveryUITestRecoveredURL: URL?
+#endif
 
     private enum WorkProductSelection: Hashable {
         case kind(DraftKindID)
@@ -120,11 +138,31 @@ struct MatterDraftingView: View {
             header
             Divider()
             Form {
+                if !controller.interruptedDraftRecoveries.isEmpty {
+                    interruptedDraftRecoverySection
+                }
+#if DEBUG
+                if let evidence = interruptedDraftRecoveryUITestEvidence {
+                    Text("Recovery fixture evidence")
+                        .font(.system(size: 1))
+                        .frame(width: 1, height: 1)
+                        .clipped()
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityIdentifier("drafting.interruptedRecovery.fixtureEvidence")
+                        // macOS can omit the value of a clipped SwiftUI Text from
+                        // the hosted accessibility snapshot. Keep the validated,
+                        // content-free fixture facts in the label, which remains
+                        // queryable even when this DEBUG-only marker is offscreen.
+                        .accessibilityLabel(evidence)
+                }
+#endif
                 if controller.legacyDraftsNeedReviewCount > 0 {
                     legacyDraftReviewSection
                 }
                 workProductSection
+                    .disabled(isWorking)
                 selectedForm
+                    .disabled(isWorking)
                 if let result {
                     resultSection(result)
                 }
@@ -149,16 +187,144 @@ struct MatterDraftingView: View {
         .frame(minWidth: 520, idealWidth: 640, maxWidth: .infinity, minHeight: 560, idealHeight: 640, maxHeight: 640)
         .onAppear {
             library.refresh()
-            controller.refreshLegacyDraftReviewState(matterID: matterID)
+            controller.refreshDraftReviewState(matterID: matterID)
+#if DEBUG
+            captureInterruptedDraftRecoveryUITestURLIfNeeded()
+#endif
             if availableKinds.isEmpty { availableKinds = controller.availableDraftKinds() }
+            if selection == .kind(.motionToDismiss) { loadMotionSourcesIfNeeded() }
         }
+#if DEBUG
+        .onChange(of: controller.interruptedDraftRecoveries) { _, _ in
+            captureInterruptedDraftRecoveryUITestURLIfNeeded()
+        }
+#endif
         // The result/error banner belongs to one work product — clear it when the
         // user switches to a different kind so a stale notice result doesn't linger
         // over the custom form (and vice versa).
         .onChange(of: selection) { _, _ in
+            if isWorking { invalidateGeneration() }
             result = nil
             errorText = nil
             routingMessage = nil
+            if selection == .kind(.letterDemand), !AppEnvironment.isUITestMode {
+                library.prewarm(role: .drafting)
+            }
+            if selection == .kind(.motionToDismiss) { loadMotionSourcesIfNeeded() }
+        }
+        .onDisappear { invalidateGeneration() }
+        .interactiveDismissDisabled(isWorking)
+    }
+
+#if DEBUG
+    private func captureInterruptedDraftRecoveryUITestURLIfNeeded() {
+        guard interruptedDraftRecoveryUITestRecoveredURL == nil,
+              AppEnvironment.interruptedDraftRecoveryUITestManagedRoot != nil
+        else { return }
+        let recoveredURLs = controller.interruptedDraftRecoveries.compactMap(\.fileURL)
+        guard recoveredURLs.count == 1 else { return }
+        interruptedDraftRecoveryUITestRecoveredURL = recoveredURLs[0]
+    }
+
+    /// Content-free evidence for the one exact hosted recovery scenario. The
+    /// value intentionally exposes neither an absolute local path nor contents.
+    private var interruptedDraftRecoveryUITestEvidence: String? {
+        guard let recoveredURL = interruptedDraftRecoveryUITestRecoveredURL?
+                .standardizedFileURL
+                .resolvingSymlinksInPath(),
+              let authorizedRoot = AppEnvironment.interruptedDraftRecoveryUITestManagedRoot,
+              let matterUUID = UUID(uuidString: matterID),
+              matterID == matterUUID.uuidString
+        else { return nil }
+
+        let managedRoot = authorizedRoot.standardizedFileURL.resolvingSymlinksInPath()
+        let testStoreRoot = managedRoot
+            .appendingPathComponent(".supra-ui-test-store", isDirectory: true)
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+        let exportsRoot = managedRoot
+            .appendingPathComponent("exports", isDirectory: true)
+            .standardizedFileURL
+        let matterRoot = exportsRoot
+            .appendingPathComponent(matterUUID.uuidString, isDirectory: true)
+            .standardizedFileURL
+        let expectedRecoveredURL = matterRoot
+            .appendingPathComponent("Interrupted-publication.md", isDirectory: false)
+            .standardizedFileURL
+        guard recoveredURL.path == expectedRecoveredURL.path,
+              recoveredURL.deletingLastPathComponent().path == matterRoot.path,
+              recoveredURL.path.hasPrefix("\(exportsRoot.path)/")
+        else { return nil }
+
+        guard let enumerator = FileManager.default.enumerator(
+            at: managedRoot,
+            includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey],
+            options: []
+        ) else { return nil }
+
+        var regularArtifactCount = 0
+        for case let rawArtifactURL as URL in enumerator {
+            let artifactURL = rawArtifactURL.standardizedFileURL.resolvingSymlinksInPath()
+            if artifactURL.path == testStoreRoot.path {
+                enumerator.skipDescendants()
+                continue
+            }
+            guard !artifactURL.path.hasPrefix("\(testStoreRoot.path)/"),
+                  artifactURL.path.hasPrefix("\(managedRoot.path)/"),
+                  let values = try? rawArtifactURL.resourceValues(
+                    forKeys: [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey]
+                  ),
+                  values.isSymbolicLink != true
+            else { return nil }
+            if values.isRegularFile == true {
+                regularArtifactCount += 1
+            }
+        }
+
+        guard let recoveredBytes = try? Data(contentsOf: recoveredURL) else { return nil }
+        let digest = SHA256.hash(data: recoveredBytes)
+            .map { String(format: "%02x", $0) }
+            .joined()
+        return "relative=exports/\(matterUUID.uuidString)/Interrupted-publication.md|bytes=\(recoveredBytes.count)|sha256=\(digest)|regularCount=\(regularArtifactCount)"
+    }
+#endif
+
+    private var interruptedDraftRecoverySection: some View {
+        Section {
+            VStack(alignment: .leading, spacing: 7) {
+                Label("Interrupted draft files are recovery-required", systemImage: "exclamationmark.triangle.fill")
+                    .font(.supraHeadline)
+                    .foregroundStyle(.orange)
+                Text("These unverified files were preserved because publication could not be authenticated. Do not rely on them as completed work. Review the named files, then regenerate anything you plan to use.")
+                    .font(.supraCaption)
+                    .fixedSize(horizontal: false, vertical: true)
+                ForEach(controller.interruptedDraftRecoveries) { recovery in
+                    HStack {
+                        Text(recovery.fileName ?? "Interrupted draft details unavailable")
+                            .font(.system(.caption, design: .monospaced))
+                            .textSelection(.enabled)
+                        Spacer()
+                        if let fileURL = recovery.fileURL {
+                            Button("Reveal in Finder") {
+                                NSWorkspace.shared.activateFileViewerSelecting([fileURL])
+                            }
+                            .accessibilityIdentifier("drafting.interruptedRecovery.reveal.\(recovery.id)")
+                        }
+                    }
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("drafting.interruptedRecovery.item.\(recovery.id)")
+                    .accessibilityLabel(
+                        recovery.fileName.map { "Recovery-required draft file \($0)" }
+                            ?? "Recovery-required interrupted draft with unavailable details"
+                    )
+                }
+                Button("I Understand — Regenerate Before Use") {
+                    controller.confirmInterruptedDraftArtifactsReviewed(matterID: matterID)
+                }
+                .accessibilityHint("Records your review without opening, moving, or deleting any preserved file")
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("drafting.interruptedRecoveryWarning")
         }
     }
 
@@ -197,7 +363,11 @@ struct MatterDraftingView: View {
             }
             Spacer()
             Button { dismiss() } label: { Image(systemName: "xmark.circle.fill") }
-                .buttonStyle(.plain).foregroundStyle(.secondary)
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .disabled(isWorking)
+                .accessibilityIdentifier("drafting.close.header")
+                .accessibilityLabel("Close Draft")
         }
         .padding()
     }
@@ -219,6 +389,7 @@ struct MatterDraftingView: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(!kind.isEnabled)
+                .accessibilityIdentifier("drafting.kind.\(kind.id.rawValue)")
             }
             Button { selection = .custom } label: {
                 workProductRow(
@@ -259,13 +430,172 @@ struct MatterDraftingView: View {
             captionSection
             representedSection
             recipientsSection
+        case .kind(.motionToDismiss):
+            captionSection
+            representedSection
+            motionSection
+            recipientsSection
         case .kind(.letterDemand):
             letterSection
-        case .kind:
-            EmptyView()   // unwired kinds aren't selectable
         case .custom:
             customSection
         }
+    }
+
+    private var motionSection: some View {
+        Section {
+            LabeledTextField(
+                label: "Responding to",
+                text: $motionRespondingTo,
+                prompt: "e.g. Plaintiff's First Amended Complaint"
+            )
+            .accessibilityIdentifier("drafting.motion.respondingTo")
+            LabeledTextField(
+                label: "Relief sought",
+                text: $motionRelief,
+                prompt: "e.g. dismissal without prejudice and leave to amend"
+            )
+            .accessibilityIdentifier("drafting.motion.relief")
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text("Ground").font(.supraCaption).foregroundStyle(.secondary)
+                Label("Failure to state a claim", systemImage: "checkmark.circle.fill")
+                    .accessibilityLabel("Selected ground: Failure to state a claim")
+            }
+
+            if !motionSourceLoadErrors.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Label("Motion sources could not be loaded", systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                    ForEach(motionSourceLoadErrors, id: \.self) { message in
+                        Text(message)
+                            .font(.supraCaption)
+                            .foregroundStyle(.orange)
+                    }
+                    Button("Retry Sources") { loadMotionSourcesIfNeeded() }
+                        .accessibilityIdentifier("drafting.motion.sources.retry")
+                }
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("drafting.motion.sources.error")
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Fact excerpts").font(.supraHeadline)
+                if motionFactLoadError == nil, motionFactSources.isEmpty {
+                    Text("No current, indexed fact excerpts are available in this matter.")
+                        .font(.supraCaption).foregroundStyle(.orange)
+                } else if motionFactLoadError == nil {
+                    ForEach(motionFactSources) { source in
+                        sourceChoice(
+                            selected: selectedMotionFactIDs.contains(source.chunkID),
+                            enabled: source.isReady,
+                            accessibilityID: "drafting.motion.fact.\(source.chunkID)",
+                            title: "\(source.documentName) — \(source.locator)",
+                            detail: source.blockingReason ?? source.text
+                        ) {
+                            toggle(source.chunkID, in: &selectedMotionFactIDs)
+                        }
+                    }
+                }
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("drafting.motion.factSources")
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Reviewed authorities").font(.supraHeadline)
+                if motionAuthorityLoadError == nil, motionAuthoritySources.isEmpty {
+                    Text("No saved authorities are available in this matter.")
+                        .font(.supraCaption).foregroundStyle(.orange)
+                } else if motionAuthorityLoadError == nil {
+                    ForEach(motionAuthoritySources) { source in
+                        sourceChoice(
+                            selected: selectedMotionAuthorityIDs.contains(source.authorityID),
+                            enabled: source.isReady,
+                            accessibilityID: "drafting.motion.authority.\(source.authorityID)",
+                            title: source.caseName,
+                            detail: source.blockingReason
+                                ?? "\(source.citation)\nReviewed proposition: \(source.snippet)"
+                        ) {
+                            toggle(source.authorityID, in: &selectedMotionAuthorityIDs)
+                        }
+                    }
+                }
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("drafting.motion.authoritySources")
+
+            let readiness = currentMotionReadiness
+            Label(
+                readiness.canGenerate
+                    ? "Ready — \(readiness.selectedFactCount) fact excerpt and \(readiness.selectedAuthorityCount) reviewed authority selected."
+                    : readiness.blockingReasons.joined(separator: " "),
+                systemImage: readiness.canGenerate ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
+            )
+            .font(.supraCaption)
+            .foregroundStyle(readiness.canGenerate ? Color.secondary : Color.orange)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityElement(children: .ignore)
+            .accessibilityIdentifier("drafting.motion.readiness")
+            .accessibilityLabel(
+                readiness.canGenerate
+                    ? "Motion ready to generate"
+                    : "Motion blocked. \(readiness.blockingReasons.joined(separator: " "))"
+            )
+        } header: {
+            Text("Supported Florida motion")
+        } footer: {
+            Text("Supra assembles this motion locally from only the fact excerpts and reviewed authorities you select. The pre-file gate checks required structure and exact selected-source reproduction; saved lineage records source provenance and reviewed-authority bindings. It does not decide fact-to-ground applicability, legal sufficiency, or filing readiness. This first supported ground is failure to state a claim; no drafting model is used. Review every proposition and citation before filing.")
+        }
+    }
+
+    private var motionSourceLoadErrors: [String] {
+        [motionFactLoadError, motionAuthorityLoadError].compactMap { $0 }
+    }
+
+    private func sourceChoice(
+        selected: Bool,
+        enabled: Bool,
+        accessibilityID: String,
+        title: String,
+        detail: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: selected ? "checkmark.square.fill" : "square")
+                    .foregroundStyle(enabled ? Color.accentColor : Color.secondary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title).foregroundStyle(enabled ? .primary : .secondary)
+                    Text(detail).font(.supraCaption)
+                        .foregroundStyle(enabled ? Color.secondary : Color.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer()
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+        .accessibilityIdentifier(accessibilityID)
+        .accessibilityLabel(sourceAccessibilityLabel(title: title, detail: detail))
+        .accessibilityValue(sourceAccessibilityValue(
+            selected: selected,
+            enabled: enabled,
+            blockingDetail: detail
+        ))
+    }
+
+    private func sourceAccessibilityLabel(title: String, detail: String) -> String {
+        "\(title). \(detail)"
+    }
+
+    private func sourceAccessibilityValue(
+        selected: Bool,
+        enabled: Bool,
+        blockingDetail: String
+    ) -> String {
+        if !enabled { return "Blocked. \(blockingDetail)" }
+        return selected ? "Selected" : "Ready"
     }
 
     @ViewBuilder
@@ -366,7 +696,7 @@ struct MatterDraftingView: View {
         } header: {
             Text("Caption parties")
         } footer: {
-            Text("As they appear in the case caption. The court, division, and case number come from the matter.")
+            Text("As they appear in the case caption. The court, judge where applicable, and case number come from the matter.")
         }
     }
 
@@ -417,6 +747,7 @@ struct MatterDraftingView: View {
         Section {
             Label("Draft generated: \(artifact.fileURL.lastPathComponent)", systemImage: "doc.fill")
                 .font(.supraCaption)
+                .accessibilityIdentifier("drafting.result.filename")
             if !artifact.reviewNotes.isEmpty {
                 ForEach(artifact.reviewNotes, id: \.self) { note in
                     Label(note, systemImage: "flag.fill")
@@ -440,27 +771,39 @@ struct MatterDraftingView: View {
         } header: {
             Text("Download")
         } footer: {
-            switch artifact.format {
-            case .docx:
-                Text("Review the generated document before filing. Unsupported content is blocked before rendering.")
-            case .markdown:
+            switch (artifact.format, artifact.source) {
+            case (.docx, .kind(.motionToDismiss)):
+                Text("Verification covers required structure and exact selected-source reproduction. It does not determine factual applicability, legal sufficiency, or filing readiness. Review the generated document before filing.")
+            case (.docx, _):
+                Text("Verification covers the required checks for this draft kind. It does not determine legal sufficiency or filing readiness. Review the generated document before filing.")
+            case (.markdown, _):
                 Text("A work-product description in your own words — a drafting brief, not a court-ready or model-generated filing.")
             }
         }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("drafting.result")
     }
+
+    private var isWorking: Bool { generationTask != nil || controller.isGenerating }
 
     private var footer: some View {
         HStack {
-            if controller.isGenerating { ProgressView().controlSize(.small) }
+            if isWorking { ProgressView().controlSize(.small) }
             if let validationHint {
                 Text(validationHint).font(.supraCaption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer()
             Button("Close") { dismiss() }
-            Button(generateLabel) { Task { await generate() } }
+                .disabled(isWorking)
+                .accessibilityIdentifier("drafting.close.footer")
+            if isWorking {
+                Button("Cancel") { generationTask?.cancel() }
+                    .accessibilityIdentifier("drafting.cancel")
+            }
+            Button(generateLabel) { startGeneration() }
                 .keyboardShortcut(.defaultAction)
-                .disabled(controller.isGenerating || !isReady)
+                .disabled(isWorking || !isReady)
                 .accessibilityIdentifier("drafting.generate")
         }
         .padding()
@@ -469,8 +812,8 @@ struct MatterDraftingView: View {
     private var generateLabel: String {
         switch selection {
         case .kind(.noticeAppearance): return "Generate Notice of Appearance"
+        case .kind(.motionToDismiss): return "Generate Motion to Dismiss"
         case .kind(.letterDemand): return "Generate Demand Letter"
-        case .kind: return "Generate"
         case .custom: return "Generate work-product description"
         }
     }
@@ -478,8 +821,8 @@ struct MatterDraftingView: View {
     private var isReady: Bool {
         switch selection {
         case .kind(.noticeAppearance): return noticeReady
+        case .kind(.motionToDismiss): return currentMotionReadiness.canGenerate
         case .kind(.letterDemand): return letterReady
-        case .kind: return false
         case .custom: return !trimmed(customDescription).isEmpty
         }
     }
@@ -490,12 +833,12 @@ struct MatterDraftingView: View {
         switch selection {
         case .kind(.noticeAppearance):
             return "Add the caption parties, your client, and at least one complete service recipient."
+        case .kind(.motionToDismiss):
+            return currentMotionReadiness.blockingReasons.first
         case .kind(.letterDemand):
             return routeModel == nil
                 ? "Assign a drafting model in Models, then fill the recipient and claim."
                 : "Fill the recipient address and the claim."
-        case .kind:
-            return nil
         case .custom:
             return "Describe the work product to enable Generate."
         }
@@ -519,19 +862,42 @@ struct MatterDraftingView: View {
             && !trimmed(letterClaim).isEmpty
     }
 
-    private func generate() async {
+    private func startGeneration() {
+        guard !isWorking else { return }
+        let token = UUID()
+        generationToken = token
+        generationTask = Task { @MainActor in
+            await generate(token: token)
+            guard generationToken == token else { return }
+            generationTask = nil
+            generationToken = nil
+        }
+    }
+
+    private func invalidateGeneration() {
+        generationToken = nil
+        generationTask?.cancel()
+        generationTask = nil
+    }
+
+    private func generationIsCurrent(_ token: UUID, selection expected: WorkProductSelection) -> Bool {
+        generationToken == token && selection == expected
+    }
+
+    private func generate(token: UUID) async {
+        let requestedSelection = selection
         errorText = nil
         result = nil
         routingMessage = nil
 
         // The letter is LLM-backed: resolve/load the drafting model, then generate.
-        if case .kind(.letterDemand) = selection {
-            await generateLetter()
+        if case .kind(.letterDemand) = requestedSelection {
+            await generateLetter(token: token, selection: requestedSelection)
             return
         }
 
         let request: MatterDraftRequest
-        switch selection {
+        switch requestedSelection {
         case .kind(.noticeAppearance):
             let partyLines = parties
                 .filter { !trimmed($0.name).isEmpty || !trimmed($0.designation).isEmpty }
@@ -555,8 +921,10 @@ struct MatterDraftingView: View {
                 representedPartyName: trimmed(representedPartyName),
                 recipients: serviceRecipients
             ))
-        case .kind:
-            return
+        case .kind(.motionToDismiss):
+            request = .motionToDismiss(currentMotionInput)
+        case .kind(.letterDemand):
+            return // handled by the routed-model branch above
         case .custom:
             request = .customDescription(CustomDraftDescriptionInput(
                 title: trimmed(customTitle),
@@ -565,7 +933,9 @@ struct MatterDraftingView: View {
             ))
         }
 
-        switch await controller.draft(request, matterID: matterID) {
+        let outcome = await controller.draft(request, matterID: matterID)
+        guard generationIsCurrent(token, selection: requestedSelection) else { return }
+        switch outcome {
         case let .success(artifact):
             result = artifact
         case let .failure(error):
@@ -573,15 +943,17 @@ struct MatterDraftingView: View {
         }
     }
 
-    private func generateLetter() async {
+    private func generateLetter(token: UUID, selection requestedSelection: WorkProductSelection) async {
         let modelID: ModelID
         switch await library.ensureLoadedRoutedModelID(for: draftRoute.role, configuration: router.configuration) {
         case let .success(loaded):
             modelID = loaded
         case let .failure(issue):
+            guard generationIsCurrent(token, selection: requestedSelection), !Task.isCancelled else { return }
             routingMessage = issue.message
             return
         }
+        guard generationIsCurrent(token, selection: requestedSelection), !Task.isCancelled else { return }
         let input = LetterDraftInput(
             recipientName: trimmed(letterRecipientName),
             recipientFirm: trimmed(letterRecipientFirm),
@@ -597,11 +969,129 @@ struct MatterDraftingView: View {
             tone: letterTone,
             deliveryNotation: trimmed(letterDelivery)
         )
-        switch await controller.draftLetterDemand(matterID: matterID, input: input, modelID: modelID, route: draftRoute) {
+        let outcome = await controller.draftLetterDemand(
+            matterID: matterID,
+            input: input,
+            modelID: modelID,
+            route: draftRoute
+        )
+        guard generationIsCurrent(token, selection: requestedSelection) else { return }
+        switch outcome {
         case let .success(artifact):
             result = artifact
         case let .failure(error):
             errorText = error.errorDescription ?? "The letter could not be generated."
+        }
+    }
+
+    private var currentMotionInput: MotionToDismissDraftInput {
+        let partyLines = parties
+            .filter { !trimmed($0.name).isEmpty || !trimmed($0.designation).isEmpty }
+            .map { PartyLine(name: trimmed($0.name), designation: trimmed($0.designation)) }
+        let serviceRecipients = completeRecipientDrafts.map { recipient in
+            ServiceRecipient(
+                name: trimmed(recipient.name),
+                firm: trimmed(recipient.firm),
+                address: OfficeBlock(
+                    street: trimmed(recipient.street),
+                    suite: nil,
+                    city: trimmed(recipient.city),
+                    state: trimmed(recipient.state),
+                    zip: trimmed(recipient.zip),
+                    phone: "",
+                    fax: nil
+                ),
+                emails: splitEmails(recipient.emails),
+                role: trimmed(recipient.role)
+            )
+        }
+        return MotionToDismissDraftInput(
+            parties: partyLines,
+            partyRepresented: trimmed(partyRepresented),
+            representedPartyName: trimmed(representedPartyName),
+            recipients: serviceRecipients,
+            respondingTo: trimmed(motionRespondingTo),
+            grounds: ["failure to state a claim"],
+            reliefSought: trimmed(motionRelief),
+            selectedFacts: motionFactSources
+                .filter { selectedMotionFactIDs.contains($0.chunkID) }
+                .map { source in
+                    MotionDraftFactSourceSelection(
+                        chunkID: source.chunkID,
+                        expectedRevisionID: source.documentRevisionID,
+                        expectedExcerptSHA256: source.excerptSHA256
+                    )
+                },
+            selectedAuthorities: motionAuthoritySources
+                .filter { selectedMotionAuthorityIDs.contains($0.authorityID) }
+                .compactMap { source in
+                    guard let bindingSHA256 = source.bindingSHA256 else { return nil }
+                    return MotionDraftAuthoritySourceSelection(
+                        authorityID: source.authorityID,
+                        expectedBindingSHA256: bindingSHA256
+                    )
+                }
+        )
+    }
+
+    private var currentMotionReadiness: MotionDraftReadiness {
+        controller.motionReadiness(
+            input: currentMotionInput,
+            matterID: matterID,
+            factSources: motionFactSources,
+            authoritySources: motionAuthoritySources
+        )
+    }
+
+    private func loadMotionSourcesIfNeeded() {
+        let displayedFactBindings = Dictionary(
+            uniqueKeysWithValues: motionFactSources.map { source in
+                (source.chunkID, "\(source.documentRevisionID):\(source.excerptSHA256)")
+            }
+        )
+        let displayedAuthorityBindings = Dictionary(
+            uniqueKeysWithValues: motionAuthoritySources.compactMap { source in
+                source.bindingSHA256.map { (source.authorityID, $0) }
+            }
+        )
+        controller.message = nil
+        let facts = controller.motionFactSources(matterID: matterID)
+        motionFactLoadError = controller.message
+
+        controller.message = nil
+        let authorities = controller.motionAuthoritySources(matterID: matterID)
+        motionAuthorityLoadError = controller.message
+        controller.message = nil
+
+        motionFactSources = facts
+        motionAuthoritySources = authorities
+        let currentFactBindings = Dictionary(
+            uniqueKeysWithValues: motionFactSources.map { source in
+                (source.chunkID, "\(source.documentRevisionID):\(source.excerptSHA256)")
+            }
+        )
+        let currentAuthorityBindings = Dictionary(
+            uniqueKeysWithValues: motionAuthoritySources.compactMap { source in
+                source.bindingSHA256.map { (source.authorityID, $0) }
+            }
+        )
+        selectedMotionFactIDs = Set(selectedMotionFactIDs.filter { chunkID in
+            guard let displayed = displayedFactBindings[chunkID],
+                  let current = currentFactBindings[chunkID] else { return false }
+            return displayed == current
+        })
+        selectedMotionAuthorityIDs = Set(selectedMotionAuthorityIDs.filter { authorityID in
+            guard let displayed = displayedAuthorityBindings[authorityID],
+                  let current = currentAuthorityBindings[authorityID] else { return false }
+            return displayed == current
+        })
+    }
+
+    private func toggle(_ id: String, in selection: inout Set<String>) {
+        if selection.contains(id) {
+            selection.remove(id)
+        } else {
+            selection.insert(id)
         }
     }
 

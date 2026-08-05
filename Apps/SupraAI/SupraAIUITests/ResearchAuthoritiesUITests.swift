@@ -1,5 +1,6 @@
 import AppKit
 import CoreGraphics
+import CryptoKit
 import XCTest
 
 /// D-06 proves the internal rollback control drives the same complete rollout
@@ -755,6 +756,659 @@ final class DraftingBlockedStateUITests: XCTestCase {
             context: "publishing a blocked draft"
         )
     }
+}
+
+/// T-UI-DRAFT-REC-01...04: a relaunch exposes interrupted publication work,
+/// distinguishes a validated reveal path from corrupt lineage, and records the
+/// user's review without deleting preserved bytes.
+@MainActor
+final class InterruptedDraftRecoveryUITests: XCTestCase {
+    override func setUp() {
+        continueAfterFailure = false
+    }
+
+    func testTUIDRAFTREC01Through04NoticeRevealAndAcknowledgementPreserveFiles() throws {
+        let storageRoot = appSandboxWritableStorageRoot(prefix: "DraftRecoveryUITest")
+        let testStoreRoot = storageRoot
+            .appendingPathComponent(".supra-ui-test-store", isDirectory: true)
+        let storeURL = testStoreRoot
+            .appendingPathComponent("SupraAI.sqlite", isDirectory: false)
+        let app = XCUIApplication()
+        addTeardownBlock {
+            app.terminate()
+            _ = app.wait(for: .notRunning, timeout: 5)
+            try? FileManager.default.removeItem(at: storageRoot)
+        }
+        app.launchArguments += [
+            "-ApplePersistenceIgnoreState", "YES",
+            "-uiTestMode",
+            "-uiTestEnsureFreshWindow",
+            "-uiTestSelectFirstMatter",
+            "-uiTestOpenDraftSheet",
+            "-uiTestInterruptedDraftRecovery",
+        ]
+        app.launchEnvironment["SUPRA_UI_TEST_DRAFT_STORAGE_ROOT"] = storageRoot.path
+
+        func launchAndDismissRepeatedNotice() throws -> RecoveryLaunchEvidence {
+            app.launch()
+            app.activate()
+            XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 10))
+
+            // Expected RED on f500e5a: SwiftUI's macOS alert is exposed to
+            // XCUITest as a Sheet whose title is a StaticText value, not as an
+            // Alert titled "Review previous generated work".
+            let notice = app.sheets.firstMatch
+            XCTAssertTrue(notice.waitForExistence(timeout: 20), "Interrupted publication notice did not appear")
+            let title = notice.staticTexts.matching(
+                NSPredicate(format: "value == %@", "Review previous generated work")
+            ).firstMatch
+            XCTAssertTrue(title.waitForExistence(timeout: 5), notice.debugDescription)
+            XCTAssertTrue(
+                notice.staticTexts.matching(
+                    NSPredicate(format: "value CONTAINS[c] %@", "2 interrupted draft publication(s)")
+                ).firstMatch.exists,
+                notice.debugDescription
+            )
+            notice.buttons["Continue"].click()
+
+            let warning = app.descendants(matching: .any)["drafting.interruptedRecoveryWarning"]
+            XCTAssertTrue(warning.waitForExistence(timeout: 10), warning.debugDescription)
+            let recoveryItems = app.descendants(matching: .any).matching(
+                NSPredicate(
+                    format: "identifier BEGINSWITH %@",
+                    "drafting.interruptedRecovery.item."
+                )
+            )
+            XCTAssertTrue(recoveryItems.firstMatch.waitForExistence(timeout: 5))
+            XCTAssertEqual(recoveryItems.count, 2, "Both exact recovery rows must remain visible")
+            let recoveryIDs = recoveryItems.allElementsBoundByIndex.map(\.identifier).sorted()
+
+            // Expected RED on f6e1043: the UI-test runner cannot read even a
+            // 0644 sidecar across the app-container boundary. The exact-scenario
+            // marker must report an app-side probe of the real managed file.
+            let fixtureEvidence = try recoveryFixtureEvidence(in: app)
+
+            // Expected RED on f500e5a: makeStore() opens a fresh UUID database
+            // on every launch, so this stable fixture-owned Store does not exist.
+            let attributes = try FileManager.default.attributesOfItem(atPath: storeURL.path)
+            let fileNumber = try XCTUnwrap(
+                (attributes[.systemFileNumber] as? NSNumber)?.uint64Value,
+                "The hosted recovery Store must expose a stable on-disk file identity"
+            )
+            let creationDate = try XCTUnwrap(
+                attributes[.creationDate] as? Date,
+                "The hosted recovery Store must retain its creation date across relaunch"
+            )
+            return RecoveryLaunchEvidence(
+                recoveryIDs: recoveryIDs,
+                databaseFileNumber: fileNumber,
+                databaseCreationDate: creationDate,
+                fixtureEvidence: fixtureEvidence
+            )
+        }
+
+        let firstLaunch = try launchAndDismissRepeatedNotice()
+        app.terminate()
+        let secondLaunch = try launchAndDismissRepeatedNotice()
+        XCTAssertEqual(
+            secondLaunch.recoveryIDs,
+            firstLaunch.recoveryIDs,
+            "Relaunch must reopen the same recovery rows instead of reseeding lookalikes"
+        )
+        XCTAssertEqual(
+            secondLaunch.databaseFileNumber,
+            firstLaunch.databaseFileNumber,
+            "Relaunch must reopen the same hermetic on-disk UI-test Store"
+        )
+        XCTAssertEqual(secondLaunch.databaseCreationDate, firstLaunch.databaseCreationDate)
+        XCTAssertEqual(secondLaunch.fixtureEvidence, firstLaunch.fixtureEvidence)
+
+        let warning = app.descendants(matching: .any)["drafting.interruptedRecoveryWarning"]
+        XCTAssertTrue(warning.waitForExistence(timeout: 10), warning.debugDescription)
+        XCTAssertTrue(app.staticTexts["Interrupted-publication.md"].exists)
+        XCTAssertTrue(app.staticTexts["Interrupted draft details unavailable"].exists)
+        let reveal = app.buttons.matching(
+            NSPredicate(
+                format: "identifier BEGINSWITH %@",
+                "drafting.interruptedRecovery.reveal."
+            )
+        )
+        XCTAssertEqual(reveal.count, 1, "Only validated recovery lineage may expose a reveal action")
+
+        let expectedBytes = Data("# Synthetic preserved interrupted publication\n".utf8)
+        let expectedDigest = SHA256.hash(data: expectedBytes)
+            .map { String(format: "%02x", $0) }
+            .joined()
+        XCTAssertEqual(secondLaunch.fixtureEvidence.byteCount, expectedBytes.count)
+        XCTAssertEqual(secondLaunch.fixtureEvidence.sha256, expectedDigest)
+        XCTAssertEqual(secondLaunch.fixtureEvidence.regularArtifactCount, 1)
+        reveal.firstMatch.click()
+        let finder = XCUIApplication(bundleIdentifier: "com.apple.finder")
+        XCTAssertTrue(
+            finder.wait(for: .runningForeground, timeout: 10),
+            "Reveal in Finder did not activate Finder for the validated path"
+        )
+        app.activate()
+
+        let acknowledge = app.buttons["I Understand — Regenerate Before Use"]
+        XCTAssertTrue(acknowledge.waitForExistence(timeout: 10))
+        acknowledge.click()
+        XCTAssertTrue(warning.waitForNonExistence(timeout: 10))
+        // Reveal hands the containing directory to Finder, which may add
+        // directory metadata. The root-wide count was already asserted before
+        // that interaction; acknowledgement must preserve this exact file.
+        let acknowledgedEvidence = try recoveryFixtureEvidence(in: app)
+        XCTAssertEqual(acknowledgedEvidence.relativePath, secondLaunch.fixtureEvidence.relativePath)
+        XCTAssertEqual(acknowledgedEvidence.matterID, secondLaunch.fixtureEvidence.matterID)
+        XCTAssertEqual(acknowledgedEvidence.byteCount, secondLaunch.fixtureEvidence.byteCount)
+        XCTAssertEqual(acknowledgedEvidence.sha256, secondLaunch.fixtureEvidence.sha256)
+    }
+
+    private struct RecoveryLaunchEvidence {
+        let recoveryIDs: [String]
+        let databaseFileNumber: UInt64
+        let databaseCreationDate: Date
+        let fixtureEvidence: RecoveryFixtureEvidence
+    }
+
+    private struct RecoveryFixtureEvidence: Equatable {
+        let relativePath: String
+        let matterID: String
+        let byteCount: Int
+        let sha256: String
+        let regularArtifactCount: Int
+    }
+
+    private func appSandboxWritableStorageRoot(prefix: String) -> URL {
+        let runnerHome = FileManager.default.homeDirectoryForCurrentUser.path
+        let containerMarker = "/Library/Containers/"
+        let hostHome = runnerHome.range(of: containerMarker).map {
+            String(runnerHome[..<$0.lowerBound])
+        } ?? runnerHome
+        return URL(fileURLWithPath: hostHome, isDirectory: true)
+            .appendingPathComponent("Library/Containers/ai.supra.SupraAI/Data/tmp", isDirectory: true)
+            .appendingPathComponent("\(prefix)-\(UUID().uuidString)", isDirectory: true)
+    }
+
+    private func recoveryFixtureEvidence(in app: XCUIApplication) throws -> RecoveryFixtureEvidence {
+        let marker = app.descendants(matching: .any)["drafting.interruptedRecovery.fixtureEvidence"]
+        XCTAssertTrue(marker.waitForExistence(timeout: 5), marker.debugDescription)
+        let rawValue = marker.label
+        let fields = rawValue.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
+        let exactFields = try XCTUnwrap(fields.count == 4 ? fields : nil, "Unexpected fixture evidence: \(rawValue)")
+
+        let relativePath = try XCTUnwrap(
+            exactFields.first(where: { $0.hasPrefix("relative=") }).map { String($0.dropFirst("relative=".count)) }
+        )
+        let components = relativePath.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+        let exactComponents = try XCTUnwrap(
+            components.count == 3 ? components : nil,
+            "Fixture evidence must expose only exports/<UUID>/<file>: \(relativePath)"
+        )
+        XCTAssertEqual(exactComponents[0], "exports")
+        XCTAssertEqual(exactComponents[2], "Interrupted-publication.md")
+        let matterUUID = try XCTUnwrap(UUID(uuidString: exactComponents[1]))
+        XCTAssertEqual(exactComponents[1], matterUUID.uuidString)
+
+        let byteCount = try XCTUnwrap(
+            exactFields.first(where: { $0.hasPrefix("bytes=") })
+                .flatMap { Int($0.dropFirst("bytes=".count)) }
+        )
+        let sha256 = try XCTUnwrap(
+            exactFields.first(where: { $0.hasPrefix("sha256=") })
+                .map { String($0.dropFirst("sha256=".count)) }
+        )
+        XCTAssertEqual(sha256.count, 64)
+        XCTAssertTrue(sha256.allSatisfy { $0.isHexDigit && !$0.isUppercase })
+        let regularArtifactCount = try XCTUnwrap(
+            exactFields.first(where: { $0.hasPrefix("regularCount=") })
+                .flatMap { Int($0.dropFirst("regularCount=".count)) }
+        )
+        return RecoveryFixtureEvidence(
+            relativePath: relativePath,
+            matterID: matterUUID.uuidString,
+            byteCount: byteCount,
+            sha256: sha256,
+            regularArtifactCount: regularArtifactCount
+        )
+    }
+}
+
+/// T-UI-MTD-01...06: production navigation exposes the complete supported motion
+/// form, produces an independently openable DOCX for the hermetic success fixture,
+/// and keeps deterministic blockers free of file actions.
+@MainActor
+final class MotionToDismissWorkspaceUITests: XCTestCase {
+    private let exactMotionAuthorityExcerpt = "A motion to dismiss for failure to state a cause of action tests legal sufficiency, accepts well-pleaded allegations as true, and does not accept conclusory allegations."
+    private let exactMotionFactTail = "Full review tail: the fictional pleading alleges no damages amount."
+
+    override func setUp() {
+        continueAfterFailure = false
+    }
+
+    func testTUIMTD01Through03SupportedMotionProducesResultActionsAndOpenableDOCX() throws {
+        let storageRoot = appSandboxWritableStorageRoot(prefix: "MotionDraftUITest")
+        let app = launchMotionApp(flag: "-uiTestMotionDraftSuccess", storageRoot: storageRoot)
+        let documentConsumer = try registeredDOCXConsumer()
+
+        openMotionDraftThroughProductionNavigation(in: app)
+        fillMotionInputsAndSelectSources(in: app, includeAuthority: true)
+
+        let generate = app.buttons["drafting.generate"]
+        XCTAssertTrue(generate.isEnabled)
+        XCTAssertTrue(generate.isHittable, app.windows.debugDescription)
+        let windowFrame = app.windows.firstMatch.frame
+        generate.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+
+        let result = app.descendants(matching: .any)["drafting.result"]
+        XCTAssertTrue(result.waitForExistence(timeout: 15), result.debugDescription)
+        let generatedFile = app.descendants(matching: .any)["drafting.result.filename"]
+        XCTAssertTrue(generatedFile.waitForExistence(timeout: 5), generatedFile.debugDescription)
+        let fileNamePrefix = "Draft generated: "
+        let generatedDescription = (generatedFile.value as? String) ?? generatedFile.label
+        XCTAssertTrue(generatedDescription.hasPrefix(fileNamePrefix), generatedFile.debugDescription)
+        let fileName = String(generatedDescription.dropFirst(fileNamePrefix.count))
+        XCTAssertEqual((fileName as NSString).pathExtension.lowercased(), "docx")
+
+        let open = app.buttons["drafting.open"]
+        XCTAssertTrue(open.exists)
+        XCTAssertTrue(app.descendants(matching: .any)["drafting.reveal"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["drafting.share"].exists)
+        assertVerticalWindowFrame(app.windows.firstMatch.frame, equals: windowFrame, context: "publishing a motion result")
+
+        // Exercise the shipping Open action. The registered DOCX consumer is
+        // TextEdit on stock hosted macOS and may be Word on a developer machine.
+        open.click()
+        XCTAssertTrue(
+            documentConsumer.application.wait(for: .runningForeground, timeout: 20),
+            "The production Open action did not activate \(documentConsumer.bundleIdentifier)"
+        )
+        let fileStem = (fileName as NSString).deletingPathExtension
+        let openedWindow = documentConsumer.application.windows.matching(
+            NSPredicate(format: "title CONTAINS[c] %@ OR label CONTAINS[c] %@", fileStem, fileStem)
+        ).firstMatch
+        XCTAssertTrue(
+            openedWindow.waitForExistence(timeout: 20),
+            "\(documentConsumer.bundleIdentifier) did not open \(fileName): \(documentConsumer.application.windows.debugDescription)"
+        )
+        openedWindow.typeKey("w", modifierFlags: .command)
+    }
+
+    func testTUIMTD04Through05BlockedMotionNamesReasonAndHasNoFileActions() throws {
+        let storageRoot = appSandboxWritableStorageRoot(prefix: "MotionDraftBlockedUITest")
+        let app = launchMotionApp(flag: "-uiTestMotionDraftBlocked", storageRoot: storageRoot)
+
+        openMotionDraftThroughProductionNavigation(in: app)
+        fillMotionInputsAndSelectSources(in: app, includeAuthority: false)
+        let blockedAuthority = app.buttons["drafting.motion.authority.ui-motion-authority-blocked"]
+        XCTAssertTrue(blockedAuthority.waitForExistence(timeout: 5))
+        XCTAssertFalse(blockedAuthority.isEnabled)
+        XCTAssertTrue(
+            blockedAuthority.label.localizedCaseInsensitiveContains("Review Required"),
+            blockedAuthority.debugDescription
+        )
+        XCTAssertTrue(
+            blockedAuthority.value.debugDescription.localizedCaseInsensitiveContains("Blocked"),
+            blockedAuthority.debugDescription
+        )
+        let readiness = app.descendants(matching: .any)["drafting.motion.readiness"]
+        XCTAssertTrue(readiness.waitForExistence(timeout: 5))
+        XCTAssertTrue(
+            readiness.label.localizedCaseInsensitiveContains("authority")
+                || readiness.value.debugDescription.localizedCaseInsensitiveContains("authority"),
+            readiness.debugDescription
+        )
+        XCTAssertFalse(app.buttons["drafting.generate"].isEnabled)
+        XCTAssertFalse(app.descendants(matching: .any)["drafting.open"].exists)
+        XCTAssertFalse(app.descendants(matching: .any)["drafting.reveal"].exists)
+        XCTAssertFalse(app.descendants(matching: .any)["drafting.share"].exists)
+    }
+
+    func testTUIMTD06CancellingInFlightMotionLeavesNoArtifact() throws {
+        let storageRoot = appSandboxWritableStorageRoot(prefix: "MotionDraftCancelledUITest")
+        let app = launchMotionApp(
+            flag: "-uiTestMotionDraftSuccess",
+            storageRoot: storageRoot,
+            additionalArguments: ["-uiTestMotionDraftDelayed"]
+        )
+
+        openMotionDraftThroughProductionNavigation(in: app)
+        fillMotionInputsAndSelectSources(in: app, includeAuthority: true)
+        let generate = app.buttons["drafting.generate"]
+        XCTAssertTrue(generate.waitForExistence(timeout: 5))
+        XCTAssertTrue(generate.isEnabled)
+        generate.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+
+        let cancel = app.buttons["drafting.cancel"]
+        XCTAssertTrue(cancel.waitForExistence(timeout: 5), "The deterministic UI fixture never held generation in flight")
+        let notice = app.buttons["drafting.kind.noticeAppearance"]
+        XCTAssertTrue(notice.exists)
+        XCTAssertFalse(notice.isEnabled, "Work-product switching must stay locked while generation is in flight")
+        XCTAssertFalse(generate.isEnabled, "A view-owned in-flight task must close the double-start window")
+        XCTAssertFalse(app.buttons["drafting.close.header"].isEnabled)
+        XCTAssertFalse(app.buttons["drafting.close.footer"].isEnabled)
+        XCTAssertTrue(cancel.isEnabled)
+        XCTAssertTrue(cancel.isHittable)
+        cancel.click()
+        let cancelled = app.descendants(matching: .any)["drafting.blocked"]
+        XCTAssertTrue(cancelled.waitForExistence(timeout: 5), cancelled.debugDescription)
+        XCTAssertTrue(cancelled.label.localizedCaseInsensitiveContains("cancelled"), cancelled.debugDescription)
+        XCTAssertFalse(app.descendants(matching: .any)["drafting.result"].exists)
+        XCTAssertFalse(app.descendants(matching: .any)["drafting.open"].exists)
+        XCTAssertFalse(app.descendants(matching: .any)["drafting.reveal"].exists)
+        XCTAssertFalse(app.descendants(matching: .any)["drafting.share"].exists)
+        XCTAssertEqual(
+            regularArtifacts(beneath: storageRoot),
+            [],
+            "Cancellation left a file, including a hidden staging artifact, in the injected production storage root"
+        )
+    }
+
+    func testTUIAUTH01ReviewedPropositionCanBeRemovedAndRecordedExactly() throws {
+        let storageRoot = appSandboxWritableStorageRoot(prefix: "AuthorityReviewUITest")
+        let app = launchMotionApp(
+            flag: "-uiTestMotionDraftSuccess",
+            storageRoot: storageRoot,
+            additionalArguments: ["-uiTestInitialMatterTab", "Authorities"]
+        )
+        openAuthorityThroughProductionNavigation(
+            in: app,
+            authorityID: "ui-motion-authority-success"
+        )
+
+        let status = app.descendants(matching: .any)["authority.reviewedProposition.status"]
+        XCTAssertTrue(status.waitForExistence(timeout: 10), "Reviewed-proposition status was not exposed")
+        waitForStatus(status, containing: "Ready")
+
+        let excerpt = app.descendants(matching: .any)["authority.reviewedProposition.excerpt"]
+        XCTAssertTrue(excerpt.waitForExistence(timeout: 5), "Exact-excerpt editor was not exposed")
+        let excerptValue = (excerpt.value as? String) ?? excerpt.label
+        XCTAssertEqual(excerptValue, exactMotionAuthorityExcerpt)
+
+        let remove = app.buttons["authority.reviewedProposition.remove"]
+        scrollToHittable(remove, in: app)
+        XCTAssertTrue(remove.isHittable, remove.debugDescription)
+        remove.click()
+        waitForStatus(status, containing: "Not reviewed")
+        XCTAssertEqual((excerpt.value as? String) ?? excerpt.label, exactMotionAuthorityExcerpt)
+
+        let save = app.buttons["authority.reviewedProposition.save"]
+        scrollToHittable(save, in: app)
+        XCTAssertTrue(save.isEnabled)
+        XCTAssertTrue(save.isHittable, save.debugDescription)
+        save.click()
+        waitForStatus(status, containing: "Ready")
+        XCTAssertEqual((excerpt.value as? String) ?? excerpt.label, exactMotionAuthorityExcerpt)
+    }
+
+    func testTUIAUTH02BlockedAuthorityRemediatesIntoMotionReadiness() throws {
+        let storageRoot = appSandboxWritableStorageRoot(prefix: "AuthorityRemediationUITest")
+        let app = launchMotionApp(
+            flag: "-uiTestMotionDraftBlocked",
+            storageRoot: storageRoot,
+            additionalArguments: ["-uiTestInitialMatterTab", "Authorities"]
+        )
+        openAuthorityThroughProductionNavigation(
+            in: app,
+            authorityID: "ui-motion-authority-blocked"
+        )
+
+        let markNotAdverse = app.buttons["authority.reviewState.markNotAdverse"]
+        XCTAssertTrue(markNotAdverse.waitForExistence(timeout: 10), markNotAdverse.debugDescription)
+        scrollToHittable(markNotAdverse, in: app)
+        XCTAssertTrue(markNotAdverse.isHittable, markNotAdverse.debugDescription)
+        markNotAdverse.click()
+        XCTAssertFalse(
+            markNotAdverse.waitForExistence(timeout: 1),
+            "The saved authority did not publish its remediated review state"
+        )
+
+        // Re-enter through the shipping sidebar and matter navigation. This proves
+        // the eligibility change was durably saved, and avoids relying on a stale
+        // accessibility snapshot from the NavigationStack detail that performed it.
+        returnToGlobalChatsThroughProductionNavigation(in: app)
+        openAuthorityThroughProductionNavigation(
+            in: app,
+            authorityID: "ui-motion-authority-blocked"
+        )
+        XCTAssertFalse(app.buttons["authority.reviewState.markNotAdverse"].exists)
+
+        let excerpt = app.descendants(matching: .any)["authority.reviewedProposition.excerpt"]
+        XCTAssertTrue(excerpt.waitForExistence(timeout: 5))
+        scrollToHittable(excerpt, in: app)
+        XCTAssertTrue(excerpt.isHittable, excerpt.debugDescription)
+        excerpt.click()
+        excerpt.typeText(exactMotionAuthorityExcerpt)
+        let save = app.buttons["authority.reviewedProposition.save"]
+        scrollToHittable(save, in: app)
+        XCTAssertTrue(save.isEnabled)
+        save.click()
+        let status = app.descendants(matching: .any)["authority.reviewedProposition.status"]
+        waitForStatus(status, containing: "Ready")
+
+        // A NavigationStack detail makes the containing matter header unavailable
+        // to hosted accessibility queries. Exercise a real sidebar transition so
+        // the test returns to the matter workspace before opening its Draft action.
+        returnToGlobalChatsThroughProductionNavigation(in: app)
+        openMotionDraftThroughProductionNavigation(in: app)
+        fillMotionInputsAndSelectSources(
+            in: app,
+            includeAuthority: true,
+            authorityID: "ui-motion-authority-blocked"
+        )
+        XCTAssertTrue(app.buttons["drafting.generate"].isEnabled)
+    }
+
+    private func openAuthorityThroughProductionNavigation(
+        in app: XCUIApplication,
+        authorityID: String
+    ) {
+        let matter = app.descendants(matching: .any)["matter.row.McKernon Motors v. Liberty Rail"]
+        XCTAssertTrue(matter.waitForExistence(timeout: 20))
+        XCTAssertTrue(matter.isHittable)
+        matter.click()
+
+        let authorities = app.buttons["matterTab.Authorities"]
+        XCTAssertTrue(authorities.waitForExistence(timeout: 10), "Matter workspace did not expose Authorities")
+        XCTAssertTrue(authorities.isHittable)
+        authorities.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+
+        let row = app.descendants(matching: .any)["authorities.row.\(authorityID)"]
+        XCTAssertTrue(row.waitForExistence(timeout: 10), "Seeded authority was not listed")
+        scrollToHittable(row, in: app)
+        XCTAssertTrue(row.isHittable, row.debugDescription)
+        row.click()
+    }
+
+    private func returnToGlobalChatsThroughProductionNavigation(in app: XCUIApplication) {
+        let globalChats = app.descendants(matching: .any)["sidebar.route.globalChats"]
+        XCTAssertTrue(globalChats.waitForExistence(timeout: 10))
+        XCTAssertTrue(globalChats.isHittable, globalChats.debugDescription)
+        globalChats.click()
+    }
+
+    private func scrollToHittable(_ element: XCUIElement, in app: XCUIApplication) {
+        for _ in 0..<8 {
+            let windowFrame = app.windows.firstMatch.frame.insetBy(dx: 8, dy: 8)
+            if element.isHittable, windowFrame.contains(element.frame) {
+                return
+            }
+            let windowWidth = windowFrame.width
+            // Text editors expose their own short NSScrollView. Choosing that
+            // nested container cannot reveal an editor clipped below the Form and
+            // can itself have no hit point. Scroll the largest visible content
+            // container so the target moves into the window first.
+            let candidates = app.scrollViews.allElementsBoundByIndex.filter {
+                let frame = $0.frame
+                return frame.width > windowWidth * 0.5
+                    && frame.height > windowFrame.height * 0.4
+                    && frame.intersects(windowFrame)
+            }
+            guard let scrollView = candidates.max(by: { $0.frame.height < $1.frame.height }) else {
+                break
+            }
+            scrollView.scroll(byDeltaX: 0, deltaY: -360)
+        }
+    }
+
+    private func waitForStatus(
+        _ element: XCUIElement,
+        containing expected: String,
+        timeout: TimeInterval = 20
+    ) {
+        let predicate = NSPredicate(
+            format: "label CONTAINS[c] %@ OR value CONTAINS[c] %@",
+            expected,
+            expected
+        )
+        let statusExpectation = expectation(for: predicate, evaluatedWith: element)
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [statusExpectation], timeout: timeout),
+            .completed,
+            element.debugDescription
+        )
+    }
+
+    private func openMotionDraftThroughProductionNavigation(in app: XCUIApplication) {
+        let matter = app.descendants(matching: .any)["matter.row.McKernon Motors v. Liberty Rail"]
+        XCTAssertTrue(matter.waitForExistence(timeout: 20))
+        XCTAssertTrue(matter.isHittable)
+        matter.click()
+
+        let draft = app.buttons["matter.draft"]
+        XCTAssertTrue(draft.waitForExistence(timeout: 10), "Matter workspace did not expose the production Draft action")
+        XCTAssertTrue(draft.isHittable)
+        draft.click()
+
+        let motion = app.buttons["drafting.kind.motionToDismiss"]
+        XCTAssertTrue(motion.waitForExistence(timeout: 10))
+        XCTAssertTrue(motion.isEnabled)
+        motion.click()
+    }
+
+    private func fillMotionInputsAndSelectSources(
+        in app: XCUIApplication,
+        includeAuthority: Bool,
+        authorityID: String = "ui-motion-authority-success"
+    ) {
+        let respondingTo = app.textFields["drafting.motion.respondingTo"]
+        XCTAssertTrue(respondingTo.waitForExistence(timeout: 5))
+        respondingTo.click()
+        respondingTo.typeText("Plaintiff's First Amended Complaint")
+
+        let relief = app.textFields["drafting.motion.relief"]
+        XCTAssertTrue(relief.waitForExistence(timeout: 5))
+        relief.click()
+        relief.typeText("dismissal without prejudice and leave to amend")
+
+        XCTAssertTrue(app.descendants(matching: .any)["drafting.motion.factSources"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.descendants(matching: .any)["drafting.motion.authoritySources"].waitForExistence(timeout: 5))
+        let fact = app.buttons["drafting.motion.fact.ui-motion-fact-chunk"]
+        XCTAssertTrue(fact.waitForExistence(timeout: 5), "The seeded fact was not exposed as a selectable production row")
+        XCTAssertTrue(fact.isEnabled)
+        XCTAssertTrue(
+            fact.label.contains(exactMotionFactTail),
+            "The selectable fact row did not expose the complete excerpt that generation will insert: \(fact.debugDescription)"
+        )
+        XCTAssertTrue(fact.value.debugDescription.localizedCaseInsensitiveContains("Ready"), fact.debugDescription)
+        fact.click()
+        XCTAssertTrue(fact.value.debugDescription.localizedCaseInsensitiveContains("Selected"), fact.debugDescription)
+
+        if includeAuthority {
+            let authority = app.buttons["drafting.motion.authority.\(authorityID)"]
+            XCTAssertTrue(authority.waitForExistence(timeout: 5), "The reviewed authority was not exposed as a selectable production row")
+            XCTAssertTrue(authority.isEnabled)
+            XCTAssertTrue(authority.label.contains(exactMotionAuthorityExcerpt), authority.debugDescription)
+            XCTAssertTrue(authority.value.debugDescription.localizedCaseInsensitiveContains("Ready"), authority.debugDescription)
+            let generate = app.buttons["drafting.generate"]
+            XCTAssertTrue(generate.waitForExistence(timeout: 5))
+            // Expected RED before geometry-based scroll targeting: XCTest reports
+            // the clipped last source row as hittable even while its activation
+            // point is under the pinned footer.
+            let draftingScroll = app.sheets.firstMatch.scrollViews.firstMatch
+            XCTAssertTrue(draftingScroll.exists, "The drafting form must remain independently scrollable")
+            for _ in 0..<4 where authority.frame.maxY > generate.frame.minY {
+                draftingScroll.scroll(byDeltaX: 0, deltaY: -180)
+            }
+            XCTAssertLessThanOrEqual(
+                authority.frame.maxY,
+                generate.frame.minY,
+                "The reviewed-authority row must end above the pinned Generate footer: authority=\(authority.frame), generate=\(generate.frame)"
+            )
+            XCTAssertTrue(authority.isHittable, authority.debugDescription)
+            authority.click()
+            XCTAssertTrue(authority.value.debugDescription.localizedCaseInsensitiveContains("Selected"), authority.debugDescription)
+            XCTAssertTrue(generate.isEnabled, "Selecting both exact source rows must make the supported motion ready")
+        }
+    }
+
+    private func regularArtifacts(beneath root: URL) -> [String] {
+        guard let enumerator = FileManager.default.enumerator(
+            at: root,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: []
+        ) else { return [] }
+        return enumerator.compactMap { item in
+            guard
+                let url = item as? URL,
+                let values = try? url.resourceValues(forKeys: [.isRegularFileKey]),
+                values.isRegularFile == true
+            else { return nil }
+            return url.path
+        }.sorted()
+    }
+
+    private func launchMotionApp(
+        flag: String,
+        storageRoot: URL,
+        additionalArguments: [String] = []
+    ) -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchArguments += [
+            "-ApplePersistenceIgnoreState", "YES",
+            "-uiTestMode",
+            "-uiTestEnsureFreshWindow",
+            flag,
+        ]
+        app.launchArguments += additionalArguments
+        app.launchEnvironment["SUPRA_UI_TEST_DRAFT_STORAGE_ROOT"] = storageRoot.path
+        app.launch()
+        app.activate()
+        XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 10))
+        return app
+    }
+
+    /// The launched app is sandboxed, so its injected drafting root must live
+    /// inside that app's own container. The hosted cancellation test reads this
+    /// exact root after the production controller reaches its cancelled terminal state.
+    private func appSandboxWritableStorageRoot(prefix: String) -> URL {
+        let runnerHome = FileManager.default.homeDirectoryForCurrentUser.path
+        let containerMarker = "/Library/Containers/"
+        let hostHome = runnerHome.range(of: containerMarker).map {
+            String(runnerHome[..<$0.lowerBound])
+        } ?? runnerHome
+        return URL(fileURLWithPath: hostHome, isDirectory: true)
+            .appendingPathComponent("Library/Containers/ai.supra.SupraAI/Data/tmp", isDirectory: true)
+            .appendingPathComponent("\(prefix)-\(UUID().uuidString)", isDirectory: true)
+    }
+
+    private func registeredDOCXConsumer() throws -> (application: XCUIApplication, bundleIdentifier: String) {
+        let probe = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SupraAI-DOCX-handler-probe-\(UUID().uuidString).docx")
+        try Data().write(to: probe, options: .atomic)
+        defer { try? FileManager.default.removeItem(at: probe) }
+
+        let applicationURL = try XCTUnwrap(
+            NSWorkspace.shared.urlForApplication(toOpen: probe),
+            "macOS has no registered DOCX consumer"
+        )
+        let bundleIdentifier = try XCTUnwrap(
+            Bundle(url: applicationURL)?.bundleIdentifier,
+            "The registered DOCX consumer has no bundle identifier: \(applicationURL.path)"
+        )
+        return (XCUIApplication(bundleIdentifier: bundleIdentifier), bundleIdentifier)
+    }
+
 }
 
 @MainActor
