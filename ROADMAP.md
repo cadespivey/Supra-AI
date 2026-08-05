@@ -43,23 +43,33 @@ on Hugging Face (1.4.1).
   Shipped single-call with deterministic per-field validation (UTBMS codes, calendar dates,
   arithmetic); the spec's decomposed pipeline remains the fidelity-gated upgrade path.
 
-## Near-term: polish the v1.0.0 surfaces
+## On `main` for the next release after 2.3.4
 
-These are the remaining concrete product follow-ups. Completed ingestion, lineage, relation,
-tokenizer, folder-tree, workbook-relationship, and assurance work is recorded in the changelog
-and milestone documents rather than carried here as future work.
+These capabilities are implemented and tested on `main`, but are not in the current v2.3.4
+download. They belong in [`Unreleased`](CHANGELOG.md#unreleased), not the future-work queue:
 
-- **Backup restore** — backups already produce manifest-backed database snapshots and a managed
-  blob pool. Add compatible-snapshot inspection, cold-start replacement, a verified pre-restore
-  safety copy, automatic rollback, and an explicit Settings workflow.
-- **Guided document Q&A** — `DocumentQAController` already accepts `guidedChunkIDs`; add a
-  Documents-tab Ask surface that lets the user choose readable source documents/passages and
-  proves that only those sources enter the saved answer.
-- **OCR highlight overlay** — image OCR bounding boxes are already captured
-  (`boundingBoxesJSON`); draw them over the image preview (PDF page + text-range highlights
-  are already implemented).
-- **Richer exports** — current PDF is plain CoreText pagination and DOCX/XLSX are minimal
-  OOXML; improve formatting fidelity.
+- **Backup restore** — Settings inspects completed snapshots, blocks incompatible or damaged
+  choices, stages a selected snapshot only after a verified safety copy, activates it on the next
+  cold launch, automatically rolls back after activation failure, and isolates unrecoverable cases
+  in a recovery-only workspace.
+- **Guided document Q&A** — **Ask the Documents** offers searchable, previewable passage selection
+  alongside automatic retrieval, saves the exact selected source revisions, and blocks stale,
+  unavailable, or cross-matter selections.
+- **OCR highlight overlay** — image previews render recognized-text regions, emphasize cited lines,
+  distinguish low-confidence OCR, and expose accessible recognized text.
+- **Richer exports** — PDF, DOCX, and XLSX renderers preserve their supported document structure,
+  formatting, links, citations, review notices, and source appendices.
+- **Grounded Florida motion to dismiss** — the matter drafting UI deterministically assembles the
+  supported failure-to-state-a-claim motion from revision-bound fact excerpts and reviewed,
+  proposition-specific authorities selected by the user, with pre-file and publication-recovery
+  gates.
+
+## Near-term: qualify the unreleased restore workflow
+
+- **Synthetic restore drill.** Before restore ships, run and record the process-boundary drill in
+  [Backup and Restore](Docs/Backup-and-Restore.md): successful activation, forced activation failure
+  with verified safety rollback, rejection of an unsupported future schema, and confirmation that
+  the source backup remains unchanged. Use synthetic data only.
 
 ## Near-term: complete the ScratchPad follow-ups
 
@@ -77,9 +87,6 @@ deliberately deferred behind their own gates (recorded in the spec's §4/§5/§1
 
 ## Near-term: expand drafting vertically
 
-- **Motion to Dismiss.** The definition, Florida failure-to-state-a-claim ground, deterministic
-  assembly, verification, pre-file gate, and court renderer exist. Wire typed inputs, selected
-  facts/authorities, durable lineage, controller dispatch, and the matter drafting UI end to end.
 - **Drafting catalog breadth.** After the motion vertical proves the repeated contract, add one
   fully tested Florida document kind at a time. A kind is available only when its slots, grounding,
   verification, renderer, persistence, UI, and acceptance fixture all ship together.
@@ -99,8 +106,9 @@ milestone plan before implementation.
 
 - **Citator / negative-treatment signals.** v1.0.0 deliberately makes **no** automatic citator
   claims. A future milestone could integrate genuine treatment data rather than inferring it.
-- **Dockets / RECAP.** Federal docket and filing retrieval via CourtListener's RECAP data,
-  beyond the v1.0.0 opinion search.
+- **Broader RECAP filing retrieval and import.** The current party-name case finder can surface
+  CourtListener/RECAP dockets. A later milestone could add deeper filing retrieval, review, and
+  matter-document import rather than treating docket discovery as the finished workflow.
 - **Broader local model support.** Vision/multimodal models require an `MLXVLM` runtime path
   that isn't linked today (see
   [`Docs/Architecture/Dependencies.md`](Docs/Architecture/Dependencies.md)).
@@ -119,5 +127,5 @@ These remain non-goals and are unlikely to change without a clear, privacy-prese
 ## How priorities are decided
 
 Work is organized into milestones with written plans before code (the model used for
-M1–M3). If you have a use case that should move something up — or a reason an "exploring"
+M1–M4). If you have a use case that should move something up — or a reason an "exploring"
 item should stay out of scope — open an issue. See [CONTRIBUTING.md](CONTRIBUTING.md).

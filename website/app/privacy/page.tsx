@@ -23,6 +23,14 @@ const sections = [
     body: "Research searches are sent as ordinary query terms — the words and connectors that make up the search — which you can review and adjust before and after you run them. You choose which connectors to enable; several need no key at all, and any API keys you add are stored in the macOS Keychain and sent only to the provider they belong to.",
   },
   {
+    title: "Local audit-log privacy",
+    body: "Raw legal query terms are omitted from local request logs by default and replaced with per-install keyed pseudonyms. You can opt in to raw local logging and can remove stored query markers from Diagnostics.",
+  },
+  {
+    title: "Protection at rest",
+    body: "Supra AI does not add application-level encryption to its SQLite database, managed document copies, model files, or exports. Protection at rest depends on macOS account controls, the permissions of destinations you choose, and FileVault when enabled.",
+  },
+  {
     title: "Software downloads and updates",
     body: "Model setup requests revision-bound metadata and model artifacts from named Hugging Face origins. When enabled, Sparkle checks the signed Supra AI update feed and may fetch its signed update. These clients do not attach matter content or legal-data credentials.",
   },

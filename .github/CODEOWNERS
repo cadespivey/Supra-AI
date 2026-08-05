@@ -1,5 +1,5 @@
-# Release, workflow, and security-claim controls require review by the repository
-# security/release owner. Branch protection must require Code Owner approval.
+# Release, workflow, and security-claim controls are owned by the repository security/release
+# owner. In the single-maintainer ruleset this routes responsibility without requiring self-approval.
 /.github/workflows/ @cadespivey
 /.github/CODEOWNERS @cadespivey
 /Scripts/release.sh @cadespivey

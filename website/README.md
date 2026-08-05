@@ -7,6 +7,8 @@ exported and deployed to GitHub Pages by
 
 ## Local development
 
+Requires Node.js `>=22.13.0` (see `package.json`).
+
 ```bash
 cd website
 npm install
@@ -40,6 +42,10 @@ The deployment workflow runs the same check before and after the static export. 
 ships from the apex domain root, so there is **no `basePath`** — assets resolve
 from `/`. Plain `npm run dev` / `npm run build` also serve from root.
 
+Public product copy describes the newest published download. A capability that exists only on
+repository `main` must either remain off the marketing pages or be labeled explicitly as unreleased;
+merging code is not the same event as publishing a signed app release.
+
 ## Deployment
 
 Pushes to `main` that touch `website/**` trigger the GitHub Pages workflow.
@@ -57,8 +63,8 @@ Repo **Settings → Pages → Build and deployment → Source → "GitHub Action
 
 ## Structure
 
-- `app/` — routes (`/`, `/product`, `/download`, `/privacy-security`,
-  `/disclaimer`, `/privacy`, `/terms`) plus `layout.tsx` and `globals.css`.
+- `app/` — routes (`/`, `/product`, `/download`, `/privacy-security`, `/privacy`, `/legal`)
+  plus `layout.tsx` and `globals.css`.
 - `components/` — page sections and shared UI.
 - `lib/` — site constants (download/GitHub URLs).
 - `public/` — redistributable images, feeds, domain metadata, and favicon; never licensed
