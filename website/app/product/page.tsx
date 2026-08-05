@@ -5,7 +5,7 @@ const steps = [
   {
     id: "models",
     title: "Configure local models",
-    body: "Assign separate local MLX models for legal reasoning, drafting, and critique, then load the runtime on device — each task runs on the model best suited to it.",
+    body: "Assign separate local MLX models for legal reasoning, drafting, and critique, then load the runtime on device — model-backed work uses the model assigned to its role.",
   },
   {
     id: "chat",
@@ -30,7 +30,7 @@ const steps = [
   {
     id: "answers",
     title: "Review grounded answers",
-    body: "Answers arrive fast and honestly labeled: document questions search the most relevant passages first with a full-file pass one click away, and research answers ground in your saved authorities before reaching for CourtListener. Every [S#] and [A#] citation is clickable — sources open beside the chat at the supporting passage, and opinions open in a built-in reader with the cited holding highlighted.",
+    body: "Document questions search the most relevant passages first with a full-file pass one click away, and research answers ground in your saved authorities before reaching for CourtListener. Every [S#] and [A#] citation is clickable — sources open beside the chat at the supporting passage, and opinions open in a built-in reader with the cited holding highlighted.",
   },
   {
     id: "scratchpad",

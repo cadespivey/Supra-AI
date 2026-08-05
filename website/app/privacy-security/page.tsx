@@ -21,7 +21,7 @@ const panels = [
       "Default-deny host allow-list (courts, statutes, registers, public records)",
       "Provider-specific query fields; no attached matter documents",
       "Query terms you can see and adjust",
-      "Query terms redacted in the local network log",
+      "Query terms replaced with per-install keyed pseudonyms in local logs by default; raw local logging is opt-in",
       "API keys stored in the macOS Keychain",
       "No general cloud generation",
     ],

@@ -28,22 +28,21 @@ orders, see [`Docs/Milestones/`](Docs/Milestones/).
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │ SupraAI.app  (SwiftUI, @MainActor)                            │
-│   Matters · Global Chat · Research · Authorities · Documents  │
-│   · Outputs · Models · Diagnostics · Settings                 │
+│   Matters · Global Chat · Research · Public Records           │
+│   · Authorities · Documents · Outputs · ScratchPad            │
+│   · Models · Diagnostics · Settings                            │
 │                                                               │
 │   SupraSessions  (app-facing controllers / orchestration)     │
 └───────┬───────────────────────────────┬──────────────────────┘
         │ XPC (typed RPC)               │ in-process
         ▼                               ▼
 ┌────────────────────────┐   ┌──────────────────────────────────┐
-│ SupraRuntimeService.xpc │   │ SupraStore (GRDB / SQLite)        │
-│   MLX chat + embeddings │   │   migrations · records · repos    │
-│   (sandboxed)           │   └──────────────────────────────────┘
-└────────────────────────┘
-        ▲
-        │ allow-listed HTTPS (legal-data allow-list)
-        ▼
-   www.courtlistener.com
+│ SupraRuntimeService.xpc │   │ Store · Research · Networking     │
+│   MLX chat + embeddings │   │ Documents · Drafting · Exports    │
+│   (sandboxed)           │   └──────────────┬───────────────────┘
+└────────────────────────┘                  │ allow-listed HTTPS
+                                            ▼
+                                Named legal-data providers
 ```
 
 ## Package graph
@@ -62,9 +61,9 @@ Packages/
 ├─ SupraSessions           App-facing controllers (chat, research, documents, Q&A, outputs, models, jobs, ScratchPad/billing, drafting)
 ├─ SupraDraftingCore       Shared drafting types (kinds, slots, house style sheet, document model, gates)
 ├─ SupraDrafting           Drafting pipeline: slot resolution, generation/authority firewall, verification, pre-file gate
-├─ SupraExports            Local OOXML renderer: court (courtFL) + letterhead shells → .docx (no Office dependency)
-├─ SupraResearch           CourtListener client + DTOs + legal citation handling/ranking
-├─ SupraDocuments          Extraction, OCR, chunking, retrieval, grounding, export
+├─ SupraExports            Drafting OOXML: court (courtFL) + letterhead shells → .docx (no Office dependency)
+├─ SupraResearch           Named legal-data clients + authority normalization, ranking, verification
+├─ SupraDocuments          Extraction, OCR, chunking, retrieval, grounding, rich output export
 ├─ SupraNetworking         Authorized HTTP client, default-deny network policy, rate limiting, Keychain
 ├─ SupraRuntimeInterface   XPC DTOs / protocols shared by app and runtime service
 ├─ SupraRuntimeClient      Typed client for the runtime XPC service
@@ -254,6 +253,9 @@ repository:
   child-attachment import. A matter-scoped, idempotent post-import linker emits
   reply/thread edges only for unambiguous Message-IDs in that matter. Outlook MSG
   and conversation UI remain unsupported.
+  Image previews consume the retained Vision OCR boxes to draw selectable, accessible regions,
+  emphasize the cited line, and distinguish low-confidence recognition. Malformed or unsupported
+  overlay payloads produce a visible unavailable state rather than guessed geometry.
   A format-agnostic deterministic legal pass recognizes numbered discovery
   requests/responses/objections and paired deposition Q/A turns without changing
   flat text. Intra-document pairs receive `responds_to` edges immediately; a
@@ -287,7 +289,7 @@ Repositories are grouped by cohesion (e.g. `DocumentLibraryRepository`,
 `DocumentIndexRepository`, `DocumentJobRepository`) rather than one-per-table, matching the
 existing convention where a repository owns several related tables.
 
-## Two representative data flows
+## Representative data flows
 
 ### Legal research (`/research`)
 
@@ -311,14 +313,49 @@ existing convention where a repository owns several related tables.
    PDFs/images on-device, and chunks deterministically with stable locators — all as a
    resumable background job.
 2. Chunks are indexed into FTS5 and embedded locally; index status advances per document.
-3. A question runs hybrid retrieval (FTS + cosine over normalized vectors) scoped to the
-   selected folders/tags/documents/dates, gated on the scope being fully indexed. Each
-   cumulative source packet is counted with the loaded model tokenizer (or a fail-closed
-   fallback), and only the largest safe prefix crosses the generation boundary.
+3. A question either runs hybrid retrieval (FTS + cosine over normalized vectors) within the
+   selected folders/tags/documents/dates or uses exact readable passages chosen in **Ask the
+   Documents**. Guided selection rejects unavailable, stale, or cross-matter chunks. Automatic
+   retrieval is gated on the scope being fully indexed. Each cumulative source packet is counted
+   with the loaded model tokenizer (or a fail-closed fallback), and only the largest safe prefix
+   crosses the generation boundary.
 4. The model answers from the retrieved source set with inline citations; a citation-coverage
    check resolves every label to a real source or marks the answer as needing review.
 5. The answer is saved as a versioned structured output with its source set; regeneration
    creates a new version with a fresh source set, preserving the old one for auditability.
+   Guided regeneration instead resolves and reuses the exact saved source revisions or fails
+   closed without changing that source set.
+
+### Supported motion drafting
+
+1. The user selects the Florida state trial-court motion to dismiss for failure to state a claim,
+   enters the typed filing details, and chooses revision-bound matter excerpts.
+2. Reviewed authorities contribute only proposition-specific excerpts that counsel has recorded;
+   the drafting controller snapshots the selected facts and authorities before assembly.
+3. Deterministic assembly creates the supported motion structure without asking a model to write
+   the motion. Verification and the pre-file gate check required sections, citation shape, exact
+   selected-source reproduction, provenance, and staleness; they do not decide factual
+   applicability, legal sufficiency, or filing readiness.
+4. Cancellation is checked after verification and immediately before rendering. Publication first
+   records a prepared Store-owned intent, then binds the exact installed DOCX and fresh source
+   snapshot to the audit record in one transaction.
+5. Relaunch reconciliation finalizes only an authenticated exact file. An uncertain public file is
+   preserved and surfaced as recovery-required for review or regeneration.
+
+### Backup restore
+
+1. Settings reads and verifies completed snapshots from the user-selected backup folder; incomplete,
+   damaged, missing-document, or unsupported-schema snapshots remain disabled.
+2. After confirmation, the app blocks normal work, closes the exact live database writer, creates
+   and verifies a safety database plus managed documents, stages private copies, and publishes a
+   cold-start marker only after every staged component passes.
+3. On the next launch, restore activation runs before the normal store is constructed. It installs,
+   opens, migrates, and validates the selected database through the ordinary database boundary.
+4. Activation failure triggers installation and validation of the safety copy. If that rollback also
+   fails, a recovery-only workspace preserves and reveals the entire safety folder instead of
+   opening the normal store.
+5. The source backup is never modified. The synthetic process-boundary drill in
+   [Backup and Restore](Docs/Backup-and-Restore.md) remains a release qualification requirement.
 
 ### Document benchmark and performance gates
 

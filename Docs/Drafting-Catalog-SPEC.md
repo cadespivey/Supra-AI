@@ -1,6 +1,7 @@
 # Drafting Catalog — Specification
 
 > **Status:** Durable design catalog and reconciliation context. Shipping source and executable tests are authoritative for code-level signatures and renderer details; the private implementation specs used during the initial build are no longer retained.
+> **Implemented vertical:** The executable registry contains only `noticeAppearance`, `motionToDismiss`, and `letterDemand`. The Florida failure-to-state-a-claim motion is complete on `main` for the next release after v2.3.4. Other catalog rows remain prospective until their slots, grounding, verification, renderer, persistence, UI, and acceptance fixtures ship together.
 > **Home module:** `Packages/SupraDrafting` (logic, with shared types in `Packages/SupraDraftingCore`) + `Packages/SupraExports` (Layer 1 renderer).
 > **Confidentiality:** This spec contains only abstract document-family taxonomy and
 > building-block design. It contains **no client content, party names, facts, or
@@ -265,6 +266,10 @@ Proposed identifiers use a `DraftKind` enum (see §9). "Auth" = `assertsLegalAut
 | `motionRoutine` (continue, extend, enlarge, remote testimony, withdraw, substitute) | short | service/contract | — | ✓ | low-reasoning, mostly slot-fill |
 | `motionWritGarnishment` | statutory | service | partial | — | + statutory notices |
 | `motionResponse` / `opposition` | crac mirroring movant | contract + precedent | ✓ | — | structure mirrors the motion answered |
+
+> **Implemented motion scope:** The executable `.motionToDismiss` vertical currently supports only
+> a Florida state trial-court motion for failure to state a claim. Venue, personal jurisdiction,
+> subject-matter jurisdiction, forum, and every other motion row above remain catalog designs.
 
 > **MSJ note (Rule 1.510, eff. 2026-04-01):** FL applies the **federal** summary-judgment
 > standard (1.510(a)). The movant must **serve supporting factual positions with the
@@ -734,16 +739,18 @@ shifts.
 
 ---
 
-## 9. Proposed registry (actionable, for later)
+## 9. Registry status
 
-Use a small compiled identifier plus data-driven definitions. The compiled enum keeps
-stable IDs distinct from research outputs; the editable definition registry carries per-firm
+The implemented vertical uses a small compiled identifier plus data-driven definitions. The
+compiled `DraftKindID` decision is separate from `StructuredOutputType`; it keeps stable IDs
+distinct from research outputs. The editable definition registry carries per-firm
 configuration and the firewall policy:
 
 ```swift
 public enum DraftKindID: String, Codable, CaseIterable, Sendable {
-    case complaint, answer, counterclaim, motionToDismiss, motionSummaryJudgment /* … */
-    // see §6 for the full set
+    case noticeAppearance
+    case motionToDismiss
+    case letterDemand
 }
 
 public enum GroundingPolicy: String, Codable, Sendable {
@@ -759,28 +766,30 @@ public struct DraftKindDefinition: Codable, Sendable {
     public var blockType: DraftBlockType      // routedSkill, contract, servicePipeline
     public var groundingPolicy: GroundingPolicy
     public var assertsLegalAuthority: Bool    // drives mandatory citation review
-    public var requiresFactProvenance: Bool   // true for grounded non-Auth letters too
     public var slotSpecs: [SlotSpec]
     public var headingContract: HeadingContract
+
+    public var requiresFactProvenance: Bool {
+        groundingPolicy != .noMatterFacts
+    }
 }
 ```
 
 Supporting enums: `RenderShell` (§4), `AnalyticalSkeleton` (§5), `DraftBlockType` (§3).
-Each `contract` kind also needs a prompt template with a `{{context}}` slot. Firms may
-configure definitions and exemplars; they do not add arbitrary compiled enum cases.
+Any future model-backed `contract` kind also needs a prompt template with a `{{context}}` slot.
+Firms may configure definitions and exemplars; they do not add arbitrary compiled enum cases.
 
 ---
 
-## 10. Suggested build sequence (when implementation begins)
+## 10. Implementation status and expansion sequence
 
 **Jurisdiction order:** Florida **state** first — and, for v1, only. **Georgia and
 MDFL/federal are both deferred expansion jurisdictions** (order between them open —
 federal-next vs. GA-next); each = a shell set + a rules pack + (optionally) exemplars.
 
-1. **Vertical slice** (Florida) to prove the pipeline end-to-end across both render
-   families and both complexity extremes — and standing up the **per-section
-   verification** (§8.2) and **exemplar-upload + precedence** (§8.4–8.5) plumbing as
-   part of the slice, not as an afterthought:
+1. **Vertical slice — complete on `main`.** The Florida implementation proves the pipeline
+   end-to-end across both render families and both complexity extremes. The slice includes the
+   **per-section verification** (§8.2) and **exemplar-upload + precedence** (§8.4–8.5) plumbing:
    - `noticeAppearance` — `courtFL` shell + slot intake + orchestration, near-zero
      hallucination risk (service pipeline).
    - `motionToDismiss` — `houseMotionFL` + CRAC + precedent-with-firewall (contract).
@@ -799,9 +808,9 @@ federal-next vs. GA-next); each = a shell set + a rules pack + (optionally) exem
 
 ## 11. Open decisions
 
-- **`DraftKind` vs. extending `StructuredOutputType`** — recommend a separate enum
-  (drafting ≠ research output) but reuse the `assertsLegalAuthority`/citation-review
-  mechanism.
+- **`DraftKindID` vs. extending `StructuredOutputType` — RESOLVED.** The implementation uses a
+  separate `DraftKindID` enum (drafting ≠ research output) and reuses the
+  `assertsLegalAuthority`/citation-review mechanism.
 - **Renderer dependency / caption fidelity** — RESOLVED by the round-tripped goldens and
   the `SupraExports` implementation spec: render programmatic WordprocessingML/OPC, not
   `NSAttributedString → .docx`; the caption is a 2-cell borderless table with exact widths

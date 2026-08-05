@@ -4,17 +4,25 @@
 runs on a trusted GitHub-hosted macOS runner without release, signing, model-provider, or
 API credentials. Signing and notarization belong only in the protected release environment.
 
-The required branch-protection checks are:
+As verified against the live `main-protection` ruleset on 2026-08-05, branch protection requires
+21 check contexts:
 
 - Repository inventory and gate tests
 - all 14 `Swift package - <name>` matrix entries
 - unsigned Debug and Release app/XPC builds
 - App UI and hosted XPC smoke
 - Shipping migration fixtures
-- Document benchmark deterministic gates
 - Website lint, build, audit, and asset guards
 - Secrets, entitlements, artifacts, models, and public metadata
+
+The workflow runs two additional jobs that are not currently required by the live ruleset:
+
+- Document benchmark deterministic gates
 - Dependency review for pull requests
+
+That makes 23 hosted workflow jobs after matrix expansion, of which 21 are branch-required. The
+benchmark remains a deterministic pull-request and scheduled safety check; dependency review remains
+a pull-request check. Neither should be described as a live branch-protection requirement.
 
 The inventory is intentionally duplicated in `Scripts/list-local-packages.sh` and the
 workflow matrix. `Scripts/verify-repo-facts.sh` compares them, so adding or removing a

@@ -1,5 +1,9 @@
 # Backup and Restore
 
+> **Status:** Implemented on `main` for the next release after v2.3.4. The synthetic success,
+> rollback, and unsupported-schema release qualification drill below remains required and is not
+> recorded as complete.
+
 Supra AI can keep completed database snapshots and the managed documents they reference in a
 folder you choose. Configure that folder in **Settings → Backup**, then use **Back Up Now** whenever
 you want a fresh recovery point. A snapshot appears as complete only after its database, referenced

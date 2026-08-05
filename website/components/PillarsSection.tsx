@@ -8,7 +8,7 @@ const pillars = [
       "Generation, indexing, embeddings, and drafting run locally on Apple Silicon; the app does not attach prompts, documents, or work product to cloud-generation requests.",
       "Supra AI has no cloud-generation or training backend. Local models arrive pre-trained and change when you install a provider version.",
       "Outbound paths are named and tested: provider-specific research requests, model metadata/artifact downloads, opinion downloads, and signed update checks/downloads.",
-      "Research queries are privileged work product, so even the app's own network log redacts query terms by default.",
+      "Research query terms are replaced with per-install keyed pseudonyms in local logs by default; raw local logging is opt-in.",
     ],
   },
   {

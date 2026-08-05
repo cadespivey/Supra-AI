@@ -11,7 +11,7 @@ const sources: Provider[] = [
   {
     name: "CourtListener — Free Law Project",
     url: "https://www.courtlistener.com",
-    role: "Case law, oral arguments, and federal dockets (PACER/RECAP). A 501(c)(3) nonprofit that has made court records free for over a decade.",
+    role: "Case law and federal dockets (PACER/RECAP). A 501(c)(3) nonprofit that has made court records free for over a decade.",
     support: { label: "Donate to Free Law Project", url: "https://free.law/donate/" },
   },
   {
@@ -127,9 +127,10 @@ export function ProvidersSection() {
       </dl>
 
       <p className="mt-12 max-w-3xl text-sm leading-[1.55] text-supra-muted">
-        Legal-data requests are limited to these named hosts and logged
-        locally for your audit trail, and rate-limited to stay a good citizen of
-        the services that keep the law open.
+        Legal-data requests are limited to these named hosts and rate-limited to
+        stay a good citizen of the services that keep the law open. Local audit
+        records replace query terms with per-install keyed pseudonyms by default;
+        raw local logging is opt-in.
       </p>
     </Section>
   );

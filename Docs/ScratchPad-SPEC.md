@@ -1,6 +1,10 @@
 # Supra AI — ScratchPad Specification (Milestone 4 plan)
 ## Daily Notes → Defensible, E-Billable Time Entries
 
+> **Status:** The Milestone 4 baseline shipped. Two fidelity-gated follow-ups remain: measuring the
+> single-call engine against the real-model golden fixtures (and decomposing only if it falls short),
+> and importing attachments into the matter document library with classification metadata.
+
 Last calibrated: June 22, 2026
 
 This file is the self-contained ScratchPad spec and the **drift anchor** for the build.
@@ -203,11 +207,12 @@ Drop a file on the day (or an entry) → `ScratchPadAttachmentService`:
 
 ---
 
-## 5. Billing-generation engine — `BillingDraftService` (decomposed)
+## 5. Billing-generation engine — target decomposition and shipping implementation
 
-The single most important fidelity decision: **the model never does the whole job in one shot,
-and never does arithmetic.** The work is decomposed into narrow, constrained, individually
-verifiable calls; all numeric work is deterministic code.
+The target fidelity architecture decomposes the work into narrow, constrained, individually
+verifiable calls and keeps numeric work in deterministic code. The shipping baseline instead uses
+one constrained generation with deterministic per-field validation; the implementation note below
+is authoritative until the real-model fidelity gate justifies decomposition.
 
 ### 5.1 Decomposed pipeline (per day)
 
@@ -455,11 +460,12 @@ existing screen — a different risk profile that must not enlarge this feature'
 
 ---
 
-## 13. Phased plan & audit gates
+## 13. Historical phased plan & audit gates
 
-Each phase ends with an **audit gate**: run the phase's tests, re-read this spec and confirm no
-locked decision was violated or quietly re-scoped, and a written checkpoint for sign-off before the
-next phase begins. Toolchain: `DEVELOPER_DIR=/Applications/Xcode-beta.app/...`; package tests via
+The original build used the following phase gates. Each phase ended with an **audit gate**: run
+the phase's tests, re-read this spec, confirm no locked decision was violated or quietly re-scoped,
+and record a checkpoint before the next phase. Toolchain:
+`DEVELOPER_DIR=/Applications/Xcode-beta.app/...`; package tests via
 `swift test --package-path`; app via the xcodebuild workspace command.
 
 ```text

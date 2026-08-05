@@ -15,7 +15,7 @@ const capabilities = [
   },
   {
     title: "Document intelligence",
-    body: "Import matter documents and ask source-scoped questions — a fast preliminary answer with a full-file pass one click away, and [S#] labels that resolve to retained source locators or force review.",
+    body: "Import matter documents and ask source-scoped questions — a focused answer with a full-file pass one click away, and [S#] labels that resolve to retained source locators or force review.",
   },
   {
     title: "Primary law from official text",

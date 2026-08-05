@@ -11,7 +11,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [2.3.4] - 2026-07-27
+### Added
+
+- **Restore from a verified backup** — Settings can inspect completed snapshots, explain why a
+  snapshot is blocked, and schedule a selected backup for activation on the next cold launch. Supra
+  AI closes the live store, creates and verifies a safety copy, verifies the staged database and
+  managed documents before quitting, automatically restores the safety copy if activation fails,
+  and opens a recovery-only screen if both activation and rollback fail.
+- **Choose exact sources for document Q&A** — Ask the Documents now offers searchable, previewable
+  passage selection alongside automatic retrieval. Guided answers record the exact selected current
+  revisions, reuse that saved source set on regeneration, and block stale, unavailable, or
+  cross-matter selections.
+- **OCR regions in image previews** — Image previews can draw recognized-text regions over the
+  original image, emphasize cited lines, distinguish low-confidence text, and expose selectable,
+  accessible recognized text. Malformed or unsupported overlay data fails visibly.
+- **Grounded Florida motion to dismiss** — Matter Drafting can deterministically assemble a Florida
+  state trial-court motion for failure to state a claim from only the revision-bound fact excerpts
+  and proposition-specific authorities selected by the user. Authority details now support recording
+  or removing an exact reviewed proposition excerpt after counsel marks the authority not adverse.
+  Incomplete, stale, mismatched, uncited, mutated, or cancelled work is blocked before publication.
+  The gate checks structure and exact selected-source reproduction; it does not determine factual
+  applicability, legal sufficiency, or filing readiness.
+
+### Changed
+
+- **Richer PDF, DOCX, and XLSX exports** — Output exports now preserve supported headings,
+  paragraphs, quotations, lists, tables, inline formatting, links, citations, review notices, and
+  source appendices. PDFs add styled pagination and page numbers; DOCX files add reusable styles,
+  numbering, tables, headers, footers, hyperlinks, and source anchors; XLSX files add separate Output
+  and Sources sheets with frozen headers, widths, tables, citation IDs, and formula neutralization.
+
+### Fixed
+
+- **Interrupted and cancelled draft publication** — Cancellation now stops draft work before
+  rendering or publication. After an interrupted save, relaunch finalizes only the exact
+  authenticated file; uncertain files remain preserved and appear in Drafting as recovery-required
+  instead of being silently accepted or removed.
+- **Live model-download progress on macOS 27** — Large model downloads again report actual byte
+  progress and transfer speed throughout the transfer while preserving redirect enforcement,
+  resumable temporary files, and clean cancellation.
+
+## [2.3.4] - 2026-07-30
 
 ### Added
 
@@ -968,9 +1008,6 @@ model-call path hardened the citation/grounding guarantees.
 - **Example prompts** — a blank Global Chat opens to four randomized legal prompt
   starters (drawn from a 36-prompt set) that fill the composer for editing; the app
   opens to a fresh chat on launch.
-- A 1.3.2 adversarial review ([`Docs/Review-1.3.2.md`](Docs/Review-1.3.2.md)) with
-  module findings, feature blockers, and product-page screenshot recommendations.
-
 ### Changed
 
 - Website now serves from the apex custom domain **https://supralegal.ai/**.

@@ -1,6 +1,9 @@
 # Supra AI — Milestone 2 Explicit Implementation Plan  
 ## Legal Utility Layer: Matters, CourtListener, Structured Outputs, and UI Polish
 
+> **Status:** Complete. This is a historical implementation plan; dated baseline descriptions and
+> imperative work orders are not statements of the current repository state.
+
 ## 0. Milestone 2 Purpose
 
 Milestone 2 converts Supra AI from a working local runtime shell into a useful legal research and drafting workstation.

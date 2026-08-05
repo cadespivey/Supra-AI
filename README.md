@@ -5,11 +5,15 @@
 Supra AI runs large language models on-device with Apple's [MLX](https://github.com/ml-explore/mlx).
 Matter content stays local for generation; user-approved research terms can be sent to named
 legal-data providers, and separate clients handle model downloads and signed software updates. It pairs local generation with
-**source-grounded** legal research (via [CourtListener](https://www.courtlistener.com/)) and a
+**source-grounded** legal research through named legal-data providers, including
+[CourtListener](https://www.courtlistener.com/), and a
 document-intelligence pipeline whose support checks block or flag output that lacks required
 source support.
 
-The current published Supra AI release is identified by the newest appcast entry.
+The current published Supra AI release is identified by the newest appcast entry. This README
+describes the current `main` branch, including work listed under
+[`Unreleased`](CHANGELOG.md#unreleased); the downloadable app may lag those capabilities until a
+new release is published.
 
 ![Platform](https://img.shields.io/badge/platform-macOS%2015%2B-blue)
 ![Apple Silicon](https://img.shields.io/badge/silicon-Apple%20Silicon-black)
@@ -26,14 +30,21 @@ The current published Supra AI release is identified by the newest appcast entry
 
 - **Local generation and document processing.** Model generation, document extraction and OCR, embeddings, retrieval, drafting, and billing generation execute on the Mac.
   Research and software egress are described separately in [SECURITY.md](SECURITY.md).
-- **Source-grounded legal research.** `/research` and `/legal` retrieve authority from CourtListener,
-  rank it (jurisdiction, court level, recency, precedential status), and constrain the model to the
-  retrieved packet. Fabricated, unresolved, or unsupported citations and propositions are flagged
-  or blocked; the checks do not determine subsequent history or whether authority remains good law.
+- **Source-grounded legal research.** `/research` and `/legal` retrieve case law from CourtListener
+  and can ground statutory or regulatory questions in GovInfo, eCFR, and Open Legal Codes. Retrieved
+  authority is ranked and retained as a source packet that constrains the model. Fabricated,
+  unresolved, or unsupported citations and propositions are flagged or blocked; the checks do not
+  determine subsequent history or whether authority remains good law.
+- **Public-records research.** Search SEC EDGAR filings, CFPB consumer complaints, and NLRB
+  labor-case records in a dedicated workspace. Results remain labeled as filings, complaints, or
+  allegations from the source—not adjudicated facts—and do not silently become model-grounding facts.
 - **Document intelligence.** Import files and folders (PDF, DOCX, XLSX, RTF, EML, images), with OCR,
   chunking, on-device embeddings, hybrid retrieval, source-cited Q&A, fact chronologies, and
   exportable structured outputs — all scoped per matter and organized into nested folders (new
-  matters start with a folder set matched to their practice area).
+  matters start with a folder set matched to their practice area). On current `main`, **Ask the
+  Documents** can use automatic retrieval or exact passages selected and previewed by the user;
+  image previews draw OCR regions and emphasize cited text; and PDF, DOCX, and XLSX exports preserve
+  supported document structure, formatting, links, citations, review notices, and source appendices.
 - **Matter workspace.** Organize chats, research sessions, authorities, documents, outputs, and
   per-matter billing rules by matter, with an audit trail. Sort the matter sidebar by client
   (grouped under the client's name), practice area, name, or date — or pin matters to the top and
@@ -42,14 +53,20 @@ The current published Supra AI release is identified by the newest appcast entry
 - **In-matter drafting.** A **Draft** button in a matter's chat opens a guided input sheet and
   generates a downloadable `.docx` — a Notice of Appearance (currently Florida-only), a demand
   letter, or a deterministic Florida state trial-court motion to dismiss for failure to state a
-  claim. The motion uses only the revision-bound fact excerpts and proposition-specific authorities
-  the user selects after review. Required slots are validated before rendering, and the signature
-  block prints the bar
-  admission whose jurisdiction matches the filing's court — configured as a multi-jurisdiction
+  claim. No drafting model writes that motion: deterministic assembly uses only the revision-bound
+  fact excerpts and proposition-specific authorities the user selects after review. Required slots
+  are validated before rendering, and the signature block prints the bar admission whose
+  jurisdiction matches the filing's court — configured as a multi-jurisdiction
   bar-admissions list in **Settings**. A per-firm **style profile** (also in Settings) applies your
   letterhead, caption, and signature-block conventions to supported drafts, and can be captured by
   parsing an uploaded exemplar document for review.
   Draft rendering stops before a file is created when required facts, authority support, or verification provenance are missing, unsupported, or unverifiable. For the supported motion, the gate checks required structure and exact selected-source reproduction; it does not determine fact-to-ground applicability, legal sufficiency, or filing readiness.
+- **Verified backup restore.** On current `main`, Settings can inspect completed snapshots, explain
+  why an incompatible or damaged snapshot is blocked, and schedule a selected backup for activation
+  on the next cold launch. Supra AI first creates and verifies a safety copy, automatically rolls
+  back to that copy if activation fails, and opens a recovery-only workspace if both activation and
+  rollback fail. The synthetic end-to-end release qualification drill remains required before this
+  restore workflow ships.
 - **Timekeeping → defensible billing (ScratchPad).** Keep one running daily note — `@matter` /
   `#issue` tags, with work product, emails, and filings attached inline to the note they support.
   Tag an entry `#Note` to exclude that entry and its attachments before billing-model input. On demand, a local model turns the day into a reviewable, editable table of
@@ -59,9 +76,9 @@ The current published Supra AI release is identified by the newest appcast entry
   chat history in an interior sidebar, searchable by title and message content — a leading `#`
   matches a tag exactly and surfaces a cross-matter "Tag matches" section spanning chats and
   ScratchPad notes. Rename, delete, or move a chat into a matter when it turns out to be case-specific.
-- **Privacy by default.** Privileged query terms are redacted (stored as per-install keyed pseudonyms) in
-  logs and diagnostics unless explicitly enabled; the CourtListener token lives in the Keychain,
-  bound to the device.
+- **Privacy by default.** Privileged query terms are replaced with per-install keyed pseudonyms in
+  local logs and diagnostics by default; raw local logging is opt-in. Provider credentials live in
+  the device-bound Keychain.
 
 ## Slash commands
 
@@ -84,7 +101,7 @@ Swift packages:
 
 ```
 Apps/SupraAI
-├─ SupraAI                 SwiftUI app (matters, chat, research, documents, outputs, settings)
+├─ SupraAI                 SwiftUI app (chat, matters, research, public records, documents, ScratchPad, settings)
 └─ SupraRuntimeService     Sandboxed XPC service that loads & runs MLX models (chat + embeddings)
 
 Packages/
@@ -93,9 +110,9 @@ Packages/
 ├─ SupraSessions           App-facing controllers (chat, research, documents, outputs, models)
 ├─ SupraDraftingCore       Shared drafting contracts, slots, and pre-file gates
 ├─ SupraDrafting           Drafting generation and authority firewall
-├─ SupraExports            Local DOCX and tabular export renderers
-├─ SupraResearch           CourtListener client + legal citation verification & ranking
-├─ SupraDocuments          Extraction, OCR, chunking, grounding, export
+├─ SupraExports            Drafting-specific court and letterhead DOCX renderers
+├─ SupraResearch           Named legal-data clients + authority normalization, ranking, verification
+├─ SupraDocuments          Extraction, OCR, chunking, grounding, rich output export
 ├─ SupraNetworking         Authorized HTTP client, network policy, rate limiting, Keychain
 ├─ SupraRuntimeInterface   XPC DTOs / protocols shared by app and runtime service
 ├─ SupraRuntimeClient      Typed client for the runtime XPC service

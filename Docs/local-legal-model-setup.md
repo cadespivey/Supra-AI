@@ -1,8 +1,9 @@
 # Local Legal Model Setup
 
 Supra AI is a Swift/macOS app with a local MLX runtime service. Model routing is
-environment-driven, and CourtListener is the only external legal authority
-retrieval path.
+configuration-driven. Case-law and docket lookup uses CourtListener; statutory and regulatory
+grounding can use GovInfo, eCFR, and Open Legal Codes; development tracking uses named public
+providers; and the separate Public Records workspace covers SEC, CFPB, and NLRB sources.
 
 ## Architecture Notes
 
@@ -11,7 +12,7 @@ retrieval path.
   generates through XPC.
 - Core route types: `Packages/SupraCore`.
 - Session orchestration: `Packages/SupraSessions`.
-- CourtListener client, normalization, ranking, and verification helpers:
+- Named legal-data clients, normalization, ranking, and verification helpers:
   `Packages/SupraResearch`.
 - Persistence: `Packages/SupraStore` with GRDB.
 - Tests: Swift Package Manager/XCTest targets under each package.
@@ -25,7 +26,7 @@ path.
 | Role | Default identifier | Notes |
 | --- | --- | --- |
 | Legal reasoning | `Qwen3-30B-A3B-Thinking-2507-MLX-4bit` | Default route for `/legal` and `/research`. |
-| Legal reasoning high quality | `Qwen3-30B-A3B-Thinking-2507-MLX-6bit` | Optional quality profile when memory headroom permits. |
+| Legal reasoning high quality | `DeepSeek-R1-Distill-Qwen-32B-MLX-4bit` | Optional high-quality role used by selected structured-output routes. |
 | Drafting | `Qwen3-30B-A3B-Instruct-2507-MLX-4bit` | Used by `/draft` and ordinary non-research drafting. |
 | Critique | `DeepSeek-R1-Distill-Qwen-32B-MLX-4bit` | Used by `/critique`/second-pass review. |
 
@@ -64,12 +65,11 @@ store is approved for privileged query content.
 The chat composer supports:
 
 - `/draft`: drafting model, low/off thinking, no mandatory research.
+- `/ask` or `/general`: general assistant route without authoritative legal grounding.
 - `/legal`: legal reasoning model. Jurisdiction-specific/current law requires
-  CourtListener grounding unless ungrounded law is explicitly allowed.
-- `/research`: legal reasoning model plus mandatory CourtListener retrieval,
+  a retained legal-data source packet unless ungrounded law is explicitly allowed.
+- `/research`: legal reasoning model plus mandatory legal-data retrieval,
   source packet prompting, and citation verification.
-- `/legal-hq` and `/research-hq`: same workflows using the optional configured
-  high-quality legal reasoning model.
 - `/critique`: critique model and defect-focused review prompt. If run after a
   legal answer, it uses the prior draft plus the latest source packet.
 - `/verify`: deterministic citation/source verification. Without a source
@@ -82,14 +82,16 @@ the prompt text. The UI asks the model library to load the configured role model
 when it is registered locally; otherwise it falls back to the loaded or active
 model.
 
-## CourtListener Grounding
+## Legal-data grounding
 
 Legal research mode:
 
 1. Classifies jurisdiction, court level, issue, posture, authority type, date
    sensitivity, binding authority need, adverse-authority request, and citation
    lookup.
-2. Queries CourtListener REST v4 only.
+2. Routes case-law and docket questions to CourtListener, U.S. Code questions to GovInfo or Open
+   Legal Codes, and federal-regulation questions to eCFR. Legislative or rulemaking developments
+   remain separately labeled tracking context rather than controlling authority.
 3. Stores matter-chat research packets as research sessions/results so they can
    be reviewed in the Research tab and reused by `/verify` or `/critique`.
 4. Normalizes results into internal `LegalAuthority` objects.
@@ -103,6 +105,10 @@ Legal research mode:
 The model is instructed not to cite or quote authorities outside the source
 packet. If retrieval is insufficient, the answer should say so.
 
+The Public Records workspace separately queries SEC EDGAR filings, CFPB consumer complaints, and
+NLRB labor-case records. Those results retain their source labels and are not silently promoted to
+adjudicated facts or legal authority.
+
 ## Memory Guidance
 
 Storage is not the main constraint. The limiting factors are unified memory for
@@ -112,7 +118,7 @@ therefore use:
 - 4-bit quantization.
 - 32K normal context.
 - 64K maximum research context.
-- optional 6-bit quality profile only when memory headroom permits.
+- an optional separate 4-bit high-quality reasoning role when memory headroom permits.
 
 If model loading fails due to likely memory pressure, the runtime surfaces a
 clearer message recommending a smaller quantization/context.
@@ -127,8 +133,8 @@ cd ../SupraResearch && swift test
 cd ../SupraSessions && swift test
 ```
 
-The added tests cover routing, environment-driven defaults, CourtListener
-request filters, matter research-packet persistence, `/verify` without a loaded
+The tests cover routing, configuration defaults, named-provider request filters,
+matter research-packet persistence, `/verify` without a loaded
 model, `/critique` with prior draft/source packet context, authority
 normalization/ranking, fake citation handling, quotation checks, drafting
 behavior, and legal research grounding.

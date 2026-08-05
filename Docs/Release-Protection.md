@@ -40,8 +40,10 @@ release transaction's automated appcast merge.
   - `Shipping migration fixtures`
   - `Website lint, build, audit, and asset guards`
   - `Secrets, entitlements, artifacts, models, and public metadata`
-  `Dependency review` continues to run on every pull request but is not marked required,
-  so that a branch-verified SHA can fast-forward `main` without a pull request.
+  `Document benchmark deterministic gates` and `Dependency review` continue to run on every pull
+  request but are not marked required, so that a branch-verified SHA can fast-forward `main`
+  without a pull request. The workflow therefore has 23 jobs after matrix expansion while the live
+  ruleset requires 21 contexts.
 - A tag ruleset on `v*` that blocks tag updates and deletions. Tags are created by the
   release transaction using the release token; on a single-maintainer personal repository
   GitHub cannot restrict tag creation to a separate identity, so published-tag
@@ -54,8 +56,9 @@ release transaction's automated appcast merge.
   do not publish manually outside the release workflows.
 
 `.github/CODEOWNERS` assigns workflows, release scripts, product-claims inventory,
-`SECURITY.md`, and public privacy copy to the release/security owner. Branch protection must
-require the resulting Code Owner review.
+`SECURITY.md`, and public privacy copy to the release/security owner. In the current
+single-maintainer ruleset, that ownership map routes responsibility but does not create a required
+Code Owner approval that the author cannot supply.
 
 ## Protected environments
 

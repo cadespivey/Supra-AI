@@ -69,10 +69,9 @@ export function ScreenshotShowcase() {
             one and the filing opens beside the conversation at the exact passage.
           </p>
           <p>
-            Answers are honest about depth, too: a fast pass returns in seconds,
-            labeled <span className="italic">Preliminary</span>, with a
-            full-document search one click away. If the documents don&rsquo;t
-            support an answer, Supra AI says so instead of improvising.
+            Search depth stays under your control: a focused pass returns first,
+            with a full-document search one click away. If the documents
+            don&rsquo;t support an answer, Supra AI says so instead of improvising.
           </p>
         </Shot>
 

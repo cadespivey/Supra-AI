@@ -1,6 +1,10 @@
 # Supra AI - Milestone 3 Implementation Plan
 ## Matter Document Intelligence: Import, Extraction, Search, Q&A, and Chronologies
 
+> **Status:** Complete. This is a historical implementation plan; dated baseline descriptions and
+> imperative work orders are not statements of the current repository state. Later closures are
+> recorded in the handoff at the end of this file.
+
 Last calibrated: June 17, 2026
 
 This file is the self-contained Milestone 3 handoff. Implementers should not rely on prior chat context.
@@ -1989,9 +1993,9 @@ Delivered:
 - Tests: text locator → highlighted text; missing PDF blob → unavailable + text
   fallback; unknown document → unavailable.
 
-Note: image OCR bounding-box overlay is carried in the model
-(`boundingBoxesJSON`) but not yet drawn over the image (page/text highlight is
-implemented); a deferred visual nicety.
+Historical WO 40 note: image OCR bounding-box overlay was carried in the model
+(`boundingBoxesJSON`) but was not drawn over the image at this checkpoint. The overlay UI shipped
+later and is recorded in the final handoff below.
 
 ## WO 41 — Auto-Source And Guided Q&A — DONE (2026-06-17)
 
@@ -2174,17 +2178,19 @@ Deferred at the original M3 handoff (historical):
            code path has a benign race); relaunch reconcile is the durability net.
 ```
 
-### M3 Handoff — known limitations / remaining production gaps
+### M3 Handoff — current limitations and post-handoff closures
 ```text
 - Legacy .doc extraction is best-effort via NSAttributedString (main actor). .xls and
   Outlook .msg are reported unsupported (convert to .xlsx/.eml) — by design.
-- Image OCR bounding boxes are captured (boundingBoxesJSON) but not yet drawn over the
-  image preview; PDF page + text-range highlights are implemented.
-- Guided Q&A (manual source selection) is supported in DocumentQAController
-  (guidedChunkIDs); a Documents-tab guided selection surface remains to be built.
 - Embedding model loads on demand — the first Q&A/index after launch pays model-load latency.
-- Export PDF is plain CoreText pagination (single font, no rich markdown); DOCX/XLSX are
-  minimal OOXML. They open in Word/Excel/Preview and carry output + appendix + warning.
+
+Closed after the original M3 handoff:
+- [done later] Image previews draw retained OCR regions, emphasize cited text, distinguish
+  low-confidence recognition, and expose accessible recognized text.
+- [done later] Ask the Documents provides searchable, previewable exact-passage selection and
+  preserves that guided source set across regeneration.
+- [done later] Rich PDF, DOCX, and XLSX renderers preserve supported structure, formatting,
+  links, citations, review notices, and source appendices.
 ```
 
 The nested folder/drag UI, relationship-based XLSX mapping, fixed-scale benchmark, and
