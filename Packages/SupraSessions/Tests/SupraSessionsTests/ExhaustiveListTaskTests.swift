@@ -771,7 +771,7 @@ final class ExhaustiveListTaskTests: XCTestCase {
         let generationID = try XCTUnwrap(result.version.generationSessionID, "T-LIN-03: engine versions carry generation lineage")
         let generation = try XCTUnwrap(store.generation.fetchGenerationSession(generationID: generationID))
         XCTAssertEqual(generation.modelRepository, "synthetic/exhaustive-runtime")
-        XCTAssertEqual(generation.modelRevision, "exhaustive-revision-nondefault")
+        XCTAssertEqual(generation.modelRevision, Self.modelArtifact.revision)
         XCTAssertEqual(generation.promptBuilderVersion, "exhaustive-list-v1")
         XCTAssertEqual(result.version.promptBuilderVersion, "exhaustive-list-v1")
         XCTAssertEqual(result.version.assuranceState, OutputAssuranceState.corpusIncomplete.rawValue)
