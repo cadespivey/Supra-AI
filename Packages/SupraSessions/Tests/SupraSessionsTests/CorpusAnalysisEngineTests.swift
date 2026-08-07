@@ -6,20 +6,26 @@ import SupraStore
 import XCTest
 
 final class CorpusAnalysisEngineTests: XCTestCase {
-    func testTCORP01And02LongRevisionTailIsPackedAsExactOnceOnlySlices() async throws {
+    func testTCORP01LongRevisionTailIsPackedAsExactPromptSlices() async throws {
         // T-CORP-01 expected RED: a long revision is persisted as one revision-only
         // partition, so the shared 3,000-character source packer omits the tail sentinel.
-        // T-CORP-02 expected RED: persisted partition input has revision IDs but no exact
-        // character ranges, so gap/overlap/once-only balance cannot be proven.
+        // Offsets in this contract count Swift extended grapheme clusters (Character),
+        // never UTF-8 bytes or UTF-16 code units.
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "Synthetic exact-slice corpus")
+        let characterBudget = 2_417
         let headSentinel = "HEAD-RANGE-217-NONDEFAULT"
         let middleSentinel = "MIDDLE-RANGE-431-NONDEFAULT"
         let tailSentinel = "TAIL-RANGE-863-NONDEFAULT"
+        let unicodeCluster = "👩🏽‍⚖️|e\u{301}|🇺🇳"
+        XCTAssertNotEqual(unicodeCluster.count, unicodeCluster.utf8.count)
+        XCTAssertNotEqual(unicodeCluster.count, unicodeCluster.utf16.count)
         let revisionText = headSentinel
-            + String(repeating: "A", count: 3_211)
+            + String(repeating: "A", count: 1_601)
+            + String(repeating: unicodeCluster, count: 179)
             + middleSentinel
-            + String(repeating: "B", count: 3_223)
+            + String(repeating: "B", count: 1_613)
+            + String(repeating: unicodeCluster, count: 181)
             + tailSentinel
         let fixture = try insertDocument(
             store: store,
@@ -39,7 +45,7 @@ final class CorpusAnalysisEngineTests: XCTestCase {
                 matterID: matter.id,
                 taskKind: .customExtraction,
                 scope: CorpusAnalysisScope(documentIDs: [fixture.documentID]),
-                characterBudget: 2_417
+                characterBudget: characterBudget
             )
         ) { input in
             await probe.record(input)
@@ -77,6 +83,11 @@ final class CorpusAnalysisEngineTests: XCTestCase {
         )
 
         for input in inputs {
+            XCTAssertLessThanOrEqual(
+                input.sources.reduce(0) { $0 + $1.text.count },
+                characterBudget,
+                "the total Character count presented to one mapper partition must honor the requested budget"
+            )
             for source in input.sources {
                 XCTAssertTrue(
                     input.promptEnvelope.contains(source.text),
@@ -90,21 +101,107 @@ final class CorpusAnalysisEngineTests: XCTestCase {
         XCTAssertEqual(Self.occurrenceCount(of: tailSentinel, in: allPrompts), 1)
         XCTAssertFalse(allPrompts.contains("…[source text truncated to fit the context window]"))
 
-        let persistedSliceLists = result.partitions.map { partition in
-            try? JSONDecoder().decode(
-                [ExactSliceProbe].self,
-                from: Data(partition.inputRevisionIDsJSON.utf8)
+        XCTAssertEqual(result.coverage.succeededPartitionCount, result.coverage.partitionCount)
+    }
+
+    func testTCORP02NormalizedSliceLedgerPersistsExactOnceOnlyRanges() async throws {
+        // T-CORP-02 expected RED: CorpusAnalysisRepository has no normalized
+        // fetchSlices contract and the store has no exact slice ledger; partition
+        // input_revision_ids_json must remain revision identity, not a second ledger.
+        // Persisted offsets and revision_char_count use Swift Character offsets.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic normalized slice ledger")
+        let characterBudget = 2_417
+        let unicodeCluster = "🧑🏿‍⚖️|o\u{308}|🇲🇦"
+        XCTAssertNotEqual(unicodeCluster.count, unicodeCluster.utf8.count)
+        XCTAssertNotEqual(unicodeCluster.count, unicodeCluster.utf16.count)
+        let revisionText = "SLICE-HEAD-211-NONDEFAULT"
+            + String(repeating: "L", count: 1_607)
+            + String(repeating: unicodeCluster, count: 173)
+            + "SLICE-MIDDLE-433-NONDEFAULT"
+            + String(repeating: "R", count: 1_619)
+            + String(repeating: unicodeCluster, count: 177)
+            + "SLICE-TAIL-877-NONDEFAULT"
+        let fixture = try insertDocument(
+            store: store,
+            matterID: matter.id,
+            name: "normalized-slice-ledger.txt",
+            status: .ready,
+            extractionStatus: .extracted,
+            indexStatus: .textIndexed,
+            partTexts: [revisionText]
+        )
+        let frozenRevisionID = try XCTUnwrap(fixture.revisionIDs.first)
+        let result = try await CorpusAnalysisEngine(store: store).run(
+            request: CorpusAnalysisRequest(
+                runKey: "normalized-slice-ledger-run",
+                matterID: matter.id,
+                taskKind: .customExtraction,
+                scope: CorpusAnalysisScope(documentIDs: [fixture.documentID]),
+                characterBudget: characterBudget
+            )
+        ) { _ in
+            CorpusAnalysisMapOutput(findings: [])
+        }
+
+        let slices = try store.corpusAnalysis.fetchSlices(
+            matterID: matter.id,
+            runID: result.run.id
+        )
+        XCTAssertGreaterThan(slices.count, 1, "one long revision must persist multiple exact ranges")
+        XCTAssertEqual(Set(slices.map(\.runID)), [result.run.id])
+        XCTAssertTrue(Set(slices.map(\.partitionID)).isSubset(of: Set(result.partitions.map(\.id))))
+        XCTAssertEqual(Set(slices.map(\.memberKey)), ["document:\(fixture.documentID)"])
+        XCTAssertEqual(Set(slices.map(\.documentID)), [fixture.documentID])
+        XCTAssertEqual(Set(slices.map(\.partIndex)), [0])
+        XCTAssertEqual(Set(slices.map(\.revisionID)), [frozenRevisionID])
+        XCTAssertEqual(Set(slices.map(\.revisionCharCount)), [revisionText.count])
+
+        for partitionSlices in Dictionary(grouping: slices, by: \.partitionID).values {
+            XCTAssertEqual(
+                partitionSlices.map(\.ordinal).sorted(),
+                Array(0..<partitionSlices.count),
+                "slice ordinals must be deterministic and gap-free within each partition"
+            )
+            XCTAssertLessThanOrEqual(
+                partitionSlices.reduce(0) { $0 + ($1.charEnd - $1.charStart) },
+                characterBudget,
+                "the normalized ledger must prove each partition stayed within the Character budget"
             )
         }
-        XCTAssertTrue(
-            persistedSliceLists.allSatisfy { $0 != nil },
-            "partition input must persist revision identity plus exact character ranges"
+
+        let ordered = slices.sorted { lhs, rhs in
+            if lhs.charStart == rhs.charStart { return lhs.charEnd < rhs.charEnd }
+            return lhs.charStart < rhs.charStart
+        }
+        let ranges = ordered.map {
+            ExactSliceProbe(
+                revisionID: $0.revisionID,
+                charStart: $0.charStart,
+                charEnd: $0.charEnd
+            )
+        }
+        XCTAssertEqual(ranges.first?.charStart, 0)
+        XCTAssertEqual(ranges.last?.charEnd, revisionText.count)
+        XCTAssertEqual(Set(ranges).count, ranges.count)
+        for pair in zip(ranges, ranges.dropFirst()) {
+            XCTAssertEqual(pair.0.charEnd, pair.1.charStart, "persisted ranges must neither gap nor overlap")
+        }
+        for slice in ordered {
+            let exactText = Self.substring(revisionText, from: slice.charStart, to: slice.charEnd)
+            XCTAssertLessThanOrEqual(exactText.count, DocumentQAPromptBuilder.maxSourceTextChars)
+            XCTAssertEqual(slice.textSHA256, DocumentStorage.sha256Hex(of: Data(exactText.utf8)))
+            let locator = try JSONDecoder().decode(
+                DocumentSourceLocator.self,
+                from: Data(slice.locatorJSON.utf8)
+            )
+            XCTAssertEqual(locator.charStart, slice.charStart)
+            XCTAssertEqual(locator.charEnd, slice.charEnd)
+        }
+        XCTAssertEqual(
+            ordered.map { Self.substring(revisionText, from: $0.charStart, to: $0.charEnd) }.joined(),
+            revisionText
         )
-        let persistedSlices = persistedSliceLists.compactMap { $0 }.flatMap { $0 }
-            .sorted { $0.charStart < $1.charStart }
-        XCTAssertEqual(persistedSlices, observedSlices)
-        XCTAssertEqual(Set(persistedSlices).count, persistedSlices.count)
-        XCTAssertEqual(result.coverage.succeededPartitionCount, result.coverage.partitionCount)
     }
 
     func testTCORP03ZeroEligibleSelectedSourcesFailsBeforeRunCreation() async throws {
@@ -801,16 +898,10 @@ private struct CorpusFixtureDocument: Sendable {
     var revisionIDs: [String]
 }
 
-private struct ExactSliceProbe: Codable, Equatable, Hashable {
+private struct ExactSliceProbe: Equatable, Hashable {
     var revisionID: String
     var charStart: Int
     var charEnd: Int
-
-    private enum CodingKeys: String, CodingKey {
-        case revisionID = "revision_id"
-        case charStart = "char_start"
-        case charEnd = "char_end"
-    }
 }
 
 private struct SyntheticAttemptHistoryEntry: Decodable {

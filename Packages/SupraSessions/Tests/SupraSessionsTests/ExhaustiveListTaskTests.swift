@@ -7,70 +7,146 @@ import SupraStore
 import XCTest
 
 final class ExhaustiveListTaskTests: XCTestCase {
-    private static let modelLineageJSON = #"{"model_repository":"synthetic/exhaustive-runtime","model_revision":"exhaustive-revision-nondefault"}"#
+    private static let modelArtifact = FrozenModelArtifactProbe(
+        repository: "synthetic/exhaustive-runtime",
+        revision: "0123456789abcdef0123456789abcdef01234567",
+        contentBindingAlgorithm: "supra-release-model-sha256-v1",
+        contentBindingSchemaVersion: 1,
+        artifactFingerprintSHA256: String(repeating: "7", count: 64)
+    )
+    private static let modelLineageJSON = #"{"artifact_fingerprint_sha256":"7777777777777777777777777777777777777777777777777777777777777777","content_binding_algorithm":"supra-release-model-sha256-v1","content_binding_schema_version":1,"model_repository":"synthetic/exhaustive-runtime","model_revision":"0123456789abcdef0123456789abcdef01234567"}"#
 
-    func testTEVID01ExactQuoteSpanIsValidatedAndLocatorIsDerivedByHost() async throws {
+    func testTEVID01ExactQuotesWithAbsentAndCorrectModelOffsetsAreLocatedByHost() async throws {
         // T-EVID-01 expected RED: the mapper ignores emitted quote/span fields and
         // persists the model's whole-revision locator/excerpt instead of validating
-        // the frozen text and deriving the exact evidence range on the host.
+        // the frozen text and deriving exact Character ranges on the host. Model
+        // offsets are optional: an exact unique quote works without them, while
+        // a supplied slice-relative span must agree with the host-derived absolute range.
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "Synthetic exact quote evidence")
-        let prefix = "PREFIX-219-NONDEFAULT | "
-        let exactQuote = "Payment was due on October 17, 2031 in the amount of $731.42."
+        let characterBudget = 241
+        let prefix = "PREFIX-219-NONDEFAULT 👩🏽‍⚖️ | "
+        let absentOffsetQuote = "Payment was due on October 17, 2031 in the amount of $731.42."
+        let explicitSpanQuote = "Notice was delivered at 9:41 p.m. 🇺🇳."
         let suffix = " | SUFFIX-887-NONDEFAULT"
-        let sourceText = prefix + exactQuote + suffix
-        let expectedStart = prefix.count
-        let expectedEnd = expectedStart + exactQuote.count
+        let absentExpectedStart = prefix.count
+        let absentExpectedEnd = absentExpectedStart + absentOffsetQuote.count
+        let explicitExpectedStart = characterBudget * 3 + 37
+        let bridge = String(
+            repeating: "B",
+            count: explicitExpectedStart - absentExpectedEnd
+        )
+        let sourceText = prefix + absentOffsetQuote + bridge + explicitSpanQuote + suffix
+        XCTAssertNotEqual(sourceText.count, sourceText.utf8.count)
+        XCTAssertNotEqual(sourceText.count, sourceText.utf16.count)
+        let explicitExpectedEnd = explicitExpectedStart + explicitSpanQuote.count
         let fixture = try insertDocument(
             store: store,
             matterID: matter.id,
             name: "exact-quote-schedule.txt",
             partTexts: [sourceText]
         )
+        let inputProbe = ListPartitionProbe()
 
         let result = try await ExhaustiveListTask(store: store).run(
             request: ExhaustiveListRequest(
                 runKey: "exact-quote-host-derived-locator-run",
                 matterID: matter.id,
                 title: "Exact quoted payment",
-                query: "Extract the exact payment sentence.",
-                characterBudget: 1_733,
+                query: "Extract both exact quoted sentences.",
+                characterBudget: characterBudget,
                 modelLineageJSON: Self.modelLineageJSON
             )
         ) { input in
-            try Self.quotedResponse(
-                input,
-                itemKey: "exact-payment-sentence-219",
-                value: exactQuote,
-                quote: exactQuote,
-                charStart: expectedStart,
-                charEnd: expectedEnd
+            await inputProbe.record(input)
+            let source = try XCTUnwrap(input.partition.sources.first)
+            var items: [SyntheticQuotedItem] = []
+            if source.text.contains(absentOffsetQuote) {
+                items.append(SyntheticQuotedItem(
+                    itemKey: "exact-payment-sentence-219",
+                    value: absentOffsetQuote,
+                    evidence: [.init(quote: absentOffsetQuote)]
+                ))
+            }
+            if source.text.contains(explicitSpanQuote) {
+                let relativeRange = try XCTUnwrap(
+                    Self.characterRange(of: explicitSpanQuote, in: source.text)
+                )
+                items.append(SyntheticQuotedItem(
+                    itemKey: "exact-notice-sentence-443",
+                    value: explicitSpanQuote,
+                    evidence: [.init(
+                        quote: explicitSpanQuote,
+                        charStart: relativeRange.lowerBound,
+                        charEnd: relativeRange.upperBound
+                    )]
+                ))
+            }
+            return try Self.quotedResponse(input, items: items)
+        }
+
+        let mapperInputs = await inputProbe.inputs
+        let explicitSource = try XCTUnwrap(mapperInputs.flatMap(\.partition.sources).first {
+            $0.text.contains(explicitSpanQuote)
+        })
+        let absentSource = try XCTUnwrap(mapperInputs.flatMap(\.partition.sources).first {
+            $0.text.contains(absentOffsetQuote)
+        })
+        XCTAssertFalse(absentSource.text.contains(explicitSpanQuote))
+        XCTAssertFalse(explicitSource.text.contains(absentOffsetQuote))
+        let explicitSliceLocator = try JSONDecoder().decode(
+            DocumentSourceLocator.self,
+            from: Data(explicitSource.locatorJSON.utf8)
+        )
+        let explicitSliceStart = try XCTUnwrap(explicitSliceLocator.charStart)
+        let suppliedRelativeRange = try XCTUnwrap(
+            Self.characterRange(of: explicitSpanQuote, in: explicitSource.text)
+        )
+        XCTAssertGreaterThan(explicitSliceStart, 0)
+        XCTAssertNotEqual(suppliedRelativeRange.lowerBound, explicitExpectedStart)
+        XCTAssertEqual(
+            explicitSliceStart + suppliedRelativeRange.lowerBound,
+            explicitExpectedStart
+        )
+        XCTAssertEqual(
+            explicitSliceStart + suppliedRelativeRange.upperBound,
+            explicitExpectedEnd
+        )
+
+        XCTAssertEqual(result.version.verificationStatus, OutputVerificationStatus.allSupported.rawValue)
+        let outputSources = try store.documentSources.fetchSources(
+            structuredOutputVersionID: result.version.id
+        )
+        XCTAssertEqual(outputSources.count, 2)
+        XCTAssertEqual(Set(outputSources.compactMap(\.revisionID)), Set(fixture.revisionIDs))
+        let expectedRanges = [
+            absentOffsetQuote: absentExpectedStart..<absentExpectedEnd,
+            explicitSpanQuote: explicitExpectedStart..<explicitExpectedEnd,
+        ]
+        for source in outputSources {
+            let expectedRange = try XCTUnwrap(expectedRanges[source.excerpt])
+            let locator = try JSONDecoder().decode(
+                DocumentSourceLocator.self,
+                from: Data(source.locatorJSON.utf8)
+            )
+            XCTAssertEqual(locator.charStart, expectedRange.lowerBound)
+            XCTAssertNotEqual(locator.charStart, 0, "the old whole-revision locator start must be absent")
+            XCTAssertEqual(locator.charEnd, expectedRange.upperBound)
+            XCTAssertNotEqual(locator.charEnd, sourceText.count, "the old whole-revision locator end must be absent")
+            XCTAssertEqual(
+                Self.substring(sourceText, from: expectedRange.lowerBound, to: expectedRange.upperBound),
+                source.excerpt
             )
         }
 
-        XCTAssertEqual(result.version.verificationStatus, OutputVerificationStatus.allSupported.rawValue)
-        let outputSource = try XCTUnwrap(
-            store.documentSources.fetchSources(structuredOutputVersionID: result.version.id).first
-        )
-        XCTAssertEqual(outputSource.revisionID, fixture.revisionIDs.first)
-        let locator = try JSONDecoder().decode(
-            DocumentSourceLocator.self,
-            from: Data(outputSource.locatorJSON.utf8)
-        )
-        XCTAssertEqual(locator.charStart, expectedStart)
-        XCTAssertNotEqual(locator.charStart, 0, "the old whole-revision locator start must be absent")
-        XCTAssertEqual(locator.charEnd, expectedEnd)
-        XCTAssertNotEqual(locator.charEnd, sourceText.count, "the old whole-revision locator end must be absent")
-        XCTAssertEqual(outputSource.excerpt, exactQuote)
-
         let verificationJSON = try XCTUnwrap(result.version.verificationJSON)
-        let support = try XCTUnwrap(DateCoding.decoder.decode(
+        let support = try DateCoding.decoder.decode(
             [PropositionSupportResult].self,
             from: Data(verificationJSON.utf8)
-        ).first)
-        XCTAssertEqual(support.status, .supported)
-        XCTAssertEqual(support.evidence.first?.locator, outputSource.locatorJSON)
-        XCTAssertEqual(support.evidence.first?.retainedExcerpt, exactQuote)
+        )
+        XCTAssertEqual(support.count, 2)
+        XCTAssertTrue(support.allSatisfy { $0.status == .supported })
+        XCTAssertEqual(Set(support.flatMap(\.evidence).map(\.retainedExcerpt)), Set(expectedRanges.keys))
     }
 
     func testTEVID02FabricatedValueWithStructurallyValidRevisionEvidenceIsRejected() async throws {
@@ -81,7 +157,10 @@ final class ExhaustiveListTaskTests: XCTestCase {
         let matter = try store.matters.createMatter(name: "Synthetic fabricated-value rejection")
         let supportedValue = "$731.42"
         let fabricatedValue = "$9,913.77"
-        let sourceText = "NONDEFAULT-SCHEDULE-417 states the exact payment amount is \(supportedValue)."
+        let sourcePrefix = "NONDEFAULT-SCHEDULE-417 states the exact payment amount is "
+        let sourceText = sourcePrefix + supportedValue + "."
+        let supportedStart = sourcePrefix.count
+        let supportedEnd = supportedStart + supportedValue.count
         let fixture = try insertDocument(
             store: store,
             matterID: matter.id,
@@ -99,13 +178,14 @@ final class ExhaustiveListTaskTests: XCTestCase {
                 modelLineageJSON: Self.modelLineageJSON
             )
         ) { input in
-            try Self.response(input, items: [
-                .init(
-                    itemKey: "scheduled-payment-417",
-                    value: fabricatedValue,
-                    evidence: [.primary]
-                ),
-            ])
+            try Self.quotedResponse(
+                input,
+                itemKey: "scheduled-payment-417",
+                value: fabricatedValue,
+                quote: supportedValue,
+                charStart: supportedStart,
+                charEnd: supportedEnd
+            )
         }
 
         let item = try XCTUnwrap(result.items.first)
@@ -136,6 +216,181 @@ final class ExhaustiveListTaskTests: XCTestCase {
         XCTAssertEqual(output.status, StructuredOutputStatus.needsReview.rawValue)
     }
 
+    func testTEVID03MismatchedAmbiguousAndOutOfRangeEvidenceFailsClosed() async throws {
+        // T-EVID-01 expected RED: evidence decoding ignores quote/span fields,
+        // so conflicting offsets, an absent quote, an ambiguous repeated quote,
+        // and an out-of-range slice span all pass structural revision checks.
+        let attacks = [
+            ExactEvidenceAttack(
+                id: "wrong-offsets-173",
+                sourceText: "PREFIX-173-NONDEFAULT | UNIQUE-QUOTE-173-NONDEFAULT",
+                value: "UNIQUE-QUOTE-173-NONDEFAULT",
+                evidence: .init(
+                    quote: "UNIQUE-QUOTE-173-NONDEFAULT",
+                    charStart: 0,
+                    charEnd: 1
+                )
+            ),
+            ExactEvidenceAttack(
+                id: "mismatched-quote-311",
+                sourceText: "MISMATCH-SOURCE-311-NONDEFAULT",
+                value: "MISMATCH-SOURCE-311-NONDEFAULT",
+                evidence: .init(quote: "ABSENT-QUOTE-311-NONDEFAULT")
+            ),
+            ExactEvidenceAttack(
+                id: "ambiguous-quote-577",
+                sourceText: "REPEATED-QUOTE-577-NONDEFAULT | REPEATED-QUOTE-577-NONDEFAULT",
+                value: "REPEATED-QUOTE-577-NONDEFAULT",
+                evidence: .init(quote: "REPEATED-QUOTE-577-NONDEFAULT")
+            ),
+            ExactEvidenceAttack(
+                id: "out-of-range-span-839",
+                sourceText: "OUT-OF-RANGE-SPAN-839-NONDEFAULT",
+                value: "OUT-OF-RANGE-SPAN-839-NONDEFAULT",
+                evidence: .init(quote: nil, charStart: 71, charEnd: 79)
+            ),
+        ]
+
+        for attack in attacks {
+            let store = try makeStore()
+            let matter = try store.matters.createMatter(name: "Synthetic rejected evidence \(attack.id)")
+            _ = try insertDocument(
+                store: store,
+                matterID: matter.id,
+                name: "\(attack.id).txt",
+                partTexts: [attack.sourceText]
+            )
+            let result = try await ExhaustiveListTask(store: store).run(
+                request: ExhaustiveListRequest(
+                    runKey: "\(attack.id)-run",
+                    matterID: matter.id,
+                    title: "Rejected exact evidence \(attack.id)",
+                    query: "Extract only values supported by unambiguous exact evidence.",
+                    characterBudget: 2_117,
+                    modelLineageJSON: Self.modelLineageJSON
+                )
+            ) { input in
+                try Self.quotedResponse(
+                    input,
+                    items: [SyntheticQuotedItem(
+                        itemKey: attack.id,
+                        value: attack.value,
+                        evidence: [attack.evidence]
+                    )]
+                )
+            }
+
+            XCTAssertEqual(result.coverage.partitionCount, 1, attack.id)
+            XCTAssertEqual(result.coverage.failedPartitionCount, 1, attack.id)
+            XCTAssertEqual(result.coverage.succeededPartitionCount, 0, attack.id)
+            XCTAssertTrue(result.items.isEmpty, attack.id)
+            XCTAssertEqual(
+                result.version.verificationStatus,
+                OutputVerificationStatus.needsReview.rawValue,
+                attack.id
+            )
+            XCTAssertNotEqual(
+                result.version.verificationStatus,
+                OutputVerificationStatus.allSupported.rawValue,
+                attack.id
+            )
+            let output = try XCTUnwrap(
+                store.structuredOutputs.fetchOutputs(matterID: matter.id).first,
+                attack.id
+            )
+            XCTAssertEqual(output.status, StructuredOutputStatus.needsReview.rawValue, attack.id)
+            let partition = try XCTUnwrap(result.partitions.first, attack.id)
+            XCTAssertFalse(partition.errorSummary?.isEmpty ?? true, attack.id)
+        }
+    }
+
+    func testTEVID04PrimaryAndContraryEvidenceMustComeFromThePresentedSlice() async throws {
+        // T-EVID-01 expected RED: revision-level validation may resolve a valid
+        // quote anywhere in the frozen revision, even when that span was not in
+        // the mapper's exact slice. The same boundary must cover contrary_evidence.
+        let headQuote = "HEAD-SHOWN-QUOTE-137-NONDEFAULT"
+        let tailQuote = "TAIL-UNSHOWN-QUOTE-941-NONDEFAULT"
+        let revisionText = headQuote
+            + String(repeating: "X", count: 3_119)
+            + "👩🏽‍⚖️|e\u{301}|"
+            + String(repeating: "Y", count: 3_127)
+            + tailQuote
+        for path in [UnshownEvidencePath.primary, .contrary] {
+            let store = try makeStore()
+            let matter = try store.matters.createMatter(
+                name: "Synthetic unshown \(path.rawValue) rejection"
+            )
+            _ = try insertDocument(
+                store: store,
+                matterID: matter.id,
+                name: "unshown-tail-\(path.rawValue)-evidence.txt",
+                partTexts: [revisionText]
+            )
+            let inputProbe = ListPartitionProbe()
+
+            let result = try await ExhaustiveListTask(store: store).run(
+                request: ExhaustiveListRequest(
+                    runKey: "unshown-\(path.rawValue)-evidence-run",
+                    matterID: matter.id,
+                    title: "Presented-slice \(path.rawValue) evidence boundary",
+                    query: "Extract only values whose exact evidence was shown in this partition.",
+                    characterBudget: 521,
+                    modelLineageJSON: Self.modelLineageJSON
+                )
+            ) { input in
+                await inputProbe.record(input)
+                let presentedText = input.partition.sources.map(\.text).joined()
+                guard presentedText.contains(headQuote) else {
+                    return try Self.quotedResponse(input, items: [])
+                }
+                let item: SyntheticQuotedItem = switch path {
+                case .primary:
+                    SyntheticQuotedItem(
+                        itemKey: "unshown-primary-941",
+                        value: tailQuote,
+                        evidence: [.init(quote: tailQuote)]
+                    )
+                case .contrary:
+                    SyntheticQuotedItem(
+                        itemKey: "unshown-contrary-941",
+                        value: headQuote,
+                        evidence: [.init(quote: headQuote)],
+                        contraryEvidence: [.init(quote: tailQuote)]
+                    )
+                }
+                return try Self.quotedResponse(input, items: [item])
+            }
+
+            let recordedInputs = await inputProbe.inputs
+            let attackedInputs = recordedInputs.filter {
+                $0.partition.sources.contains { $0.text.contains(headQuote) }
+            }
+            XCTAssertEqual(attackedInputs.count, 1, path.rawValue)
+            let attackedText = try XCTUnwrap(
+                attackedInputs.first,
+                path.rawValue
+            ).partition.sources.map(\.text).joined()
+            XCTAssertFalse(
+                attackedText.contains(tailQuote),
+                "\(path.rawValue): the cited revision span must not have been shown to this mapper"
+            )
+            XCTAssertEqual(result.coverage.failedPartitionCount, 1, path.rawValue)
+            XCTAssertTrue(result.items.isEmpty, path.rawValue)
+            XCTAssertEqual(
+                result.version.verificationStatus,
+                OutputVerificationStatus.needsReview.rawValue,
+                path.rawValue
+            )
+            let persistedSources = try store.documentSources.fetchSources(
+                structuredOutputVersionID: result.version.id
+            )
+            XCTAssertFalse(
+                persistedSources.contains { $0.excerpt.contains(tailQuote) },
+                path.rawValue
+            )
+        }
+    }
+
     func testTCORP04WholeMatterMembershipAndEligibilityDriftUsesFrozenLineageAndMarksStale() async throws {
         // T-CORP-04 expected RED: staleness compares revision IDs only for frozen
         // eligible members; an added whole-matter source and eligibility change are
@@ -148,7 +403,6 @@ final class ExhaustiveListTaskTests: XCTestCase {
             name: "frozen-scope-original.txt",
             partTexts: ["FROZEN-SCOPE-VALUE-613-NONDEFAULT"]
         )
-        let frozenLineageHash = try Self.wholeMatterLineageHash(store: store, matterID: matter.id)
         let mutation = ListScopeDriftProbe()
 
         let result = try await ExhaustiveListTask(store: store).run(
@@ -175,13 +429,14 @@ final class ExhaustiveListTaskTests: XCTestCase {
                     status: .needsReview
                 )
             }
-            return try Self.response(input, items: [
-                .init(
-                    itemKey: "frozen-scope-value-613",
-                    value: "FROZEN-SCOPE-VALUE-613-NONDEFAULT",
-                    evidence: [.primary]
-                ),
-            ])
+            return try Self.quotedResponse(
+                input,
+                itemKey: "frozen-scope-value-613",
+                value: "FROZEN-SCOPE-VALUE-613-NONDEFAULT",
+                quote: "FROZEN-SCOPE-VALUE-613-NONDEFAULT",
+                charStart: nil,
+                charEnd: nil
+            )
         }
 
         let capturedAddedDocumentID = await mutation.addedDocumentID
@@ -193,6 +448,25 @@ final class ExhaustiveListTaskTests: XCTestCase {
         XCTAssertEqual(snapshot.members.compactMap(\.documentID), [original.documentID])
         XCTAssertFalse(snapshot.members.compactMap(\.documentID).contains(addedDocumentID))
         XCTAssertEqual(snapshot.members.first?.disposition, .eligible)
+        let frozenSlices = try store.corpusAnalysis.fetchSlices(
+            matterID: matter.id,
+            runID: result.run.id
+        ).map {
+            FrozenSliceLineageProbe(
+                memberKey: $0.memberKey,
+                documentID: $0.documentID,
+                partIndex: $0.partIndex,
+                revisionID: $0.revisionID,
+                charStart: $0.charStart,
+                charEnd: $0.charEnd,
+                revisionCharCount: $0.revisionCharCount,
+                textSHA256: $0.textSHA256
+            )
+        }
+        let frozenLineageHash = try Self.frozenCorpusLineageHash(
+            snapshot: snapshot,
+            slices: frozenSlices
+        )
 
         XCTAssertEqual(result.run.assuranceState, OutputAssuranceState.stale.rawValue)
         let reasonsJSON = try XCTUnwrap(result.run.assuranceReasonsJSON)
@@ -204,13 +478,22 @@ final class ExhaustiveListTaskTests: XCTestCase {
             structuredOutputVersionID: result.version.id
         ))
         let persistedLineageHash = try XCTUnwrap(sourceSet.corpusSnapshotHash)
-        let mutatedLiveLineageHash = try Self.wholeMatterLineageHash(store: store, matterID: matter.id)
-        XCTAssertNotEqual(frozenLineageHash, mutatedLiveLineageHash, "the mutation must change the live-scope hash")
         XCTAssertEqual(persistedLineageHash, frozenLineageHash)
+        var revisionChangedSnapshot = snapshot
+        let changedRevisionID = "revision-id-drift-997-nondefault"
+        revisionChangedSnapshot.members[0].revisionIDs = [changedRevisionID]
+        let revisionChangedSlices = frozenSlices.map { slice in
+            var changed = slice
+            changed.revisionID = changedRevisionID
+            return changed
+        }
         XCTAssertNotEqual(
-            persistedLineageHash,
-            mutatedLiveLineageHash,
-            "frozen-run lineage must not be silently replaced by current whole-matter membership"
+            try Self.frozenCorpusLineageHash(
+                snapshot: revisionChangedSnapshot,
+                slices: revisionChangedSlices
+            ),
+            frozenLineageHash,
+            "revision identity must remain content-significant even when every range and text hash is unchanged"
         )
 
         let outputSources = try store.documentSources.fetchSources(
@@ -226,8 +509,9 @@ final class ExhaustiveListTaskTests: XCTestCase {
 
     func testTCORP05ChangedSemanticRequestCannotReuseRunKeyOrAttachedOutput() async throws {
         // T-CORP-05 expected RED: run-key collision checks omit the exhaustive-list
-        // query/task request digest, so a changed semantic request silently returns
-        // the first run's already-attached output without invoking the generator.
+        // query/task request digest and the run record has no v2 request identity.
+        // An exact retry must remain idempotent, while a query-only mutation fails
+        // before returning or replacing the first attached output.
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "Synthetic request digest collision")
         let fixture = try insertDocument(
@@ -237,27 +521,87 @@ final class ExhaustiveListTaskTests: XCTestCase {
             partTexts: ["REQUEST-DIGEST-VALUE-541-NONDEFAULT"]
         )
         let runKey = "semantic-request-digest-run-key"
+        let title = "Stable presentation title"
         let firstQuery = "Extract the request-digest value 541."
         let changedQuery = "Extract a materially different termination-date field 977."
+        let firstRequest = ExhaustiveListRequest(
+            runKey: runKey,
+            matterID: matter.id,
+            title: title,
+            query: firstQuery,
+            characterBudget: 1_577,
+            maximumRetryCount: 3,
+            modelLineageJSON: Self.modelLineageJSON
+        )
         let first = try await ExhaustiveListTask(store: store).run(
-            request: ExhaustiveListRequest(
-                runKey: runKey,
-                matterID: matter.id,
-                title: "First semantic request",
-                query: firstQuery,
-                characterBudget: 1_577,
-                modelLineageJSON: Self.modelLineageJSON
-            )
+            request: firstRequest
         ) { input in
-            try Self.response(input, items: [
+            try Self.quotedResponse(
+                input,
+                itemKey: "request-digest-value-541",
+                value: "REQUEST-DIGEST-VALUE-541-NONDEFAULT",
+                quote: "REQUEST-DIGEST-VALUE-541-NONDEFAULT",
+                charStart: nil,
+                charEnd: nil
+            )
+        }
+        let beforeRun = try XCTUnwrap(store.corpusAnalysis.fetchRun(matterID: matter.id, id: first.run.id))
+        let frozenSnapshot = try JSONDecoder().decode(
+            CorpusAnalysisSnapshot.self,
+            from: Data(beforeRun.corpusSnapshotJSON.utf8)
+        )
+        let frozenSlices = try store.corpusAnalysis.fetchSlices(
+            matterID: matter.id,
+            runID: first.run.id
+        ).map {
+            FrozenSliceLineageProbe(
+                memberKey: $0.memberKey,
+                documentID: $0.documentID,
+                partIndex: $0.partIndex,
+                revisionID: $0.revisionID,
+                charStart: $0.charStart,
+                charEnd: $0.charEnd,
+                revisionCharCount: $0.revisionCharCount,
+                textSHA256: $0.textSHA256
+            )
+        }
+        let expectedRequestDigest = try Self.exhaustiveRequestDigest(
+            matterID: matter.id,
+            query: firstQuery,
+            scope: firstRequest.scope,
+            snapshot: frozenSnapshot,
+            slices: frozenSlices,
+            characterBudget: firstRequest.characterBudget,
+            maximumRetryCount: firstRequest.maximumRetryCount,
+            modelArtifact: Self.modelArtifact
+        )
+        XCTAssertEqual(beforeRun.requestSchemaVersion, 2)
+        XCTAssertEqual(beforeRun.requestDigest, expectedRequestDigest)
+        XCTAssertEqual(expectedRequestDigest.count, 64)
+        XCTAssertEqual(expectedRequestDigest, expectedRequestDigest.lowercased())
+
+        let exactRetryProbe = ListGeneratorProbe()
+        let exactRetry = try await ExhaustiveListTask(store: store).run(
+            request: firstRequest
+        ) { input in
+            await exactRetryProbe.recordCall()
+            return try Self.response(input, items: [
                 .init(
-                    itemKey: "request-digest-value-541",
-                    value: "REQUEST-DIGEST-VALUE-541-NONDEFAULT",
+                    itemKey: "foreign-idempotency-value-883",
+                    value: "FOREIGN-IDEMPOTENCY-VALUE-883-MUST-NOT-PERSIST",
                     evidence: [.primary]
                 ),
             ])
         }
-        let beforeRun = try XCTUnwrap(store.corpusAnalysis.fetchRun(matterID: matter.id, id: first.run.id))
+        let exactRetryCallCount = await exactRetryProbe.callCount
+        XCTAssertEqual(exactRetryCallCount, 0)
+        XCTAssertEqual(exactRetry.run.id, first.run.id)
+        XCTAssertEqual(exactRetry.version.id, first.version.id)
+        XCTAssertEqual(exactRetry.outputID, first.outputID)
+        XCTAssertFalse(
+            exactRetry.items.flatMap(\.values).contains("FOREIGN-IDEMPOTENCY-VALUE-883-MUST-NOT-PERSIST")
+        )
+
         let changedGeneratorProbe = ListGeneratorProbe()
         var secondResult: ExhaustiveListResult?
         var collisionError: CorpusAnalysisEngineError?
@@ -268,9 +612,10 @@ final class ExhaustiveListTaskTests: XCTestCase {
                 request: ExhaustiveListRequest(
                     runKey: runKey,
                     matterID: matter.id,
-                    title: "Changed semantic request",
+                    title: title,
                     query: changedQuery,
                     characterBudget: 1_577,
+                    maximumRetryCount: 3,
                     modelLineageJSON: Self.modelLineageJSON
                 )
             ) { input in
@@ -298,6 +643,38 @@ final class ExhaustiveListTaskTests: XCTestCase {
         XCTAssertEqual(afterRun.structuredOutputVersionID, first.version.id)
         XCTAssertEqual(afterRun.corpusSnapshotJSON, beforeRun.corpusSnapshotJSON)
         XCTAssertEqual(afterRun.reconciliationJSON, beforeRun.reconciliationJSON)
+        XCTAssertEqual(afterRun.requestSchemaVersion, 2)
+        XCTAssertEqual(afterRun.requestDigest, expectedRequestDigest)
+        XCTAssertNotEqual(
+            try Self.exhaustiveRequestDigest(
+                matterID: matter.id,
+                query: changedQuery,
+                scope: firstRequest.scope,
+                snapshot: frozenSnapshot,
+                slices: frozenSlices,
+                characterBudget: firstRequest.characterBudget,
+                maximumRetryCount: firstRequest.maximumRetryCount,
+                modelArtifact: Self.modelArtifact
+            ),
+            expectedRequestDigest,
+            "the query-only mutation must change the independently computed request identity"
+        )
+        var otherArtifact = Self.modelArtifact
+        otherArtifact.artifactFingerprintSHA256 = String(repeating: "8", count: 64)
+        XCTAssertNotEqual(
+            try Self.exhaustiveRequestDigest(
+                matterID: matter.id,
+                query: firstQuery,
+                scope: firstRequest.scope,
+                snapshot: frozenSnapshot,
+                slices: frozenSlices,
+                characterBudget: firstRequest.characterBudget,
+                maximumRetryCount: firstRequest.maximumRetryCount,
+                modelArtifact: otherArtifact
+            ),
+            expectedRequestDigest,
+            "repository and revision alone must not collapse distinct model artifacts"
+        )
         let outputs = try store.structuredOutputs.fetchOutputs(matterID: matter.id)
         let versions = try store.structuredOutputs.fetchVersions(structuredOutputID: first.outputID)
         XCTAssertEqual(outputs.count, 1)
@@ -757,28 +1134,73 @@ final class ExhaustiveListTaskTests: XCTestCase {
         )
     }
 
-    private static func wholeMatterLineageHash(
-        store: SupraStore,
-        matterID: String
+    private static func frozenCorpusLineageHash(
+        snapshot: CorpusAnalysisSnapshot,
+        slices: [FrozenSliceLineageProbe]
     ) throws -> String {
-        let report = DocumentSourceLineageBuilder.report(summary: nil, candidates: [])
-        return try DocumentSourceLineageBuilder.make(
-            store: store,
+        let canonicalSnapshot = CorpusAnalysisSnapshot(
+            schemaVersion: snapshot.schemaVersion,
+            members: snapshot.members.sorted { $0.memberKey < $1.memberKey }
+        )
+        let envelope = FrozenCorpusLineageEnvelope(
+            snapshot: canonicalSnapshot,
+            slices: slices.sorted(by: FrozenSliceLineageProbe.lessThan)
+        )
+        return sha256(try canonicalData(envelope))
+    }
+
+    private static func exhaustiveRequestDigest(
+        matterID: String,
+        query: String,
+        scope: CorpusAnalysisScope,
+        snapshot: CorpusAnalysisSnapshot,
+        slices: [FrozenSliceLineageProbe],
+        characterBudget: Int,
+        maximumRetryCount: Int,
+        modelArtifact: FrozenModelArtifactProbe
+    ) throws -> String {
+        let canonicalSnapshot = CorpusAnalysisSnapshot(
+            schemaVersion: snapshot.schemaVersion,
+            members: snapshot.members.sorted { $0.memberKey < $1.memberKey }
+        )
+        let envelope = FrozenExhaustiveRequestEnvelope(
             matterID: matterID,
-            scope: .wholeMatter,
-            configuration: DocumentRetrievalConfiguration(
-                schemaVersion: 1,
-                mode: DocumentSourceSetMode.exhaustive.rawValue,
-                depth: nil,
-                candidateLimit: 37,
-                packedLimit: 19,
-                maxPerDocument: nil,
-                semanticFloor: nil,
-                rrfK: nil,
-                characterBudget: 1_919
+            normalizedQuery: query.split(whereSeparator: \.isWhitespace).joined(separator: " "),
+            scope: FrozenScopeProbe(
+                schemaVersion: scope.schemaVersion,
+                mode: scope.documentIDs == nil ? "whole_matter" : "selected_documents",
+                documentIDs: scope.documentIDs?.sorted()
             ),
-            packingReport: report
-        ).corpusSnapshotHash
+            snapshot: canonicalSnapshot,
+            slices: slices.sorted(by: FrozenSliceLineageProbe.lessThan),
+            characterBudget: characterBudget,
+            maximumRetryCount: maximumRetryCount,
+            modelArtifact: modelArtifact
+        )
+        return sha256(try canonicalData(envelope))
+    }
+
+    private static func canonicalData<T: Encodable>(_ value: T) throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        return try encoder.encode(value)
+    }
+
+    private static func sha256(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func substring(_ value: String, from start: Int, to end: Int) -> String {
+        let lower = value.index(value.startIndex, offsetBy: start)
+        let upper = value.index(value.startIndex, offsetBy: end)
+        return String(value[lower..<upper])
+    }
+
+    private static func characterRange(of quote: String, in value: String) -> Range<Int>? {
+        guard let range = value.range(of: quote) else { return nil }
+        let lower = value.distance(from: value.startIndex, to: range.lowerBound)
+        let upper = value.distance(from: value.startIndex, to: range.upperBound)
+        return lower..<upper
     }
 
     private static func response(
@@ -808,25 +1230,47 @@ final class ExhaustiveListTaskTests: XCTestCase {
         _ input: ExhaustiveListGenerationInput,
         itemKey: String,
         value: String,
-        quote: String,
-        charStart: Int,
-        charEnd: Int
+        quote: String?,
+        charStart: Int?,
+        charEnd: Int?
     ) throws -> String {
-        let source = try XCTUnwrap(input.partition.sources.first)
-        let payload = SyntheticQuotedListResponse(items: [
-            SyntheticQuotedListMapItem(
+        try quotedResponse(
+            input,
+            items: [SyntheticQuotedItem(
                 itemKey: itemKey,
                 value: value,
-                evidence: [SyntheticQuotedEvidenceReference(
-                    documentID: source.documentID,
-                    revisionID: source.revisionID,
-                    locatorJSON: source.locatorJSON,
+                evidence: [.init(
                     quote: quote,
                     charStart: charStart,
                     charEnd: charEnd
                 )]
-            ),
-        ])
+            )]
+        )
+    }
+
+    private static func quotedResponse(
+        _ input: ExhaustiveListGenerationInput,
+        items: [SyntheticQuotedItem]
+    ) throws -> String {
+        let source = try XCTUnwrap(input.partition.sources.first)
+        let reference: (SyntheticQuotedEvidenceSpec) -> SyntheticQuotedEvidenceReference = { spec in
+            SyntheticQuotedEvidenceReference(
+                documentID: source.documentID,
+                revisionID: source.revisionID,
+                locatorJSON: source.locatorJSON,
+                quote: spec.quote,
+                charStart: spec.charStart,
+                charEnd: spec.charEnd
+            )
+        }
+        let payload = SyntheticQuotedListResponse(items: items.map { item in
+            SyntheticQuotedListMapItem(
+                itemKey: item.itemKey,
+                value: item.value,
+                evidence: item.evidence.map(reference),
+                contraryEvidence: item.contraryEvidence.map(reference)
+            )
+        })
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         return String(decoding: try encoder.encode(payload), as: UTF8.self)
@@ -919,6 +1363,14 @@ private actor ListGeneratorProbe {
     }
 }
 
+private actor ListPartitionProbe {
+    private(set) var inputs: [ExhaustiveListGenerationInput] = []
+
+    func record(_ input: ExhaustiveListGenerationInput) {
+        inputs.append(input)
+    }
+}
+
 private struct ListFixtureDocument {
     var documentID: String
     var revisionIDs: [String]
@@ -987,9 +1439,9 @@ private struct SyntheticQuotedEvidenceReference: Encodable {
     var documentID: String
     var revisionID: String
     var locatorJSON: String
-    var quote: String
-    var charStart: Int
-    var charEnd: Int
+    var quote: String?
+    var charStart: Int?
+    var charEnd: Int?
 
     private enum CodingKeys: String, CodingKey {
         case documentID = "document_id"
@@ -998,5 +1450,132 @@ private struct SyntheticQuotedEvidenceReference: Encodable {
         case quote
         case charStart = "char_start"
         case charEnd = "char_end"
+    }
+}
+
+private struct SyntheticQuotedEvidenceSpec: Sendable {
+    var quote: String?
+    var charStart: Int? = nil
+    var charEnd: Int? = nil
+}
+
+private struct SyntheticQuotedItem: Sendable {
+    var itemKey: String
+    var value: String
+    var evidence: [SyntheticQuotedEvidenceSpec]
+    var contraryEvidence: [SyntheticQuotedEvidenceSpec] = []
+}
+
+private struct ExactEvidenceAttack: Sendable {
+    var id: String
+    var sourceText: String
+    var value: String
+    var evidence: SyntheticQuotedEvidenceSpec
+}
+
+private enum UnshownEvidencePath: String, Sendable {
+    case primary
+    case contrary
+}
+
+private struct FrozenModelArtifactProbe: Codable, Sendable {
+    var repository: String
+    var revision: String
+    var contentBindingAlgorithm: String
+    var contentBindingSchemaVersion: Int
+    var artifactFingerprintSHA256: String
+
+    private enum CodingKeys: String, CodingKey {
+        case repository = "model_repository"
+        case revision = "model_revision"
+        case contentBindingAlgorithm = "content_binding_algorithm"
+        case contentBindingSchemaVersion = "content_binding_schema_version"
+        case artifactFingerprintSHA256 = "artifact_fingerprint_sha256"
+    }
+}
+
+private struct FrozenScopeProbe: Codable, Sendable {
+    var schemaVersion: Int
+    var mode: String
+    var documentIDs: [String]?
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case mode
+        case documentIDs = "document_ids"
+    }
+}
+
+private struct FrozenSliceLineageProbe: Codable, Sendable {
+    var memberKey: String
+    var documentID: String
+    var partIndex: Int
+    var revisionID: String
+    var charStart: Int
+    var charEnd: Int
+    var revisionCharCount: Int
+    var textSHA256: String
+
+    static func lessThan(_ lhs: Self, _ rhs: Self) -> Bool {
+        if lhs.memberKey != rhs.memberKey { return lhs.memberKey < rhs.memberKey }
+        if lhs.documentID != rhs.documentID { return lhs.documentID < rhs.documentID }
+        if lhs.partIndex != rhs.partIndex { return lhs.partIndex < rhs.partIndex }
+        if lhs.revisionID != rhs.revisionID { return lhs.revisionID < rhs.revisionID }
+        if lhs.charStart != rhs.charStart { return lhs.charStart < rhs.charStart }
+        if lhs.charEnd != rhs.charEnd { return lhs.charEnd < rhs.charEnd }
+        return lhs.textSHA256 < rhs.textSHA256
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case memberKey = "member_key"
+        case documentID = "document_id"
+        case partIndex = "part_index"
+        case revisionID = "revision_id"
+        case charStart = "char_start"
+        case charEnd = "char_end"
+        case revisionCharCount = "revision_char_count"
+        case textSHA256 = "text_sha256"
+    }
+}
+
+private struct FrozenCorpusLineageEnvelope: Codable, Sendable {
+    var schemaVersion = 2
+    var snapshot: CorpusAnalysisSnapshot
+    var slices: [FrozenSliceLineageProbe]
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case snapshot
+        case slices
+    }
+}
+
+private struct FrozenExhaustiveRequestEnvelope: Codable, Sendable {
+    var schemaVersion = 2
+    var taskKind = CorpusAnalysisTaskKind.exhaustiveList.rawValue
+    var taskSchemaVersion = ExhaustiveListTask.schemaVersion
+    var promptBuilderVersion = ExhaustiveListTask.promptBuilderVersion
+    var matterID: String
+    var normalizedQuery: String
+    var scope: FrozenScopeProbe
+    var snapshot: CorpusAnalysisSnapshot
+    var slices: [FrozenSliceLineageProbe]
+    var characterBudget: Int
+    var maximumRetryCount: Int
+    var modelArtifact: FrozenModelArtifactProbe
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case taskKind = "task_kind"
+        case taskSchemaVersion = "task_schema_version"
+        case promptBuilderVersion = "prompt_builder_version"
+        case matterID = "matter_id"
+        case normalizedQuery = "normalized_query"
+        case scope
+        case snapshot
+        case slices
+        case characterBudget = "character_budget"
+        case maximumRetryCount = "maximum_retry_count"
+        case modelArtifact = "model_artifact"
     }
 }
