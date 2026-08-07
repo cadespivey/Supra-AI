@@ -202,6 +202,112 @@ final class DocumentChronologyTests: XCTestCase {
         XCTAssertEqual(Set(allSources.map(\.documentID)).count, 2)
     }
 
+    func testChronologyPersistsRevisionBoundBoundingBoxesInSourceLocator() async throws {
+        // Expected RED: chronology harvest copies the chunk's ordinary locator
+        // fields but drops its non-default OCR bounding-box payload, so the
+        // attached revision-bound source locator decodes with the default nil.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic OCR chronology locator")
+        let documentName = "ocr-hearing-timeline.txt"
+        let sourceText = "The evidentiary hearing occurred on August 17, 2025."
+        let expectedBoundingBoxesJSON =
+            #"{"schema_version":97,"boxes":[{"x":0.137,"y":0.211,"width":0.307,"height":0.419}]}"#
+        let blob = try store.documentLibrary.upsertBlob(DocumentBlobRecord(
+            sha256: "revision-bound-\(documentName)",
+            byteSize: sourceText.utf8.count,
+            originalExtension: "pdf",
+            managedRelativePath: "blobs/\(documentName)"
+        )).blob
+        let document = try store.documentLibrary.insertDocument(MatterDocumentRecord(
+            matterID: matter.id,
+            blobID: blob.id,
+            displayName: documentName,
+            status: MatterDocumentStatus.indexing.rawValue,
+            extractionStatus: DocumentExtractionStatus.extracted.rawValue,
+            extractionMethod: "synthetic@toolchain:ocr"
+        ))
+        let part = DocumentPagePartRecord(
+            documentID: document.id,
+            partIndex: 0,
+            sourceKind: DocumentSourceKind.pdfPage.rawValue,
+            pageIndex: 0,
+            pageLabel: "1",
+            normalizedText: sourceText,
+            charCount: sourceText.count,
+            ocrConfidence: 0.973,
+            boundingBoxesJSON: expectedBoundingBoxesJSON
+        )
+        let revision = DocumentPartRevisionRecord(
+            documentID: document.id,
+            partIndex: 0,
+            derivationKey: "chronology-ocr:\(documentName)",
+            origin: "ocr",
+            method: "synthetic-vision-ocr",
+            text: sourceText,
+            charCount: sourceText.count,
+            ocrConfidence: 0.973,
+            boundingBoxesJSON: expectedBoundingBoxesJSON
+        )
+        let selection = DocumentPartSelectionRecord(
+            documentID: document.id,
+            partIndex: 0,
+            selectedRevisionID: revision.id,
+            selectionKey: "chronology-ocr:\(documentName)",
+            selectedBy: "policy",
+            policyVersion: 97,
+            decisionJSON: #"{"rule":"synthetic_ocr_chronology_fixture"}"#
+        )
+        _ = try store.documentRevisions.replacePartsAndPersistLineage(
+            documentID: document.id,
+            parts: [part],
+            revisions: [revision],
+            selections: [selection]
+        )
+        _ = try await DocumentIndexingService(store: store, embedder: nil)
+            .indexDocument(documentID: document.id)
+        let chunk = try XCTUnwrap(store.documentIndex.fetchChunks(documentID: document.id).first)
+        XCTAssertEqual(chunk.revisionID, revision.id)
+        XCTAssertEqual(chunk.boundingBoxesJSON, expectedBoundingBoxesJSON)
+
+        let runtime = StubRuntimeClient(outcome: { request in
+            .events([
+                .event(
+                    request,
+                    0,
+                    .token,
+                    token: "| Date | Event | Source |\n| 2025-08-17 | Evidentiary hearing occurred [S1] | [S1] |"
+                ),
+                .event(request, 1, .generationCompleted),
+            ])
+        })
+        let chronology = DocumentChronologyController(
+            matterID: matter.id,
+            store: store,
+            runtimeClient: runtime
+        )
+
+        let result = try XCTUnwrapAsync(await chronology.generate(
+            scope: .wholeMatter,
+            format: .table,
+            modelID: ModelID(),
+            modelLineage: Self.syntheticModelLineage
+        ))
+        let source = try XCTUnwrap(
+            store.documentSources.fetchSources(structuredOutputVersionID: result.versionID)
+                .first { $0.chunkID == chunk.id }
+        )
+        XCTAssertEqual(source.revisionID, revision.id)
+        let locator = try JSONDecoder().decode(
+            DocumentSourceLocator.self,
+            from: Data(source.locatorJSON.utf8)
+        )
+        XCTAssertNotNil(
+            locator.boundingBoxesJSON,
+            "the persisted locator must not fall back to the default nil bounding-box payload"
+        )
+        XCTAssertEqual(locator.boundingBoxesJSON, expectedBoundingBoxesJSON)
+    }
+
     func testRegenerateCreatesNewVersionWithFreshSourceSet() async throws {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "Acme")
