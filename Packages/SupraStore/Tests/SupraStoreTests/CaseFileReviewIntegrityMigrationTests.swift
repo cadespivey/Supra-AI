@@ -2708,6 +2708,74 @@ final class CaseFileReviewIntegrityMigrationTests: XCTestCase {
         }
     }
 
+    func testTSTORE01V072RejectsWeakActiveVersionAssuranceLaundering() throws {
+        // T-STORE-01 active-projection audit expected RED: selecting an unlinked
+        // weak version is legitimate review behavior, but promoting that active
+        // row to an export-eligible assurance state must re-run the exact-proof
+        // check instead of bypassing the active-version trigger.
+        let queue = try DatabaseQueue()
+        try SupraMigrator.makeMigrator().migrate(queue)
+        let matter = try MattersRepository(writer: queue).createMatter(
+            name: "Synthetic active assurance laundering 2347"
+        )
+        let linked = try createLinkedExactOutputFixture(
+            queue: queue,
+            matterID: matter.id,
+            marker: "active-assurance-owner-2347",
+            digestDigit: "8",
+            partIndex: 311
+        )
+        let outputs = StructuredOutputRepository(writer: queue)
+        let weakVersion = try outputs.createVersion(
+            structuredOutputID: linked.output.id,
+            contentMarkdown: "# WEAK-ACTIVE-2347\n\nReview-only candidate [S97].",
+            requiredSections: ["WEAK-ACTIVE-2347"],
+            presentSections: ["WEAK-ACTIVE-2347"],
+            missingSections: [],
+            verificationStatus: .legacyUnverified,
+            verificationVersion: "",
+            verificationResults: [],
+            assuranceState: .supportNeedsReview,
+            makeActive: false
+        )
+
+        XCTAssertNoThrow(
+            try queue.write { db in
+                try db.execute(
+                    sql: "UPDATE structured_outputs SET active_version_id = ? WHERE id = ?",
+                    arguments: [weakVersion.id, linked.output.id]
+                )
+            },
+            "a weak active review candidate remains legal"
+        )
+        XCTAssertThrowsError(
+            try queue.write { db in
+                try db.execute(
+                    sql: "UPDATE structured_output_versions SET assurance_state = 'corpus_complete' WHERE id = ?",
+                    arguments: [weakVersion.id]
+                )
+            },
+            "an active unlinked version cannot gain export assurance in place"
+        )
+        try queue.read { db in
+            let output = try XCTUnwrap(
+                StructuredOutputRecord.fetchOne(db, key: linked.output.id)
+            )
+            let retained = try XCTUnwrap(
+                StructuredOutputVersionRecord.fetchOne(db, key: weakVersion.id)
+            )
+            XCTAssertEqual(output.activeVersionID, weakVersion.id)
+            XCTAssertEqual(
+                retained.assuranceState,
+                OutputAssuranceState.supportNeedsReview.rawValue
+            )
+            XCTAssertNotEqual(
+                retained.assuranceState,
+                OutputAssuranceState.corpusComplete.rawValue
+            )
+        }
+    }
+
     func testTSTORE01V072KeepsPermanentMatterDeletionCascading() throws {
         // T-STORE-01 compatibility control: link immutability must not turn a
         // permanent matter deletion into an undeletable graph.
