@@ -3,6 +3,71 @@ import SupraCore
 @testable import SupraStore
 import XCTest
 final class AtomicSourcePublicationIntegrityTests: XCTestCase {
+    func testTSTORE04AtomicPublisherRejectsNewLiveOutputForSoftDeletedMatter() throws {
+        // T-STORE-04 expected RED: the atomic publisher checks the proposed
+        // output but never requires its parent matter to remain live, so a write
+        // after the delete cascade creates a new non-deleted output and version.
+        let store = try SupraStore.inMemory()
+        let matter = try store.matters.createMatter(
+            name: "Synthetic deleted publication matter 41",
+            jurisdiction: "Nevada",
+            partyPerspective: .defendant
+        )
+        try store.matters.softDeleteMatter(id: matter.id)
+        XCTAssertNil(
+            try store.matters.fetchMatter(id: matter.id),
+            "the publication attempt must occur after the parent matter is soft-deleted"
+        )
+
+        let outputID = "t-store-04-deleted-matter-output-41"
+        let sourceSetID = "t-store-04-deleted-matter-source-set-41"
+        let newOutput = StructuredOutputRecord(
+            id: outputID,
+            matterID: matter.id,
+            title: "Synthetic late publication 41",
+            outputType: StructuredOutputType.documentQA.rawValue,
+            status: StructuredOutputStatus.draft.rawValue,
+            createdAt: Date(timeIntervalSince1970: 1_790_004_041),
+            updatedAt: Date(timeIntervalSince1970: 1_790_004_041)
+        )
+        let sourceSet = DocumentSourceSetRecord(
+            id: sourceSetID,
+            matterID: matter.id,
+            status: DocumentSourceSetStatus.pending.rawValue,
+            mode: DocumentSourceSetMode.guided.rawValue,
+            scopeJSON: #"{"schema_version":41,"document_ids":[]}"#,
+            retrievalQuery: "synthetic deleted matter publication 41",
+            createdAt: Date(timeIntervalSince1970: 1_790_004_041)
+        )
+
+        XCTAssertThrowsError(
+            try store.structuredOutputs.createVersionWithSourceSetAtomically(
+                structuredOutputID: outputID,
+                newOutput: newOutput,
+                sourceSet: sourceSet,
+                outputSources: [],
+                contentMarkdown: "Synthetic publication that must not survive matter deletion.",
+                verificationStatus: .legacyUnverified,
+                verificationVersion: "",
+                verificationResults: [],
+                outputStatus: .draft
+            ),
+            "the atomic publication transaction must reject a soft-deleted parent matter"
+        )
+        XCTAssertFalse(
+            try store.structuredOutputs.fetchOutputs(matterID: matter.id).contains { $0.id == outputID },
+            "rejected publication must not create a new live structured output"
+        )
+        XCTAssertTrue(
+            try store.structuredOutputs.fetchVersions(structuredOutputID: outputID).isEmpty,
+            "rejected publication must not leave a version behind"
+        )
+        XCTAssertNil(
+            try store.documentSources.fetchSourceSet(id: sourceSetID),
+            "rejected publication must roll back its pending source set"
+        )
+    }
+
     func testTSTORE03AtomicPublisherRejectsCrossMatterDocumentLikeOrdinarySourceWrite() throws {
         // T-STORE-03 expected RED: the ordinary source path rejects this
         // cross-matter document, but the atomic publisher inserts it directly.

@@ -210,6 +210,115 @@ final class CorpusReviewQueueContractTests: XCTestCase {
         XCTAssertEqual(generationCalls, 0)
     }
 
+    func testTQUEUE01WhitespaceOnlyRawQueryMutationFailsBeforeModelResolution() async throws {
+        // T-QUEUE-01 expected RED: the runner accepts a raw query whose whitespace
+        // differs from the frozen payload because request-digest validation binds
+        // only its normalized form, so the mutated prompt reaches model resolution.
+        let store = try makeStore(testName: "TQUEUE01RawQueryWhitespace")
+        let fixture = try prepareFixture(
+            store: store,
+            caseName: "raw-query-whitespace",
+            partCount: 1
+        )
+        var mutatedRequest = try queuedRequest(from: fixture.payload)
+        let frozenQuery = mutatedRequest.query
+        mutatedRequest.query = "\n\tList   every nondefault privilege indicator\n\nand its exact source.   "
+        XCTAssertNotEqual(mutatedRequest.query, frozenQuery)
+        XCTAssertEqual(
+            CorpusAnalysisRequestDigest.normalizeQuery(mutatedRequest.query),
+            frozenQuery,
+            "the hostile raw query must preserve the previously digested normalized query"
+        )
+        var mutatedPayload = fixture.payload
+        mutatedPayload.task = .exhaustiveList(mutatedRequest)
+
+        let probe = ModelResolutionProbe(resolvedModel: Self.pinnedModel)
+        let runner = makeProductionRunner(store: store, probe: probe)
+        let queue = makeQueue(store: store) { payload in
+            try await runner.run(payload)
+        }
+        let jobID = try XCTUnwrap(queue.enqueueCorpusAnalysis(
+            matterID: fixture.matterID,
+            payload: mutatedPayload
+        ))
+        await queue.waitUntilIdle()
+
+        let job = try XCTUnwrap(store.documentJobs.fetchJob(id: jobID))
+        let resolutionCalls = await probe.resolutionCalls
+        let generationCalls = await probe.generationCalls
+        XCTAssertEqual(job.status, DocumentProcessingJobStatus.failed.rawValue)
+        XCTAssertFalse((job.errorSummary ?? "").isEmpty)
+        XCTAssertEqual(resolutionCalls, 0, "raw prompt bytes must be frozen before model resolution")
+        XCTAssertEqual(generationCalls, 0, "a mutated raw query must never reach generation")
+    }
+
+    func testTQUEUE01InjectedEmptyPartitionFailsBeforeModelResolution() async throws {
+        // T-QUEUE-01 expected RED: the old digest binds only partition-backed
+        // slices, so a hostile extra partition with no slices survives digest
+        // recomputation and reaches model resolution before the engine rejects it.
+        let store = try makeStore(testName: "TQUEUE01InjectedEmptyPartition")
+        let fixture = try prepareFixture(
+            store: store,
+            caseName: "injected-empty-partition",
+            partCount: 1
+        )
+        let originalPartitions = try store.corpusAnalysis.fetchPartitions(
+            matterID: fixture.matterID,
+            runID: fixture.payload.runID
+        )
+        let hostilePartitionID = "t-queue-01-hostile-empty-partition"
+        try await store.database.writer.write { db in
+            // Simulate hostile on-disk insertion without adding a mutation API
+            // to the shipping repository or weakening normal preparation.
+            try db.execute(
+                sql: """
+                INSERT INTO corpus_analysis_partitions (
+                    id, run_id, partition_key, input_revision_ids_json
+                ) VALUES (?, ?, ?, ?)
+                """,
+                arguments: [
+                    hostilePartitionID,
+                    fixture.payload.runID,
+                    "zz-hostile-empty-partition-nondefault",
+                    "[]",
+                ]
+            )
+        }
+        let corruptedPartitions = try store.corpusAnalysis.fetchPartitions(
+            matterID: fixture.matterID,
+            runID: fixture.payload.runID
+        )
+        let corruptedSlices = try store.corpusAnalysis.fetchSlices(
+            matterID: fixture.matterID,
+            runID: fixture.payload.runID
+        )
+        let hostilePartition = try XCTUnwrap(
+            corruptedPartitions.first { $0.id == hostilePartitionID }
+        )
+        XCTAssertEqual(corruptedPartitions.count, originalPartitions.count + 1)
+        XCTAssertEqual(hostilePartition.inputRevisionIDsJSON, "[]")
+        XCTAssertTrue(corruptedSlices.allSatisfy { $0.partitionID != hostilePartitionID })
+
+        let probe = ModelResolutionProbe(resolvedModel: Self.pinnedModel)
+        let runner = makeProductionRunner(store: store, probe: probe)
+        let queue = makeQueue(store: store) { payload in
+            try await runner.run(payload)
+        }
+        let jobID = try XCTUnwrap(queue.enqueueCorpusAnalysis(
+            matterID: fixture.matterID,
+            payload: fixture.payload
+        ))
+        await queue.waitUntilIdle()
+
+        let job = try XCTUnwrap(store.documentJobs.fetchJob(id: jobID))
+        let resolutionCalls = await probe.resolutionCalls
+        let generationCalls = await probe.generationCalls
+        XCTAssertEqual(job.status, DocumentProcessingJobStatus.failed.rawValue)
+        XCTAssertFalse((job.errorSummary ?? "").isEmpty)
+        XCTAssertEqual(resolutionCalls, 0, "partition/slice imbalance must fail before model load")
+        XCTAssertEqual(generationCalls, 0, "an empty hostile partition must never generate")
+    }
+
     func testTQUEUE03MissingAndWrongContentBoundModelsFailClosedWithoutFallback() async throws {
         // T-QUEUE-03 expected RED: no production corpus runner resolves the
         // exact content-bound artifact. A test closure can currently choose its

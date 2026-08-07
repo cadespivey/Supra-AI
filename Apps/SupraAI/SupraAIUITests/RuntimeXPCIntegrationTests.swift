@@ -33,6 +33,11 @@ final class RuntimeXPCIntegrationTests: XCTestCase {
             "samePathReplacementRejected",
             "managedRootEscapeRejected",
             "contentBindingVerified",
+            // T-QUEUE-03 expected RED: the hosted harness does not yet ask the
+            // loaded content-bound model to generate with a deliberately wrong,
+            // non-default expected SHA. The service must reject that request
+            // before publishing generationStarted or invoking the model actor.
+            "generationFingerprintMismatchRejected",
             "controlledModelLoaded",
             "streamCompletedOnce",
             "cancelExactlyOnce",

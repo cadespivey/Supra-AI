@@ -1,6 +1,7 @@
 import Foundation
 import SupraCore
 import SupraDocuments
+import SupraRuntimeClient
 import SupraRuntimeInterface
 @testable import SupraSessions
 import SupraStore
@@ -155,6 +156,131 @@ final class CorpusReviewQueueExecutionTests: XCTestCase {
         XCTAssertEqual(persistedFollowerRun.status, CorpusAnalysisRunStatus.persisted.rawValue)
     }
 
+    func testTQUEUE04LiveCancellationWaitsForConfirmedRuntimeQuiescenceBeforeReturning() async throws {
+        // T-QUEUE-04 expected RED: CorpusAnalysisQueueRunner.live starts
+        // cancelGeneration in an unowned Task and returns CancellationError
+        // without awaiting its reply. The queue can therefore advance its FIFO
+        // before the XPC model actor confirms that the old generation unwound.
+        let store = try makeStore(testName: "TQUEUE04-LIVE-QUIESCENCE")
+        let runtime = LiveQuiescenceRuntimeStub()
+        let liveModel = try installLiveContentBoundModel(store: store)
+        let fixture = try prepareFixture(
+            store: store,
+            caseName: "live-cancel-quiescence",
+            partCount: 1,
+            pinnedModel: liveModel.pinnedModel
+        )
+        let library = ModelLibrary(
+            store: store,
+            runtimeClient: runtime,
+            managedModelRoots: [liveModel.managedRoot]
+        )
+        library.refresh()
+        let runner = CorpusAnalysisQueueRunner.live(
+            store: store,
+            modelLibrary: library,
+            runtimeClient: runtime
+        )
+        let completion = LiveRunnerCompletionProbe()
+        let runnerTask = Task {
+            let outcome: LiveRunnerOutcome
+            do {
+                try await runner.run(fixture.payload)
+                outcome = .succeeded
+            } catch is CancellationError {
+                outcome = .cancelled
+            } catch {
+                outcome = .failed(error.localizedDescription)
+            }
+            await completion.record(outcome)
+            return outcome
+        }
+
+        try await waitUntilLiveGenerationStarted(runtime)
+        runnerTask.cancel()
+        try await waitUntilLiveCancellationRequested(runtime)
+        let returnedBeforeQuiescence = try await runnerReturnedWithinObservationWindow(completion)
+
+        await runtime.confirmQuiescence()
+        let outcome = await runnerTask.value
+        try await waitUntilLiveCancellationResponseReturned(runtime)
+
+        XCTAssertFalse(
+            returnedBeforeQuiescence,
+            "the live runner, and therefore its FIFO owner, must remain suspended until cancelGeneration confirms XPC quiescence"
+        )
+        XCTAssertEqual(outcome, .cancelled)
+    }
+
+    func testTQUEUE06SoftDeleteCancellationWinsActiveRunnerSuccess() async throws {
+        // T-QUEUE-06 success expected RED: softDeleteMatter changes the active row
+        // to cancelled, but runCorpusAnalysis later completes it unconditionally.
+        try await assertSoftDeleteCancellationWins(
+            outcome: .success,
+            testName: "TQUEUE06-success",
+            caseName: "deleted-active-success"
+        )
+    }
+
+    func testTQUEUE06SoftDeleteCancellationWinsActiveRunnerFailure() async throws {
+        // T-QUEUE-06 failure expected RED: softDeleteMatter changes the active row
+        // to cancelled, but runCorpusAnalysis later fails it unconditionally.
+        try await assertSoftDeleteCancellationWins(
+            outcome: .failure,
+            testName: "TQUEUE06-failure",
+            caseName: "deleted-active-failure"
+        )
+    }
+
+    private func assertSoftDeleteCancellationWins(
+        outcome: SyntheticRunnerOutcome,
+        testName: String,
+        caseName: String
+    ) async throws {
+        let store = try makeStore(testName: testName)
+        let fixture = try prepareFixture(store: store, caseName: caseName, partCount: 1)
+        let gate = DeletionRaceRunnerGate()
+        let queue = makeQueue(store: store) { _ in
+            await gate.waitForRelease()
+            if outcome == .failure {
+                throw QueueExecutionTestError.syntheticRunnerFailure
+            }
+        }
+        let jobID = try XCTUnwrap(queue.enqueueCorpusAnalysis(
+            matterID: fixture.matterID,
+            payload: fixture.payload
+        ))
+        await gate.waitUntilStarted()
+        XCTAssertEqual(
+            try store.documentJobs.fetchJob(id: jobID)?.status,
+            DocumentProcessingJobStatus.active.rawValue,
+            "the fixture must delete a genuinely active runner"
+        )
+
+        try store.matters.softDeleteMatter(id: fixture.matterID)
+        XCTAssertNil(try store.matters.fetchMatter(id: fixture.matterID))
+        XCTAssertEqual(
+            try store.documentJobs.fetchJob(id: jobID)?.status,
+            DocumentProcessingJobStatus.cancelled.rawValue,
+            "matter deletion must establish cancellation before runner \(outcome.rawValue) returns"
+        )
+        await gate.release()
+        await queue.waitUntilIdle()
+
+        let persisted = try XCTUnwrap(store.documentJobs.fetchJob(id: jobID))
+        XCTAssertEqual(
+            persisted.status,
+            DocumentProcessingJobStatus.cancelled.rawValue,
+            "a late runner \(outcome.rawValue) must not resurrect a deletion-cancelled job"
+        )
+        if outcome == .failure {
+            XCTAssertNil(
+                persisted.errorSummary,
+                "a rejected late failure must not overwrite the deletion cancellation with an error"
+            )
+        }
+    }
+
     func testTQUEUE05RelaunchResumesOnlyRemainingThreeOfFiveAndReportsTwoThroughFive() async throws {
         // T-QUEUE-05 expected RED: there is no production runner wired to the
         // queue, bootstrap does not pump, and the old probe merely rereads a
@@ -288,10 +414,19 @@ final class CorpusReviewQueueExecutionTests: XCTestCase {
         artifactFingerprintSHA256: String(repeating: "c", count: 64)
     )
 
+    private static let livePinnedModel = CorpusAnalysisPinnedModel(
+        modelRepository: "mlx-community/Release-Smoke-4bit",
+        modelRevision: String(repeating: "a", count: 40),
+        contentBindingAlgorithm: RuntimeModelContentBinding.fingerprintAlgorithm,
+        contentBindingSchemaVersion: RuntimeModelContentBinding.supportedManifestSchemaVersion,
+        artifactFingerprintSHA256: "9403244220818d3139ea6d154268eb9395647d8513617be7f403569a90999489"
+    )
+
     private func prepareFixture(
         store: SupraStore,
         caseName: String,
-        partCount: Int
+        partCount: Int,
+        pinnedModel: CorpusAnalysisPinnedModel = CorpusReviewQueueExecutionTests.pinnedModel
     ) throws -> QueueExecutionFixture {
         let matter = try store.matters.createMatter(name: "Synthetic queue \(caseName)")
         let documentID = try insertDocument(
@@ -313,9 +448,62 @@ final class CorpusReviewQueueExecutionTests: XCTestCase {
         )
         let payload = try CorpusAnalysisQueuePreparer(store: store).prepareExhaustiveList(
             request: request,
-            pinnedModel: Self.pinnedModel
+            pinnedModel: pinnedModel
         )
         return QueueExecutionFixture(matterID: matter.id, payload: payload)
+    }
+
+    private func installLiveContentBoundModel(
+        store: SupraStore
+    ) throws -> LiveContentBoundModelFixture {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "CorpusReviewLiveModel-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        let managedRoot = base.appendingPathComponent("Models", isDirectory: true)
+        let modelDirectory = managedRoot.appendingPathComponent(
+            "release-smoke",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: modelDirectory,
+            withIntermediateDirectories: true
+        )
+        addTeardownBlock { try? FileManager.default.removeItem(at: base) }
+
+        let payloads = [
+            "config.json": Data(#"{"model_type":"qwen2"}"#.utf8),
+            "model.safetensors": Data("protected-release-weight-canary".utf8),
+        ]
+        for (relativePath, data) in payloads {
+            try data.write(to: modelDirectory.appendingPathComponent(relativePath))
+        }
+        let manifest = ModelArtifactManifest(
+            repositoryID: Self.livePinnedModel.modelRepository,
+            revision: Self.livePinnedModel.modelRevision,
+            files: payloads.map { relativePath, data in
+                ModelArtifactManifest.File(
+                    relativePath: relativePath,
+                    size: Int64(data.count),
+                    digestAlgorithm: .sha256,
+                    digest: ModelArtifactIntegrity.sha256Hex(data)
+                )
+            }
+        )
+        try ManagedModelStorage.writeManifest(
+            manifest,
+            to: ManagedModelStorage.manifestURL(in: modelDirectory)
+        )
+        try store.models.upsertModel(ModelRecord(
+            id: "88888888-8888-4888-8888-888888888888",
+            displayName: "Synthetic live cancellation model",
+            path: modelDirectory.path,
+            bookmarkData: nil
+        ))
+        return LiveContentBoundModelFixture(
+            managedRoot: managedRoot,
+            pinnedModel: Self.livePinnedModel
+        )
     }
 
     private func insertDocument(
@@ -433,6 +621,46 @@ final class CorpusReviewQueueExecutionTests: XCTestCase {
         throw QueueExecutionTestError.runnerDidNotStart
     }
 
+    private func waitUntilLiveGenerationStarted(
+        _ runtime: LiveQuiescenceRuntimeStub
+    ) async throws {
+        for _ in 0..<200 {
+            if await runtime.generationStarted { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        throw QueueExecutionTestError.liveGenerationDidNotStart
+    }
+
+    private func waitUntilLiveCancellationRequested(
+        _ runtime: LiveQuiescenceRuntimeStub
+    ) async throws {
+        for _ in 0..<200 {
+            if await runtime.cancellationRequested { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        throw QueueExecutionTestError.liveCancellationWasNotRequested
+    }
+
+    private func runnerReturnedWithinObservationWindow(
+        _ completion: LiveRunnerCompletionProbe
+    ) async throws -> Bool {
+        for _ in 0..<100 {
+            if await completion.outcome != nil { return true }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        return await completion.outcome != nil
+    }
+
+    private func waitUntilLiveCancellationResponseReturned(
+        _ runtime: LiveQuiescenceRuntimeStub
+    ) async throws {
+        for _ in 0..<200 {
+            if await runtime.cancellationResponseReturned { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        throw QueueExecutionTestError.liveCancellationResponseDidNotReturn
+    }
+
     private func decodeCoverage(_ run: CorpusAnalysisRunRecord) throws -> CorpusAnalysisCoverage {
         guard let coverageJSON = run.coverageJSON else {
             throw QueueExecutionTestError.missingCoverage(run.id)
@@ -446,10 +674,65 @@ private struct QueueExecutionFixture {
     var payload: CorpusAnalysisJobPayload
 }
 
+private struct LiveContentBoundModelFixture {
+    var managedRoot: URL
+    var pinnedModel: CorpusAnalysisPinnedModel
+}
+
 private enum QueueExecutionTestError: Error {
     case missingCoverage(String)
     case runnerDidNotStart
+    case liveGenerationDidNotStart
+    case liveCancellationWasNotRequested
+    case liveCancellationResponseDidNotReturn
+    case syntheticRunnerFailure
     case unexpectedPartition(String)
+}
+
+private enum LiveRunnerOutcome: Equatable {
+    case succeeded
+    case cancelled
+    case failed(String)
+}
+
+private actor LiveRunnerCompletionProbe {
+    private(set) var outcome: LiveRunnerOutcome?
+
+    func record(_ outcome: LiveRunnerOutcome) {
+        self.outcome = outcome
+    }
+}
+
+private enum SyntheticRunnerOutcome: String, Sendable {
+    case success
+    case failure
+}
+
+private actor DeletionRaceRunnerGate {
+    private var started = false
+    private var startContinuation: CheckedContinuation<Void, Never>?
+    private var releaseContinuation: CheckedContinuation<Void, Never>?
+
+    func waitForRelease() async {
+        started = true
+        startContinuation?.resume()
+        startContinuation = nil
+        await withCheckedContinuation { continuation in
+            releaseContinuation = continuation
+        }
+    }
+
+    func waitUntilStarted() async {
+        if started { return }
+        await withCheckedContinuation { continuation in
+            startContinuation = continuation
+        }
+    }
+
+    func release() {
+        releaseContinuation?.resume()
+        releaseContinuation = nil
+    }
 }
 
 private actor PayloadRecorder {
@@ -504,6 +787,145 @@ private actor ResumeProbe {
 
     func recordProgress(runID: String, coverage: CorpusAnalysisCoverage) {
         progress.append(RecordedQueueProgress(runID: runID, coverage: coverage))
+    }
+}
+
+private final class LiveQuiescenceRuntimeStub: RuntimeClientProtocol, @unchecked Sendable {
+    private let state = LiveQuiescenceRuntimeState()
+
+    var generationStarted: Bool {
+        get async { await state.generationStarted }
+    }
+
+    var cancellationRequested: Bool {
+        get async { await state.cancellationRequested }
+    }
+
+    var cancellationResponseReturned: Bool {
+        get async { await state.cancellationResponseReturned }
+    }
+
+    func confirmQuiescence() async {
+        await state.confirmQuiescence()
+    }
+
+    func connect() async throws {}
+
+    func loadModel(_ request: LoadModelRequest) async throws -> LoadModelResponse {
+        await state.recordLoadedModel(request.modelID)
+        return LoadModelResponse(
+            status: .loaded,
+            modelID: request.modelID,
+            verifiedModelSHA256: request.contentBinding?.fingerprintSHA256
+        )
+    }
+
+    func generate(
+        _ request: GenerateRequest
+    ) throws -> AsyncThrowingStream<GenerationEvent, Error> {
+        AsyncThrowingStream { [state] continuation in
+            Task {
+                await state.installGeneration(request, continuation: continuation)
+            }
+        }
+    }
+
+    func cancelGeneration(
+        _ generationID: GenerationID
+    ) async throws -> CancelGenerationResponse {
+        await state.beginCancellation(generationID)
+        await state.recordCancellationResponseReturned()
+        return CancelGenerationResponse(status: .cancelled, generationID: generationID)
+    }
+
+    func recentEvents(
+        for generationID: GenerationID,
+        after sequenceNumber: Int
+    ) async throws -> [GenerationEvent] {
+        []
+    }
+
+    func unloadModel() async throws -> UnloadModelResponse {
+        await state.recordLoadedModel(nil)
+        return UnloadModelResponse(status: .unloaded)
+    }
+
+    func reloadCurrentModel() async throws -> LoadModelResponse {
+        LoadModelResponse(status: .loaded, modelID: await state.loadedModelID)
+    }
+
+    func runtimeStatus() async throws -> RuntimeStatus {
+        let snapshot = await state.statusSnapshot()
+        return RuntimeStatus(
+            state: snapshot.generationID == nil ? .modelLoaded : .generating,
+            loadedModelID: snapshot.modelID,
+            activeGenerationID: snapshot.generationID,
+            message: nil,
+            metrics: nil
+        )
+    }
+
+    func restartRuntimeService() async throws {}
+}
+
+private actor LiveQuiescenceRuntimeState {
+    private(set) var loadedModelID: ModelID?
+    private(set) var generationStarted = false
+    private(set) var cancellationRequested = false
+    private(set) var cancellationResponseReturned = false
+    private var activeGenerationID: GenerationID?
+    private var generationContinuation: AsyncThrowingStream<GenerationEvent, Error>.Continuation?
+    private var quiescenceConfirmed = false
+    private var quiescenceWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func recordLoadedModel(_ modelID: ModelID?) {
+        loadedModelID = modelID
+    }
+
+    func installGeneration(
+        _ request: GenerateRequest,
+        continuation: AsyncThrowingStream<GenerationEvent, Error>.Continuation
+    ) {
+        activeGenerationID = request.generationID
+        generationContinuation = continuation
+        generationStarted = true
+        continuation.yield(GenerationEvent(
+            generationID: request.generationID,
+            sequenceNumber: 1,
+            timestamp: Date(timeIntervalSince1970: 1_700_000_000),
+            type: .generationStarted
+        ))
+    }
+
+    func beginCancellation(_ generationID: GenerationID) async {
+        cancellationRequested = true
+        if activeGenerationID == generationID {
+            // Simulate the local stream ending as soon as its consuming Swift
+            // task is cancelled. The independent cancellation reply remains
+            // blocked until the test confirms model-actor quiescence.
+            generationContinuation?.finish()
+            generationContinuation = nil
+        }
+        guard !quiescenceConfirmed else { return }
+        await withCheckedContinuation { continuation in
+            quiescenceWaiters.append(continuation)
+        }
+    }
+
+    func confirmQuiescence() {
+        quiescenceConfirmed = true
+        activeGenerationID = nil
+        let waiters = quiescenceWaiters
+        quiescenceWaiters.removeAll()
+        for waiter in waiters { waiter.resume() }
+    }
+
+    func recordCancellationResponseReturned() {
+        cancellationResponseReturned = true
+    }
+
+    func statusSnapshot() -> (modelID: ModelID?, generationID: GenerationID?) {
+        (loadedModelID, activeGenerationID)
     }
 }
 
