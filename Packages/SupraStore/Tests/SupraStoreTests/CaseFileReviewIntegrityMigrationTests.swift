@@ -2286,6 +2286,11 @@ final class CaseFileReviewIntegrityMigrationTests: XCTestCase {
             digestDigit: "6",
             partIndex: 233
         )
+        let persistedIdentityCreatedAt = try queue.read { db in
+            try XCTUnwrap(
+                StructuredOutputVersionRecord.fetchOne(db, key: identity.version.id)
+            ).createdAt
+        }
 
         XCTAssertThrowsError(
             try queue.write { db in
@@ -2354,7 +2359,7 @@ final class CaseFileReviewIntegrityMigrationTests: XCTestCase {
             XCTAssertNotEqual(retainedIdentity.versionIndex, 2243)
             XCTAssertEqual(retainedIdentity.parentVersionID, identity.version.parentVersionID)
             XCTAssertNotEqual(retainedIdentity.parentVersionID, parentDecoy.version.id)
-            XCTAssertEqual(retainedIdentity.createdAt, identity.version.createdAt)
+            XCTAssertEqual(retainedIdentity.createdAt, persistedIdentityCreatedAt)
 
             let retainedContent = try XCTUnwrap(
                 StructuredOutputVersionRecord.fetchOne(db, key: content.version.id)
