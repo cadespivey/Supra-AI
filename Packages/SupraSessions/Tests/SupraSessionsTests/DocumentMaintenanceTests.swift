@@ -75,7 +75,8 @@ final class DocumentMaintenanceTests: XCTestCase {
         let document = try store.documentLibrary.insertDocument(MatterDocumentRecord(
             matterID: matter.id,
             blobID: blob.id,
-            displayName: "Restorable source 613.txt"
+            displayName: "Restorable source 613.txt",
+            status: MatterDocumentStatus.ready.rawValue
         ))
         let now = Date(timeIntervalSince1970: 1_790_106_401)
         try store.matters.softDeleteMatter(
