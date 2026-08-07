@@ -77,6 +77,52 @@ final class ShippingMigrationFixtureTests: XCTestCase {
         }
     }
 
+    func testTSTORE02ShippingFixturesUpgradeWithoutFabricatedExactSliceLineage() throws {
+        // T-STORE-02 expected RED: the authenticated fixture manifest still
+        // names v071, and upgrading those databases creates no v072 exact-slice
+        // schema on which legacy-unknown lineage can be asserted.
+        let manifest = try loadManifest()
+        XCTAssertEqual(manifest.currentMigration, "v072_harden_corpus_review_integrity")
+
+        for fixture in manifest.fixtures {
+            try XCTContext.runActivity(named: fixture.seedVersion) { _ in
+                let directory = try temporaryDirectory(prefix: "T-STORE-02-shipping-")
+                defer { try? FileManager.default.removeItem(at: directory) }
+                let databaseURL = directory.appendingPathComponent("SupraAI.sqlite")
+                try authenticatedFixtureData(fixture).write(to: databaseURL)
+                let store = try SupraStore(url: databaseURL)
+
+                try store.database.writer.read { db in
+                    let runColumns = Set(try db.columns(in: "corpus_analysis_runs").map(\.name))
+                    XCTAssertTrue(runColumns.contains("request_schema_version"))
+                    XCTAssertTrue(runColumns.contains("request_digest"))
+                    let hasSliceTable = try db.tableExists("corpus_analysis_partition_slices")
+                    XCTAssertTrue(hasSliceTable)
+                    if hasSliceTable {
+                        XCTAssertEqual(
+                            try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM corpus_analysis_partition_slices"),
+                            0,
+                            "\(fixture.seedVersion) must not acquire fabricated exact slices"
+                        )
+                    }
+                    if runColumns.contains("request_schema_version"), runColumns.contains("request_digest") {
+                        XCTAssertEqual(
+                            try Int.fetchOne(
+                                db,
+                                sql: """
+                                SELECT COUNT(*) FROM corpus_analysis_runs
+                                WHERE request_schema_version IS NOT NULL OR request_digest IS NOT NULL
+                                """
+                            ),
+                            0,
+                            "\(fixture.seedVersion) must keep pre-v072 request lineage explicitly unknown"
+                        )
+                    }
+                }
+            }
+        }
+    }
+
     // T-RST-37 expected RED: shipping fixtures are only opened directly; none
     // exercises discovery, staging, cold-start activation, and migration as one path.
     func testTRST37EverySupportedShippingFixtureRestoresAndMigratesThroughColdStart() throws {
