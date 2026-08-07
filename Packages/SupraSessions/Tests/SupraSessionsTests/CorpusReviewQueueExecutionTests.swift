@@ -318,13 +318,14 @@ final class CorpusReviewQueueExecutionTests: XCTestCase {
         XCTAssertEqual(activated.status, DocumentProcessingJobStatus.active.rawValue)
         XCTAssertEqual(activated.kind, DocumentProcessingJobKind.process.rawValue)
         XCTAssertEqual(queue.activeJob?.id, activated.id)
+        let beforeCancel = try XCTUnwrap(store.documentJobs.fetchJob(id: activated.id))
 
         queue.cancel(jobID: activated.id)
 
         let afterCancel = try XCTUnwrap(store.documentJobs.fetchJob(id: activated.id))
-        XCTAssertEqual(afterCancel.status, activated.status)
-        XCTAssertEqual(afterCancel.phase, activated.phase)
-        XCTAssertEqual(afterCancel.updatedAt, activated.updatedAt)
+        XCTAssertEqual(afterCancel.status, beforeCancel.status)
+        XCTAssertEqual(afterCancel.phase, beforeCancel.phase)
+        XCTAssertEqual(afterCancel.updatedAt, beforeCancel.updatedAt)
         XCTAssertEqual(queue.activeJob?.id, activated.id)
     }
 

@@ -292,23 +292,22 @@ final class ModelLibraryContentBoundLoadingTests: XCTestCase {
     private func observeMainActorHeartbeat(
         whileHeldBy probe: AuthorizationPhaseProbe
     ) async -> (entered: Bool, heartbeatRan: Bool) {
-        await Task.detached {
-            let entered = probe.waitUntilHeldPhaseEntered()
-            guard entered else {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let entered = probe.waitUntilHeldPhaseEntered()
+                guard entered else {
+                    probe.releaseHeldPhase()
+                    continuation.resume(returning: (false, false))
+                    return
+                }
+
+                let heartbeat = DispatchSemaphore(value: 0)
+                Task { @MainActor in heartbeat.signal() }
+                let heartbeatRan = heartbeat.wait(timeout: .now() + 2) == .success
                 probe.releaseHeldPhase()
-                return (false, false)
+                continuation.resume(returning: (true, heartbeatRan))
             }
-
-            let heartbeat = DispatchSemaphore(value: 0)
-            Task { @MainActor in heartbeat.signal() }
-            let heartbeatRan = Self.waitForSignal(heartbeat)
-            probe.releaseHeldPhase()
-            return (true, heartbeatRan)
-        }.value
-    }
-
-    private nonisolated static func waitForSignal(_ semaphore: DispatchSemaphore) -> Bool {
-        semaphore.wait(timeout: .now() + 2) == .success
+        }
     }
 
     private func makeFixture(location: FixtureLocation) throws -> Fixture {
