@@ -704,7 +704,7 @@ final class ExhaustiveListTaskTests: XCTestCase {
                 matterID: matter.id,
                 title: "Every invoice reference",
                 query: "Extract every invoice reference.",
-                characterBudget: 1,
+                characterBudget: 16,
                 evaluationExpectedItemKeys: ["invoice-a", "invoice-b", "invoice-c"],
                 modelLineageJSON: Self.modelLineageJSON
             )
@@ -796,7 +796,7 @@ final class ExhaustiveListTaskTests: XCTestCase {
                 matterID: matter.id,
                 title: "Incomplete invoice list",
                 query: "Extract every invoice.",
-                characterBudget: 1,
+                characterBudget: 8,
                 evaluationExpectedItemKeys: ["invoice-good", "invoice-missing"],
                 modelLineageJSON: Self.modelLineageJSON
             )
@@ -846,7 +846,7 @@ final class ExhaustiveListTaskTests: XCTestCase {
                 matterID: matter.id,
                 title: "Malformed list",
                 query: "Extract every reference.",
-                characterBudget: 1,
+                characterBudget: 13,
                 modelLineageJSON: Self.modelLineageJSON
             )
         ) { _ in malformed }
@@ -879,7 +879,7 @@ final class ExhaustiveListTaskTests: XCTestCase {
                 matterID: incompleteMatter.id,
                 title: "Blocked negative",
                 query: "Find any termination reference.",
-                characterBudget: 1,
+                characterBudget: 8,
                 modelLineageJSON: Self.modelLineageJSON
             )
         ) { _ in throw CorpusAnalysisMapFailure.permanent("synthetic negative probe failure") }
@@ -906,7 +906,7 @@ final class ExhaustiveListTaskTests: XCTestCase {
                 matterID: completeMatter.id,
                 title: "Allowed negative",
                 query: "Find any termination reference.",
-                characterBudget: 1,
+                characterBudget: 8,
                 modelLineageJSON: Self.modelLineageJSON
             )
         ) { input in try Self.response(input, items: []) }
@@ -945,7 +945,7 @@ final class ExhaustiveListTaskTests: XCTestCase {
                 matterID: matter.id,
                 title: "Renewal positions",
                 query: "Extract every renewal position and sweep for contrary evidence.",
-                characterBudget: 1,
+                characterBudget: 28,
                 modelLineageJSON: Self.modelLineageJSON
             )
         ) { input in
@@ -1011,7 +1011,7 @@ final class ExhaustiveListTaskTests: XCTestCase {
                 matterID: matter.id,
                 title: "Incomplete payment list",
                 query: "Extract every payment.",
-                characterBudget: 1,
+                characterBudget: 22,
                 modelLineageJSON: Self.modelLineageJSON
             )
         ) { input in

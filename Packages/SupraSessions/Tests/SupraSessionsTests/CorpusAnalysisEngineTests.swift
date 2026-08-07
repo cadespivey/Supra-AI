@@ -275,7 +275,7 @@ final class CorpusAnalysisEngineTests: XCTestCase {
                 matterID: matter.id,
                 taskKind: .customExtraction,
                 scope: CorpusAnalysisScope(documentIDs: [fixture.documentID]),
-                characterBudget: 1
+                characterBudget: 15
             )
         ) { input in
             await probe.record(input)
@@ -359,7 +359,7 @@ final class CorpusAnalysisEngineTests: XCTestCase {
                 matterID: matter.id,
                 taskKind: .customExtraction,
                 scope: .wholeMatter,
-                characterBudget: 1
+                characterBudget: 17
             )
         ) { input in
             CorpusAnalysisMapOutput(findings: input.sources.map { source in
@@ -426,7 +426,7 @@ final class CorpusAnalysisEngineTests: XCTestCase {
                 matterID: matter.id,
                 taskKind: .customExtraction,
                 scope: CorpusAnalysisScope(documentIDs: [fixture.documentID]),
-                characterBudget: 1
+                characterBudget: 32
             )
         ) { input in
             await probe.record(input)
@@ -480,7 +480,7 @@ final class CorpusAnalysisEngineTests: XCTestCase {
                     runKey: "cancelled-run",
                     matterID: matter.id,
                     taskKind: .customExtraction,
-                    characterBudget: 1
+                    characterBudget: 13
                 )
             ) { input in
                 let ordinal = await probe.recordAndReturnOrdinal(input)
@@ -546,7 +546,7 @@ final class CorpusAnalysisEngineTests: XCTestCase {
             runKey: "resumed-run",
             matterID: matter.id,
             taskKind: .customExtraction,
-            characterBudget: 1
+            characterBudget: 13
         )
 
         do {
@@ -726,7 +726,7 @@ final class CorpusAnalysisEngineTests: XCTestCase {
                 runKey: "retry-run",
                 matterID: matter.id,
                 taskKind: .customExtraction,
-                characterBudget: 1,
+                characterBudget: 12,
                 maximumRetryCount: 2
             )
         ) { input in
