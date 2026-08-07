@@ -41,6 +41,7 @@ struct MatterDocumentsView: View {
     @State private var selectedDocID: String?
     /// Documents ticked for multi-select sharing.
     @State private var checkedDocIDs: Set<String> = []
+    @State private var pendingPermanentDeletion: PermanentDeletionTarget?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -118,6 +119,24 @@ struct MatterDocumentsView: View {
             PartTextEditSheet(draft: draft) { text, reason in
                 try controller.saveCorrection(draft, text: text, reason: reason)
             }
+        }
+        .permanentDeletionConfirmation(
+            target: $pendingPermanentDeletion,
+            perform: performPermanentDeletion
+        )
+        .alert(item: Binding(
+            get: { controller.permanentDeletionNotice },
+            set: { notice in
+                if notice == nil { controller.clearPermanentDeletionNotice() }
+            }
+        )) { notice in
+            Alert(
+                title: Text(notice.title),
+                message: Text(notice.message),
+                dismissButton: .default(Text("OK")) {
+                    controller.clearPermanentDeletionNotice()
+                }
+            )
         }
         .onAppear {
             controller.reload()
@@ -766,7 +785,12 @@ struct MatterDocumentsView: View {
                                 Spacer()
                                 Button("Restore") { controller.restore(documentID: doc.id) }
                                     .buttonStyle(.ghost)
-                                Button("Delete Permanently", role: .destructive) { controller.permanentlyDelete(documentID: doc.id) }
+                                Button("Remove Source", role: .destructive) {
+                                    pendingPermanentDeletion = .document(
+                                        id: doc.id,
+                                        name: doc.displayName
+                                    )
+                                }
                                     .buttonStyle(.ghostDanger)
                             }
                         }
@@ -775,6 +799,11 @@ struct MatterDocumentsView: View {
                 .frame(minWidth: 480, minHeight: 320)
             }
         }
+    }
+
+    private func performPermanentDeletion(_ target: PermanentDeletionTarget) {
+        guard case let .document(id, _) = target else { return }
+        controller.permanentlyDelete(documentID: id)
     }
 
     private func statusBadge(_ document: MatterDocumentRecord) -> some View {

@@ -20,6 +20,7 @@ public enum CorpusAnalysisRepositoryError: Error, LocalizedError, Equatable, Sen
     case corpusCompleteRequiresV2Request
     case corpusCompleteRequiresExactSliceCoverage
     case invalidStructuredOutputAttachment(String)
+    case staleRunRequiresNewRun(String)
 
     public var errorDescription: String? {
         switch self {
@@ -44,6 +45,8 @@ public enum CorpusAnalysisRepositoryError: Error, LocalizedError, Equatable, Sen
             "Corpus-complete requires exact, once-only Character-range coverage."
         case .invalidStructuredOutputAttachment(let id):
             "Structured output version \(id) is not a compatible one-time attachment for this corpus run."
+        case .staleRunRequiresNewRun(let id):
+            "Corpus run \(id) was invalidated by a source change and cannot regain assurance; start a new run."
         }
     }
 }
@@ -286,6 +289,9 @@ public final class CorpusAnalysisRepository: @unchecked Sendable {
     ) throws -> CorpusAnalysisRunRecord {
         try writer.write { db in
             var run = try scopedRun(db, matterID: matterID, runID: runID)
+            guard run.assuranceState != OutputAssuranceState.stale.rawValue else {
+                throw CorpusAnalysisRepositoryError.staleRunRequiresNewRun(run.id)
+            }
             guard run.status != CorpusAnalysisRunStatus.persisted.rawValue else {
                 throw CorpusAnalysisRepositoryError.invalidStatusTransition("persisted->running")
             }
@@ -465,6 +471,8 @@ public final class CorpusAnalysisRepository: @unchecked Sendable {
     public func cancelRun(matterID: String, runID: String) throws -> CorpusAnalysisRunRecord {
         try writer.write { db in
             var run = try scopedRun(db, matterID: matterID, runID: runID)
+            let preservesStaleAssurance =
+                run.assuranceState == OutputAssuranceState.stale.rawValue
             let now = Date()
             var partitions = try CorpusAnalysisPartitionRecord.fetchAll(
                 db,
@@ -485,8 +493,10 @@ public final class CorpusAnalysisRepository: @unchecked Sendable {
                 run: run,
                 exclusionsDisclosed: true
             ))
-            run.assuranceState = nil
-            run.assuranceReasonsJSON = nil
+            if !preservesStaleAssurance {
+                run.assuranceState = nil
+                run.assuranceReasonsJSON = nil
+            }
             run.completedAt = now
             try run.update(db)
             return run
@@ -587,6 +597,9 @@ public final class CorpusAnalysisRepository: @unchecked Sendable {
     ) throws -> CorpusAnalysisRunRecord {
         try writer.write { db in
             var run = try scopedRun(db, matterID: matterID, runID: runID)
+            guard run.assuranceState != OutputAssuranceState.stale.rawValue else {
+                throw CorpusAnalysisRepositoryError.staleRunRequiresNewRun(run.id)
+            }
             let resolvedStructuredOutputVersionID = try Self.validatedStructuredOutputAttachment(
                 requestedID: structuredOutputVersionID,
                 run: run,

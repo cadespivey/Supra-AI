@@ -1,6 +1,81 @@
 import SupraSessions
 import SwiftUI
 
+enum PermanentDeletionTarget: Identifiable {
+    case matter(id: String, name: String)
+    case chat(id: String, name: String)
+    case document(id: String, name: String)
+
+    var id: String {
+        switch self {
+        case let .matter(id, _): "m:\(id)"
+        case let .chat(id, _): "c:\(id)"
+        case let .document(id, _): "d:\(id)"
+        }
+    }
+
+    var confirmationTitle: String {
+        switch self {
+        case let .matter(_, name): "Delete “\(name)” permanently?"
+        case let .chat(_, name): "Delete “\(name)” permanently?"
+        case let .document(_, name): "Remove “\(name)” permanently?"
+        }
+    }
+
+    var actionTitle: String {
+        switch self {
+        case .matter: "Delete Matter"
+        case .chat: "Delete Chat"
+        case .document: "Remove Source"
+        }
+    }
+
+    var confirmationMessage: String {
+        switch self {
+        case .matter:
+            "This removes the matter’s source data, chats, saved in-app outputs, and export records. Prior audit history and previously written export files remain. This cannot be undone."
+        case .document:
+            "Removing this source invalidates dependent work. Saved output text, citation display excerpts and locators, and retained corpus-analysis proof records remain. Document classifications and relations are removed. Audit history and previously written export files remain. This cannot be undone."
+        case .chat:
+            "This permanently deletes the chat. This cannot be undone."
+        }
+    }
+}
+
+private struct PermanentDeletionConfirmationModifier: ViewModifier {
+    @Binding var target: PermanentDeletionTarget?
+    let perform: (PermanentDeletionTarget) -> Void
+
+    func body(content: Content) -> some View {
+        content.confirmationDialog(
+            target?.confirmationTitle ?? "Delete permanently?",
+            isPresented: Binding(
+                get: { target != nil },
+                set: { if !$0 { target = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: target
+        ) { item in
+            Button(item.actionTitle, role: .destructive) {
+                perform(item)
+                target = nil
+            }
+            Button("Cancel", role: .cancel) { target = nil }
+        } message: { item in
+            Text(item.confirmationMessage)
+        }
+    }
+}
+
+extension View {
+    func permanentDeletionConfirmation(
+        target: Binding<PermanentDeletionTarget?>,
+        perform: @escaping (PermanentDeletionTarget) -> Void
+    ) -> some View {
+        modifier(PermanentDeletionConfirmationModifier(target: target, perform: perform))
+    }
+}
+
 /// Lists soft-deleted matters, chats, and documents that the discard policy hasn't
 /// purged yet, with per-item Restore and (confirmed) permanent delete.
 struct RecycleBinView: View {
@@ -8,29 +83,7 @@ struct RecycleBinView: View {
     @ObservedObject var matters: MattersController
     @ObservedObject var chats: GlobalChatController
 
-    private enum PendingDelete: Identifiable {
-        case matter(id: String, name: String)
-        case chat(id: String, name: String)
-        case document(id: String, name: String)
-
-        var id: String {
-            switch self {
-            case let .matter(id, _): return "m:\(id)"
-            case let .chat(id, _): return "c:\(id)"
-            case let .document(id, _): return "d:\(id)"
-            }
-        }
-
-        var name: String {
-            switch self {
-            case let .matter(_, name), let .chat(_, name), let .document(_, name): return name
-            }
-        }
-
-        var isMatter: Bool { if case .matter = self { return true } else { return false } }
-    }
-
-    @State private var pendingDelete: PendingDelete?
+    @State private var pendingDelete: PermanentDeletionTarget?
 
     var body: some View {
         Group {
@@ -42,18 +95,17 @@ struct RecycleBinView: View {
         }
         .navigationTitle("Recycle Bin")
         .onAppear { controller.reload() }
-        .confirmationDialog(
-            pendingDelete.map { "Delete “\($0.name)” permanently?" } ?? "Delete permanently?",
-            isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }),
-            titleVisibility: .visible,
-            presenting: pendingDelete
-        ) { item in
-            Button("Delete Permanently", role: .destructive) { performDelete(item) }
-            Button("Cancel", role: .cancel) {}
-        } message: { item in
-            Text(item.isMatter
-                ? "“\(item.name)” and all of its chats, documents, and files will be permanently deleted. This cannot be undone."
-                : "“\(item.name)” will be permanently deleted. This cannot be undone.")
+        .permanentDeletionConfirmation(target: $pendingDelete, perform: performDelete)
+        .alert(
+            "Deletion needs attention",
+            isPresented: Binding(
+                get: { controller.deletionError != nil },
+                set: { if !$0 { controller.clearDeletionError() } }
+            )
+        ) {
+            Button("OK") { controller.clearDeletionError() }
+        } message: {
+            Text(controller.deletionError ?? "The deletion could not be completed.")
         }
     }
 
@@ -129,12 +181,11 @@ struct RecycleBinView: View {
         .padding(.vertical, 2)
     }
 
-    private func performDelete(_ item: PendingDelete) {
+    private func performDelete(_ item: PermanentDeletionTarget) {
         switch item {
         case let .matter(id, _): controller.permanentlyDeleteMatter(id: id); matters.loadMatters()
         case let .chat(id, _): controller.permanentlyDeleteChat(id: id)
         case let .document(id, _): controller.permanentlyDeleteDocument(id: id)
         }
-        pendingDelete = nil
     }
 }

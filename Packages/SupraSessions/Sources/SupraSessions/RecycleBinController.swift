@@ -30,6 +30,7 @@ public final class RecycleBinController: ObservableObject {
     public struct DeletedDocument: Identifiable, Sendable, Equatable {
         public let id: String
         public let name: String
+        public let matterID: String
         public let matterName: String
         public let deletedAt: Date?
     }
@@ -37,6 +38,7 @@ public final class RecycleBinController: ObservableObject {
     @Published public private(set) var matters: [DeletedMatter] = []
     @Published public private(set) var chats: [DeletedChat] = []
     @Published public private(set) var documents: [DeletedDocument] = []
+    @Published public private(set) var deletionError: String?
 
     private let store: SupraStore
     private let storage: DocumentStorage
@@ -65,6 +67,7 @@ public final class RecycleBinController: ObservableObject {
             DeletedDocument(
                 id: record.id,
                 name: record.displayName,
+                matterID: record.matterID,
                 matterName: nameByID[record.matterID] ?? "—",
                 deletedAt: record.deletedAt
             )
@@ -93,26 +96,97 @@ public final class RecycleBinController: ObservableObject {
     /// Irreversibly deletes a matter and everything it owns, freeing any blob files no
     /// longer referenced by a surviving document.
     public func permanentlyDeleteMatter(id: String) {
-        let freed = (try? store.matters.permanentlyDeleteMatter(id: id)) ?? []
-        removeBlobFiles(freed)
+        deletionError = nil
+        do {
+            let freed = try store.matters.permanentlyDeleteMatter(id: id, actor: "user")
+            let orphanedBlobCount = removeBlobFiles(freed)
+            if orphanedBlobCount > 0 {
+                deletionError = "The matter was removed, but \(orphanedBlobCount) managed file(s) still need cleanup."
+                recordCleanupFailure(
+                    matterID: nil,
+                    eventType: "matter_blob_cleanup_failed",
+                    relatedTable: "matters",
+                    relatedID: id,
+                    orphanedBlobCount: orphanedBlobCount
+                )
+            }
+        } catch {
+            deletionError = "Couldn’t permanently delete the matter: \(error.localizedDescription)"
+        }
         reload()
     }
 
     public func permanentlyDeleteChat(id: String) {
-        try? store.chats.permanentlyDeleteChat(id: id)
+        deletionError = nil
+        do {
+            try store.chats.permanentlyDeleteChat(id: id)
+        } catch {
+            deletionError = "Couldn’t permanently delete the chat: \(error.localizedDescription)"
+        }
         reload()
     }
 
     public func permanentlyDeleteDocument(id: String) {
-        if let result = try? store.documentLibrary.permanentlyDeleteDocument(id: id) {
-            removeBlobFiles(result.removedBlobPaths)
+        deletionError = nil
+        let owningMatterID = documents.first { $0.id == id }?.matterID
+            ?? (try? store.documentLibrary.fetchDocument(id: id))?.matterID
+        do {
+            let result = try store.documentLibrary.permanentlyDeleteDocument(
+                id: id,
+                actor: "user"
+            )
+            let orphanedBlobCount = removeBlobFiles(result.removedBlobPaths)
+            if orphanedBlobCount > 0 {
+                deletionError = "The source was removed, but \(orphanedBlobCount) managed file(s) still need cleanup."
+                recordCleanupFailure(
+                    matterID: owningMatterID,
+                    eventType: "document_blob_cleanup_failed",
+                    relatedTable: "matter_documents",
+                    relatedID: id,
+                    orphanedBlobCount: orphanedBlobCount
+                )
+            }
+        } catch {
+            deletionError = "Couldn’t permanently delete the document: \(error.localizedDescription)"
         }
         reload()
     }
 
-    private func removeBlobFiles(_ managedPaths: [String]) {
+    public func clearDeletionError() {
+        deletionError = nil
+    }
+
+    @discardableResult
+    private func removeBlobFiles(_ managedPaths: [String]) -> Int {
+        var orphanedBlobCount = 0
         for path in managedPaths {
-            try? FileManager.default.removeItem(at: storage.url(forManagedRelativePath: path))
+            let fileURL = storage.url(forManagedRelativePath: path)
+            do {
+                try FileManager.default.removeItem(at: fileURL)
+            } catch {
+                if FileManager.default.fileExists(atPath: fileURL.path) {
+                    orphanedBlobCount += 1
+                }
+            }
         }
+        return orphanedBlobCount
+    }
+
+    private func recordCleanupFailure(
+        matterID: String?,
+        eventType: String,
+        relatedTable: String,
+        relatedID: String,
+        orphanedBlobCount: Int
+    ) {
+        _ = try? store.auditEvents.recordEvent(
+            matterID: matterID,
+            eventType: eventType,
+            actor: "user",
+            summary: "Managed blob cleanup remained incomplete after permanent deletion.",
+            relatedTable: relatedTable,
+            relatedID: relatedID,
+            metadataJSON: "{\"orphaned_blob_count\":\(orphanedBlobCount),\"schema_version\":1}"
+        )
     }
 }
