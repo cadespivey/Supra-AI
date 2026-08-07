@@ -110,6 +110,137 @@ final class CorpusAnalysisPreparationTests: XCTestCase {
             textSHA256: sha256(text),
             locatorJSON: "{\"source_kind\":\"text\",\"char_start\":0,\"char_end\":\(text.count)}"
         )
+
+        var nonPlanningRun = run
+        nonPlanningRun.id = "atomic-prepare-nonplanning-run-971"
+        nonPlanningRun.runKey = "atomic-prepare-nonplanning-key-971"
+        nonPlanningRun.status = CorpusAnalysisRunStatus.running.rawValue
+        var nonPlanningPartition = partition
+        nonPlanningPartition.id = "atomic-prepare-nonplanning-partition-971"
+        nonPlanningPartition.runID = nonPlanningRun.id
+        var nonPlanningSlice = valid
+        nonPlanningSlice.id = "atomic-prepare-nonplanning-slice-971"
+        nonPlanningSlice.runID = nonPlanningRun.id
+        nonPlanningSlice.partitionID = nonPlanningPartition.id
+        XCTAssertThrowsError(
+            try store.corpusAnalysis.createOrFetchPreparedRun(
+                run: nonPlanningRun,
+                partitions: [nonPlanningPartition],
+                slices: [nonPlanningSlice]
+            ),
+            "atomic preparation must begin from a clean planning state"
+        )
+        XCTAssertNil(
+            try store.corpusAnalysis.fetchRun(
+                matterID: matter.id,
+                id: nonPlanningRun.id
+            )
+        )
+
+        var seedRun = run
+        seedRun.id = "atomic-prepare-seed-run-971"
+        seedRun.runKey = "atomic-prepare-seed-key-971"
+        var seedPartition = partition
+        seedPartition.id = "atomic-prepare-seed-partition-971"
+        seedPartition.runID = seedRun.id
+        var seedSlice = valid
+        seedSlice.id = "atomic-prepare-global-slice-collision-971"
+        seedSlice.runID = seedRun.id
+        seedSlice.partitionID = seedPartition.id
+        _ = try store.corpusAnalysis.createOrFetchPreparedRun(
+            run: seedRun,
+            partitions: [seedPartition],
+            slices: [seedSlice]
+        )
+
+        var rollbackRun = run
+        rollbackRun.id = "atomic-prepare-postwrite-rollback-run-971"
+        rollbackRun.runKey = "atomic-prepare-postwrite-rollback-key-971"
+        var rollbackPartition = partition
+        rollbackPartition.id = "atomic-prepare-postwrite-rollback-partition-971"
+        rollbackPartition.runID = rollbackRun.id
+        var collidingSlice = valid
+        collidingSlice.id = seedSlice.id
+        collidingSlice.runID = rollbackRun.id
+        collidingSlice.partitionID = rollbackPartition.id
+        XCTAssertThrowsError(
+            try store.corpusAnalysis.createOrFetchPreparedRun(
+                run: rollbackRun,
+                partitions: [rollbackPartition],
+                slices: [collidingSlice]
+            )
+        )
+        XCTAssertNil(
+            try store.corpusAnalysis.fetchRun(
+                matterID: matter.id,
+                id: rollbackRun.id
+            )
+        )
+        try store.database.writer.read { db in
+            XCTAssertEqual(
+                try Int.fetchOne(
+                    db,
+                    sql: "SELECT COUNT(*) FROM corpus_analysis_partitions WHERE run_id = ?",
+                    arguments: [rollbackRun.id]
+                ),
+                0,
+                "a database failure after run/partition inserts must roll back the whole preparation"
+            )
+        }
+
+        var changedLedgerRun = seedRun
+        changedLedgerRun.id = "atomic-prepare-changed-ledger-run-971"
+        let split = text.count / 2
+        let splitIndex = text.index(text.startIndex, offsetBy: split)
+        let left = String(text[..<splitIndex])
+        let right = String(text[splitIndex...])
+        let changedPartition = CorpusAnalysisPartitionRecord(
+            id: "atomic-prepare-changed-ledger-partition-971",
+            runID: changedLedgerRun.id,
+            partitionKey: "000000|\(memberKey)#revision:\(revision.id)#chars:0-\(split)|chars:\(split)-\(text.count)",
+            inputRevisionIDsJSON: try canonicalJSON([revision.id])
+        )
+        let changedSlices = [
+            CorpusAnalysisPartitionSliceRecord(
+                id: "atomic-prepare-changed-ledger-left-971",
+                runID: changedLedgerRun.id,
+                partitionID: changedPartition.id,
+                ordinal: 0,
+                memberKey: memberKey,
+                documentID: document.id,
+                partIndex: 0,
+                revisionID: revision.id,
+                charStart: 0,
+                charEnd: split,
+                revisionCharCount: text.count,
+                textSHA256: sha256(left),
+                locatorJSON: "{\"source_kind\":\"text\",\"char_start\":0,\"char_end\":\(split)}"
+            ),
+            CorpusAnalysisPartitionSliceRecord(
+                id: "atomic-prepare-changed-ledger-right-971",
+                runID: changedLedgerRun.id,
+                partitionID: changedPartition.id,
+                ordinal: 1,
+                memberKey: memberKey,
+                documentID: document.id,
+                partIndex: 0,
+                revisionID: revision.id,
+                charStart: split,
+                charEnd: text.count,
+                revisionCharCount: text.count,
+                textSHA256: sha256(right),
+                locatorJSON: "{\"source_kind\":\"text\",\"char_start\":\(split),\"char_end\":\(text.count)}"
+            ),
+        ]
+        XCTAssertThrowsError(
+            try store.corpusAnalysis.createOrFetchPreparedRun(
+                run: changedLedgerRun,
+                partitions: [changedPartition],
+                slices: changedSlices
+            ),
+            "an exact retry must compare the proposed semantic ledger to the stored ledger"
+        )
+
         var duplicateOrdinal = valid
         duplicateOrdinal.id = "atomic-prepare-slice-invalid-duplicate-ordinal-971"
         duplicateOrdinal.charStart = 1

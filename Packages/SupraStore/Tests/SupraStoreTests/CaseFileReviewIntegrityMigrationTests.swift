@@ -192,6 +192,21 @@ final class CaseFileReviewIntegrityMigrationTests: XCTestCase {
                     String(repeating: "a", count: 64),
                     "digest constraints must protect mutations as well as initial inserts"
                 )
+                XCTAssertThrowsError(
+                    try db.execute(
+                        sql: "UPDATE corpus_analysis_runs SET request_digest = ? WHERE id = ?",
+                        arguments: [Data(repeating: 0x61, count: 64), "t-store-01-run"]
+                    ),
+                    "a 64-byte lowercase-hex BLOB is not a text request digest"
+                )
+                XCTAssertEqual(
+                    try String.fetchOne(
+                        db,
+                        sql: "SELECT request_digest FROM corpus_analysis_runs WHERE id = ?",
+                        arguments: ["t-store-01-run"]
+                    ),
+                    String(repeating: "a", count: 64)
+                )
 
                 XCTAssertThrowsError(
                     try insertSlice(
@@ -625,7 +640,170 @@ final class CaseFileReviewIntegrityMigrationTests: XCTestCase {
                 let completed = try XCTUnwrap(CorpusAnalysisRunRecord.fetchOne(db, key: exact.runID))
                 XCTAssertEqual(completed.status, CorpusAnalysisRunStatus.persisted.rawValue)
                 XCTAssertEqual(completed.assuranceState, OutputAssuranceState.corpusComplete.rawValue)
+                XCTAssertThrowsError(
+                    try db.execute(
+                        sql: "DELETE FROM corpus_analysis_partition_slices WHERE run_id = ?",
+                        arguments: [exact.runID]
+                    ),
+                    "a finalized exact ledger must remain frozen while its completion claim exists"
+                )
+                XCTAssertEqual(
+                    try Int.fetchOne(
+                        db,
+                        sql: "SELECT COUNT(*) FROM corpus_analysis_partition_slices WHERE run_id = ?",
+                        arguments: [exact.runID]
+                    ),
+                    1
+                )
+
+                let malformed = try insertCompletionBarrierRun(
+                    db,
+                    matterID: matter.id,
+                    caseName: "malformed-eligible-member",
+                    digestDigit: "e",
+                    disposition: .succeeded
+                )
+                try insertSlice(
+                    db,
+                    id: "t-store-01-malformed-valid-slice",
+                    partitionID: malformed.partitionID,
+                    ordinal: 0,
+                    charStart: 0,
+                    charEnd: 100,
+                    revisionCharCount: 100,
+                    textSHA256: String(repeating: "e", count: 64),
+                    runID: malformed.runID,
+                    memberKey: malformed.memberKey,
+                    documentID: malformed.documentID,
+                    partIndex: 13,
+                    revisionID: malformed.revisionID
+                )
+                let malformedSnapshot = try JSONSerialization.data(
+                    withJSONObject: [
+                        "schema_version": 2,
+                        "members": [
+                            [
+                                "member_key": malformed.memberKey,
+                                "document_id": malformed.documentID,
+                                "display_name": "Valid member.txt",
+                                "revision_ids": [malformed.revisionID],
+                                "index_state": "ready",
+                                "disposition": "eligible",
+                            ],
+                            [
+                                "member_key": "malformed-eligible",
+                                "display_name": "Malformed member.txt",
+                                "index_state": "ready",
+                                "disposition": "eligible",
+                            ],
+                        ],
+                    ],
+                    options: [.sortedKeys]
+                )
+                try db.execute(
+                    sql: "UPDATE corpus_analysis_runs SET corpus_snapshot_json = ? WHERE id = ?",
+                    arguments: [String(decoding: malformedSnapshot, as: UTF8.self), malformed.runID]
+                )
+                XCTAssertEqual(
+                    try Int.fetchOne(
+                        db,
+                        sql: "SELECT json_valid(corpus_snapshot_json) FROM corpus_analysis_runs WHERE id = ?",
+                        arguments: [malformed.runID]
+                    ),
+                    1
+                )
+                XCTAssertThrowsError(
+                    try persistCorpusComplete(
+                        db,
+                        runID: malformed.runID,
+                        exclusionsDisclosed: true
+                    ),
+                    "an eligible snapshot member with missing identity fields must fail closed"
+                ) { error in
+                    XCTAssertTrue(
+                        error.localizedDescription.contains("eligible snapshot member is malformed"),
+                        "the malformed-member barrier must be the reason for rejection: \(error)"
+                    )
+                }
+                try assertNotCorpusComplete(db, runID: malformed.runID)
             }
+        }
+    }
+
+    func testTSTORE01V072RejectsDirectInsertOfCompletedExhaustiveRun() throws {
+        // T-STORE-01 expected RED: an UPDATE-only completion trigger can be
+        // bypassed by inserting an exhaustive run directly in its terminal
+        // corpus-complete state without any partitions or exact slices.
+        let queue = try DatabaseQueue()
+        try SupraMigrator.makeMigrator().migrate(queue)
+        let matter = try MattersRepository(writer: queue).createMatter(
+            name: "Synthetic direct-insert completion bypass"
+        )
+
+        try queue.write { db in
+            XCTAssertThrowsError(
+                try db.execute(
+                    sql: """
+                        INSERT INTO corpus_analysis_runs (
+                            id, run_key, matter_id, task_kind, scope_json,
+                            corpus_snapshot_json, partition_strategy,
+                            partition_strategy_version, request_schema_version,
+                            request_digest, status, coverage_json,
+                            assurance_state, created_at, completed_at
+                        ) VALUES (?, ?, ?, ?, '{}', ?, ?, 2, 2, ?,
+                            'persisted', ?, 'corpus_complete', ?, ?)
+                        """,
+                    arguments: [
+                        "t-store-01-direct-insert-run",
+                        "t-store-01-direct-insert-key",
+                        matter.id,
+                        CorpusAnalysisTaskKind.exhaustiveList.rawValue,
+                        #"{"schema_version":2,"members":[{"member_key":"document:direct-insert","document_id":"direct-insert","display_name":"Direct insert.txt","revision_ids":["direct-insert-revision"],"index_state":"ready","disposition":"eligible"}]}"#,
+                        "exact_revision_slice:characters=1973",
+                        String(repeating: "d", count: 64),
+                        #"{"excluded_members_disclosed":true,"partition_count":0,"succeeded_partition_count":0,"balance_error_count":0}"#,
+                        Date(timeIntervalSince1970: 1_790_001_701),
+                        Date(timeIntervalSince1970: 1_790_001_702),
+                    ]
+                )
+            )
+            XCTAssertNil(
+                try CorpusAnalysisRunRecord.fetchOne(
+                    db,
+                    key: "t-store-01-direct-insert-run"
+                )
+            )
+
+            XCTAssertThrowsError(
+                try db.execute(
+                    sql: """
+                        INSERT INTO corpus_analysis_runs (
+                            id, run_key, matter_id, task_kind, scope_json,
+                            corpus_snapshot_json, partition_strategy,
+                            partition_strategy_version, status, coverage_json,
+                            assurance_state, created_at, completed_at
+                        ) VALUES (?, ?, ?, ?, '{}', '{"schema_version":2,"members":[]}',
+                            'part_range:characters=1979', 1, 'persisted', ?,
+                            'proposition_supported', ?, ?)
+                        """,
+                    arguments: [
+                        "t-store-01-direct-proposition-run",
+                        "t-store-01-direct-proposition-key",
+                        matter.id,
+                        CorpusAnalysisTaskKind.exhaustiveList.rawValue,
+                        #"{"excluded_members_disclosed":true,"partition_count":0,"succeeded_partition_count":0,"balance_error_count":0}"#,
+                        Date(timeIntervalSince1970: 1_790_001_711),
+                        Date(timeIntervalSince1970: 1_790_001_712),
+                    ]
+                ),
+                "exhaustive proposition-supported output is equally export-eligible and must require v2 exact lineage"
+            )
+            XCTAssertNil(
+                try CorpusAnalysisRunRecord.fetchOne(
+                    db,
+                    key: "t-store-01-direct-proposition-run"
+                )
+            )
         }
     }
 
@@ -854,9 +1032,10 @@ final class CaseFileReviewIntegrityMigrationTests: XCTestCase {
                     INSERT INTO corpus_analysis_runs (
                         id, run_key, matter_id, task_kind, scope_json,
                         corpus_snapshot_json, partition_strategy,
-                        partition_strategy_version, status, created_at
+                        partition_strategy_version, request_schema_version,
+                        request_digest, status, created_at
                     ) VALUES (?, ?, ?, ?, '{}', ?, 'chronology_document', 1,
-                        'planning', ?)
+                        2, ?, 'planning', ?)
                     """,
                 arguments: [
                     "t-store-02-current-chronology-run",
@@ -864,6 +1043,7 @@ final class CaseFileReviewIntegrityMigrationTests: XCTestCase {
                     matter.id,
                     CorpusAnalysisTaskKind.chronology.rawValue,
                     #"{"schema_version":1,"members":[{"member_key":"document:chronology-current","document_id":"chronology-current","display_name":"Chronology current.txt","revision_ids":["chronology-current-revision"],"index_state":"ready","disposition":"eligible"}]}"#,
+                    String(repeating: "c", count: 64),
                     Date(timeIntervalSince1970: 1_790_001_201),
                 ]
             )
@@ -900,6 +1080,106 @@ final class CaseFileReviewIntegrityMigrationTests: XCTestCase {
                     arguments: ["t-store-02-current-chronology-run"]
                 ),
                 OutputAssuranceState.corpusComplete.rawValue
+            )
+        }
+    }
+
+    func testTSTORE02V072PreservesBaselineChronologyCompletionGuard() throws {
+        // T-STORE-02 expected RED: replacing v064's universal completion guard
+        // with an exhaustive/v2-only trigger lets chronology claim completion
+        // while its revision-ledger partition is still pending.
+        let queue = try DatabaseQueue()
+        try SupraMigrator.makeMigrator().migrate(queue)
+        let matter = try MattersRepository(writer: queue).createMatter(
+            name: "Synthetic chronology completion guard"
+        )
+
+        try queue.write { db in
+            try db.execute(
+                sql: """
+                    INSERT INTO corpus_analysis_runs (
+                        id, run_key, matter_id, task_kind, scope_json,
+                        corpus_snapshot_json, partition_strategy,
+                        partition_strategy_version, status, created_at
+                    ) VALUES (?, ?, ?, ?, '{}', ?, 'chronology_document', 1,
+                        'planning', ?)
+                    """,
+                arguments: [
+                    "t-store-02-guarded-chronology-run",
+                    "t-store-02-guarded-chronology-key",
+                    matter.id,
+                    CorpusAnalysisTaskKind.chronology.rawValue,
+                    #"{"schema_version":1,"members":[{"member_key":"document:guarded-chronology","document_id":"guarded-chronology","display_name":"Guarded chronology.txt","revision_ids":["guarded-chronology-revision"],"index_state":"ready","disposition":"eligible"}]}"#,
+                    Date(timeIntervalSince1970: 1_790_001_801),
+                ]
+            )
+            try db.execute(
+                sql: """
+                    INSERT INTO corpus_analysis_partitions (
+                        id, run_id, partition_key, input_revision_ids_json,
+                        disposition
+                    ) VALUES (?, ?, ?, ?, 'pending')
+                    """,
+                arguments: [
+                    "t-store-02-guarded-chronology-partition",
+                    "t-store-02-guarded-chronology-run",
+                    "guarded-chronology#document",
+                    #"["guarded-chronology-revision"]"#,
+                ]
+            )
+            XCTAssertThrowsError(
+                try db.execute(
+                    sql: """
+                        UPDATE corpus_analysis_runs
+                        SET status = 'persisted', assurance_state = 'corpus_complete',
+                            coverage_json = ?
+                        WHERE id = ?
+                        """,
+                    arguments: [
+                        #"{"excluded_members_disclosed":true,"partition_count":1,"succeeded_partition_count":0,"balance_error_count":0}"#,
+                        "t-store-02-guarded-chronology-run",
+                    ]
+                )
+            )
+            XCTAssertEqual(
+                try String.fetchOne(
+                    db,
+                    sql: "SELECT status FROM corpus_analysis_runs WHERE id = ?",
+                    arguments: ["t-store-02-guarded-chronology-run"]
+                ),
+                CorpusAnalysisRunStatus.planning.rawValue
+            )
+
+            try db.execute(
+                sql: """
+                    UPDATE corpus_analysis_partitions
+                    SET disposition = 'succeeded'
+                    WHERE id = ?
+                    """,
+                arguments: ["t-store-02-guarded-chronology-partition"]
+            )
+            XCTAssertThrowsError(
+                try db.execute(
+                    sql: """
+                        UPDATE corpus_analysis_runs
+                        SET status = 'persisted', assurance_state = 'corpus_complete',
+                            coverage_json = ?
+                        WHERE id = ?
+                        """,
+                    arguments: [
+                        #"{"excluded_members_disclosed":false,"partition_count":1,"succeeded_partition_count":1,"balance_error_count":0}"#,
+                        "t-store-02-guarded-chronology-run",
+                    ]
+                ),
+                "the universal completion guard must continue requiring disclosed exclusions"
+            )
+            XCTAssertEqual(
+                try String.fetchOne(
+                    db,
+                    sql: "SELECT status FROM corpus_analysis_runs WHERE id = ?",
+                    arguments: ["t-store-02-guarded-chronology-run"]
+                ),
+                CorpusAnalysisRunStatus.planning.rawValue
             )
         }
     }
