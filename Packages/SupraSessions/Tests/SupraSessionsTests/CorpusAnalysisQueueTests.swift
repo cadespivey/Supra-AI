@@ -1,6 +1,7 @@
 import Foundation
 import SupraCore
 import SupraDocuments
+import SupraRuntimeInterface
 @testable import SupraSessions
 import SupraStore
 import XCTest
@@ -8,7 +9,8 @@ import XCTest
 @MainActor
 final class CorpusAnalysisQueueTests: XCTestCase {
     func testM6W1CorpusAnalysisJobUsesNondefaultKindAndDurableRunPayload() async throws {
-        // M6-W1 expected RED: the corpus_analysis job kind, payload, and queue route do not exist.
+        // M6-W1 expected RED: the queue has no typed v2 enqueue path; its legacy
+        // run-ID-only producer now conflicts with the fail-closed execution contract.
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "Synthetic queued corpus")
         let recorder = CorpusPayloadRecorder()
@@ -22,14 +24,33 @@ final class CorpusAnalysisQueueTests: XCTestCase {
             corpusAnalysisRunner: { payload in await recorder.record(payload) }
         )
 
-        let jobID = try XCTUnwrap(queue.enqueueCorpusAnalysis(
-            matterID: matter.id,
-            runID: "nondefault-corpus-run"
-        ))
+        let payload = CorpusAnalysisJobPayload(
+            runID: "nondefault-corpus-run",
+            requestDigest: String(repeating: "9", count: 64),
+            task: .exhaustiveList(ExhaustiveListQueuedRequest(
+                taskSchemaVersion: ExhaustiveListTask.schemaVersion,
+                promptBuilderVersion: ExhaustiveListTask.promptBuilderVersion,
+                runKey: "nondefault-corpus-run-key",
+                matterID: matter.id,
+                title: "Synthetic durable corpus request",
+                query: "List every nondefault queue marker.",
+                scope: CorpusAnalysisScope(schemaVersion: 7, documentIDs: ["document-zeta"]),
+                characterBudget: 31_337,
+                maximumRetryCount: 4
+            )),
+            pinnedModel: CorpusAnalysisPinnedModel(
+                modelRepository: "synthetic/durable-queue-model",
+                modelRevision: String(repeating: "d", count: 40),
+                contentBindingAlgorithm: RuntimeModelContentBinding.fingerprintAlgorithm,
+                contentBindingSchemaVersion: RuntimeModelContentBinding.supportedManifestSchemaVersion,
+                artifactFingerprintSHA256: String(repeating: "a", count: 64)
+            )
+        )
+        let jobID = try XCTUnwrap(queue.enqueueCorpusAnalysis(matterID: matter.id, payload: payload))
         await queue.waitUntilIdle()
 
         let payloads = await recorder.payloads
-        XCTAssertEqual(payloads, [CorpusAnalysisJobPayload(runID: "nondefault-corpus-run")])
+        XCTAssertEqual(payloads, [payload])
         let job = try XCTUnwrap(store.documentJobs.fetchJob(id: jobID))
         XCTAssertEqual(job.kind, DocumentProcessingJobKind.corpusAnalysis.rawValue)
         XCTAssertNotEqual(job.kind, DocumentProcessingJobKind.process.rawValue)

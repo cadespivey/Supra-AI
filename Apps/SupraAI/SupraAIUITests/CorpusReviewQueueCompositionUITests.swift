@@ -31,4 +31,32 @@ final class CorpusReviewQueueCompositionUITests: XCTestCase {
         )
         XCTAssertTrue(source.contains("documentQueue.bootstrap()"))
     }
+
+    func testTQUEUE03CorpusBootstrapPrecedesAndSuppressesStartupModelAutoload() throws {
+        // T-QUEUE-03 expected RED: startup model autoload currently begins before
+        // persisted corpus work is reconciled, so two loads can race for one XPC slot.
+        let source = try appEnvironmentSource()
+        let bootstrap = try XCTUnwrap(source.range(of: "documentQueue.bootstrap()"))
+        let guardedAutoload = try XCTUnwrap(
+            source.range(of: "if !documentQueue.hasPendingCorpusAnalysisWork")
+        )
+        let autoload = try XCTUnwrap(
+            source.range(
+                of: "autoLoadStartupModelIfNeeded()",
+                range: guardedAutoload.lowerBound..<source.endIndex
+            )
+        )
+
+        XCTAssertLessThan(bootstrap.lowerBound, guardedAutoload.lowerBound)
+        XCTAssertLessThan(guardedAutoload.lowerBound, autoload.lowerBound)
+    }
+
+    private func appEnvironmentSource() throws -> String {
+        let testFile = URL(fileURLWithPath: #filePath)
+        let appEnvironmentURL = testFile
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("SupraAI/AppEnvironment.swift")
+        return try String(contentsOf: appEnvironmentURL, encoding: .utf8)
+    }
 }

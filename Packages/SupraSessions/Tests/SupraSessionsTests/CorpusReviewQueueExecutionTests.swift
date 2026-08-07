@@ -54,6 +54,15 @@ final class CorpusReviewQueueExecutionTests: XCTestCase {
             )
         )
         XCTAssertEqual(persistedRun.status, CorpusAnalysisRunStatus.persisted.rawValue)
+        let versionID = try XCTUnwrap(
+            persistedRun.structuredOutputVersionID,
+            "the production runner must execute the prepared task through output publication"
+        )
+        let version = try XCTUnwrap(store.structuredOutputs.fetchVersion(id: versionID))
+        XCTAssertNotNil(
+            try store.documentSources.fetchSourceSet(structuredOutputVersionID: version.id),
+            "the published version must retain its exhaustive source set"
+        )
     }
 
     func testTQUEUE04ActiveCancelCancelsSwiftTaskBalancesRunAndDrainsFollower() async throws {
@@ -88,11 +97,18 @@ final class CorpusReviewQueueExecutionTests: XCTestCase {
         let queue = makeQueue(store: store) { payload in
             try await runner.run(payload)
         }
+        queue.bootstrap()
         let activeJobID = try XCTUnwrap(queue.enqueueCorpusAnalysis(
             matterID: active.matterID,
             payload: active.payload
         ))
         try await waitUntilStarted(probe)
+        queue.bootstrap()
+        XCTAssertEqual(
+            try store.documentJobs.fetchJob(id: activeJobID)?.status,
+            DocumentProcessingJobStatus.active.rawValue,
+            "repeated bootstrap must not reconcile this process's live job as interrupted"
+        )
         let followerJobID = try XCTUnwrap(queue.enqueueCorpusAnalysis(
             matterID: follower.matterID,
             payload: follower.payload
@@ -163,6 +179,17 @@ final class CorpusReviewQueueExecutionTests: XCTestCase {
                 findingsJSON: "[]"
             )
         }
+        _ = try store.corpusAnalysis.updateStatus(
+            matterID: fixture.matterID,
+            runID: fixture.payload.runID,
+            to: .running
+        )
+        let orphanedPartition = partitions[2]
+        _ = try store.corpusAnalysis.beginAttempt(
+            matterID: fixture.matterID,
+            runID: fixture.payload.runID,
+            partitionID: orphanedPartition.id
+        )
         let before = try store.corpusAnalysis.coverage(
             matterID: fixture.matterID,
             runID: fixture.payload.runID
@@ -221,6 +248,21 @@ final class CorpusReviewQueueExecutionTests: XCTestCase {
         XCTAssertEqual(thisRunProgress.first, 2, "relaunch must surface persisted 2/5 before resuming")
         XCTAssertEqual(thisRunProgress.last, 5)
         XCTAssertEqual(Array(Set(thisRunProgress)).sorted(), [2, 3, 4, 5])
+
+        let resumedOrphan = try XCTUnwrap(
+            store.corpusAnalysis.fetchPartitions(
+                matterID: fixture.matterID,
+                runID: fixture.payload.runID
+            ).first { $0.id == orphanedPartition.id }
+        )
+        let attemptHistory = try JSONDecoder().decode(
+            [CorpusAnalysisAttemptHistoryEntry].self,
+            from: Data(resumedOrphan.attemptHistoryJSON.utf8)
+        )
+        XCTAssertEqual(attemptHistory.count, 2)
+        XCTAssertEqual(attemptHistory[0].outcome, .failed)
+        XCTAssertEqual(attemptHistory[0].retryable, true)
+        XCTAssertEqual(attemptHistory[1].outcome, .succeeded)
     }
 
     private static let pinnedModel = CorpusAnalysisPinnedModel(
