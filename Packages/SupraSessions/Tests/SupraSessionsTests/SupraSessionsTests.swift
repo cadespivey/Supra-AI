@@ -830,6 +830,13 @@ final class SupraSessionsTests: XCTestCase {
         // Matter, its chat, and the chat's messages are all hard-deleted (FK cascade).
         XCTAssertTrue(try store.chats.fetchMessages(chatID: matterChat.id).isEmpty)
         XCTAssertTrue(try store.matters.fetchSoftDeletedMatters().isEmpty)
+        let events = try store.auditEvents.fetchEvents(
+            relatedTable: "matters",
+            relatedID: matter.id,
+            eventType: "matter_permanently_deleted"
+        )
+        XCTAssertEqual(events.count, 1)
+        XCTAssertEqual(events.first?.actor, "user")
     }
 
     func testRecycleBinPermanentDeleteFailureRemainsVisibleAndReportsError() throws {
