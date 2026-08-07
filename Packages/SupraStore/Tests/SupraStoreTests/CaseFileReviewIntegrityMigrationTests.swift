@@ -2107,6 +2107,602 @@ final class CaseFileReviewIntegrityMigrationTests: XCTestCase {
         }
     }
 
+    func testTSTORE01V072KeepsLinkedOutputAssuranceAndParentIdentityConsistent() throws {
+        // T-STORE-01 output-projection audit expected RED: the exact-run guards
+        // protect only the run-to-version link. Direct version/output updates can
+        // still leave a corpus-complete public projection with NULL or mismatched
+        // assurance, a foreign matter, or the document-QA output type.
+        let queue = try DatabaseQueue()
+        try SupraMigrator.makeMigrator().migrate(queue)
+        let matters = MattersRepository(writer: queue)
+        let matter = try matters.createMatter(name: "Synthetic linked projection 2203")
+        let foreignMatter = try matters.createMatter(name: "Foreign linked projection 2207")
+        let nullFixture = try createLinkedExactOutputFixture(
+            queue: queue,
+            matterID: matter.id,
+            marker: "null-assurance-2203",
+            digestDigit: "1",
+            partIndex: 203
+        )
+        let mismatchedFixture = try createLinkedExactOutputFixture(
+            queue: queue,
+            matterID: matter.id,
+            marker: "mismatched-assurance-2207",
+            digestDigit: "2",
+            partIndex: 211
+        )
+        let parentFixture = try createLinkedExactOutputFixture(
+            queue: queue,
+            matterID: matter.id,
+            marker: "parent-identity-2213",
+            digestDigit: "3",
+            partIndex: 223
+        )
+
+        var nullError: Error?
+        do {
+            try queue.write { db in
+                try db.execute(
+                    sql: "UPDATE structured_output_versions SET assurance_state = NULL WHERE id = ?",
+                    arguments: [nullFixture.version.id]
+                )
+            }
+        } catch {
+            nullError = error
+        }
+        try queue.read { db in
+            let version = try XCTUnwrap(
+                StructuredOutputVersionRecord.fetchOne(db, key: nullFixture.version.id)
+            )
+            let output = try XCTUnwrap(
+                StructuredOutputRecord.fetchOne(db, key: nullFixture.output.id)
+            )
+            if nullError != nil {
+                XCTAssertEqual(version.assuranceState, OutputAssuranceState.corpusComplete.rawValue)
+                XCTAssertEqual(output.status, StructuredOutputStatus.complete.rawValue)
+            } else {
+                XCTAssertEqual(
+                    version.assuranceState,
+                    OutputAssuranceState.stale.rawValue,
+                    "an accepted assurance change must atomically revoke the linked export"
+                )
+                XCTAssertNotNil(version.assuranceState)
+                XCTAssertNotNil(version.staleReason)
+                XCTAssertEqual(output.status, StructuredOutputStatus.needsReview.rawValue)
+                XCTAssertNotEqual(output.status, StructuredOutputStatus.complete.rawValue)
+            }
+        }
+
+        var mismatchError: Error?
+        do {
+            try queue.write { db in
+                try db.execute(
+                    sql: "UPDATE structured_output_versions SET assurance_state = ? WHERE id = ?",
+                    arguments: [
+                        OutputAssuranceState.propositionSupported.rawValue,
+                        mismatchedFixture.version.id,
+                    ]
+                )
+            }
+        } catch {
+            mismatchError = error
+        }
+        try queue.read { db in
+            let version = try XCTUnwrap(
+                StructuredOutputVersionRecord.fetchOne(db, key: mismatchedFixture.version.id)
+            )
+            let output = try XCTUnwrap(
+                StructuredOutputRecord.fetchOne(db, key: mismatchedFixture.output.id)
+            )
+            if mismatchError != nil {
+                XCTAssertEqual(version.assuranceState, OutputAssuranceState.corpusComplete.rawValue)
+                XCTAssertEqual(output.status, StructuredOutputStatus.complete.rawValue)
+            } else {
+                XCTAssertEqual(
+                    version.assuranceState,
+                    OutputAssuranceState.stale.rawValue,
+                    "an accepted mismatched strong state must atomically revoke the linked export"
+                )
+                XCTAssertNotEqual(
+                    version.assuranceState,
+                    OutputAssuranceState.propositionSupported.rawValue
+                )
+                XCTAssertNotNil(version.staleReason)
+                XCTAssertEqual(output.status, StructuredOutputStatus.needsReview.rawValue)
+                XCTAssertNotEqual(output.status, StructuredOutputStatus.complete.rawValue)
+            }
+        }
+
+        XCTAssertThrowsError(
+            try queue.write { db in
+                try db.execute(
+                    sql: "UPDATE structured_outputs SET matter_id = ? WHERE id = ?",
+                    arguments: [foreignMatter.id, parentFixture.output.id]
+                )
+            },
+            "a linked exhaustive output must not move to a foreign matter"
+        )
+        XCTAssertThrowsError(
+            try queue.write { db in
+                try db.execute(
+                    sql: "UPDATE structured_outputs SET output_type = ? WHERE id = ?",
+                    arguments: [StructuredOutputType.documentQA.rawValue, parentFixture.output.id]
+                )
+            },
+            "a linked exhaustive output must not change into a document-QA output"
+        )
+        try queue.read { db in
+            let output = try XCTUnwrap(
+                StructuredOutputRecord.fetchOne(db, key: parentFixture.output.id)
+            )
+            XCTAssertEqual(output.matterID, matter.id)
+            XCTAssertNotEqual(output.matterID, foreignMatter.id)
+            XCTAssertEqual(output.outputType, StructuredOutputType.documentExhaustiveList.rawValue)
+            XCTAssertNotEqual(output.outputType, StructuredOutputType.documentQA.rawValue)
+            XCTAssertEqual(output.activeVersionID, parentFixture.version.id)
+        }
+    }
+
+    func testTSTORE01V072MakesLinkedVersionIdentityContentAndVerificationAppendOnly() throws {
+        // T-STORE-01 output-projection audit expected RED: a linked exact version
+        // is still a mutable row. Its owner/index/parent identity, retained content,
+        // and verification receipt can be rewritten in place without a new version.
+        let queue = try DatabaseQueue()
+        try SupraMigrator.makeMigrator().migrate(queue)
+        let matter = try MattersRepository(writer: queue).createMatter(
+            name: "Synthetic append-only linked version 2237"
+        )
+        let outputs = StructuredOutputRepository(writer: queue)
+        let emptyDecoy = try outputs.createOutput(
+            matterID: matter.id,
+            title: "Empty identity decoy 2239",
+            outputType: .documentExhaustiveList
+        )
+        let parentDecoy = try createSyntheticOutputVersion(
+            repository: outputs,
+            matterID: matter.id,
+            marker: "parent-decoy-2243",
+            outputType: .documentExhaustiveList,
+            assuranceState: .corpusComplete
+        )
+        let identity = try createLinkedExactOutputFixture(
+            queue: queue,
+            matterID: matter.id,
+            marker: "identity-2243",
+            digestDigit: "4",
+            partIndex: 227
+        )
+        let content = try createLinkedExactOutputFixture(
+            queue: queue,
+            matterID: matter.id,
+            marker: "content-2249",
+            digestDigit: "5",
+            partIndex: 229
+        )
+        let verification = try createLinkedExactOutputFixture(
+            queue: queue,
+            matterID: matter.id,
+            marker: "verification-2251",
+            digestDigit: "6",
+            partIndex: 233
+        )
+
+        XCTAssertThrowsError(
+            try queue.write { db in
+                try db.execute(
+                    sql: """
+                        UPDATE structured_output_versions
+                        SET structured_output_id = ?, version_index = 2243,
+                            parent_version_id = ?, created_at = ?
+                        WHERE id = ?
+                        """,
+                    arguments: [
+                        emptyDecoy.id,
+                        parentDecoy.version.id,
+                        Date(timeIntervalSince1970: 1_790_522_443),
+                        identity.version.id,
+                    ]
+                )
+            },
+            "linked version identity must be append-only"
+        )
+        XCTAssertThrowsError(
+            try queue.write { db in
+                try db.execute(
+                    sql: """
+                        UPDATE structured_output_versions
+                        SET content_markdown = '# FORGED-CONTENT-2249',
+                            required_sections_json = '["FORGED-REQUIRED-2249"]',
+                            present_sections_json = '["FORGED-PRESENT-2249"]',
+                            missing_sections_json = '["FORGED-MISSING-2249"]',
+                            repair_reason = 'FORGED-REPAIR-2249'
+                        WHERE id = ?
+                        """,
+                    arguments: [content.version.id]
+                )
+            },
+            "linked version content must be replaced by an appended version, not rewritten"
+        )
+        XCTAssertThrowsError(
+            try queue.write { db in
+                try db.execute(
+                    sql: """
+                        UPDATE structured_output_versions
+                        SET verification_status = 'needs_review',
+                            verification_version = 'forged-verifier/2251',
+                            verification_json = '[]',
+                            verification_dimensions_json = '{}',
+                            verified_at = ?, prompt_builder_version = 'forged-prompt/2251'
+                        WHERE id = ?
+                        """,
+                    arguments: [
+                        Date(timeIntervalSince1970: 1_790_522_551),
+                        verification.version.id,
+                    ]
+                )
+            },
+            "linked version verification evidence must be append-only"
+        )
+
+        try queue.read { db in
+            let retainedIdentity = try XCTUnwrap(
+                StructuredOutputVersionRecord.fetchOne(db, key: identity.version.id)
+            )
+            XCTAssertEqual(retainedIdentity.structuredOutputID, identity.output.id)
+            XCTAssertNotEqual(retainedIdentity.structuredOutputID, emptyDecoy.id)
+            XCTAssertEqual(retainedIdentity.versionIndex, identity.version.versionIndex)
+            XCTAssertNotEqual(retainedIdentity.versionIndex, 2243)
+            XCTAssertEqual(retainedIdentity.parentVersionID, identity.version.parentVersionID)
+            XCTAssertNotEqual(retainedIdentity.parentVersionID, parentDecoy.version.id)
+            XCTAssertEqual(retainedIdentity.createdAt, identity.version.createdAt)
+
+            let retainedContent = try XCTUnwrap(
+                StructuredOutputVersionRecord.fetchOne(db, key: content.version.id)
+            )
+            XCTAssertEqual(retainedContent.contentMarkdown, content.version.contentMarkdown)
+            XCTAssertFalse(retainedContent.contentMarkdown.contains("FORGED-CONTENT-2249"))
+            XCTAssertEqual(retainedContent.requiredSectionsJSON, content.version.requiredSectionsJSON)
+            XCTAssertFalse(retainedContent.requiredSectionsJSON.contains("FORGED-REQUIRED-2249"))
+            XCTAssertEqual(retainedContent.presentSectionsJSON, content.version.presentSectionsJSON)
+            XCTAssertEqual(retainedContent.missingSectionsJSON, content.version.missingSectionsJSON)
+            XCTAssertEqual(retainedContent.repairReason, content.version.repairReason)
+
+            let retainedVerification = try XCTUnwrap(
+                StructuredOutputVersionRecord.fetchOne(db, key: verification.version.id)
+            )
+            XCTAssertEqual(
+                retainedVerification.verificationStatus,
+                OutputVerificationStatus.allSupported.rawValue
+            )
+            XCTAssertNotEqual(
+                retainedVerification.verificationStatus,
+                OutputVerificationStatus.needsReview.rawValue
+            )
+            XCTAssertEqual(
+                retainedVerification.verificationVersion,
+                verification.version.verificationVersion
+            )
+            XCTAssertNotEqual(retainedVerification.verificationVersion, "forged-verifier/2251")
+            XCTAssertEqual(retainedVerification.verificationJSON, verification.version.verificationJSON)
+            XCTAssertNotEqual(retainedVerification.verificationJSON, "[]")
+            XCTAssertEqual(
+                retainedVerification.verificationDimensionsJSON,
+                verification.version.verificationDimensionsJSON
+            )
+            XCTAssertNotEqual(retainedVerification.verificationDimensionsJSON, "{}")
+            XCTAssertEqual(retainedVerification.verifiedAt, verification.version.verifiedAt)
+            XCTAssertEqual(
+                retainedVerification.promptBuilderVersion,
+                verification.version.promptBuilderVersion
+            )
+            XCTAssertNotEqual(retainedVerification.promptBuilderVersion, "forged-prompt/2251")
+        }
+    }
+
+    func testTSTORE01V072ProtectsLinkedGraphAndRequiresProofLinkedActiveVersion() throws {
+        // T-STORE-01 output-graph audit expected RED: deleting a linked version
+        // or its parent can clear the run's SET NULL foreign key and permit a
+        // new proof link, while active_version_id can point at any unlinked
+        // all-supported corpus-complete version. Only matter deletion may cascade.
+        let queue = try DatabaseQueue()
+        try SupraMigrator.makeMigrator().migrate(queue)
+        let matter = try MattersRepository(writer: queue).createMatter(
+            name: "Synthetic linked output graph 2267"
+        )
+        let outputs = StructuredOutputRepository(writer: queue)
+        let versionDelete = try createLinkedExactOutputFixture(
+            queue: queue,
+            matterID: matter.id,
+            marker: "version-delete-2267",
+            digestDigit: "7",
+            partIndex: 239
+        )
+        let versionReplacement = try createSyntheticOutputVersion(
+            repository: outputs,
+            matterID: matter.id,
+            marker: "version-replacement-2269",
+            outputType: .documentExhaustiveList,
+            assuranceState: .corpusComplete
+        )
+        let outputDelete = try createLinkedExactOutputFixture(
+            queue: queue,
+            matterID: matter.id,
+            marker: "output-delete-2273",
+            digestDigit: "8",
+            partIndex: 241
+        )
+        let outputReplacement = try createSyntheticOutputVersion(
+            repository: outputs,
+            matterID: matter.id,
+            marker: "output-replacement-2279",
+            outputType: .documentExhaustiveList,
+            assuranceState: .corpusComplete
+        )
+
+        XCTAssertThrowsError(
+            try queue.write { db in
+                try db.execute(
+                    sql: "DELETE FROM structured_output_versions WHERE id = ?",
+                    arguments: [versionDelete.version.id]
+                )
+            },
+            "a linked proof version cannot be deleted directly"
+        )
+        XCTAssertThrowsError(
+            try queue.write { db in
+                try db.execute(
+                    sql: "UPDATE corpus_analysis_runs SET structured_output_version_id = ? WHERE id = ?",
+                    arguments: [versionReplacement.version.id, versionDelete.runID]
+                )
+            },
+            "version deletion must not clear the link and permit replacement proof"
+        )
+        XCTAssertThrowsError(
+            try queue.write { db in
+                try db.execute(
+                    sql: "DELETE FROM structured_outputs WHERE id = ?",
+                    arguments: [outputDelete.output.id]
+                )
+            },
+            "a linked proof's parent output cannot be deleted directly"
+        )
+        XCTAssertThrowsError(
+            try queue.write { db in
+                try db.execute(
+                    sql: "UPDATE corpus_analysis_runs SET structured_output_version_id = ? WHERE id = ?",
+                    arguments: [outputReplacement.version.id, outputDelete.runID]
+                )
+            },
+            "parent deletion must not clear the link and permit replacement proof"
+        )
+        try queue.read { db in
+            XCTAssertNotNil(
+                try StructuredOutputVersionRecord.fetchOne(db, key: versionDelete.version.id)
+            )
+            XCTAssertEqual(
+                try CorpusAnalysisRunRecord.fetchOne(db, key: versionDelete.runID)?
+                    .structuredOutputVersionID,
+                versionDelete.version.id
+            )
+            XCTAssertNotEqual(
+                try CorpusAnalysisRunRecord.fetchOne(db, key: versionDelete.runID)?
+                    .structuredOutputVersionID,
+                versionReplacement.version.id
+            )
+            XCTAssertNotNil(try StructuredOutputRecord.fetchOne(db, key: outputDelete.output.id))
+            XCTAssertNotNil(
+                try StructuredOutputVersionRecord.fetchOne(db, key: outputDelete.version.id)
+            )
+            XCTAssertEqual(
+                try CorpusAnalysisRunRecord.fetchOne(db, key: outputDelete.runID)?
+                    .structuredOutputVersionID,
+                outputDelete.version.id
+            )
+            XCTAssertNotEqual(
+                try CorpusAnalysisRunRecord.fetchOne(db, key: outputDelete.runID)?
+                    .structuredOutputVersionID,
+                outputReplacement.version.id
+            )
+        }
+
+        let activeFixture = try createLinkedExactOutputFixture(
+            queue: queue,
+            matterID: matter.id,
+            marker: "active-link-2281",
+            digestDigit: "9",
+            partIndex: 251
+        )
+        let unlinkedVersion = try outputs.createVersion(
+            structuredOutputID: activeFixture.output.id,
+            contentMarkdown: "# UNLINKED-ACTIVE-2281\n\nForeign active candidate [S97].",
+            requiredSections: ["UNLINKED-ACTIVE-2281"],
+            presentSections: ["UNLINKED-ACTIVE-2281"],
+            missingSections: [],
+            verificationStatus: .allSupported,
+            verificationVersion: "unlinked-active-verifier/2281",
+            verificationResults: [try supportedResult(sourceID: "unlinked-active-source-2281")],
+            verificationDimensions: supportedDimensions(),
+            verifiedAt: Date(timeIntervalSince1970: 1_790_522_881),
+            promptBuilderVersion: "unlinked-active-prompt/2281",
+            assuranceState: .corpusComplete,
+            makeActive: false
+        )
+        XCTAssertThrowsError(
+            try queue.write { db in
+                try db.execute(
+                    sql: "UPDATE structured_outputs SET active_version_id = ? WHERE id = ?",
+                    arguments: [unlinkedVersion.id, activeFixture.output.id]
+                )
+            },
+            "an exhaustive output's active version must be linked to its exact proof run"
+        )
+        try queue.read { db in
+            let output = try XCTUnwrap(
+                StructuredOutputRecord.fetchOne(db, key: activeFixture.output.id)
+            )
+            XCTAssertEqual(output.activeVersionID, activeFixture.version.id)
+            XCTAssertNotEqual(output.activeVersionID, unlinkedVersion.id)
+        }
+
+        let prelinkedOutput = try outputs.createOutput(
+            matterID: matter.id,
+            title: "Synthetic prelinked activation 2287",
+            outputType: .documentExhaustiveList
+        )
+        let prelinkedVersion = try outputs.createVersion(
+            structuredOutputID: prelinkedOutput.id,
+            contentMarkdown: "# PRELINKED-ACTIVE-2287\n\nIntended ordering control [S97].",
+            requiredSections: ["PRELINKED-ACTIVE-2287"],
+            presentSections: ["PRELINKED-ACTIVE-2287"],
+            missingSections: [],
+            verificationStatus: .allSupported,
+            verificationVersion: "prelinked-active-verifier/2287",
+            verificationResults: [try supportedResult(sourceID: "prelinked-active-source-2287")],
+            verificationDimensions: supportedDimensions(),
+            verifiedAt: Date(timeIntervalSince1970: 1_790_522_887),
+            promptBuilderVersion: "prelinked-active-prompt/2287",
+            assuranceState: .corpusComplete,
+            makeActive: false
+        )
+        try queue.write { db in
+            let target = try insertCompletionBarrierRun(
+                db,
+                matterID: matter.id,
+                caseName: "prelinked-active-2287",
+                digestDigit: "a",
+                disposition: .succeeded
+            )
+            try insertSlice(
+                db,
+                id: "t-store-01-prelinked-active-slice-2287",
+                partitionID: target.partitionID,
+                ordinal: 0,
+                charStart: 0,
+                charEnd: 100,
+                revisionCharCount: 100,
+                textSHA256: String(repeating: "a", count: 64),
+                runID: target.runID,
+                memberKey: target.memberKey,
+                documentID: target.documentID,
+                partIndex: 257,
+                revisionID: target.revisionID
+            )
+            try persistCorpusComplete(db, runID: target.runID, exclusionsDisclosed: true)
+            try db.execute(
+                sql: "UPDATE corpus_analysis_runs SET structured_output_version_id = ? WHERE id = ?",
+                arguments: [prelinkedVersion.id, target.runID]
+            )
+            try db.execute(
+                sql: """
+                    UPDATE structured_outputs
+                    SET active_version_id = ?, status = 'complete'
+                    WHERE id = ?
+                    """,
+                arguments: [prelinkedVersion.id, prelinkedOutput.id]
+            )
+        }
+        try queue.read { db in
+            let output = try XCTUnwrap(
+                StructuredOutputRecord.fetchOne(db, key: prelinkedOutput.id)
+            )
+            XCTAssertEqual(output.activeVersionID, prelinkedVersion.id)
+            XCTAssertEqual(output.status, StructuredOutputStatus.complete.rawValue)
+            XCTAssertFalse(
+                output.activeVersionID?.contains("UNLINKED-ACTIVE-2281") ?? false
+            )
+        }
+    }
+
+    func testTSTORE01V072RevalidatesAttachmentWhenRunIsReclassifiedExact() throws {
+        // T-STORE-01 classification-laundering audit expected RED: attachment
+        // checks run only when structured_output_version_id changes. A chronology
+        // run can first share a version, then change task/request/strategy identity
+        // into exact v2 and bypass the one-proof-root uniqueness contract.
+        let queue = try DatabaseQueue()
+        try SupraMigrator.makeMigrator().migrate(queue)
+        let matter = try MattersRepository(writer: queue).createMatter(
+            name: "Synthetic classification laundering 2293"
+        )
+        let owner = try createLinkedExactOutputFixture(
+            queue: queue,
+            matterID: matter.id,
+            marker: "classification-owner-2293",
+            digestDigit: "b",
+            partIndex: 263
+        )
+        let candidateRunID: String = try queue.write { db in
+            let candidate = try insertCompletionBarrierRun(
+                db,
+                matterID: matter.id,
+                caseName: "classification-candidate-2297",
+                digestDigit: "c",
+                disposition: .succeeded
+            )
+            try db.execute(
+                sql: """
+                    UPDATE corpus_analysis_runs
+                    SET task_kind = 'chronology', request_schema_version = NULL,
+                        request_digest = NULL, partition_strategy = 'per_document:2297',
+                        partition_strategy_version = 1
+                    WHERE id = ?
+                    """,
+                arguments: [candidate.runID]
+            )
+            try insertSlice(
+                db,
+                id: "t-store-01-classification-candidate-slice-2297",
+                partitionID: candidate.partitionID,
+                ordinal: 0,
+                charStart: 0,
+                charEnd: 100,
+                revisionCharCount: 100,
+                textSHA256: String(repeating: "c", count: 64),
+                runID: candidate.runID,
+                memberKey: candidate.memberKey,
+                documentID: candidate.documentID,
+                partIndex: 269,
+                revisionID: candidate.revisionID
+            )
+            try persistCorpusComplete(db, runID: candidate.runID, exclusionsDisclosed: true)
+            try db.execute(
+                sql: "UPDATE corpus_analysis_runs SET structured_output_version_id = ? WHERE id = ?",
+                arguments: [owner.version.id, candidate.runID]
+            )
+            return candidate.runID
+        }
+
+        XCTAssertThrowsError(
+            try queue.write { db in
+                try db.execute(
+                    sql: """
+                        UPDATE corpus_analysis_runs
+                        SET task_kind = 'exhaustive_list', request_schema_version = 2,
+                            request_digest = ?, partition_strategy = 'exact_revision_slice:2297',
+                            partition_strategy_version = 2
+                        WHERE id = ?
+                        """,
+                    arguments: [String(repeating: "c", count: 64), candidateRunID]
+                )
+            },
+            "becoming exact v2 must revalidate that the output version has one proof root"
+        )
+        try queue.read { db in
+            let ownerRun = try XCTUnwrap(CorpusAnalysisRunRecord.fetchOne(db, key: owner.runID))
+            let candidate = try XCTUnwrap(
+                CorpusAnalysisRunRecord.fetchOne(db, key: candidateRunID)
+            )
+            XCTAssertEqual(ownerRun.structuredOutputVersionID, owner.version.id)
+            XCTAssertEqual(candidate.structuredOutputVersionID, owner.version.id)
+            XCTAssertEqual(candidate.taskKind, CorpusAnalysisTaskKind.chronology.rawValue)
+            XCTAssertNotEqual(candidate.taskKind, CorpusAnalysisTaskKind.exhaustiveList.rawValue)
+            XCTAssertNil(candidate.requestSchemaVersion)
+            XCTAssertNotEqual(candidate.requestSchemaVersion, 2)
+            XCTAssertNil(candidate.requestDigest)
+            XCTAssertFalse(candidate.partitionStrategy.hasPrefix("exact_revision_slice"))
+            XCTAssertNotEqual(candidate.partitionStrategyVersion, 2)
+        }
+    }
+
     func testTSTORE01V072KeepsPermanentMatterDeletionCascading() throws {
         // T-STORE-01 compatibility control: link immutability must not turn a
         // permanent matter deletion into an undeletable graph.
@@ -2303,6 +2899,262 @@ final class CaseFileReviewIntegrityMigrationTests: XCTestCase {
             XCTAssertEqual(coherentRun.status, CorpusAnalysisRunStatus.persisted.rawValue)
             XCTAssertEqual(coherentRun.assuranceState, OutputAssuranceState.corpusComplete.rawValue)
             XCTAssertNotEqual(coherentRun.assuranceState, OutputAssuranceState.corpusIncomplete.rawValue)
+        }
+    }
+
+    func testTSTORE01V072ValidatesSucceededRowTimesAndFindingsShape() throws {
+        // T-STORE-01 attempt-row audit expected RED: a structurally valid final
+        // attempt currently launders non-date or reversed row timestamps and
+        // NULL/object/scalar findings through exact-v2 success and finalization.
+        // The new constraint must remain scoped away from chronology and v1.
+        let queue = try DatabaseQueue()
+        try SupraMigrator.makeMigrator().migrate(queue)
+        let matter = try MattersRepository(writer: queue).createMatter(
+            name: "Synthetic exact attempt row scalars 2309"
+        )
+        let orderedHistory =
+            #"[{"attempt_number":1,"outcome":"succeeded","retryable":false,"started_at":8301.25,"completed_at":8307.75}]"#
+        let invalidRows: [(
+            caseName: String,
+            digestDigit: String,
+            partIndex: Int,
+            rowAssignments: String,
+            forbiddenMarker: String
+        )] = [
+            (
+                "non-date-row-2309", "d", 271,
+                "started_at = 'FOREIGN-NON-DATE-2309', completed_at = 8307.75, findings_json = '[]'",
+                "FOREIGN-NON-DATE-2309"
+            ),
+            (
+                "reversed-row-2311", "e", 277,
+                "started_at = 8319.75, completed_at = 8311.25, findings_json = '[]'",
+                "8319.75"
+            ),
+            (
+                "null-findings-2317", "f", 281,
+                "started_at = 8301.25, completed_at = 8307.75, findings_json = NULL",
+                "NULL-FINDINGS-2317"
+            ),
+            (
+                "object-findings-2321", "1", 283,
+                "started_at = 8301.25, completed_at = 8307.75, findings_json = '{\"foreign\":\"FOREIGN-OBJECT-2321\"}'",
+                "FOREIGN-OBJECT-2321"
+            ),
+            (
+                "scalar-findings-2327", "2", 293,
+                "started_at = 8301.25, completed_at = 8307.75, findings_json = '23272327'",
+                "23272327"
+            ),
+            (
+                "missing-evidence-findings-2329", "6", 299,
+                "started_at = 8301.25, completed_at = 8307.75, findings_json = '[{\"id\":\"FOREIGN-MISSING-EVIDENCE-2329\",\"value\":\"claim\"}]'",
+                "FOREIGN-MISSING-EVIDENCE-2329"
+            ),
+            (
+                "malformed-evidence-findings-2331", "7", 301,
+                "started_at = 8301.25, completed_at = 8307.75, findings_json = '[{\"id\":\"finding-2331\",\"value\":\"claim\",\"evidence\":[{\"document_id\":\"\",\"revision_id\":\"revision-2331\",\"locator_json\":\"FOREIGN-MALFORMED-EVIDENCE-2331\"}]}]'",
+                "FOREIGN-MALFORMED-EVIDENCE-2331"
+            ),
+        ]
+
+        try queue.write { db in
+            for invalid in invalidRows {
+                let target = try insertCompletionBarrierRun(
+                    db,
+                    matterID: matter.id,
+                    caseName: invalid.caseName,
+                    digestDigit: invalid.digestDigit,
+                    disposition: .pending
+                )
+                try insertSlice(
+                    db,
+                    id: "t-store-01-\(invalid.caseName)-slice",
+                    partitionID: target.partitionID,
+                    ordinal: 0,
+                    charStart: 0,
+                    charEnd: 100,
+                    revisionCharCount: 100,
+                    textSHA256: String(repeating: invalid.digestDigit, count: 64),
+                    runID: target.runID,
+                    memberKey: target.memberKey,
+                    documentID: target.documentID,
+                    partIndex: invalid.partIndex,
+                    revisionID: target.revisionID
+                )
+
+                var transitionError: Error?
+                do {
+                    try db.execute(
+                        sql: """
+                            UPDATE corpus_analysis_partitions
+                            SET attempt_count = 1, attempt_history_json = ?,
+                                disposition = 'succeeded', \(invalid.rowAssignments)
+                            WHERE id = ?
+                            """,
+                        arguments: [orderedHistory, target.partitionID]
+                    )
+                } catch {
+                    transitionError = error
+                }
+                if transitionError != nil {
+                    let retained = try XCTUnwrap(
+                        Row.fetchOne(
+                            db,
+                            sql: """
+                                SELECT disposition, findings_json, CAST(started_at AS TEXT) AS started_text
+                                FROM corpus_analysis_partitions WHERE id = ?
+                                """,
+                            arguments: [target.partitionID]
+                        )
+                    )
+                    XCTAssertEqual(
+                        retained["disposition"] as String,
+                        CorpusAnalysisPartitionDisposition.pending.rawValue
+                    )
+                    XCTAssertNil(retained["findings_json"] as String?)
+                    XCTAssertFalse(
+                        (retained["started_text"] as String?)?.contains(invalid.forbiddenMarker)
+                            ?? false
+                    )
+                } else {
+                    XCTAssertThrowsError(
+                        try persistCorpusComplete(
+                            db,
+                            runID: target.runID,
+                            exclusionsDisclosed: true
+                        ),
+                        "\(invalid.caseName) must not cross the exact export barrier"
+                    )
+                }
+                try assertNotCorpusComplete(db, runID: target.runID)
+            }
+
+            let valid = try insertCompletionBarrierRun(
+                db,
+                matterID: matter.id,
+                caseName: "numeric-row-control-2333",
+                digestDigit: "3",
+                disposition: .pending
+            )
+            try insertSlice(
+                db,
+                id: "t-store-01-numeric-row-control-slice-2333",
+                partitionID: valid.partitionID,
+                ordinal: 0,
+                charStart: 0,
+                charEnd: 100,
+                revisionCharCount: 100,
+                textSHA256: String(repeating: "3", count: 64),
+                runID: valid.runID,
+                memberKey: valid.memberKey,
+                documentID: valid.documentID,
+                partIndex: 307,
+                revisionID: valid.revisionID
+            )
+            try db.execute(
+                sql: """
+                    UPDATE corpus_analysis_partitions
+                    SET attempt_count = 1, attempt_history_json = ?,
+                        disposition = 'succeeded', findings_json = '[]',
+                        started_at = 8301.25, completed_at = 8307.75
+                    WHERE id = ?
+                    """,
+                arguments: [orderedHistory, valid.partitionID]
+            )
+            try persistCorpusComplete(db, runID: valid.runID, exclusionsDisclosed: true)
+            let validRun = try XCTUnwrap(CorpusAnalysisRunRecord.fetchOne(db, key: valid.runID))
+            XCTAssertEqual(validRun.status, CorpusAnalysisRunStatus.persisted.rawValue)
+            XCTAssertEqual(validRun.assuranceState, OutputAssuranceState.corpusComplete.rawValue)
+            let validTypes = try XCTUnwrap(
+                Row.fetchOne(
+                    db,
+                    sql: """
+                        SELECT typeof(started_at) AS started_type,
+                               typeof(completed_at) AS completed_type,
+                               started_at < completed_at AS ordered,
+                               json_type(findings_json) AS findings_type
+                        FROM corpus_analysis_partitions WHERE id = ?
+                        """,
+                    arguments: [valid.partitionID]
+                )
+            )
+            XCTAssertEqual(validTypes["started_type"] as String, "real")
+            XCTAssertEqual(validTypes["completed_type"] as String, "real")
+            XCTAssertEqual(validTypes["ordered"] as Int, 1)
+            XCTAssertEqual(validTypes["findings_type"] as String, "array")
+
+            let chronology = try insertCompletionBarrierRun(
+                db,
+                matterID: matter.id,
+                caseName: "chronology-row-control-2339",
+                digestDigit: "4",
+                disposition: .pending
+            )
+            try db.execute(
+                sql: "UPDATE corpus_analysis_runs SET task_kind = 'chronology' WHERE id = ?",
+                arguments: [chronology.runID]
+            )
+            XCTAssertNoThrow(
+                try db.execute(
+                    sql: """
+                        UPDATE corpus_analysis_partitions
+                        SET attempt_count = 1, attempt_history_json = ?,
+                            disposition = 'succeeded',
+                            started_at = 'LEGACY-CHRONOLOGY-2339', completed_at = 8307.75,
+                            findings_json = '{"legacy":"CHRONOLOGY-2339"}'
+                        WHERE id = ?
+                        """,
+                    arguments: [orderedHistory, chronology.partitionID]
+                )
+            )
+            XCTAssertEqual(
+                try String.fetchOne(
+                    db,
+                    sql: "SELECT disposition FROM corpus_analysis_partitions WHERE id = ?",
+                    arguments: [chronology.partitionID]
+                ),
+                CorpusAnalysisPartitionDisposition.succeeded.rawValue
+            )
+
+            let v1 = try insertCompletionBarrierRun(
+                db,
+                matterID: matter.id,
+                caseName: "v1-row-control-2341",
+                digestDigit: "5",
+                disposition: .pending
+            )
+            try db.execute(
+                sql: """
+                    UPDATE corpus_analysis_runs
+                    SET request_schema_version = 1,
+                        partition_strategy = 'per_revision:2341',
+                        partition_strategy_version = 1
+                    WHERE id = ?
+                    """,
+                arguments: [v1.runID]
+            )
+            XCTAssertNoThrow(
+                try db.execute(
+                    sql: """
+                        UPDATE corpus_analysis_partitions
+                        SET attempt_count = 1, attempt_history_json = ?,
+                            disposition = 'succeeded',
+                            started_at = 8341.75, completed_at = 8341.25,
+                            findings_json = NULL
+                        WHERE id = ?
+                        """,
+                    arguments: [orderedHistory, v1.partitionID]
+                )
+            )
+            XCTAssertEqual(
+                try String.fetchOne(
+                    db,
+                    sql: "SELECT disposition FROM corpus_analysis_partitions WHERE id = ?",
+                    arguments: [v1.partitionID]
+                ),
+                CorpusAnalysisPartitionDisposition.succeeded.rawValue
+            )
         }
     }
 
@@ -3116,6 +3968,57 @@ final class CaseFileReviewIntegrityMigrationTests: XCTestCase {
             outputStatus: exportEligible ? .complete : .needsReview
         )
         return (output, version)
+    }
+
+    private func createLinkedExactOutputFixture(
+        queue: DatabaseQueue,
+        matterID: String,
+        marker: String,
+        digestDigit: String,
+        partIndex: Int
+    ) throws -> (
+        output: StructuredOutputRecord,
+        version: StructuredOutputVersionRecord,
+        runID: String
+    ) {
+        let artifact = try createSyntheticOutputVersion(
+            repository: StructuredOutputRepository(writer: queue),
+            matterID: matterID,
+            marker: marker,
+            outputType: .documentExhaustiveList,
+            assuranceState: .corpusComplete
+        )
+        let runID: String = try queue.write { db in
+            let target = try insertCompletionBarrierRun(
+                db,
+                matterID: matterID,
+                caseName: marker,
+                digestDigit: digestDigit,
+                disposition: .succeeded
+            )
+            try insertSlice(
+                db,
+                id: "t-store-01-linked-fixture-\(marker)-slice",
+                partitionID: target.partitionID,
+                ordinal: 0,
+                charStart: 0,
+                charEnd: 100,
+                revisionCharCount: 100,
+                textSHA256: String(repeating: digestDigit, count: 64),
+                runID: target.runID,
+                memberKey: target.memberKey,
+                documentID: target.documentID,
+                partIndex: partIndex,
+                revisionID: target.revisionID
+            )
+            try persistCorpusComplete(db, runID: target.runID, exclusionsDisclosed: true)
+            try db.execute(
+                sql: "UPDATE corpus_analysis_runs SET structured_output_version_id = ? WHERE id = ?",
+                arguments: [artifact.version.id, target.runID]
+            )
+            return target.runID
+        }
+        return (artifact.output, artifact.version, runID)
     }
 }
 
