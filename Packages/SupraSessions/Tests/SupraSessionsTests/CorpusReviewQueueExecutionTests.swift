@@ -263,6 +263,21 @@ final class CorpusReviewQueueExecutionTests: XCTestCase {
         XCTAssertEqual(attemptHistory[0].outcome, .failed)
         XCTAssertEqual(attemptHistory[0].retryable, true)
         XCTAssertEqual(attemptHistory[1].outcome, .succeeded)
+
+        let finalVersionID = try XCTUnwrap(finalRun.structuredOutputVersionID)
+        let finalVersion = try XCTUnwrap(
+            store.structuredOutputs.fetchVersion(id: finalVersionID)
+        )
+        let generationID = try XCTUnwrap(finalVersion.generationSessionID)
+        let generation = try XCTUnwrap(
+            store.generation.fetchGenerationSession(generationID: generationID)
+        )
+        for index in 1...5 {
+            XCTAssertTrue(
+                generation.prompt.contains("QUEUE-\(index)-"),
+                "resume audit lineage must reconstruct every frozen partition prompt, including prior checkpoints"
+            )
+        }
     }
 
     private static let pinnedModel = CorpusAnalysisPinnedModel(
