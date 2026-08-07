@@ -99,6 +99,9 @@ public final class DocumentProcessingQueue: ObservableObject {
     /// the sole source authority for FIFO-queued imports.
     private var pendingSources: [String: [URL]] = [:]
     private var runTask: Task<Void, Never>?
+    private var activeCorpusTask: Task<Void, Error>?
+    private var activeCorpusJobID: String?
+    private var hasBootstrapped = false
 
     public init(
         store: SupraStore,
@@ -119,21 +122,30 @@ public final class DocumentProcessingQueue: ObservableObject {
     deinit {
         // Stop the background pump if the queue is ever released, so a detached
         // runLoop can't keep running after its owner is gone.
+        activeCorpusTask?.cancel()
         runTask?.cancel()
     }
 
     /// Relaunch reconciliation: any job left active is treated as interrupted and
     /// moved to paused for the user to resume (plan §5.4).
     public func bootstrap() {
-        do {
-            _ = try store.documentJobs.reconcileOrphanedBatches()
-            _ = try store.documentJobs.reconcileInterruptedJobs()
-            try reconcileQueuedImportsAfterRelaunch()
-            lastImportFailure = try restoredImportFailure()
-        } catch {
-            lastError = error.localizedDescription
+        if !hasBootstrapped {
+            hasBootstrapped = true
+            do {
+                _ = try store.documentJobs.reconcileOrphanedBatches()
+                _ = try store.documentJobs.reconcileInterruptedJobs()
+                try reconcileQueuedImportsAfterRelaunch()
+                lastImportFailure = try restoredImportFailure()
+            } catch {
+                lastError = error.localizedDescription
+            }
         }
         refresh()
+        if queuedJobs.contains(where: {
+            $0.kind == DocumentProcessingJobKind.corpusAnalysis.rawValue
+        }) {
+            pump()
+        }
     }
 
     public func refresh() {
@@ -152,6 +164,14 @@ public final class DocumentProcessingQueue: ObservableObject {
                 unfinishedCount: summary.unfinishedCount
             )
         }
+    }
+
+    /// True only for corpus work that can currently own the shared chat runtime.
+    /// Paused interrupted work remains user-controlled and does not suppress the
+    /// ordinary startup load until the user resumes it.
+    public var hasPendingCorpusAnalysisWork: Bool {
+        activeJob?.kind == DocumentProcessingJobKind.corpusAnalysis.rawValue
+            || queuedJobs.contains { $0.kind == DocumentProcessingJobKind.corpusAnalysis.rawValue }
     }
 
     /// Enqueues an import job for the given source URLs.
@@ -275,13 +295,16 @@ public final class DocumentProcessingQueue: ObservableObject {
         }
     }
 
-    /// Enqueues a persisted v064 corpus-analysis run. The run itself owns the
-    /// frozen snapshot and partition ledger; the job payload carries only its id.
+    /// Enqueues a fully reconstructible corpus-analysis request whose exact inputs
+    /// were frozen before the durable job becomes runnable.
     @discardableResult
-    public func enqueueCorpusAnalysis(matterID: String, runID: String) -> String? {
+    public func enqueueCorpusAnalysis(
+        matterID: String,
+        payload: CorpusAnalysisJobPayload
+    ) -> String? {
         do {
             let payloadJSON = String(
-                data: try JSONEncoder().encode(CorpusAnalysisJobPayload(runID: runID)),
+                data: try JSONEncoder().encode(payload),
                 encoding: .utf8
             )
             let job = try store.documentJobs.enqueueJob(
@@ -317,9 +340,21 @@ public final class DocumentProcessingQueue: ObservableObject {
     }
 
     public func cancelQueuedJob(id: String) {
-        try? store.documentJobs.cancelJob(id: id)
-        pendingSources[id] = nil
+        if (try? store.documentJobs.cancelQueuedJob(id: id)) == true {
+            pendingSources[id] = nil
+        }
         refresh()
+    }
+
+    /// Cancels owned active corpus work without cancelling the FIFO pump. The row
+    /// becomes cancelled only after the runner acknowledges cancellation and the
+    /// corpus engine atomically balances its frozen partition ledger.
+    public func cancel(jobID: String) {
+        if activeCorpusJobID == jobID, let activeCorpusTask {
+            activeCorpusTask.cancel()
+            return
+        }
+        cancelQueuedJob(id: jobID)
     }
 
     /// Resumes a paused job. Sources from the original session are reused if still
@@ -437,22 +472,49 @@ public final class DocumentProcessingQueue: ObservableObject {
             try? store.documentJobs.failJob(id: job.id, errorSummary: message)
             return
         }
+        guard payload.schemaVersion == 2,
+              case .exhaustiveList(let request) = payload.task,
+              request.matterID == job.matterID else {
+            let message = "The corpus-analysis job is not a coherent reconstructible v2 request."
+            lastError = message
+            try? store.documentJobs.failJob(id: job.id, errorSummary: message)
+            return
+        }
         do {
             setPhase(job.id, .analyzingCorpus)
-            try await corpusAnalysisRunner(payload)
-            try store.documentJobs.completeJob(id: job.id)
+            let task = Task {
+                try await corpusAnalysisRunner(payload)
+            }
+            activeCorpusJobID = job.id
+            activeCorpusTask = task
+            defer {
+                if activeCorpusJobID == job.id {
+                    activeCorpusJobID = nil
+                    activeCorpusTask = nil
+                }
+            }
+            try await task.value
+            _ = try store.documentJobs.completeActiveJob(id: job.id)
+            refresh()
+        } catch is CancellationError {
+            _ = try? store.documentJobs.cancelActiveJob(id: job.id)
             refresh()
         } catch {
-            lastError = error.localizedDescription
-            try? store.documentJobs.failJob(id: job.id, errorSummary: error.localizedDescription)
-            _ = try? store.auditEvents.recordEvent(
-                matterID: job.matterID,
-                eventType: "corpus_analysis_failed",
-                actor: "system",
-                summary: "Corpus analysis failed: \(error.localizedDescription)",
-                relatedTable: "document_processing_jobs",
-                relatedID: job.id
-            )
+            let failed = (try? store.documentJobs.failActiveJob(
+                id: job.id,
+                errorSummary: error.localizedDescription
+            )) == true
+            if failed {
+                lastError = error.localizedDescription
+                _ = try? store.auditEvents.recordEvent(
+                    matterID: job.matterID,
+                    eventType: "corpus_analysis_failed",
+                    actor: "system",
+                    summary: "Corpus analysis failed: \(error.localizedDescription)",
+                    relatedTable: "document_processing_jobs",
+                    relatedID: job.id
+                )
+            }
         }
     }
 

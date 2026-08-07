@@ -246,6 +246,13 @@ public final class StructuredOutputRepository: @unchecked Sendable {
         }
 
         return try writer.write { db in
+            guard try Int.fetchOne(
+                db,
+                sql: "SELECT COUNT(*) FROM matters WHERE id = ? AND deleted_at IS NULL",
+                arguments: [sourceSet.matterID]
+            ) == 1 else {
+                throw StructuredOutputRepositoryError.outputUnavailable(structuredOutputID)
+            }
             let output: StructuredOutputRecord
             if let newOutput {
                 try newOutput.insert(db)

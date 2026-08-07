@@ -44,6 +44,19 @@ public struct ExhaustiveListGenerationInput: Sendable {
     public var prompt: String
 }
 
+/// Versioned runtime behavior for one exhaustive-list prompt builder. Shipping
+/// composition uses the same value for XPC generation and persisted audit
+/// lineage; changing it requires a promptBuilderVersion bump.
+public struct ExhaustiveListGenerationConfiguration: Equatable, Sendable {
+    public var systemPrompt: String?
+    public var options: GenerationOptions
+
+    public init(systemPrompt: String?, options: GenerationOptions) {
+        self.systemPrompt = systemPrompt
+        self.options = options
+    }
+}
+
 public struct ExhaustiveListItem: Codable, Equatable, Sendable {
     public var itemKey: String
     public var values: [String]
@@ -284,10 +297,6 @@ public final class ExhaustiveListTask: @unchecked Sendable {
             throw DocumentGenerationLineageError.stableModelIdentityUnavailable
         }
         try pinnedModel.validate()
-        let resolvedModelLineage = DocumentGenerationModelLineage(
-            modelRepository: pinnedModel.modelRepository,
-            modelRevision: pinnedModel.modelRevision
-        )
         let queuedRequest = ExhaustiveListQueuedRequest(
             taskSchemaVersion: Self.schemaVersion,
             promptBuilderVersion: Self.promptBuilderVersion,
@@ -303,12 +312,76 @@ public final class ExhaustiveListTask: @unchecked Sendable {
             request: queuedRequest,
             pinnedModel: pinnedModel
         )
+        return try await runPrepared(
+            payload: payload,
+            evaluationExpectedItemKeys: request.evaluationExpectedItemKeys,
+            generationConfiguration: nil,
+            progressHandler: { _ in },
+            generator: generator
+        )
+    }
+
+    /// Executes a request whose exact task, model identity, snapshot, partitions,
+    /// and slices were already frozen before it entered the durable FIFO. Production
+    /// execution must use this path so relaunch never prepares a second live run.
+    public func runPrepared(
+        payload: CorpusAnalysisJobPayload,
+        generationConfiguration: ExhaustiveListGenerationConfiguration? = nil,
+        progressHandler: @escaping @Sendable (CorpusAnalysisCoverage) async -> Void = { _ in },
+        generator: @escaping Generator
+    ) async throws -> ExhaustiveListResult {
+        try await runPrepared(
+            payload: payload,
+            evaluationExpectedItemKeys: [],
+            generationConfiguration: generationConfiguration,
+            progressHandler: progressHandler,
+            generator: generator
+        )
+    }
+
+    private func runPrepared(
+        payload: CorpusAnalysisJobPayload,
+        evaluationExpectedItemKeys: [String],
+        generationConfiguration: ExhaustiveListGenerationConfiguration?,
+        progressHandler: @escaping @Sendable (CorpusAnalysisCoverage) async -> Void,
+        generator: @escaping Generator
+    ) async throws -> ExhaustiveListResult {
+        guard payload.schemaVersion == 2 else {
+            throw CorpusAnalysisPreparationError.preparedRunMismatch("payload schema")
+        }
         guard case .exhaustiveList(let frozenRequest) = payload.task else {
             throw CorpusAnalysisPreparationError.preparedRunMismatch("task payload")
         }
+        guard frozenRequest.taskSchemaVersion == Self.schemaVersion else {
+            throw CorpusAnalysisPreparationError.unsupportedTaskSchema(
+                frozenRequest.taskSchemaVersion
+            )
+        }
+        guard frozenRequest.promptBuilderVersion == Self.promptBuilderVersion else {
+            throw CorpusAnalysisPreparationError.unsupportedPromptBuilder(
+                frozenRequest.promptBuilderVersion
+            )
+        }
+        let pinnedModel = payload.pinnedModel
+        try pinnedModel.validate()
+        let resolvedModelLineage = DocumentGenerationModelLineage(
+            modelRepository: pinnedModel.modelRepository,
+            modelRevision: pinnedModel.modelRevision
+        )
+        let request = ExhaustiveListRequest(
+            runKey: frozenRequest.runKey,
+            matterID: frozenRequest.matterID,
+            title: frozenRequest.title,
+            query: frozenRequest.query,
+            scope: frozenRequest.scope,
+            characterBudget: frozenRequest.characterBudget,
+            maximumRetryCount: frozenRequest.maximumRetryCount,
+            evaluationExpectedItemKeys: evaluationExpectedItemKeys,
+            modelLineageJSON: try CorpusAnalysisRequestDigest.canonicalJSON(pinnedModel)
+        )
         let canonicalModelLineage = try CorpusAnalysisRequestDigest.canonicalJSON(pinnedModel)
-        let promptCollector = PromptCollector()
-        let engineResult = try await CorpusAnalysisEngine(store: store).runPrepared(
+        let engine = CorpusAnalysisEngine(store: store)
+        let engineResult = try await engine.runPrepared(
             request: CorpusAnalysisRequest(
                 runKey: request.runKey,
                 matterID: request.matterID,
@@ -319,16 +392,23 @@ public final class ExhaustiveListTask: @unchecked Sendable {
                 modelLineageJSON: canonicalModelLineage
             ),
             runID: payload.runID,
-            requestDigest: payload.requestDigest
+            requestDigest: payload.requestDigest,
+            progressHandler: progressHandler
         ) { partition in
             let prompt = Self.prompt(query: frozenRequest.query, partition: partition)
-            promptCollector.append(prompt)
             let raw = try await generator(ExhaustiveListGenerationInput(
                 partition: partition,
                 prompt: prompt
             ))
             return try Self.decodeMapResponse(raw)
         }
+        try Task.checkCancellation()
+        let auditPrompt = try engine.preparedPartitionInputs(
+            matterID: request.matterID,
+            runID: payload.runID
+        ).map { partition in
+            Self.prompt(query: frozenRequest.query, partition: partition)
+        }.joined(separator: "\n\n")
 
         let reconciliation = Self.reconcile(
             findings: engineResult.findings,
@@ -512,11 +592,13 @@ public final class ExhaustiveListTask: @unchecked Sendable {
                     modelRepository: resolvedModelLineage.modelRepository,
                     modelRevision: resolvedModelLineage.modelRevision,
                     promptBuilderVersion: Self.promptBuilderVersion,
-                    prompt: promptCollector.joined(or: frozenRequest.query),
+                    prompt: auditPrompt.isEmpty ? frozenRequest.query : auditPrompt,
+                    systemPrompt: generationConfiguration?.systemPrompt,
                     optionsJSON: try Self.canonicalJSON(GenerationAuditOptions(
                         characterBudget: frozenRequest.characterBudget,
                         maximumRetryCount: frozenRequest.maximumRetryCount,
-                        taskKind: CorpusAnalysisTaskKind.exhaustiveList.rawValue
+                        taskKind: CorpusAnalysisTaskKind.exhaustiveList.rawValue,
+                        generationOptions: generationConfiguration?.options
                     ))
                 )
         let version = try store.structuredOutputs.createVersionWithSourceSetAtomically(
@@ -580,28 +662,13 @@ public final class ExhaustiveListTask: @unchecked Sendable {
         var characterBudget: Int
         var maximumRetryCount: Int
         var taskKind: String
+        var generationOptions: GenerationOptions?
 
         private enum CodingKeys: String, CodingKey {
             case characterBudget = "character_budget"
             case maximumRetryCount = "maximum_retry_count"
             case taskKind = "task_kind"
-        }
-    }
-
-    private final class PromptCollector: @unchecked Sendable {
-        private let lock = NSLock()
-        private var prompts: [String] = []
-
-        func append(_ prompt: String) {
-            lock.withLock { prompts.append(prompt) }
-        }
-
-        func joined(or fallback: String) -> String {
-            lock.withLock {
-                prompts.isEmpty
-                    ? fallback
-                    : prompts.joined(separator: "\n\n--- prompt boundary ---\n\n")
-            }
+            case generationOptions = "generation_options"
         }
     }
 

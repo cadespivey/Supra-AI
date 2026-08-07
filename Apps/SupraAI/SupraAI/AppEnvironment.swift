@@ -292,6 +292,11 @@ final class AppEnvironment: ObservableObject {
         self.embeddingDownloadController.onModelRegistered = { [weak documentSetup] in
             documentSetup?.handleEmbeddingModelDownloaded()
         }
+        let corpusAnalysisRunner = CorpusAnalysisQueueRunner.live(
+            store: store,
+            modelLibrary: modelLibrary,
+            runtimeClient: taskRuntimeClient
+        )
         let importService = DocumentImportService(store: store)
         let queue = DocumentProcessingQueue(
             store: store,
@@ -311,7 +316,10 @@ final class AppEnvironment: ObservableObject {
                 store: store,
                 modelLibrary: modelLibrary,
                 runtimeClient: taskRuntimeClient
-            )
+            ),
+            corpusAnalysisRunner: { payload in
+                try await corpusAnalysisRunner.run(payload)
+            }
         )
         documentSetup.setReindexEnqueuer { [weak queue] matterID in
             _ = queue?.enqueueReindex(matterID: matterID)
@@ -505,11 +513,17 @@ final class AppEnvironment: ObservableObject {
         dumpOpinionToPasteboardIfRequested()
         #endif
         await refreshRuntimeStatus()
+        // Reconcile and claim persisted corpus work before scheduling the ordinary
+        // chat-model warm. Both use the one chat-runtime slot, and exact review
+        // loads must never race a routed fallback load during launch.
+        documentQueue.bootstrap()
         // If the runtime already holds a model from a previous session, re-enable
         // chat without forcing the user to re-load it (the chat gate keys on
         // ModelLibrary.loadState, which otherwise starts idle each launch).
         modelLibrary.reconcileLoadedModel(runtimeStatusController.loadedModelID)
-        autoLoadStartupModelIfNeeded()
+        if !documentQueue.hasPendingCorpusAnalysisWork {
+            autoLoadStartupModelIfNeeded()
+        }
         await documentSetupController.refreshAll()
         documentChunkerVersion = (try? store.documentSettings.loadSettings().chunkerVersion)
             ?? DocumentChunkerRolloutService.approvedDefaultVersion
@@ -524,8 +538,6 @@ final class AppEnvironment: ObservableObject {
         // the chat model — and it removes the first-use wait on Document Q&A, semantic
         // search, and import indexing.
         if !Self.isUITestMode, !Self.isHeadlessProbeMode { documentSetupController.prewarmEmbeddingModel() }
-        // Reconcile any document job interrupted by a previous quit (plan §5.4).
-        documentQueue.bootstrap()
         // Auto-purge documents and chats soft-deleted past the retention window
         // (plan §12.2). Matters are never auto-purged — only manually from the Recycle Bin.
         let maintenance = DocumentMaintenance(store: store)

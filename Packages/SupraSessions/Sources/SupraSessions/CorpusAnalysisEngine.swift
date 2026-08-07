@@ -225,6 +225,7 @@ public final class CorpusAnalysisEngine: @unchecked Sendable {
             request: request,
             preparedRunID: nil,
             expectedRequestDigest: nil,
+            progressHandler: { _ in },
             mapper: mapper
         )
     }
@@ -233,20 +234,58 @@ public final class CorpusAnalysisEngine: @unchecked Sendable {
         request: CorpusAnalysisRequest,
         runID: String,
         requestDigest: String,
+        progressHandler: @escaping @Sendable (CorpusAnalysisCoverage) async -> Void = { _ in },
         mapper: @escaping Mapper
     ) async throws -> CorpusAnalysisRunResult {
         try await execute(
             request: request,
             preparedRunID: runID,
             expectedRequestDigest: requestDigest,
+            progressHandler: progressHandler,
             mapper: mapper
         )
+    }
+
+    /// Reconstructs every frozen partition input in canonical ledger order,
+    /// including checkpoints completed by an earlier process. Task layers use
+    /// this for complete generation audit lineage after a resumed run.
+    func preparedPartitionInputs(
+        matterID: String,
+        runID: String
+    ) throws -> [CorpusAnalysisPartitionInput] {
+        guard let run = try store.corpusAnalysis.fetchRun(matterID: matterID, id: runID) else {
+            throw CorpusAnalysisPreparationError.preparedRunMismatch("run identity")
+        }
+        let snapshot = try decodeSnapshot(run)
+        let documentNames = try frozenDocumentNames(snapshot)
+        let partitions = try store.corpusAnalysis.fetchPartitions(
+            matterID: matterID,
+            runID: runID
+        )
+        let slicesByPartitionID = Dictionary(
+            grouping: try store.corpusAnalysis.fetchSlices(
+                matterID: matterID,
+                runID: runID
+            ),
+            by: \.partitionID
+        )
+        let requiresExactSlices = run.partitionStrategyVersion == 2
+            && run.partitionStrategy.hasPrefix("exact_revision_slice")
+        return try partitions.map { partition in
+            try partitionInput(
+                partition,
+                slices: slicesByPartitionID[partition.id] ?? [],
+                requiresExactSlices: requiresExactSlices,
+                documentNames: documentNames
+            )
+        }
     }
 
     private func execute(
         request: CorpusAnalysisRequest,
         preparedRunID: String?,
         expectedRequestDigest: String?,
+        progressHandler: @escaping @Sendable (CorpusAnalysisCoverage) async -> Void,
         mapper: @escaping Mapper
     ) async throws -> CorpusAnalysisRunResult {
         let scopeJSON = try canonicalJSON(request.scope)
@@ -372,6 +411,10 @@ public final class CorpusAnalysisEngine: @unchecked Sendable {
                     throw CorpusAnalysisEngineError.invalidPersistedJSON("exact slice ledger")
                 }
             }
+            await progressHandler(try store.corpusAnalysis.coverage(
+                matterID: request.matterID,
+                runID: run.id
+            ))
             for partition in partitions where partition.disposition == CorpusAnalysisPartitionDisposition.pending.rawValue {
                 try Task.checkCancellation()
                 var partitionFinished = false
@@ -388,10 +431,9 @@ public final class CorpusAnalysisEngine: @unchecked Sendable {
                             requiresExactSlices: requiresExactSlices,
                             documentNames: nameByID
                         )
-                        let output = try validated(
-                            try await mapper(input),
-                            against: input
-                        )
+                        let mapped = try await mapper(input)
+                        try Task.checkCancellation()
+                        let output = try validated(mapped, against: input)
                         try store.corpusAnalysis.completeAttemptSucceeded(
                             matterID: request.matterID,
                             runID: run.id,
@@ -421,8 +463,13 @@ public final class CorpusAnalysisEngine: @unchecked Sendable {
                         if shouldRetry { try Task.checkCancellation() }
                     }
                 }
+                await progressHandler(try store.corpusAnalysis.coverage(
+                    matterID: request.matterID,
+                    runID: run.id
+                ))
             }
 
+            try Task.checkCancellation()
             _ = try store.corpusAnalysis.updateStatus(
                 matterID: request.matterID,
                 runID: run.id,
@@ -521,6 +568,7 @@ public final class CorpusAnalysisEngine: @unchecked Sendable {
                 assurance = .corpusIncomplete
                 reasons = ["The corpus ledger contains failed, cancelled, pending, excluded, or unbalanced partitions."]
             }
+            try Task.checkCancellation()
             let finalized = try store.corpusAnalysis.finalizeRun(
                 matterID: request.matterID,
                 runID: run.id,
