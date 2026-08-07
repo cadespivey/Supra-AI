@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import GRDB
 import SupraCore
@@ -2107,6 +2108,272 @@ final class CaseFileReviewIntegrityMigrationTests: XCTestCase {
         }
     }
 
+    func testTSTORE01V072RejectsLegacyRunSharingAnExactRunsOutputVersion() throws {
+        // T-STORE-01 proof-ownership audit expected RED: uniqueness guards are
+        // scoped only to the run being attached when that run is exact v2. A
+        // chronology/v1 row can therefore attach, or be inserted already
+        // attached, to a version that already belongs to an exact proof root.
+        // Proof-owned versions must reject every second owner irrespective of
+        // the candidate run's legacy classification.
+        let queue = try DatabaseQueue()
+        try SupraMigrator.makeMigrator().migrate(queue)
+        let matter = try MattersRepository(writer: queue).createMatter(
+            name: "Synthetic legacy proof ownership 2191"
+        )
+        let owner = try createLinkedExactOutputFixture(
+            queue: queue,
+            matterID: matter.id,
+            marker: "legacy-proof-owner-2191",
+            digestDigit: "d",
+            partIndex: 199
+        )
+
+        try queue.write { db in
+            let legacy = try insertCompletionBarrierRun(
+                db,
+                matterID: matter.id,
+                caseName: "legacy-proof-candidate-2197",
+                digestDigit: "e",
+                disposition: .pending
+            )
+            try db.execute(
+                sql: """
+                    UPDATE corpus_analysis_runs
+                    SET task_kind = 'chronology', request_schema_version = NULL,
+                        request_digest = NULL, partition_strategy = 'per_document:2197',
+                        partition_strategy_version = 1
+                    WHERE id = ?
+                    """,
+                arguments: [legacy.runID]
+            )
+            XCTAssertThrowsError(
+                try db.execute(
+                    sql: """
+                        UPDATE corpus_analysis_runs
+                        SET structured_output_version_id = ?
+                        WHERE id = ?
+                        """,
+                    arguments: [owner.version.id, legacy.runID]
+                ),
+                "a legacy update must not become a second owner of an exact proof version"
+            )
+            XCTAssertNil(
+                try CorpusAnalysisRunRecord.fetchOne(db, key: legacy.runID)?
+                    .structuredOutputVersionID
+            )
+
+            let insertedLegacyID = "t-store-01-inserted-legacy-owner-2203"
+            XCTAssertThrowsError(
+                try db.execute(
+                    sql: """
+                        INSERT INTO corpus_analysis_runs (
+                            id, run_key, matter_id, task_kind, scope_json,
+                            corpus_snapshot_json, partition_strategy,
+                            partition_strategy_version, status,
+                            structured_output_version_id, created_at
+                        ) VALUES (?, ?, ?, 'chronology', '{}', ?, 'per_revision:2203',
+                            1, 'planning', ?, ?)
+                        """,
+                    arguments: [
+                        insertedLegacyID,
+                        "t-store-01-inserted-legacy-owner-key-2203",
+                        matter.id,
+                        #"{"schema_version":1,"members":[]}"#,
+                        owner.version.id,
+                        Date(timeIntervalSince1970: 1_790_322_003),
+                    ]
+                ),
+                "a legacy insert must not arrive as a second owner of an exact proof version"
+            )
+            XCTAssertNil(try CorpusAnalysisRunRecord.fetchOne(db, key: insertedLegacyID))
+            XCTAssertEqual(
+                try CorpusAnalysisRunRecord.fetchOne(db, key: owner.runID)?
+                    .structuredOutputVersionID,
+                owner.version.id
+            )
+        }
+    }
+
+    func testTSTORE01V072AtomicPublisherRequiresSourceSetToMatchFrozenCorpusLineage() throws {
+        // T-STORE-01 publication-lineage audit expected RED: the atomic
+        // publisher checks only source-set matter identity before binding an
+        // exact run. A pending source set whose corpus_snapshot_hash names a
+        // different frozen corpus can therefore be published as that run's
+        // active proof. The field must equal the deterministic lineage hash
+        // recomputed from the run's frozen snapshot and normalized slices; it
+        // remains deliberately independent from the broader request digest.
+        let queue = try DatabaseQueue()
+        try SupraMigrator.makeMigrator().migrate(queue)
+        let matter = try MattersRepository(writer: queue).createMatter(
+            name: "Synthetic atomic source lineage 2213"
+        )
+        let runs: (
+            invalid: (id: String, lineageHash: String, requestDigest: String),
+            valid: (id: String, lineageHash: String, requestDigest: String)
+        ) = try queue.write { db in
+            func makeFinalRun(
+                caseName: String,
+                digestDigit: String,
+                partIndex: Int
+            ) throws -> String {
+                let target = try insertCompletionBarrierRun(
+                    db,
+                    matterID: matter.id,
+                    caseName: caseName,
+                    digestDigit: digestDigit,
+                    disposition: .succeeded
+                )
+                try insertSlice(
+                    db,
+                    id: "t-store-01-source-lineage-\(caseName)-slice",
+                    partitionID: target.partitionID,
+                    ordinal: 0,
+                    charStart: 0,
+                    charEnd: 100,
+                    revisionCharCount: 100,
+                    textSHA256: String(repeating: digestDigit, count: 64),
+                    runID: target.runID,
+                    memberKey: target.memberKey,
+                    documentID: target.documentID,
+                    partIndex: partIndex,
+                    revisionID: target.revisionID
+                )
+                try persistCorpusComplete(
+                    db,
+                    runID: target.runID,
+                    exclusionsDisclosed: true
+                )
+                return target.runID
+            }
+            let invalidID = try makeFinalRun(
+                    caseName: "source-lineage-invalid-2213",
+                    digestDigit: "1",
+                    partIndex: 211
+                )
+            let validID = try makeFinalRun(
+                    caseName: "source-lineage-valid-2219",
+                    digestDigit: "2",
+                    partIndex: 223
+                )
+            let invalidRun = try XCTUnwrap(
+                CorpusAnalysisRunRecord.fetchOne(db, key: invalidID)
+            )
+            let validRun = try XCTUnwrap(
+                CorpusAnalysisRunRecord.fetchOne(db, key: validID)
+            )
+            return (
+                (
+                    invalidID,
+                    try frozenCorpusLineageHash(db, runID: invalidID),
+                    try XCTUnwrap(invalidRun.requestDigest)
+                ),
+                (
+                    validID,
+                    try frozenCorpusLineageHash(db, runID: validID),
+                    try XCTUnwrap(validRun.requestDigest)
+                )
+            )
+        }
+        XCTAssertNotEqual(runs.invalid.lineageHash, runs.invalid.requestDigest)
+        XCTAssertNotEqual(runs.valid.lineageHash, runs.valid.requestDigest)
+
+        let outputs = StructuredOutputRepository(writer: queue)
+        let invalidOutput = StructuredOutputRecord(
+            id: "t-store-01-source-lineage-invalid-output-2213",
+            matterID: matter.id,
+            title: "Synthetic mismatched source lineage 2213",
+            outputType: StructuredOutputType.documentExhaustiveList.rawValue,
+            createdAt: Date(timeIntervalSince1970: 1_790_322_113),
+            updatedAt: Date(timeIntervalSince1970: 1_790_322_113)
+        )
+        let invalidSourceSet = DocumentSourceSetRecord(
+            id: "t-store-01-source-lineage-invalid-set-2213",
+            matterID: matter.id,
+            mode: DocumentSourceSetMode.guided.rawValue,
+            scopeJSON: #"{"document_ids":["synthetic-source-lineage-2213"]}"#,
+            retrievalQuery: "Synthetic mismatched source lineage 2213",
+            corpusSnapshotHash: runs.valid.lineageHash,
+            createdAt: Date(timeIntervalSince1970: 1_790_322_117)
+        )
+        XCTAssertThrowsError(
+            try outputs.createVersionWithSourceSetAtomically(
+                structuredOutputID: invalidOutput.id,
+                newOutput: invalidOutput,
+                sourceSet: invalidSourceSet,
+                outputSources: [],
+                contentMarkdown: "# Mismatched source lineage\n\nFOREIGN-SOURCE-LINEAGE-2213 [S97].",
+                verificationStatus: .allSupported,
+                verificationVersion: "source-lineage-verifier/2213",
+                verificationResults: [try supportedResult(sourceID: "source-lineage-source-2213")],
+                verificationDimensions: supportedDimensions(),
+                outputStatus: .complete,
+                corpusAnalysisRunID: runs.invalid.id,
+                promptBuilderVersion: "source-lineage-prompt/2213",
+                assuranceState: .corpusComplete
+            ),
+            "an exact publication must reject a source set from another frozen corpus"
+        )
+        try queue.read { db in
+            XCTAssertNil(try StructuredOutputRecord.fetchOne(db, key: invalidOutput.id))
+            XCTAssertNil(try DocumentSourceSetRecord.fetchOne(db, key: invalidSourceSet.id))
+            XCTAssertNil(
+                try CorpusAnalysisRunRecord.fetchOne(db, key: runs.invalid.id)?
+                    .structuredOutputVersionID
+            )
+        }
+
+        let validOutput = StructuredOutputRecord(
+            id: "t-store-01-source-lineage-valid-output-2219",
+            matterID: matter.id,
+            title: "Synthetic matching source lineage 2219",
+            outputType: StructuredOutputType.documentExhaustiveList.rawValue,
+            createdAt: Date(timeIntervalSince1970: 1_790_322_119),
+            updatedAt: Date(timeIntervalSince1970: 1_790_322_119)
+        )
+        let validSourceSet = DocumentSourceSetRecord(
+            id: "t-store-01-source-lineage-valid-set-2219",
+            matterID: matter.id,
+            mode: DocumentSourceSetMode.guided.rawValue,
+            scopeJSON: #"{"document_ids":["synthetic-source-lineage-2219"]}"#,
+            retrievalQuery: "Synthetic matching source lineage 2219",
+            corpusSnapshotHash: runs.valid.lineageHash,
+            createdAt: Date(timeIntervalSince1970: 1_790_322_127)
+        )
+        let validVersion = try outputs.createVersionWithSourceSetAtomically(
+            structuredOutputID: validOutput.id,
+            newOutput: validOutput,
+            sourceSet: validSourceSet,
+            outputSources: [],
+            contentMarkdown: "# Matching source lineage\n\nMATCHING-SOURCE-LINEAGE-2219 [S97].",
+            verificationStatus: .allSupported,
+            verificationVersion: "source-lineage-verifier/2219",
+            verificationResults: [try supportedResult(sourceID: "source-lineage-source-2219")],
+            verificationDimensions: supportedDimensions(),
+            outputStatus: .complete,
+            corpusAnalysisRunID: runs.valid.id,
+            promptBuilderVersion: "source-lineage-prompt/2219",
+            assuranceState: .corpusComplete
+        )
+        XCTAssertEqual(validVersion.assuranceState, OutputAssuranceState.corpusComplete.rawValue)
+        try queue.read { db in
+            let storedSet = try XCTUnwrap(
+                DocumentSourceSetRecord.fetchOne(db, key: validSourceSet.id)
+            )
+            XCTAssertEqual(storedSet.corpusSnapshotHash, runs.valid.lineageHash)
+            XCTAssertEqual(storedSet.structuredOutputVersionID, validVersion.id)
+            XCTAssertEqual(
+                try CorpusAnalysisRunRecord.fetchOne(db, key: runs.valid.id)?
+                    .structuredOutputVersionID,
+                validVersion.id
+            )
+            XCTAssertEqual(
+                try StructuredOutputRecord.fetchOne(db, key: validOutput.id)?.activeVersionID,
+                validVersion.id
+            )
+        }
+        XCTAssertNotEqual(runs.invalid.lineageHash, invalidSourceSet.corpusSnapshotHash)
+    }
+
     func testTSTORE01V072KeepsLinkedOutputAssuranceAndParentIdentityConsistent() throws {
         // T-STORE-01 output-projection audit expected RED: the exact-run guards
         // protect only the run-to-version link. Direct version/output updates can
@@ -3231,6 +3498,217 @@ final class CaseFileReviewIntegrityMigrationTests: XCTestCase {
         }
     }
 
+    func testTSTORE01V072RequiresEveryFindingReferenceToBelongToItsExactPartition() throws {
+        // T-STORE-01 evidence-lineage audit expected RED: exact-v2 success
+        // currently checks only the JSON shape of evidence references. It
+        // accepts findings with no references and references to a foreign
+        // document, revision, or locator. Every non-empty finding must instead
+        // carry at least one primary/contrary reference that equals a frozen
+        // slice in this exact partition; an empty top-level findings array is
+        // still a valid no-findings result.
+        let queue = try DatabaseQueue()
+        try SupraMigrator.makeMigrator().migrate(queue)
+        let matter = try MattersRepository(writer: queue).createMatter(
+            name: "Synthetic exact finding lineage 2351"
+        )
+        let invalidCases = [
+            "no-references-2351",
+            "foreign-document-2357",
+            "foreign-revision-2371",
+            "foreign-locator-2377",
+            "foreign-contrary-locator-2381",
+        ]
+        let digestDigits = ["6", "7", "8", "9", "a"]
+
+        try queue.write { db in
+            for (offset, caseName) in invalidCases.enumerated() {
+                let target = try insertCompletionBarrierRun(
+                    db,
+                    matterID: matter.id,
+                    caseName: caseName,
+                    digestDigit: digestDigits[offset],
+                    disposition: .pending
+                )
+                let partIndex = 311 + offset * 2
+                let locator =
+                    "{\"source_kind\":\"text\",\"part_index\":\(partIndex),\"char_start\":0,\"char_end\":100}"
+                try insertSlice(
+                    db,
+                    id: "t-store-01-\(caseName)-slice",
+                    partitionID: target.partitionID,
+                    ordinal: 0,
+                    charStart: 0,
+                    charEnd: 100,
+                    revisionCharCount: 100,
+                    textSHA256: String(repeating: digestDigits[offset], count: 64),
+                    runID: target.runID,
+                    memberKey: target.memberKey,
+                    documentID: target.documentID,
+                    partIndex: partIndex,
+                    revisionID: target.revisionID
+                )
+                let validReference = findingReference(
+                    documentID: target.documentID,
+                    revisionID: target.revisionID,
+                    locatorJSON: locator
+                )
+                let evidence: [[String: String]]
+                let contraryEvidence: [[String: String]]
+                switch caseName {
+                case "no-references-2351":
+                    evidence = []
+                    contraryEvidence = []
+                case "foreign-document-2357":
+                    evidence = [findingReference(
+                        documentID: "FOREIGN-DOCUMENT-2357",
+                        revisionID: target.revisionID,
+                        locatorJSON: locator
+                    )]
+                    contraryEvidence = []
+                case "foreign-revision-2371":
+                    evidence = [findingReference(
+                        documentID: target.documentID,
+                        revisionID: "FOREIGN-REVISION-2371",
+                        locatorJSON: locator
+                    )]
+                    contraryEvidence = []
+                case "foreign-locator-2377":
+                    evidence = [findingReference(
+                        documentID: target.documentID,
+                        revisionID: target.revisionID,
+                        locatorJSON:
+                            "{\"source_kind\":\"text\",\"part_index\":\(partIndex),\"char_start\":0,\"char_end\":99}"
+                    )]
+                    contraryEvidence = []
+                default:
+                    evidence = [validReference]
+                    contraryEvidence = [findingReference(
+                        documentID: target.documentID,
+                        revisionID: target.revisionID,
+                        locatorJSON:
+                            "{\"source_kind\":\"text\",\"part_index\":\(partIndex),\"char_start\":1,\"char_end\":100}"
+                    )]
+                }
+                let findings = try findingsJSON(
+                    marker: "FOREIGN-\(caseName.uppercased())",
+                    evidence: evidence,
+                    contraryEvidence: contraryEvidence
+                )
+
+                XCTAssertThrowsError(
+                    try markPartitionSucceededWithFindings(
+                        db,
+                        partitionID: target.partitionID,
+                        findingsJSON: findings,
+                        timestampMarker: 350 + offset
+                    ),
+                    "\(caseName) must not become an exact-v2 succeeded checkpoint"
+                )
+                let retained = try XCTUnwrap(
+                    CorpusAnalysisPartitionRecord.fetchOne(db, key: target.partitionID)
+                )
+                XCTAssertEqual(
+                    retained.disposition,
+                    CorpusAnalysisPartitionDisposition.pending.rawValue
+                )
+                XCTAssertNil(retained.findingsJSON)
+                XCTAssertFalse(retained.findingsJSON?.contains(caseName.uppercased()) ?? false)
+            }
+
+            let empty = try insertCompletionBarrierRun(
+                db,
+                matterID: matter.id,
+                caseName: "empty-top-level-control-2383",
+                digestDigit: "b",
+                disposition: .pending
+            )
+            try insertSlice(
+                db,
+                id: "t-store-01-empty-top-level-control-slice-2383",
+                partitionID: empty.partitionID,
+                ordinal: 0,
+                charStart: 0,
+                charEnd: 100,
+                revisionCharCount: 100,
+                textSHA256: String(repeating: "b", count: 64),
+                runID: empty.runID,
+                memberKey: empty.memberKey,
+                documentID: empty.documentID,
+                partIndex: 323,
+                revisionID: empty.revisionID
+            )
+            XCTAssertNoThrow(
+                try markPartitionSucceededWithFindings(
+                    db,
+                    partitionID: empty.partitionID,
+                    findingsJSON: "[]",
+                    timestampMarker: 383
+                )
+            )
+            XCTAssertNoThrow(
+                try persistCorpusComplete(db, runID: empty.runID, exclusionsDisclosed: true)
+            )
+            XCTAssertEqual(
+                try CorpusAnalysisPartitionRecord.fetchOne(db, key: empty.partitionID)?.findingsJSON,
+                "[]"
+            )
+
+            let contraryOnly = try insertCompletionBarrierRun(
+                db,
+                matterID: matter.id,
+                caseName: "contrary-only-control-2389",
+                digestDigit: "c",
+                disposition: .pending
+            )
+            let contraryPartIndex = 331
+            let contraryLocator =
+                "{\"source_kind\":\"text\",\"part_index\":\(contraryPartIndex),\"char_start\":0,\"char_end\":100}"
+            try insertSlice(
+                db,
+                id: "t-store-01-contrary-only-control-slice-2389",
+                partitionID: contraryOnly.partitionID,
+                ordinal: 0,
+                charStart: 0,
+                charEnd: 100,
+                revisionCharCount: 100,
+                textSHA256: String(repeating: "c", count: 64),
+                runID: contraryOnly.runID,
+                memberKey: contraryOnly.memberKey,
+                documentID: contraryOnly.documentID,
+                partIndex: contraryPartIndex,
+                revisionID: contraryOnly.revisionID
+            )
+            let contraryOnlyFindings = try findingsJSON(
+                marker: "CONTRARY-ONLY-CONTROL-2389",
+                evidence: [],
+                contraryEvidence: [findingReference(
+                    documentID: contraryOnly.documentID,
+                    revisionID: contraryOnly.revisionID,
+                    locatorJSON: contraryLocator
+                )]
+            )
+            XCTAssertNoThrow(
+                try markPartitionSucceededWithFindings(
+                    db,
+                    partitionID: contraryOnly.partitionID,
+                    findingsJSON: contraryOnlyFindings,
+                    timestampMarker: 389
+                )
+            )
+            XCTAssertNoThrow(
+                try persistCorpusComplete(
+                    db,
+                    runID: contraryOnly.runID,
+                    exclusionsDisclosed: true
+                )
+            )
+            XCTAssertTrue(
+                try CorpusAnalysisPartitionRecord.fetchOne(db, key: contraryOnly.partitionID)?
+                    .findingsJSON?.contains("CONTRARY-ONLY-CONTROL-2389") == true
+            )
+        }
+    }
+
     func testTSTORE01V072RejectsEmptyLocatorsAndFractionalPartIndices() throws {
         // T-STORE-01 review finding expected RED: SQLite accepts a NULL-valued
         // locator CHECK, so an empty/missing-field object and a REAL part_index
@@ -3622,6 +4100,20 @@ final class CaseFileReviewIntegrityMigrationTests: XCTestCase {
         partitionID: String,
         timestampMarker: Int
     ) throws {
+        try markPartitionSucceededWithFindings(
+            db,
+            partitionID: partitionID,
+            findingsJSON: "[]",
+            timestampMarker: timestampMarker
+        )
+    }
+
+    private func markPartitionSucceededWithFindings(
+        _ db: Database,
+        partitionID: String,
+        findingsJSON: String,
+        timestampMarker: Int
+    ) throws {
         let startedAt = Date(
             timeIntervalSince1970: 1_790_400_000 + Double(timestampMarker)
         )
@@ -3643,12 +4135,42 @@ final class CaseFileReviewIntegrityMigrationTests: XCTestCase {
             sql: """
                 UPDATE corpus_analysis_partitions
                 SET attempt_count = 1, attempt_history_json = ?,
-                    disposition = 'succeeded', findings_json = '[]',
+                    disposition = 'succeeded', findings_json = ?,
                     started_at = ?, completed_at = ?
                 WHERE id = ?
                 """,
-            arguments: [historyJSON, startedAt, completedAt, partitionID]
+            arguments: [historyJSON, findingsJSON, startedAt, completedAt, partitionID]
         )
+    }
+
+    private func findingReference(
+        documentID: String,
+        revisionID: String,
+        locatorJSON: String
+    ) -> [String: String] {
+        [
+            "document_id": documentID,
+            "revision_id": revisionID,
+            "locator_json": locatorJSON,
+        ]
+    }
+
+    private func findingsJSON(
+        marker: String,
+        evidence: [[String: String]],
+        contraryEvidence: [[String: String]]
+    ) throws -> String {
+        let finding: [String: Any] = [
+            "id": "finding-\(marker)",
+            "value": marker,
+            "evidence": evidence,
+            "contrary_evidence": contraryEvidence,
+        ]
+        let data = try JSONSerialization.data(
+            withJSONObject: [finding],
+            options: [.sortedKeys, .withoutEscapingSlashes]
+        )
+        return String(decoding: data, as: UTF8.self)
     }
 
     private func insertCompletionBarrierRun(
@@ -3984,6 +4506,70 @@ final class CaseFileReviewIntegrityMigrationTests: XCTestCase {
         return result
     }
 
+    private func frozenCorpusLineageHash(_ db: Database, runID: String) throws -> String {
+        let run = try XCTUnwrap(CorpusAnalysisRunRecord.fetchOne(db, key: runID))
+        let snapshot = try JSONDecoder().decode(
+            CorpusAnalysisSnapshot.self,
+            from: Data(run.corpusSnapshotJSON.utf8)
+        )
+        let partitions = try CorpusAnalysisPartitionRecord.fetchAll(
+            db,
+            sql: "SELECT * FROM corpus_analysis_partitions WHERE run_id = ?",
+            arguments: [runID]
+        )
+        let partitionKeyByID = Dictionary(
+            uniqueKeysWithValues: partitions.map { ($0.id, $0.partitionKey) }
+        )
+        let slices = try CorpusAnalysisPartitionSliceRecord.fetchAll(
+            db,
+            sql: "SELECT * FROM corpus_analysis_partition_slices WHERE run_id = ?",
+            arguments: [runID]
+        ).map { slice -> StoreFrozenSliceLineageProbe in
+            let locatorObject = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: Data(slice.locatorJSON.utf8))
+                    as? [String: Any]
+            )
+            let sourceKind = try XCTUnwrap(
+                (locatorObject["source_kind"] as? String).flatMap(DocumentSourceKind.init(rawValue:))
+            )
+            return StoreFrozenSliceLineageProbe(
+                partitionKey: try XCTUnwrap(partitionKeyByID[slice.partitionID]),
+                ordinal: slice.ordinal,
+                memberKey: slice.memberKey,
+                documentID: slice.documentID,
+                partIndex: slice.partIndex,
+                revisionID: slice.revisionID,
+                charStart: slice.charStart,
+                charEnd: slice.charEnd,
+                revisionCharCount: slice.revisionCharCount,
+                textSHA256: slice.textSHA256,
+                locator: StoreSourceLocatorProbe(
+                    sourceKind: sourceKind,
+                    pageIndex: locatorObject["page_index"] as? Int,
+                    pageLabel: locatorObject["page_label"] as? String,
+                    sheetName: locatorObject["sheet_name"] as? String,
+                    cellRange: locatorObject["cell_range"] as? String,
+                    emailPartPath: locatorObject["email_part_path"] as? String,
+                    charStart: locatorObject["char_start"] as? Int,
+                    charEnd: locatorObject["char_end"] as? Int,
+                    boundingBoxesJSON: locatorObject["bounding_boxes_json"] as? String
+                )
+            )
+        }
+        let envelope = StoreFrozenCorpusLineageEnvelope(
+            snapshot: CorpusAnalysisSnapshot(
+                schemaVersion: snapshot.schemaVersion,
+                members: snapshot.members.sorted { $0.memberKey < $1.memberKey }
+            ),
+            slices: slices.sorted(by: StoreFrozenSliceLineageProbe.lessThan)
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        return SHA256.hash(data: try encoder.encode(envelope))
+            .map { String(format: "%02x", $0) }
+            .joined()
+    }
+
     private func supportedResult(sourceID: String) throws -> PropositionSupportResult {
         try PropositionSupportResult(
             propositionID: "legacy-proposition-97",
@@ -4092,6 +4678,70 @@ final class CaseFileReviewIntegrityMigrationTests: XCTestCase {
             return target.runID
         }
         return (artifact.output, artifact.version, runID)
+    }
+}
+
+private struct StoreSourceLocatorProbe: Codable, Sendable {
+    var sourceKind: DocumentSourceKind
+    var pageIndex: Int?
+    var pageLabel: String?
+    var sheetName: String?
+    var cellRange: String?
+    var emailPartPath: String?
+    var charStart: Int?
+    var charEnd: Int?
+    var boundingBoxesJSON: String?
+}
+
+private struct StoreFrozenSliceLineageProbe: Codable, Sendable {
+    var partitionKey: String
+    var ordinal: Int
+    var memberKey: String
+    var documentID: String
+    var partIndex: Int
+    var revisionID: String
+    var charStart: Int
+    var charEnd: Int
+    var revisionCharCount: Int
+    var textSHA256: String
+    var locator: StoreSourceLocatorProbe
+
+    static func lessThan(_ lhs: Self, _ rhs: Self) -> Bool {
+        if lhs.partitionKey != rhs.partitionKey { return lhs.partitionKey < rhs.partitionKey }
+        if lhs.ordinal != rhs.ordinal { return lhs.ordinal < rhs.ordinal }
+        if lhs.memberKey != rhs.memberKey { return lhs.memberKey < rhs.memberKey }
+        if lhs.documentID != rhs.documentID { return lhs.documentID < rhs.documentID }
+        if lhs.partIndex != rhs.partIndex { return lhs.partIndex < rhs.partIndex }
+        if lhs.revisionID != rhs.revisionID { return lhs.revisionID < rhs.revisionID }
+        if lhs.charStart != rhs.charStart { return lhs.charStart < rhs.charStart }
+        if lhs.charEnd != rhs.charEnd { return lhs.charEnd < rhs.charEnd }
+        return lhs.textSHA256 < rhs.textSHA256
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case partitionKey = "partition_key"
+        case ordinal
+        case memberKey = "member_key"
+        case documentID = "document_id"
+        case partIndex = "part_index"
+        case revisionID = "revision_id"
+        case charStart = "char_start"
+        case charEnd = "char_end"
+        case revisionCharCount = "revision_char_count"
+        case textSHA256 = "text_sha256"
+        case locator
+    }
+}
+
+private struct StoreFrozenCorpusLineageEnvelope: Codable, Sendable {
+    var schemaVersion = 2
+    var snapshot: CorpusAnalysisSnapshot
+    var slices: [StoreFrozenSliceLineageProbe]
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case snapshot
+        case slices
     }
 }
 

@@ -1020,7 +1020,7 @@ final class ExhaustiveListTaskTests: XCTestCase {
             store: store,
             matterID: matter.id,
             name: "supporting-agreement.txt",
-            partTexts: ["PRIMARY-POSITION-NONDEFAULT"]
+            partTexts: ["PRIMARY-POSITION-NONDEFAULT: Agreement renews"]
         )
         let contrary = try insertDocument(
             store: store,
@@ -1087,7 +1087,7 @@ final class ExhaustiveListTaskTests: XCTestCase {
             store: store,
             matterID: matter.id,
             name: "successful-ledger.txt",
-            partTexts: ["MAP-SUCCESS-NONDEFAULT"]
+            partTexts: ["MAP-SUCCESS-NONDEFAULT: $731"]
         )
         _ = try insertDocument(
             store: store,

@@ -299,6 +299,83 @@ final class CorpusAnalysisEngineTests: XCTestCase {
         )
     }
 
+    func testTCORP03WholeMatterPlanningDisclosesUnfinishedDocumentlessImportSource() throws {
+        // T-CORP-03 expected RED: whole-matter exact planning inventories only
+        // terminal documentless import exclusions, so an unfinished copying
+        // source vanishes instead of remaining disclosed in the frozen scope.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic unfinished import disclosure")
+        let eligible = try insertDocument(
+            store: store,
+            matterID: matter.id,
+            name: "eligible-for-unfinished-inventory.txt",
+            status: .ready,
+            extractionStatus: .extracted,
+            indexStatus: .textIndexed,
+            partTexts: ["ELIGIBLE-UNFINISHED-INVENTORY-2011-NONDEFAULT"]
+        )
+        let batch = try store.documentJobs.createBatch(matterID: matter.id)
+        let unfinishedPath = "Copy Interrupted 2011.txt"
+        let unfinished = try store.documentJobs.recordDiscovered(
+            batchID: batch.id,
+            matterID: matter.id,
+            sourceKey: "selection:copying-2011-nondefault",
+            sourceDisplayPath: unfinishedPath,
+            sourceBookmark: Data("COPYING-BOOKMARK-2011-NONDEFAULT".utf8),
+            state: .selected
+        )
+        _ = try store.documentJobs.markState(sourceID: unfinished.id, state: .copying)
+        let pinnedModel = CorpusAnalysisPinnedModel(
+            modelRepository: "synthetic/unfinished-inventory-model",
+            modelRevision: "0123456789abcdef0123456789abcdef01234567",
+            contentBindingAlgorithm: "supra-release-model-sha256-v1",
+            contentBindingSchemaVersion: 1,
+            artifactFingerprintSHA256: String(repeating: "c", count: 64)
+        )
+        let queued = ExhaustiveListQueuedRequest(
+            taskSchemaVersion: ExhaustiveListTask.schemaVersion,
+            promptBuilderVersion: ExhaustiveListTask.promptBuilderVersion,
+            runKey: "unfinished-inventory-run-2011",
+            matterID: matter.id,
+            title: "Unfinished import inventory",
+            query: "List every unfinished inventory marker.",
+            scope: .wholeMatter,
+            characterBudget: 2_011,
+            maximumRetryCount: 3
+        )
+
+        let payload = try CorpusAnalysisQueuePreparer(store: store).prepareExhaustiveList(
+            request: queued,
+            pinnedModel: pinnedModel
+        )
+        let run = try XCTUnwrap(
+            store.corpusAnalysis.fetchRun(matterID: matter.id, id: payload.runID)
+        )
+        let snapshot = try JSONDecoder().decode(
+            CorpusAnalysisSnapshot.self,
+            from: Data(run.corpusSnapshotJSON.utf8)
+        )
+        let unfinishedMemberKey = "import-source:\(unfinished.id)"
+
+        XCTAssertFalse(
+            snapshot.members.allSatisfy { $0.memberKey != unfinishedMemberKey },
+            "unfinished whole-matter sources must not vanish from the frozen inventory"
+        )
+        let disclosed = try XCTUnwrap(
+            snapshot.members.first { $0.memberKey == unfinishedMemberKey }
+        )
+        XCTAssertNil(disclosed.documentID)
+        XCTAssertEqual(disclosed.displayName, unfinishedPath)
+        XCTAssertEqual(disclosed.disposition, .excluded)
+        XCTAssertNotEqual(disclosed.disposition, .eligible)
+        XCTAssertEqual(disclosed.reason, DocumentImportSourceState.copying.rawValue)
+        XCTAssertEqual(snapshot.members.count, 2)
+        XCTAssertEqual(
+            snapshot.members.filter { $0.disposition == .eligible }.map(\.documentID),
+            [eligible.documentID]
+        )
+    }
+
     func testTCORP02ExactRunWithMissingSlicesNeverFallsBackToWholeRevisionInput() async throws {
         // T-CORP-02 expected RED: partitionInput treats an empty slice array as
         // a legacy v1 signal even when the run declares the exact v2 strategy,
@@ -463,6 +540,102 @@ final class CorpusAnalysisEngineTests: XCTestCase {
         let source = try XCTUnwrap(recordedInputs.first?.sources.first)
         XCTAssertEqual(source.documentName, frozenName)
         XCTAssertNotEqual(source.documentName, liveRenamedName)
+    }
+
+    func testTCORP05QueuePreparerCanonicalizesPubliclyMutatedNegativeBudgetsBeforeFreeze() throws {
+        // T-CORP-05 expected RED: public queued-request mutation bypasses the
+        // initializer clamps, so preparation emits negative payload/digest
+        // values and a negative persisted strategy while planning with 1/0.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic canonical queue budgets")
+        let fixture = try insertDocument(
+            store: store,
+            matterID: matter.id,
+            name: "canonical-negative-budget.txt",
+            status: .ready,
+            extractionStatus: .extracted,
+            indexStatus: .textIndexed,
+            partTexts: ["CANONICAL-BUDGET-2027-NONDEFAULT"]
+        )
+        let pinnedModel = CorpusAnalysisPinnedModel(
+            modelRepository: "synthetic/canonical-budget-model",
+            modelRevision: "89abcdef0123456789abcdef0123456789abcdef",
+            contentBindingAlgorithm: "supra-release-model-sha256-v1",
+            contentBindingSchemaVersion: 1,
+            artifactFingerprintSHA256: String(repeating: "d", count: 64)
+        )
+        let negativeCharacterBudget = -2_027
+        let negativeRetryCount = -7
+        var publiclyMutated = ExhaustiveListQueuedRequest(
+            taskSchemaVersion: ExhaustiveListTask.schemaVersion,
+            promptBuilderVersion: ExhaustiveListTask.promptBuilderVersion,
+            runKey: "canonical-negative-budget-run-2027",
+            matterID: matter.id,
+            title: "Canonical negative budget",
+            query: "  Extract   every canonical budget marker.  ",
+            scope: CorpusAnalysisScope(documentIDs: [fixture.documentID]),
+            characterBudget: 2_027,
+            maximumRetryCount: 7
+        )
+        publiclyMutated.characterBudget = negativeCharacterBudget
+        publiclyMutated.maximumRetryCount = negativeRetryCount
+
+        let payload = try CorpusAnalysisQueuePreparer(store: store).prepareExhaustiveList(
+            request: publiclyMutated,
+            pinnedModel: pinnedModel
+        )
+        guard case .exhaustiveList(let frozenRequest) = payload.task else {
+            return XCTFail("prepared v2 payload must retain its exhaustive-list task")
+        }
+        let run = try XCTUnwrap(
+            store.corpusAnalysis.fetchRun(matterID: matter.id, id: payload.runID)
+        )
+        let snapshot = try JSONDecoder().decode(
+            CorpusAnalysisSnapshot.self,
+            from: Data(run.corpusSnapshotJSON.utf8)
+        )
+        let partitions = try store.corpusAnalysis.fetchPartitions(
+            matterID: matter.id,
+            runID: payload.runID
+        )
+        let slices = try store.corpusAnalysis.fetchSlices(
+            matterID: matter.id,
+            runID: payload.runID
+        )
+        var canonicalRequest = publiclyMutated
+        canonicalRequest.query = CorpusAnalysisRequestDigest.normalizeQuery(publiclyMutated.query)
+        canonicalRequest.characterBudget = 1
+        canonicalRequest.maximumRetryCount = 0
+        let canonicalDigest = try CorpusAnalysisRequestDigest.exhaustiveList(
+            request: canonicalRequest,
+            snapshot: snapshot,
+            partitions: partitions,
+            slices: slices,
+            pinnedModel: pinnedModel
+        )
+        var negativeDigestRequest = publiclyMutated
+        negativeDigestRequest.query = CorpusAnalysisRequestDigest.normalizeQuery(publiclyMutated.query)
+        let negativeDigest = try CorpusAnalysisRequestDigest.exhaustiveList(
+            request: negativeDigestRequest,
+            snapshot: snapshot,
+            partitions: partitions,
+            slices: slices,
+            pinnedModel: pinnedModel
+        )
+        XCTAssertNotEqual(canonicalDigest, negativeDigest, "the negative sentinel must affect the digest")
+
+        XCTAssertEqual(frozenRequest.characterBudget, 1)
+        XCTAssertNotEqual(frozenRequest.characterBudget, negativeCharacterBudget)
+        XCTAssertEqual(frozenRequest.maximumRetryCount, 0)
+        XCTAssertNotEqual(frozenRequest.maximumRetryCount, negativeRetryCount)
+        XCTAssertEqual(run.partitionStrategy, "exact_revision_slice:characters=1")
+        XCTAssertNotEqual(
+            run.partitionStrategy,
+            "exact_revision_slice:characters=\(negativeCharacterBudget)"
+        )
+        XCTAssertEqual(payload.requestDigest, canonicalDigest)
+        XCTAssertEqual(run.requestDigest, canonicalDigest)
+        XCTAssertNotEqual(payload.requestDigest, negativeDigest)
     }
 
     func testTCORP05PublicUnpreparedRunCannotResumeV2Request() async throws {

@@ -376,6 +376,149 @@ final class CorpusAnalysisPreparationTests: XCTestCase {
         }
     }
 
+    func testTSTORE05PreparedExactRunRejectsUnsupportedModelBindingContract() throws {
+        // T-STORE-05 pinned-model audit expected RED: the preparation boundary
+        // currently accepts any non-empty content-binding algorithm and any
+        // positive schema version. A well-formed model object must still use
+        // the one supported deterministic binding contract:
+        // supra-release-model-sha256-v1, schema 1.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(
+            name: "Synthetic unsupported model binding 2393"
+        )
+        let text = "SUPPORTED-MODEL-BINDING-CONTROL-2393-NONDEFAULT"
+        let blob = try store.documentLibrary.upsertBlob(DocumentBlobRecord(
+            sha256: "model-binding-blob-2393",
+            byteSize: text.utf8.count,
+            originalExtension: "txt",
+            managedRelativePath: "blobs/model-binding-2393.txt"
+        )).blob
+        let document = try store.documentLibrary.insertDocument(MatterDocumentRecord(
+            matterID: matter.id,
+            blobID: blob.id,
+            displayName: "model-binding-2393.txt",
+            status: MatterDocumentStatus.ready.rawValue,
+            extractionStatus: DocumentExtractionStatus.extracted.rawValue,
+            indexStatus: DocumentIndexStatus.textIndexed.rawValue
+        ))
+        let part = DocumentPagePartRecord(
+            id: "model-binding-part-2393",
+            documentID: document.id,
+            partIndex: 0,
+            sourceKind: DocumentSourceKind.text.rawValue,
+            normalizedText: text,
+            charCount: text.count
+        )
+        let revision = DocumentPartRevisionRecord(
+            id: "model-binding-revision-2393",
+            documentID: document.id,
+            partIndex: 0,
+            derivationKey: "model-binding-2393",
+            origin: "synthetic_test",
+            method: "plain-text",
+            text: text,
+            charCount: text.count
+        )
+        let selection = DocumentPartSelectionRecord(
+            id: "model-binding-selection-2393",
+            documentID: document.id,
+            partIndex: 0,
+            selectedRevisionID: revision.id,
+            selectionKey: "model-binding-2393",
+            selectedBy: "test",
+            decisionJSON: #"{"rule":"model-binding"}"#
+        )
+        _ = try store.documentRevisions.replacePartsAndPersistLineage(
+            documentID: document.id,
+            parts: [part],
+            revisions: [revision],
+            selections: [selection]
+        )
+
+        let memberKey = "document:\(document.id)"
+        let snapshot = CorpusAnalysisSnapshot(
+            schemaVersion: 2,
+            members: [CorpusAnalysisSnapshotMember(
+                memberKey: memberKey,
+                documentID: document.id,
+                displayName: document.displayName,
+                revisionIDs: [revision.id],
+                indexState: document.indexStatus,
+                disposition: .eligible
+            )]
+        )
+        let invalidContracts: [(
+            marker: String,
+            algorithm: String,
+            schemaVersion: Int
+        )] = [
+            ("unsupported-algorithm-2393", "FOREIGN-CONTENT-BINDING-2393", 1),
+            ("unsupported-schema-2399", "supra-release-model-sha256-v1", 37),
+        ]
+
+        for contract in invalidContracts {
+            let runID = "model-binding-run-\(contract.marker)"
+            let partitionID = "model-binding-partition-\(contract.marker)"
+            let run = CorpusAnalysisRunRecord(
+                id: runID,
+                runKey: "model-binding-key-\(contract.marker)",
+                matterID: matter.id,
+                taskKind: CorpusAnalysisTaskKind.exhaustiveList.rawValue,
+                scopeJSON: "{\"document_ids\":[\"\(document.id)\"],\"schema_version\":2}",
+                corpusSnapshotJSON: try canonicalJSON(snapshot),
+                partitionStrategy: "exact_revision_slice:characters=2393",
+                partitionStrategyVersion: 2,
+                modelLineageJSON: """
+                    {"artifact_fingerprint_sha256":"4444444444444444444444444444444444444444444444444444444444444444","content_binding_algorithm":"\(contract.algorithm)","content_binding_schema_version":\(contract.schemaVersion),"model_repository":"synthetic/model-binding","model_revision":"0123456789abcdef0123456789abcdef01234567"}
+                    """,
+                status: CorpusAnalysisRunStatus.planning.rawValue,
+                requestSchemaVersion: 2,
+                requestDigest: String(repeating: "4", count: 64)
+            )
+            let partition = CorpusAnalysisPartitionRecord(
+                id: partitionID,
+                runID: runID,
+                partitionKey:
+                    "000000|\(memberKey)#revision:\(revision.id)#chars:0-\(text.count)",
+                inputRevisionIDsJSON: try canonicalJSON([revision.id])
+            )
+            let slice = CorpusAnalysisPartitionSliceRecord(
+                id: "model-binding-slice-\(contract.marker)",
+                runID: runID,
+                partitionID: partitionID,
+                ordinal: 0,
+                memberKey: memberKey,
+                documentID: document.id,
+                partIndex: 0,
+                revisionID: revision.id,
+                charStart: 0,
+                charEnd: text.count,
+                revisionCharCount: text.count,
+                textSHA256: sha256(text),
+                locatorJSON:
+                    "{\"source_kind\":\"text\",\"char_start\":0,\"char_end\":\(text.count)}"
+            )
+
+            XCTAssertThrowsError(
+                try store.corpusAnalysis.createOrFetchPreparedRun(
+                    run: run,
+                    partitions: [partition],
+                    slices: [slice]
+                ),
+                "\(contract.marker) must not become durable prepared work"
+            ) { error in
+                XCTAssertEqual(
+                    error as? CorpusAnalysisRepositoryError,
+                    .invalidPreparedRun("exact model lineage is unavailable")
+                )
+            }
+            XCTAssertNil(
+                try store.corpusAnalysis.fetchRun(matterID: matter.id, id: runID),
+                "the rejected model contract must leave no prepared run behind"
+            )
+        }
+    }
+
     private func makeStore() throws -> SupraStore {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
             "CorpusAnalysisPreparation-\(UUID().uuidString)",

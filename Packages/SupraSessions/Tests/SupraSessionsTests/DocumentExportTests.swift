@@ -7,6 +7,7 @@ import XCTest
 
 final class DocumentExportTests: XCTestCase {
     private enum InjectedFailure: Error { case stop }
+    private static let exactModelLineageJSON = #"{"artifact_fingerprint_sha256":"7777777777777777777777777777777777777777777777777777777777777777","content_binding_algorithm":"supra-release-model-sha256-v1","content_binding_schema_version":1,"model_repository":"synthetic/exact-export-runtime","model_revision":"0123456789abcdef0123456789abcdef01234567"}"#
 
     func testExportWritesFileRecordsAndAudits() throws {
         let store = try makeStore()
@@ -300,6 +301,129 @@ final class DocumentExportTests: XCTestCase {
         )
     }
 
+    func testTEXACTEXPORT03RevokedProofAtCompletionRestoresCanaryAndWritesNoSuccessRows() async throws {
+        // T-EXACT-EXPORT-03 expected RED: exact-proof authorization occurs before
+        // rendering, but the export/audit transaction does not revalidate it. A
+        // proof revoked after install can therefore leave a successful export row.
+        let fixture = try await makeExactExportFixture(marker: 947)
+        let canary = Data("PRIOR-EXACT-EXPORT-CANARY-947".utf8)
+        try FileManager.default.createDirectory(
+            at: fixture.destination.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try canary.write(to: fixture.destination)
+        var recorderSawInstalledFile = false
+        let service = DocumentExportService(
+            store: fixture.store,
+            storage: fixture.storage,
+            completionRecorder: { export, audit in
+                recorderSawInstalledFile = (try? DocumentExportValidator.validate(
+                    fixture.destination,
+                    as: .markdown
+                )) != nil
+                _ = try fixture.store.corpusAnalysis.cancelRun(
+                    matterID: fixture.matterID,
+                    runID: fixture.runID
+                )
+                try fixture.store.documentSources.recordExportCompletion(
+                    export,
+                    auditEvent: audit
+                )
+            }
+        )
+
+        XCTAssertThrowsError(
+            try service.export(
+                matterID: fixture.matterID,
+                structuredOutputID: fixture.outputID,
+                format: .markdown
+            )
+        ) { error in
+            guard case DocumentExportService.ExportError.completionRecordingFailed = error else {
+                return XCTFail("expected completionRecordingFailed after proof revocation, got \(error)")
+            }
+        }
+        XCTAssertTrue(recorderSawInstalledFile)
+        XCTAssertEqual(try Data(contentsOf: fixture.destination), canary)
+        XCTAssertTrue(
+            try fixture.store.documentSources.fetchExports(
+                structuredOutputID: fixture.outputID
+            ).isEmpty
+        )
+        XCTAssertFalse(
+            try fixture.store.auditEvents.fetchEvents(matterID: fixture.matterID).contains {
+                $0.eventType == "export_completed" && $0.relatedID == fixture.outputID
+            }
+        )
+    }
+
+    func testTEXACTEXPORT04ActiveVersionSwitchAtCompletionRestoresCanaryAndWritesNoSuccessRows() async throws {
+        // T-EXACT-EXPORT-04 expected RED: the completion transaction does not
+        // require the exported version to remain the output's active version.
+        let fixture = try await makeExactExportFixture(marker: 953)
+        let weakVersion = try fixture.store.structuredOutputs.createVersion(
+            structuredOutputID: fixture.outputID,
+            contentMarkdown: "WEAK-INACTIVE-VERSION-953",
+            requiredSections: [],
+            presentSections: [],
+            missingSections: [],
+            assuranceState: .supportNeedsReview,
+            outputStatus: .needsReview,
+            makeActive: false
+        )
+        let canary = Data("PRIOR-ACTIVE-VERSION-CANARY-953".utf8)
+        try FileManager.default.createDirectory(
+            at: fixture.destination.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try canary.write(to: fixture.destination)
+        var recorderSawInstalledFile = false
+        let service = DocumentExportService(
+            store: fixture.store,
+            storage: fixture.storage,
+            completionRecorder: { export, audit in
+                recorderSawInstalledFile = (try? DocumentExportValidator.validate(
+                    fixture.destination,
+                    as: .markdown
+                )) != nil
+                try fixture.store.database.writer.write { db in
+                    try db.execute(
+                        sql: "UPDATE structured_outputs SET active_version_id = ? WHERE id = ?",
+                        arguments: [weakVersion.id, fixture.outputID]
+                    )
+                }
+                try fixture.store.documentSources.recordExportCompletion(
+                    export,
+                    auditEvent: audit
+                )
+            }
+        )
+
+        XCTAssertThrowsError(
+            try service.export(
+                matterID: fixture.matterID,
+                structuredOutputID: fixture.outputID,
+                format: .markdown
+            )
+        ) { error in
+            guard case DocumentExportService.ExportError.completionRecordingFailed = error else {
+                return XCTFail("expected completionRecordingFailed after active-version switch, got \(error)")
+            }
+        }
+        XCTAssertTrue(recorderSawInstalledFile)
+        XCTAssertEqual(try Data(contentsOf: fixture.destination), canary)
+        XCTAssertTrue(
+            try fixture.store.documentSources.fetchExports(
+                structuredOutputID: fixture.outputID
+            ).isEmpty
+        )
+        XCTAssertFalse(
+            try fixture.store.auditEvents.fetchEvents(matterID: fixture.matterID).contains {
+                $0.eventType == "export_completed" && $0.relatedID == fixture.outputID
+            }
+        )
+    }
+
     private func makeFixture() throws -> (store: SupraStore, storage: DocumentStorage, matterID: String, outputID: String) {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "Acme")
@@ -319,6 +443,125 @@ final class DocumentExportTests: XCTestCase {
             root: FileManager.default.temporaryDirectory.appendingPathComponent("ExportFixture-\(UUID().uuidString)")
         )
         return (store, storage, matter.id, output.id)
+    }
+
+    private func makeExactExportFixture(marker: Int) async throws -> (
+        store: SupraStore,
+        storage: DocumentStorage,
+        matterID: String,
+        outputID: String,
+        runID: String,
+        destination: URL
+    ) {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic exact export race \(marker)")
+        let value = "EXACT-EXPORT-SUPPORTED-VALUE-\(marker)"
+        _ = try insertExactTextDocument(
+            store: store,
+            matterID: matter.id,
+            name: "exact-export-\(marker).txt",
+            text: value
+        )
+        let title = "Revocable Exact Export \(marker)"
+        let result = try await ExhaustiveListTask(store: store).run(
+            request: ExhaustiveListRequest(
+                runKey: "exact-export-race-run-\(marker)",
+                matterID: matter.id,
+                title: title,
+                query: "Extract the exact supported value.",
+                characterBudget: 1_907,
+                modelLineageJSON: Self.exactModelLineageJSON
+            )
+        ) { input in
+            let source = try XCTUnwrap(input.partition.sources.first)
+            let payload: [String: Any] = [
+                "schema_version": 1,
+                "items": [[
+                    "item_key": "exact-export-value-\(marker)",
+                    "value": value,
+                    "evidence": [[
+                        "document_id": source.documentID,
+                        "revision_id": source.revisionID,
+                        "locator_json": source.locatorJSON,
+                        "quote": value,
+                        "char_start": 0,
+                        "char_end": value.count,
+                    ]],
+                    "contrary_evidence": [],
+                ]],
+            ]
+            let data = try JSONSerialization.data(
+                withJSONObject: payload,
+                options: [.sortedKeys, .withoutEscapingSlashes]
+            )
+            return String(decoding: data, as: UTF8.self)
+        }
+        XCTAssertEqual(result.run.assuranceState, OutputAssuranceState.corpusComplete.rawValue)
+        XCTAssertEqual(result.version.verificationStatus, OutputVerificationStatus.allSupported.rawValue)
+        XCTAssertEqual(result.version.assuranceState, OutputAssuranceState.corpusComplete.rawValue)
+        let storage = DocumentStorage(
+            root: FileManager.default.temporaryDirectory
+                .appendingPathComponent("ExactExportRace-\(marker)-\(UUID().uuidString)")
+        )
+        let destination = storage.exportsDirectory(forMatterID: matter.id)
+            .appendingPathComponent("Revocable-Exact-Export-\(marker)-v1.md")
+        return (store, storage, matter.id, result.outputID, result.run.id, destination)
+    }
+
+    private func insertExactTextDocument(
+        store: SupraStore,
+        matterID: String,
+        name: String,
+        text: String
+    ) throws -> String {
+        let key = "exact-export-\(UUID().uuidString)"
+        let blob = try store.documentLibrary.upsertBlob(DocumentBlobRecord(
+            sha256: key,
+            byteSize: text.utf8.count,
+            originalExtension: "txt",
+            managedRelativePath: "blobs/\(key).txt"
+        )).blob
+        let document = try store.documentLibrary.insertDocument(MatterDocumentRecord(
+            matterID: matterID,
+            blobID: blob.id,
+            displayName: name,
+            status: MatterDocumentStatus.ready.rawValue,
+            extractionStatus: DocumentExtractionStatus.extracted.rawValue,
+            indexStatus: DocumentIndexStatus.textIndexed.rawValue
+        ))
+        let part = DocumentPagePartRecord(
+            id: "\(key)-part",
+            documentID: document.id,
+            partIndex: 0,
+            sourceKind: DocumentSourceKind.text.rawValue,
+            normalizedText: text,
+            charCount: text.count
+        )
+        let revision = DocumentPartRevisionRecord(
+            id: "\(key)-revision",
+            documentID: document.id,
+            partIndex: 0,
+            derivationKey: "exact-export-fixture",
+            origin: "synthetic_test",
+            method: "plain-text",
+            text: text,
+            charCount: text.count
+        )
+        _ = try store.documentRevisions.replacePartsAndPersistLineage(
+            documentID: document.id,
+            parts: [part],
+            revisions: [revision],
+            selections: [DocumentPartSelectionRecord(
+                id: "\(key)-selection",
+                documentID: document.id,
+                partIndex: 0,
+                selectedRevisionID: revision.id,
+                selectionKey: "exact-export-fixture",
+                selectedBy: "test",
+                decisionJSON: #"{"rule":"fixture"}"#
+            )]
+        )
+        return document.id
     }
 
     private func createExportableVersion(
