@@ -264,6 +264,146 @@ final class AtomicSourcePublicationIntegrityTests: XCTestCase {
         }
     }
 
+    func testTSTORE03AtomicPublisherRejectsSoftDeletedSourceDocument() throws {
+        // T-STORE-03 expected RED: the atomic publisher proves only that the
+        // source document belongs to the matter. A document already in the
+        // Recycle Bin still retains its chunks and revisions, so the publisher
+        // currently grants proposition-supported assurance from a deleted source.
+        let fixture = try makeFixture(caseName: "soft-deleted-source-document")
+        try fixture.store.documentLibrary.softDeleteDocument(id: fixture.primaryDocument.id)
+        XCTAssertEqual(
+            try fixture.store.documentLibrary.fetchSoftDeletedDocuments(
+                matterID: fixture.outputMatter.id
+            ).map(\.id),
+            [fixture.primaryDocument.id],
+            "the source document must be deleted before the publication attempt"
+        )
+        let deletedSource = primarySource(
+            fixture,
+            id: "t-store-03-soft-deleted-source-document",
+            citationLabel: "S89"
+        )
+
+        try assertAtomicPublisherRejects(
+            deletedSource,
+            expectedOrdinaryError: nil,
+            caseName: "soft-deleted-source-document",
+            fixture: fixture,
+            validateOrdinarySourcePath: false
+        )
+    }
+
+    func testTSTORE03AtomicPublisherRejectsWhollyUnboundSourceRow() throws {
+        // T-STORE-03 expected RED: nullable historical source identities let a
+        // new source row omit its document, chunk, and revision. The publisher
+        // currently accepts the row's random id plus its self-supplied excerpt
+        // as enough evidence for proposition-supported assurance.
+        let fixture = try makeFixture(caseName: "wholly-unbound-source")
+        let unboundSource = DocumentOutputSourceRecord(
+            id: "t-store-03-wholly-unbound-source",
+            sourceSetID: "replaced-by-test",
+            documentID: nil,
+            chunkID: nil,
+            revisionID: nil,
+            citationLabel: "S91",
+            locatorJSON: #"{"source_kind":"text","part_index":97,"char_start":211,"char_end":307}"#,
+            excerpt: "Synthetic unbound evidence value 91 must not earn assurance.",
+            rank: 37,
+            warningsJSON: #"["synthetic_unbound_source_probe"]"#,
+            createdAt: Date(timeIntervalSince1970: 1_790_003_091)
+        )
+
+        try assertAtomicPublisherRejects(
+            unboundSource,
+            expectedOrdinaryError: nil,
+            caseName: "wholly-unbound-source",
+            fixture: fixture,
+            validateOrdinarySourcePath: false
+        )
+    }
+
+    func testTSTORE03AtomicPublisherRejectsRevisionlessChunkForPropositionSupportedOutput() throws {
+        // T-STORE-03 expected RED: a legacy-compatible chunk may retain a nil
+        // revision id. The atomic publisher currently treats the mutable chunk
+        // row itself as sufficient provenance and grants proposition-supported
+        // assurance without any immutable revision binding.
+        let fixture = try makeFixture(caseName: "revisionless-chunk")
+        var revisionlessChunk = fixture.primaryChunk
+        revisionlessChunk.id = "t-store-03-revisionless-chunk"
+        revisionlessChunk.revisionID = nil
+        try fixture.store.documentIndex.replaceChunks(
+            documentID: fixture.primaryDocument.id,
+            chunks: [revisionlessChunk]
+        )
+        XCTAssertNil(
+            try XCTUnwrap(fixture.store.documentIndex.fetchChunk(id: revisionlessChunk.id)).revisionID,
+            "the publication probe must cite a chunk with no immutable revision"
+        )
+        let revisionlessSource = DocumentOutputSourceRecord(
+            id: "t-store-03-revisionless-source",
+            sourceSetID: "replaced-by-test",
+            documentID: fixture.primaryDocument.id,
+            chunkID: revisionlessChunk.id,
+            revisionID: nil,
+            citationLabel: "S93",
+            locatorJSON: fixture.primaryLocatorJSON,
+            excerpt: fixture.primaryExcerpt,
+            rank: 41,
+            warningsJSON: #"["synthetic_revisionless_chunk_probe"]"#,
+            createdAt: Date(timeIntervalSince1970: 1_790_003_093)
+        )
+
+        try assertAtomicPublisherRejects(
+            revisionlessSource,
+            expectedOrdinaryError: nil,
+            caseName: "revisionless-chunk",
+            fixture: fixture,
+            validateOrdinarySourcePath: false
+        )
+    }
+
+    func testTSTORE03AtomicPublisherRejectsMalformedAndOutOfRangeRevisionOnlyLocator() throws {
+        // T-STORE-03 expected RED: a revision-only source bypasses the chunk
+        // locator validator. Missing or out-of-range endpoints currently fall
+        // back to searching the entire revision, so a false locator can still
+        // earn proposition-supported assurance from text found elsewhere.
+        let invalidLocators = [
+            (
+                caseName: "revision-only-one-sided-range",
+                locatorJSON: #"{"source_kind":"text","part_index":7,"char_start":71}"#
+            ),
+            (
+                caseName: "revision-only-out-of-range",
+                locatorJSON: #"{"source_kind":"text","part_index":7,"char_start":71,"char_end":997}"#
+            ),
+        ]
+
+        for invalidLocator in invalidLocators {
+            let fixture = try makeFixture(caseName: invalidLocator.caseName)
+            let revisionOnlySource = DocumentOutputSourceRecord(
+                id: "t-store-03-\(invalidLocator.caseName)-source",
+                sourceSetID: "replaced-by-test",
+                documentID: fixture.primaryDocument.id,
+                chunkID: nil,
+                revisionID: fixture.primaryRevision.id,
+                citationLabel: "S95",
+                locatorJSON: invalidLocator.locatorJSON,
+                excerpt: fixture.primaryExcerpt,
+                rank: 43,
+                warningsJSON: #"["synthetic_revision_only_locator_probe"]"#,
+                createdAt: Date(timeIntervalSince1970: 1_790_003_095)
+            )
+
+            try assertAtomicPublisherRejects(
+                revisionOnlySource,
+                expectedOrdinaryError: nil,
+                caseName: invalidLocator.caseName,
+                fixture: fixture,
+                validateOrdinarySourcePath: false
+            )
+        }
+    }
+
     private func assertAtomicPublisherRejects(
         _ invalidSource: DocumentOutputSourceRecord,
         expectedOrdinaryError: DocumentSourceRepositoryError?,
