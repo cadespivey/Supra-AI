@@ -264,6 +264,42 @@ final class AtomicSourcePublicationIntegrityTests: XCTestCase {
         }
     }
 
+    func testTSTORE03AtomicPublisherRejectsEvidenceOutsideImmutableLocatorRange() throws {
+        // T-STORE-03 expected RED: evidence grounding currently falls back to
+        // mutable composite chunk text after missing the cited revision range.
+        // That lets concatenated context with no immutable locator earn
+        // proposition-supported assurance.
+        let fixture = try makeFixture(caseName: "evidence-outside-locator")
+        let unlocatedContext = "Synthetic composite-only context value 109."
+        var compositeChunk = fixture.primaryChunk
+        compositeChunk.normalizedText = fixture.primaryExcerpt + " " + unlocatedContext
+        compositeChunk.displayExcerpt = compositeChunk.normalizedText
+        try fixture.store.documentIndex.replaceChunks(
+            documentID: fixture.primaryDocument.id,
+            chunks: [compositeChunk]
+        )
+        var source = primarySource(
+            fixture,
+            id: "t-store-03-evidence-outside-locator-source",
+            citationLabel: "S109"
+        )
+        source.excerpt = compositeChunk.normalizedText
+
+        try assertAtomicPublisherRejects(
+            source,
+            expectedOrdinaryError: nil,
+            caseName: "evidence-outside-locator",
+            fixture: fixture,
+            verificationResults: [
+                try supportedResult(
+                    for: source,
+                    retainedExcerptOverride: unlocatedContext
+                )
+            ],
+            validateOrdinarySourcePath: false
+        )
+    }
+
     func testTSTORE03AtomicPublisherRejectsSoftDeletedSourceDocument() throws {
         // T-STORE-03 expected RED: the atomic publisher proves only that the
         // source document belongs to the matter. A document already in the
@@ -832,7 +868,8 @@ final class AtomicSourcePublicationIntegrityTests: XCTestCase {
 
     private func supportedResult(
         for source: DocumentOutputSourceRecord,
-        mutation: EvidenceMutation? = nil
+        mutation: EvidenceMutation? = nil,
+        retainedExcerptOverride: String? = nil
     ) throws -> PropositionSupportResult {
         let evidenceSourceID = mutation == .sourceID ? "t-store-03-wrong-evidence-source" : source.id
         let evidenceLabel = mutation == .sourceLabel ? "S997" : source.citationLabel
@@ -840,10 +877,10 @@ final class AtomicSourcePublicationIntegrityTests: XCTestCase {
             mutation == .locator
             ? #"{"source_kind":"text","part_index":997,"char_start":0,"char_end":1}"#
             : source.locatorJSON
-        let evidenceExcerpt =
-            mutation == .retainedExcerpt
-            ? "Synthetic mismatched verification excerpt 997."
-            : source.excerpt
+        let evidenceExcerpt = retainedExcerptOverride
+            ?? (mutation == .retainedExcerpt
+                ? "Synthetic mismatched verification excerpt 997."
+                : source.excerpt)
         return try PropositionSupportResult(
             propositionID: "atomic-proposition-\(source.citationLabel)",
             status: .supported,
