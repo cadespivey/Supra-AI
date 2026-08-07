@@ -299,7 +299,7 @@ final class CorpusAnalysisEngineTests: XCTestCase {
         )
     }
 
-    func testTCORP03WholeMatterPlanningDisclosesUnfinishedDocumentlessImportSource() throws {
+    func testTCORP03WholeMatterPlanningDisclosesUnfinishedDocumentlessImportSource() async throws {
         // T-CORP-03 expected RED: whole-matter exact planning inventories only
         // terminal documentless import exclusions, so an unfinished copying
         // source vanishes instead of remaining disclosed in the frozen scope.
@@ -373,6 +373,36 @@ final class CorpusAnalysisEngineTests: XCTestCase {
         XCTAssertEqual(
             snapshot.members.filter { $0.disposition == .eligible }.map(\.documentID),
             [eligible.documentID]
+        )
+
+        let result = try await CorpusAnalysisEngine(store: store).runPrepared(
+            request: CorpusAnalysisRequest(
+                runKey: queued.runKey,
+                matterID: queued.matterID,
+                taskKind: .exhaustiveList,
+                scope: queued.scope,
+                characterBudget: queued.characterBudget,
+                maximumRetryCount: queued.maximumRetryCount,
+                modelLineageJSON: try Self.canonicalJSON(pinnedModel)
+            ),
+            runID: payload.runID,
+            requestDigest: payload.requestDigest
+        ) { _ in
+            CorpusAnalysisMapOutput(findings: [])
+        }
+        XCTAssertEqual(
+            result.run.assuranceState,
+            OutputAssuranceState.corpusIncomplete.rawValue,
+            "unfinished selected/copying imports block corpus-complete assurance"
+        )
+        XCTAssertNotEqual(
+            result.run.assuranceState,
+            OutputAssuranceState.corpusComplete.rawValue
+        )
+        XCTAssertTrue(
+            result.assuranceReasons.contains { reason in
+                reason.contains(unfinishedPath) && reason.contains("copying")
+            }
         )
     }
 
