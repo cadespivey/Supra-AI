@@ -1135,7 +1135,7 @@ private struct DeterministicCorpusWorkload: Sendable {
             runKey: "benchmark-corpus-cancel",
             matterID: corpusMatter.id,
             taskKind: .customExtraction,
-            characterBudget: 1
+            characterBudget: corpusTexts.map(\.count).max() ?? 1
         )
         let cancellationProbe = BenchmarkCorpusProbe()
         var cancellationObserved = false
@@ -1180,11 +1180,12 @@ private struct DeterministicCorpusWorkload: Sendable {
         // Case 5: transient exhaustion is a successful recovery outcome only
         // when all three attempts are durable and the ledger closes incomplete.
         let retryMatter = try store.matters.createMatter(name: "Synthetic corpus retry benchmark")
+        let retryText = "CORPUS-RETRY-PART"
         _ = try insertCorpusFixture(
             store: store,
             matterID: retryMatter.id,
             name: "corpus-retry.txt",
-            partTexts: ["CORPUS-RETRY-PART"]
+            partTexts: [retryText]
         )
         let retryProbe = BenchmarkCorpusProbe()
         let exhausted = try await CorpusAnalysisEngine(store: store).run(
@@ -1192,7 +1193,7 @@ private struct DeterministicCorpusWorkload: Sendable {
                 runKey: "benchmark-corpus-retry",
                 matterID: retryMatter.id,
                 taskKind: .customExtraction,
-                characterBudget: 1,
+                characterBudget: retryText.count,
                 maximumRetryCount: 2
             )
         ) { input in
@@ -1232,6 +1233,7 @@ private struct DeterministicCorpusWorkload: Sendable {
         let root = temporaryRoot.appendingPathComponent("exhaustive-task-store", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let store = try SupraStore(url: root.appendingPathComponent("exhaustive.sqlite"))
+        let pinnedModelLineageJSON = #"{"artifact_fingerprint_sha256":"7777777777777777777777777777777777777777777777777777777777777777","content_binding_algorithm":"supra-release-model-sha256-v1","content_binding_schema_version":1,"model_repository":"synthetic/benchmark-runtime","model_revision":"0123456789abcdef0123456789abcdef01234567"}"#
 
         let qualityMatter = try store.matters.createMatter(name: "Synthetic list quality benchmark")
         _ = try insertCorpusFixture(
@@ -1246,9 +1248,9 @@ private struct DeterministicCorpusWorkload: Sendable {
                 matterID: qualityMatter.id,
                 title: "Synthetic list quality",
                 query: "Extract every synthetic list item.",
-                characterBudget: 1,
+                characterBudget: 17,
                 evaluationExpectedItemKeys: ["item-a", "item-b", "item-c"],
-                modelLineageJSON: #"{"model_repository":"synthetic/benchmark-runtime","model_revision":"benchmark-revision-v1"}"#
+                modelLineageJSON: pinnedModelLineageJSON
             )
         ) { input in
             switch input.partition.sources.first?.text {
@@ -1285,8 +1287,8 @@ private struct DeterministicCorpusWorkload: Sendable {
                 matterID: failedMatter.id,
                 title: "Synthetic failed list",
                 query: "Extract every synthetic list item.",
-                characterBudget: 1,
-                modelLineageJSON: #"{"model_repository":"synthetic/benchmark-runtime","model_revision":"benchmark-revision-v1"}"#
+                characterBudget: 9,
+                modelLineageJSON: pinnedModelLineageJSON
             )
         ) { _ in throw CorpusAnalysisMapFailure.permanent("synthetic benchmark map failure") }
 
@@ -1303,8 +1305,8 @@ private struct DeterministicCorpusWorkload: Sendable {
                 matterID: invalidMatter.id,
                 title: "Synthetic schema-invalid list",
                 query: "Extract every synthetic list item.",
-                characterBudget: 1,
-                modelLineageJSON: #"{"model_repository":"synthetic/benchmark-runtime","model_revision":"benchmark-revision-v1"}"#
+                characterBudget: 19,
+                modelLineageJSON: pinnedModelLineageJSON
             )
         ) { _ in #"{"schema_version":1,"items":[{"item_key":7}]}"# }
 

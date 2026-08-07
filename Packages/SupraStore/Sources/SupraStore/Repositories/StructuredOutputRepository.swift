@@ -269,6 +269,15 @@ public final class StructuredOutputRepository: @unchecked Sendable {
                       run.structuredOutputVersionID == nil else {
                     throw StructuredOutputRepositoryError.corpusRunUnavailable(corpusAnalysisRunID)
                 }
+                if Self.requiresExactExecutionProof(run) {
+                    guard try CorpusAnalysisProofIdentity.sourceSetMatchesFrozenCorpus(
+                        sourceSet,
+                        run: run,
+                        db: db
+                    ) else {
+                        throw StructuredOutputRepositoryError.corpusRunUnavailable(corpusAnalysisRunID)
+                    }
+                }
                 corpusRun = run
             }
             let resolvedAssurance = assuranceState
@@ -352,17 +361,6 @@ public final class StructuredOutputRepository: @unchecked Sendable {
                 """,
                 arguments: [version.id, sourceSet.id]
             )
-            try db.execute(
-                sql: """
-                UPDATE structured_outputs
-                SET active_version_id = ?, status = ?, updated_at = ?
-                WHERE id = ?
-                """,
-                arguments: [version.id, outputStatus.rawValue, now, structuredOutputID]
-            )
-            guard db.changesCount == 1 else {
-                throw StructuredOutputRepositoryError.outputUnavailable(structuredOutputID)
-            }
             if let corpusAnalysisRunID {
                 try db.execute(
                     sql: """
@@ -383,6 +381,17 @@ public final class StructuredOutputRepository: @unchecked Sendable {
                 guard db.changesCount == 1 else {
                     throw StructuredOutputRepositoryError.corpusRunUnavailable(corpusAnalysisRunID)
                 }
+            }
+            try db.execute(
+                sql: """
+                UPDATE structured_outputs
+                SET active_version_id = ?, status = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                arguments: [version.id, outputStatus.rawValue, now, structuredOutputID]
+            )
+            guard db.changesCount == 1 else {
+                throw StructuredOutputRepositoryError.outputUnavailable(structuredOutputID)
             }
             return version
         }
@@ -812,6 +821,13 @@ public final class StructuredOutputRepository: @unchecked Sendable {
             throw StructuredOutputRepositoryError.requiredFieldMissing(fieldName)
         }
         return trimmed
+    }
+
+    private static func requiresExactExecutionProof(_ run: CorpusAnalysisRunRecord) -> Bool {
+        run.taskKind == CorpusAnalysisTaskKind.exhaustiveList.rawValue
+            && run.requestSchemaVersion == 2
+            && run.partitionStrategyVersion == 2
+            && run.partitionStrategy.hasPrefix("exact_revision_slice")
     }
 }
 

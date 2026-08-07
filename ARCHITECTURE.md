@@ -119,7 +119,7 @@ Managed model downloads are bound to a repository revision and verified manifest
 ## Persistence
 
 `SupraStore` uses [GRDB](https://github.com/groue/GRDB.swift) over SQLite with an ordered
-migration list. The shipping database schema registers a contiguous migration sequence from v001 through v071. Each feature area adds migrations and a
+migration list. The shipping database schema registers a contiguous migration sequence from v001 through v072. Each feature area adds migrations and a
 repository:
 
 - Milestone 1 established chats, messages, models, and validation runs.
@@ -158,6 +158,10 @@ repository:
   duplicate keys, conflicting values, contrary evidence, named omissions, and deterministic
   precision/recall metrics without exposing raw invalid model responses. Validated evidence is
   written as a version-scoped source set, and the run/source-set/version link commits atomically.
+  The v2 exhaustive-list preparation boundary hashes normalized execution fields (task and prompt versions, matter, normalized query, scope, clamped character budget and retry count), frozen membership, exact ordered slices, and a declared pinned-model identity (repository, revision, binding contract, and artifact fingerprint) into one request digest; the presentation title and run_key queue identity are intentionally excluded.
+  The v2 exhaustive-list mapper boundary accepts primary or contrary evidence only when the host resolves it to exactly one presented frozen slice, normalizes it to a nonempty quote and slice-relative Character range, and derives the retained excerpt and absolute output locator from the frozen revision; a value absent from every retained primary excerpt fails proposition verification.
+  Store v072 requires a complete exact-slice ledger relative to the frozen snapshot before an exhaustive-list run may retain either export-eligible assurance state, preserves legacy content without fabricating lineage while marking prior export-eligible assurance stale, and leaves chronology on its v1 revision ledger without imposing the exhaustive-list exact-slice contract; universal corpus-complete prerequisites are enforced on insert and update.
+  Store v072 admits an export-eligible v2 exact-slice proof only when every succeeded checkpoint has coherent terminal attempt history, valid ordered row timestamps, and a typed findings array whose findings each cite at least one primary or contrary reference anchored to that checkpoint's own exact partition slice; optional quote and slice-relative range fields fail closed when malformed or outside that slice. Exact publication also requires the attached source set's independent frozen-corpus hash to equal the Store recomputation over the run's canonical membership and slices. While its matter exists, Store prevents drift of the exact source-set attachment/mode/hash, linked version identity/content/verification, parent matter/type, single-run ownership, and proof-linked export-eligible active selection.
   Failed or schema-invalid partitions force an attached `needs_review` output with
   `corpus_incomplete`; negative conclusions are blocked unless coverage is complete and the run
   found no positive item. Chronology also adopts this ledger without changing its established
@@ -226,6 +230,7 @@ repository:
   headers. Only `proposition_supported` and `corpus_complete` enable export. Citation preview
   loads the recorded immutable revision with its origin/time provenance, and PDF text matching is
   restricted to the locator page rather than accepting the first document-wide occurrence.
+  Document export selects the requested output's explicit active version. Exhaustive-list export must pass both preflight and completion-record checks that the version remains active, all-supported, export-eligible, and matched by exactly one persisted v2 exact-slice run for the same matter, version, and assurance. A failed completion transaction records neither the export nor its success audit; the service restores the prior file or removes the new file, or reports a partial failure if that compensation also fails.
   Scope readiness keeps failed and review-required documents in its disclosed denominator and
   names each blocker. A per-message `Save to Outputs` action atomically creates the output/version
   and attaches the existing grounded-chat source set while retaining its message link, revisions,
