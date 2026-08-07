@@ -151,6 +151,72 @@ final class ModelLibraryContentBoundLoadingTests: XCTestCase {
         )
     }
 
+    func testTQUEUE03AuthorizationHashingLeavesMainActorResponsive() async throws {
+        // T-QUEUE-03 expected RED: ModelLibrary has no authorizationExecutor
+        // injection seam, and both authorize and makeLoadRequest currently hash
+        // synchronously on ModelLibrary's MainActor.
+        for phase in HeldAuthorizationPhase.allCases {
+            let fixture = try makeFixture(location: .managed)
+            let runtime = ContentBoundLoadingRuntimeStub(reply: .echoRequestFingerprint)
+            let probe = AuthorizationPhaseProbe(holding: phase)
+            let library = try makeLibrary(
+                fixture: fixture,
+                runtime: runtime,
+                authorizationExecutor: makeAuthorizationExecutor(probe: probe)
+            )
+
+            let load = Task { @MainActor in
+                try await library.loadContentBoundModel(matching: Self.pinnedModel)
+            }
+            let observation = await observeMainActorHeartbeat(whileHeldBy: probe)
+            let loadedModelID = try await load.value
+
+            XCTAssertTrue(observation.entered, "\(phase.rawValue) was never entered")
+            XCTAssertTrue(
+                observation.heartbeatRan,
+                "MainActor was blocked while \(phase.rawValue) was held"
+            )
+            XCTAssertEqual(loadedModelID.rawValue.uuidString, Self.modelIDString.uppercased())
+            XCTAssertEqual(runtime.loadRequests.count, 1)
+        }
+    }
+
+    func testTQUEUE03AuthorizationHashingPropagatesCancellationBeforeRuntimeLoad() async throws {
+        // T-QUEUE-03 expected RED: ModelLibrary has no authorizationExecutor
+        // injection seam, so cancellation cannot be proven to reach off-main
+        // authorize and makeLoadRequest hashing before runtime admission.
+        for phase in HeldAuthorizationPhase.allCases {
+            let fixture = try makeFixture(location: .managed)
+            let runtime = ContentBoundLoadingRuntimeStub(reply: .echoRequestFingerprint)
+            let probe = AuthorizationPhaseProbe(holding: phase)
+            let library = try makeLibrary(
+                fixture: fixture,
+                runtime: runtime,
+                authorizationExecutor: makeAuthorizationExecutor(probe: probe)
+            )
+
+            let load = Task { @MainActor in
+                try await library.loadContentBoundModel(matching: Self.pinnedModel)
+            }
+            let entered = await Task.detached { probe.waitUntilHeldPhaseEntered() }.value
+            load.cancel()
+            probe.releaseHeldPhase()
+            let error = await thrownError { try await load.value }
+
+            XCTAssertTrue(entered, "\(phase.rawValue) was never entered")
+            XCTAssertEqual(error as? ContentBoundModelLoadError, .cancelled)
+            XCTAssertTrue(
+                runtime.loadRequests.isEmpty,
+                "runtime load must not begin after cancellation during \(phase.rawValue)"
+            )
+            if phase == .authorize {
+                XCTAssertEqual(probe.enteredPhases, [.authorize])
+            } else {
+                XCTAssertEqual(probe.enteredPhases, [.authorize, .makeLoadRequest])
+            }
+        }
+    }
+
     private static var pinnedModel: CorpusAnalysisPinnedModel {
         CorpusAnalysisPinnedModel(
             modelRepository: repositoryID,
@@ -178,6 +244,71 @@ final class ModelLibraryContentBoundLoadingTests: XCTestCase {
         )
         library.refresh()
         return library
+    }
+
+    private func makeLibrary(
+        fixture: Fixture,
+        runtime: ContentBoundLoadingRuntimeStub,
+        authorizationExecutor: ContentBoundAuthorizationExecutor
+    ) throws -> ModelLibrary {
+        try fixture.store.models.upsertModel(ModelRecord(
+            id: Self.modelIDString,
+            displayName: "Synthetic exact review model",
+            path: fixture.modelDirectory.path,
+            bookmarkData: nil
+        ))
+        let library = ModelLibrary(
+            store: fixture.store,
+            runtimeClient: runtime,
+            managedModelRoots: [fixture.managedRoot],
+            authorizationExecutor: authorizationExecutor
+        )
+        library.refresh()
+        return library
+    }
+
+    private func makeAuthorizationExecutor(
+        probe: AuthorizationPhaseProbe
+    ) -> ContentBoundAuthorizationExecutor {
+        ContentBoundAuthorizationExecutor(
+            authorize: { modelDirectory, managedRoot, expectedSHA256 in
+                try probe.enter(.authorize)
+                return try SignedReleaseModelAuthorization.authorize(
+                    modelDirectory: modelDirectory,
+                    managedRoot: managedRoot,
+                    expectedSHA256: expectedSHA256
+                )
+            },
+            makeLoadRequest: { authorization, modelID, displayName in
+                try probe.enter(.makeLoadRequest)
+                return try authorization.makeLoadRequest(
+                    modelID: modelID,
+                    displayName: displayName
+                )
+            }
+        )
+    }
+
+    private func observeMainActorHeartbeat(
+        whileHeldBy probe: AuthorizationPhaseProbe
+    ) async -> (entered: Bool, heartbeatRan: Bool) {
+        await Task.detached {
+            let entered = probe.waitUntilHeldPhaseEntered()
+            guard entered else {
+                probe.releaseHeldPhase()
+                return (false, false)
+            }
+
+            let heartbeat = DispatchSemaphore(value: 0)
+            Task { @MainActor in heartbeat.signal() }
+            let heartbeatRan = Self.waitForSignal(heartbeat)
+            probe.releaseHeldPhase()
+            return (true, heartbeatRan)
+        }.value
+    }
+
+    private nonisolated static func waitForSignal(_ semaphore: DispatchSemaphore) -> Bool {
+        semaphore.wait(timeout: .now() + 2) == .success
     }
 
     private func makeFixture(location: FixtureLocation) throws -> Fixture {
@@ -257,6 +388,44 @@ private struct Fixture {
     var managedRoot: URL
     var modelDirectory: URL
     var store: SupraStore
+}
+
+private enum HeldAuthorizationPhase: String, CaseIterable, Sendable {
+    case authorize
+    case makeLoadRequest
+}
+
+private final class AuthorizationPhaseProbe: @unchecked Sendable {
+    private let heldPhase: HeldAuthorizationPhase
+    private let entered = DispatchSemaphore(value: 0)
+    private let release = DispatchSemaphore(value: 0)
+    private let lock = NSLock()
+    private var phases: [HeldAuthorizationPhase] = []
+
+    init(holding heldPhase: HeldAuthorizationPhase) {
+        self.heldPhase = heldPhase
+    }
+
+    var enteredPhases: [HeldAuthorizationPhase] {
+        lock.withLock { phases }
+    }
+
+    func enter(_ phase: HeldAuthorizationPhase) throws {
+        lock.withLock { phases.append(phase) }
+        if phase == heldPhase {
+            entered.signal()
+            release.wait()
+        }
+        try Task.checkCancellation()
+    }
+
+    func waitUntilHeldPhaseEntered() -> Bool {
+        entered.wait(timeout: .now() + 2) == .success
+    }
+
+    func releaseHeldPhase() {
+        release.signal()
+    }
 }
 
 private final class ContentBoundLoadingRuntimeStub: RuntimeClientProtocol, @unchecked Sendable {

@@ -156,6 +156,178 @@ final class CorpusReviewQueueExecutionTests: XCTestCase {
         XCTAssertEqual(persistedFollowerRun.status, CorpusAnalysisRunStatus.persisted.rawValue)
     }
 
+    func testTQUEUE04CancelDuringPinnedModelResolutionBalancesRunAndDrainsFollower() async throws {
+        // T-QUEUE-04 expected RED: cancellation while the pinned-model resolver
+        // is suspended cancels only the queue row. Because the engine has not
+        // started, the prepared run and every partition remain nonterminal.
+        let store = try makeStore(testName: "TQUEUE04-resolver-cancel")
+        let active = try prepareFixture(
+            store: store,
+            caseName: "resolver-cancel-active",
+            partCount: 4
+        )
+        let follower = try prepareFixture(
+            store: store,
+            caseName: "resolver-cancel-follower",
+            partCount: 1
+        )
+        let activePartitions = try store.corpusAnalysis.fetchPartitions(
+            matterID: active.matterID,
+            runID: active.payload.runID
+        )
+        let followerPartitions = try store.corpusAnalysis.fetchPartitions(
+            matterID: follower.matterID,
+            runID: follower.payload.runID
+        )
+        XCTAssertEqual(activePartitions.count, 4)
+        XCTAssertEqual(followerPartitions.count, 1)
+
+        let probe = ResolverCancellationAndFollowerProbe(
+            activeMatterID: active.matterID,
+            followerMatterID: follower.matterID,
+            followerPartitionIDs: Set(followerPartitions.map(\.id))
+        )
+        let runner = CorpusAnalysisQueueRunner(
+            store: store,
+            resolvePinnedModel: { pinnedModel, request in
+                try await probe.resolve(pinnedModel, request: request)
+            },
+            exhaustiveListGenerator: { input in
+                try await probe.generate(input)
+            }
+        )
+        let queue = makeQueue(store: store) { payload in
+            try await runner.run(payload)
+        }
+        queue.bootstrap()
+        let activeJobID = try XCTUnwrap(queue.enqueueCorpusAnalysis(
+            matterID: active.matterID,
+            payload: active.payload
+        ))
+        try await waitUntilResolverStarted(probe)
+        let followerJobID = try XCTUnwrap(queue.enqueueCorpusAnalysis(
+            matterID: follower.matterID,
+            payload: follower.payload
+        ))
+
+        queue.cancel(jobID: activeJobID)
+        await queue.waitUntilIdle()
+
+        let cancellationObserved = await probe.cancellationObserved
+        let followerGeneratedPartitionIDs = await probe.followerGeneratedPartitionIDs
+        let activeJob = try XCTUnwrap(store.documentJobs.fetchJob(id: activeJobID))
+        let followerJob = try XCTUnwrap(store.documentJobs.fetchJob(id: followerJobID))
+        let activeRun = try XCTUnwrap(
+            store.corpusAnalysis.fetchRun(matterID: active.matterID, id: active.payload.runID)
+        )
+        let followerRun = try XCTUnwrap(
+            store.corpusAnalysis.fetchRun(matterID: follower.matterID, id: follower.payload.runID)
+        )
+        let finalActivePartitions = try store.corpusAnalysis.fetchPartitions(
+            matterID: active.matterID,
+            runID: active.payload.runID
+        )
+        let coverage = try store.corpusAnalysis.coverage(
+            matterID: active.matterID,
+            runID: active.payload.runID
+        )
+        let terminalDispositions: Set<String> = [
+            CorpusAnalysisPartitionDisposition.succeeded.rawValue,
+            CorpusAnalysisPartitionDisposition.failed.rawValue,
+            CorpusAnalysisPartitionDisposition.cancelled.rawValue,
+            CorpusAnalysisPartitionDisposition.excluded.rawValue,
+        ]
+
+        XCTAssertTrue(cancellationObserved, "cancellation must interrupt the suspended resolver")
+        XCTAssertEqual(activeJob.status, DocumentProcessingJobStatus.cancelled.rawValue)
+        XCTAssertEqual(activeRun.status, CorpusAnalysisRunStatus.cancelled.rawValue)
+        XCTAssertEqual(coverage.partitionCount, 4)
+        XCTAssertEqual(coverage.pendingPartitionCount, 0)
+        XCTAssertEqual(coverage.cancelledPartitionCount, 4)
+        XCTAssertEqual(coverage.terminalPartitionCount, 4)
+        XCTAssertEqual(coverage.balanceErrorCount, 0)
+        XCTAssertTrue(
+            finalActivePartitions.allSatisfy { terminalDispositions.contains($0.disposition) },
+            "every unfinished frozen partition must become terminal before FIFO advance"
+        )
+        XCTAssertEqual(Set(followerGeneratedPartitionIDs), Set(followerPartitions.map(\.id)))
+        XCTAssertEqual(followerJob.status, DocumentProcessingJobStatus.complete.rawValue)
+        XCTAssertEqual(followerRun.status, CorpusAnalysisRunStatus.persisted.rawValue)
+    }
+
+    func testTQUEUE04LateCancelCompletedCorpusJobIsNoOp() async throws {
+        // T-QUEUE-04 expected RED: a late cancel for an already completed job
+        // falls through to the unconditional row helper and rewrites complete
+        // work as cancelled instead of treating the stale request as a no-op.
+        let store = try makeStore(testName: "TQUEUE04-late-complete-cancel")
+        let fixture = try prepareFixture(
+            store: store,
+            caseName: "late-complete-cancel",
+            partCount: 1
+        )
+        let runner = CorpusAnalysisQueueRunner(
+            store: store,
+            resolvePinnedModel: { pinnedModel, _ in pinnedModel },
+            exhaustiveListGenerator: { _ in
+                #"{"schema_version":1,"items":[]}"#
+            }
+        )
+        let queue = makeQueue(store: store) { payload in
+            try await runner.run(payload)
+        }
+        queue.bootstrap()
+        let jobID = try XCTUnwrap(queue.enqueueCorpusAnalysis(
+            matterID: fixture.matterID,
+            payload: fixture.payload
+        ))
+        await queue.waitUntilIdle()
+        let beforeCancel = try XCTUnwrap(store.documentJobs.fetchJob(id: jobID))
+        XCTAssertEqual(beforeCancel.status, DocumentProcessingJobStatus.complete.rawValue)
+        XCTAssertEqual(beforeCancel.phase, DocumentProcessingPhase.complete.rawValue)
+        XCTAssertNotNil(beforeCancel.completedAt)
+
+        queue.cancel(jobID: jobID)
+
+        let afterCancel = try XCTUnwrap(store.documentJobs.fetchJob(id: jobID))
+        XCTAssertEqual(afterCancel.status, beforeCancel.status)
+        XCTAssertEqual(afterCancel.phase, beforeCancel.phase)
+        XCTAssertEqual(afterCancel.completedAt, beforeCancel.completedAt)
+        XCTAssertEqual(
+            afterCancel.updatedAt,
+            beforeCancel.updatedAt,
+            "a late cancel must not rewrite any persisted completed-job field"
+        )
+    }
+
+    func testTQUEUE04LateCancelActiveNonCorpusJobIsNoOp() async throws {
+        // T-QUEUE-04 expected RED: cancel(jobID:) rewrites any unowned job row.
+        // A stale corpus cancellation can therefore cancel an active import or
+        // reindex even though no corpus child task owns that job identifier.
+        let store = try makeStore(testName: "TQUEUE04-late-noncorpus-cancel")
+        let matter = try store.matters.createMatter(name: "Synthetic active non-corpus matter")
+        let queue = makeQueue(store: store) { _ in
+            throw QueueExecutionTestError.unexpectedCorpusDispatch
+        }
+        let queued = try store.documentJobs.enqueueJob(
+            matterID: matter.id,
+            kind: DocumentProcessingJobKind.process.rawValue
+        )
+        let activated = try XCTUnwrap(store.documentJobs.activateNextJobIfIdle())
+        queue.refresh()
+        XCTAssertEqual(activated.id, queued.id)
+        XCTAssertEqual(activated.status, DocumentProcessingJobStatus.active.rawValue)
+        XCTAssertEqual(activated.kind, DocumentProcessingJobKind.process.rawValue)
+        XCTAssertEqual(queue.activeJob?.id, activated.id)
+
+        queue.cancel(jobID: activated.id)
+
+        let afterCancel = try XCTUnwrap(store.documentJobs.fetchJob(id: activated.id))
+        XCTAssertEqual(afterCancel.status, activated.status)
+        XCTAssertEqual(afterCancel.phase, activated.phase)
+        XCTAssertEqual(afterCancel.updatedAt, activated.updatedAt)
+        XCTAssertEqual(queue.activeJob?.id, activated.id)
+    }
+
     func testTQUEUE04LiveCancellationWaitsForConfirmedRuntimeQuiescenceBeforeReturning() async throws {
         // T-QUEUE-04 expected RED: CorpusAnalysisQueueRunner.live starts
         // cancelGeneration in an unowned Task and returns CancellationError
@@ -282,9 +454,10 @@ final class CorpusReviewQueueExecutionTests: XCTestCase {
     }
 
     func testTQUEUE05RelaunchResumesOnlyRemainingThreeOfFiveAndReportsTwoThroughFive() async throws {
-        // T-QUEUE-05 expected RED: there is no production runner wired to the
-        // queue, bootstrap does not pump, and the old probe merely rereads a
-        // cancelled 2/5 ledger before incorrectly completing the job.
+        // T-QUEUE-05 review-corrected fixture semantics (may already be GREEN):
+        // the prior fixture left the persisted job queued, so it did not model
+        // a crash. Activate it first, require relaunch bootstrap to pause without
+        // generation, then explicitly resume the durable 2/5 ledger.
         let store = try makeStore(testName: "TQUEUE05")
         let fixture = try prepareFixture(store: store, caseName: "resume-two-of-five", partCount: 5)
         let partitions = try store.corpusAnalysis.fetchPartitions(
@@ -328,6 +501,9 @@ final class CorpusReviewQueueExecutionTests: XCTestCase {
             matterID: fixture.matterID,
             payload: fixture.payload
         )
+        let activeBeforeCrash = try XCTUnwrap(store.documentJobs.activateNextJobIfIdle())
+        XCTAssertEqual(activeBeforeCrash.id, job.id)
+        XCTAssertEqual(activeBeforeCrash.status, DocumentProcessingJobStatus.active.rawValue)
         let probe = ResumeProbe()
         let runner = CorpusAnalysisQueueRunner(
             store: store,
@@ -345,6 +521,22 @@ final class CorpusReviewQueueExecutionTests: XCTestCase {
         }
 
         relaunchedQueue.bootstrap()
+        await relaunchedQueue.waitUntilIdle()
+
+        let pausedAfterRelaunch = try XCTUnwrap(store.documentJobs.fetchJob(id: job.id))
+        let generatedBeforeExplicitResume = await probe.generatedPartitionIDs
+        XCTAssertEqual(pausedAfterRelaunch.status, DocumentProcessingJobStatus.paused.rawValue)
+        XCTAssertEqual(pausedAfterRelaunch.phase, DocumentProcessingPhase.paused.rawValue)
+        XCTAssertTrue(
+            relaunchedQueue.resumableJobs.contains { $0.id == job.id },
+            "the new queue must expose the crash-interrupted corpus job for explicit resume"
+        )
+        XCTAssertTrue(
+            generatedBeforeExplicitResume.isEmpty,
+            "relaunch bootstrap must not generate before the user explicitly resumes"
+        )
+
+        relaunchedQueue.resume(jobID: job.id)
         await relaunchedQueue.waitUntilIdle()
 
         let generatedPartitionIDs = await probe.generatedPartitionIDs
@@ -621,6 +813,16 @@ final class CorpusReviewQueueExecutionTests: XCTestCase {
         throw QueueExecutionTestError.runnerDidNotStart
     }
 
+    private func waitUntilResolverStarted(
+        _ probe: ResolverCancellationAndFollowerProbe
+    ) async throws {
+        for _ in 0..<200 {
+            if await probe.resolverStarted { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        throw QueueExecutionTestError.resolverDidNotStart
+    }
+
     private func waitUntilLiveGenerationStarted(
         _ runtime: LiveQuiescenceRuntimeStub
     ) async throws {
@@ -682,10 +884,13 @@ private struct LiveContentBoundModelFixture {
 private enum QueueExecutionTestError: Error {
     case missingCoverage(String)
     case runnerDidNotStart
+    case resolverDidNotStart
     case liveGenerationDidNotStart
     case liveCancellationWasNotRequested
     case liveCancellationResponseDidNotReturn
     case syntheticRunnerFailure
+    case unexpectedCorpusDispatch
+    case unexpectedMatter(String)
     case unexpectedPartition(String)
 }
 
@@ -768,6 +973,54 @@ private actor CancellationAndFollowerProbe {
             cancellationObserved = true
             throw CancellationError()
         }
+        return #"{"schema_version":1,"items":[]}"#
+    }
+}
+
+private actor ResolverCancellationAndFollowerProbe {
+    private let activeMatterID: String
+    private let followerMatterID: String
+    private let followerPartitionIDs: Set<String>
+    private(set) var resolverStarted = false
+    private(set) var cancellationObserved = false
+    private(set) var followerGeneratedPartitionIDs: [String] = []
+
+    init(
+        activeMatterID: String,
+        followerMatterID: String,
+        followerPartitionIDs: Set<String>
+    ) {
+        self.activeMatterID = activeMatterID
+        self.followerMatterID = followerMatterID
+        self.followerPartitionIDs = followerPartitionIDs
+    }
+
+    func resolve(
+        _ pinnedModel: CorpusAnalysisPinnedModel,
+        request: ExhaustiveListQueuedRequest
+    ) async throws -> CorpusAnalysisPinnedModel? {
+        if request.matterID == followerMatterID {
+            return pinnedModel
+        }
+        guard request.matterID == activeMatterID else {
+            throw QueueExecutionTestError.unexpectedMatter(request.matterID)
+        }
+        resolverStarted = true
+        do {
+            try await Task.sleep(for: .seconds(30))
+        } catch is CancellationError {
+            cancellationObserved = true
+            throw CancellationError()
+        }
+        return pinnedModel
+    }
+
+    func generate(_ input: ExhaustiveListGenerationInput) throws -> String {
+        let partitionID = input.partition.partitionID
+        guard followerPartitionIDs.contains(partitionID) else {
+            throw QueueExecutionTestError.unexpectedPartition(partitionID)
+        }
+        followerGeneratedPartitionIDs.append(partitionID)
         return #"{"schema_version":1,"items":[]}"#
     }
 }
