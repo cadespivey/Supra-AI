@@ -193,6 +193,50 @@ final class CorpusAnalysisPreparationTests: XCTestCase {
             )
         }
 
+        // T-STORE-05 review finding expected RED: after a clean atomic prepare,
+        // the legacy setDisposition API can mark v2 work succeeded with zero
+        // attempts and arbitrary findings, bypassing the mapper checkpoint path.
+        var lifecycleRun = run
+        lifecycleRun.id = "atomic-prepare-zero-attempt-run-977"
+        lifecycleRun.runKey = "atomic-prepare-zero-attempt-key-977"
+        var lifecyclePartition = partition
+        lifecyclePartition.id = "atomic-prepare-zero-attempt-partition-977"
+        lifecyclePartition.runID = lifecycleRun.id
+        var lifecycleSlice = valid
+        lifecycleSlice.id = "atomic-prepare-zero-attempt-slice-977"
+        lifecycleSlice.runID = lifecycleRun.id
+        lifecycleSlice.partitionID = lifecyclePartition.id
+        _ = try store.corpusAnalysis.createOrFetchPreparedRun(
+            run: lifecycleRun,
+            partitions: [lifecyclePartition],
+            slices: [lifecycleSlice]
+        )
+        let foreignFinding =
+            #"[{"id":"foreign-zero-attempt-977","value":"FOREIGN-ZERO-ATTEMPT-977","evidence":[]}]"#
+        XCTAssertThrowsError(
+            try store.corpusAnalysis.setDisposition(
+                matterID: matter.id,
+                runID: lifecycleRun.id,
+                partitionID: lifecyclePartition.id,
+                disposition: .succeeded,
+                dispositionReason: "foreign_zero_attempt_success_977",
+                findingsJSON: foreignFinding
+            ),
+            "v2 succeeded transitions must pass through a running attempt checkpoint"
+        )
+        let retainedLifecycle = try XCTUnwrap(
+            store.corpusAnalysis.fetchPartitions(
+                matterID: matter.id,
+                runID: lifecycleRun.id
+            ).first
+        )
+        XCTAssertEqual(retainedLifecycle.disposition, CorpusAnalysisPartitionDisposition.pending.rawValue)
+        XCTAssertEqual(retainedLifecycle.attemptCount, 0)
+        XCTAssertEqual(retainedLifecycle.attemptHistoryJSON, "[]")
+        XCTAssertNil(retainedLifecycle.dispositionReason)
+        XCTAssertNil(retainedLifecycle.findingsJSON)
+        XCTAssertFalse(retainedLifecycle.findingsJSON?.contains("FOREIGN-ZERO-ATTEMPT-977") ?? false)
+
         var seedRun = run
         seedRun.id = "atomic-prepare-seed-run-971"
         seedRun.runKey = "atomic-prepare-seed-key-971"
