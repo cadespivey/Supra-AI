@@ -832,6 +832,36 @@ final class SupraSessionsTests: XCTestCase {
         XCTAssertTrue(try store.matters.fetchSoftDeletedMatters().isEmpty)
     }
 
+    func testRecycleBinPermanentDeleteFailureRemainsVisibleAndReportsError() throws {
+        // Expected RED: permanent-delete errors are currently collapsed to an
+        // empty result, so the row happens to remain but the user sees no reason.
+        let store = try makeStore()
+        let bin = RecycleBinController(store: store)
+        let matter = try store.matters.createMatter(name: "Rollback matter", jurisdiction: "FL")
+        try store.matters.softDeleteMatter(id: matter.id)
+        try store.database.writer.write { db in
+            try db.execute(sql: """
+                CREATE TRIGGER recycle_bin_reject_matter_delete_audit
+                BEFORE INSERT ON audit_events
+                WHEN NEW.event_type = 'matter_permanently_deleted'
+                BEGIN
+                    SELECT RAISE(ABORT, 'synthetic recycle bin delete rollback');
+                END
+                """)
+        }
+        bin.reload()
+
+        bin.permanentlyDeleteMatter(id: matter.id)
+
+        XCTAssertEqual(bin.matters.map(\.id), [matter.id])
+        XCTAssertTrue(bin.deletionError?.contains("synthetic recycle bin delete rollback") ?? false)
+        XCTAssertNotNil(
+            try store.database.writer.read { db in
+                try MatterRecord.fetchOne(db, key: matter.id)
+            }
+        )
+    }
+
     func testMentionsFederalCitationMatchesStatutesRegulationsAndReporters() {
         XCTAssertTrue(GlobalChatController.mentionsFederalCitation("see 18 u.s.c. § 1001"))
         XCTAssertTrue(GlobalChatController.mentionsFederalCitation("18 usc 1001"))

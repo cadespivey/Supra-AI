@@ -33,6 +33,18 @@ final class DocumentMaintenanceTests: XCTestCase {
         XCTAssertNotNil(try store.documentLibrary.fetchDocument(id: recent.id))
         // Blob survives because the recent instance still references it.
         XCTAssertNotNil(try store.documentLibrary.fetchBlob(id: oldBlob.id))
+        let deletionEvents = try store.auditEvents.fetchEvents(
+            relatedTable: "matter_documents",
+            relatedID: expired.id,
+            eventType: "document_permanently_deleted"
+        )
+        XCTAssertEqual(
+            deletionEvents.count,
+            1,
+            "auto-purge must rely on the repository's atomic base audit instead of duplicating it"
+        )
+        XCTAssertEqual(deletionEvents.first?.actor, "system")
+        XCTAssertEqual(deletionEvents.first?.timestamp, now)
     }
 
     func testAutoPurgeDisabledWhenZeroDays() throws {
