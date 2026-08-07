@@ -75,6 +75,8 @@ final class CorpusReviewQueueCompositionUITests: XCTestCase {
     func testTDELUI01BothDocumentTrashSurfacesShareConfirmationAndRenderFailure() throws {
         // Expected RED: MatterDocumentsView hard-deletes directly from its trash
         // row and never renders the controller's deletion-specific notice.
+        // Follow-on RED: the shared dialog must identify the selected target and
+        // must not imply that document-owned classifications/relations survive.
         let matterDocuments = try appSource(
             relativePath: "SupraAI/Documents/MatterDocumentsView.swift"
         )
@@ -91,7 +93,16 @@ final class CorpusReviewQueueCompositionUITests: XCTestCase {
             "a trash-row click must select a pending item, not perform deletion"
         )
         XCTAssertTrue(
-            recycleBin.contains("Saved analysis, output text, citation and evidence excerpts")
+            recycleBin.contains("Remove “\\(name)” permanently?")
+        )
+        XCTAssertTrue(
+            recycleBin.contains(
+                "Saved output text, citation display excerpts and locators, and retained corpus-analysis proof records"
+            )
+        )
+        XCTAssertFalse(
+            recycleBin.contains("Saved analysis"),
+            "document-owned classification and relation records are deleted, not retained"
         )
     }
 
