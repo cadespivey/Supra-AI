@@ -2289,7 +2289,7 @@ final class CaseFileReviewIntegrityMigrationTests: XCTestCase {
         let invalidSourceSet = DocumentSourceSetRecord(
             id: "t-store-01-source-lineage-invalid-set-2213",
             matterID: matter.id,
-            mode: DocumentSourceSetMode.guided.rawValue,
+            mode: DocumentSourceSetMode.exhaustive.rawValue,
             scopeJSON: #"{"document_ids":["synthetic-source-lineage-2213"]}"#,
             retrievalQuery: "Synthetic mismatched source lineage 2213",
             corpusSnapshotHash: runs.valid.lineageHash,
@@ -2322,6 +2322,50 @@ final class CaseFileReviewIntegrityMigrationTests: XCTestCase {
             )
         }
 
+        let invalidModeOutput = StructuredOutputRecord(
+            id: "t-store-01-source-lineage-mode-output-2217",
+            matterID: matter.id,
+            title: "Synthetic non-exhaustive source lineage 2217",
+            outputType: StructuredOutputType.documentExhaustiveList.rawValue,
+            createdAt: Date(timeIntervalSince1970: 1_790_322_117),
+            updatedAt: Date(timeIntervalSince1970: 1_790_322_117)
+        )
+        let invalidModeSourceSet = DocumentSourceSetRecord(
+            id: "t-store-01-source-lineage-mode-set-2217",
+            matterID: matter.id,
+            mode: DocumentSourceSetMode.guided.rawValue,
+            scopeJSON: #"{"document_ids":["synthetic-source-lineage-2217"]}"#,
+            retrievalQuery: "Synthetic non-exhaustive source lineage 2217",
+            corpusSnapshotHash: runs.valid.lineageHash,
+            createdAt: Date(timeIntervalSince1970: 1_790_322_118)
+        )
+        XCTAssertThrowsError(
+            try outputs.createVersionWithSourceSetAtomically(
+                structuredOutputID: invalidModeOutput.id,
+                newOutput: invalidModeOutput,
+                sourceSet: invalidModeSourceSet,
+                outputSources: [],
+                contentMarkdown: "# Non-exhaustive source lineage\n\nWRONG-SOURCE-MODE-2217 [S97].",
+                verificationStatus: .allSupported,
+                verificationVersion: "source-lineage-verifier/2217",
+                verificationResults: [try supportedResult(sourceID: "source-lineage-source-2217")],
+                verificationDimensions: supportedDimensions(),
+                outputStatus: .complete,
+                corpusAnalysisRunID: runs.valid.id,
+                promptBuilderVersion: "source-lineage-prompt/2217",
+                assuranceState: .corpusComplete
+            ),
+            "an exact publication must use an exhaustive frozen source set"
+        )
+        try queue.read { db in
+            XCTAssertNil(try StructuredOutputRecord.fetchOne(db, key: invalidModeOutput.id))
+            XCTAssertNil(try DocumentSourceSetRecord.fetchOne(db, key: invalidModeSourceSet.id))
+            XCTAssertNil(
+                try CorpusAnalysisRunRecord.fetchOne(db, key: runs.valid.id)?
+                    .structuredOutputVersionID
+            )
+        }
+
         let validOutput = StructuredOutputRecord(
             id: "t-store-01-source-lineage-valid-output-2219",
             matterID: matter.id,
@@ -2333,7 +2377,7 @@ final class CaseFileReviewIntegrityMigrationTests: XCTestCase {
         let validSourceSet = DocumentSourceSetRecord(
             id: "t-store-01-source-lineage-valid-set-2219",
             matterID: matter.id,
-            mode: DocumentSourceSetMode.guided.rawValue,
+            mode: DocumentSourceSetMode.exhaustive.rawValue,
             scopeJSON: #"{"document_ids":["synthetic-source-lineage-2219"]}"#,
             retrievalQuery: "Synthetic matching source lineage 2219",
             corpusSnapshotHash: runs.valid.lineageHash,
