@@ -1184,6 +1184,560 @@ final class CaseFileReviewIntegrityMigrationTests: XCTestCase {
         }
     }
 
+    func testTSTORE01V072RequiresLiteralExactSliceStrategy() throws {
+        // T-STORE-01 review finding expected RED: SQL LIKE treats each `_` in
+        // `exact_revision_slice%` as a wildcard, so a lookalike strategy can
+        // retain corpus-complete assurance without using the exact planner.
+        let queue = try DatabaseQueue()
+        try SupraMigrator.makeMigrator().migrate(queue)
+        let matter = try MattersRepository(writer: queue).createMatter(
+            name: "Synthetic literal strategy guard 1987"
+        )
+
+        try queue.write { db in
+            let target = try insertCompletionBarrierRun(
+                db,
+                matterID: matter.id,
+                caseName: "literal-strategy-1987",
+                digestDigit: "1",
+                disposition: .succeeded
+            )
+            try insertSlice(
+                db,
+                id: "t-store-01-literal-strategy-slice-1987",
+                partitionID: target.partitionID,
+                ordinal: 0,
+                charStart: 0,
+                charEnd: 100,
+                revisionCharCount: 100,
+                textSHA256: String(repeating: "1", count: 64),
+                runID: target.runID,
+                memberKey: target.memberKey,
+                documentID: target.documentID,
+                partIndex: 79,
+                revisionID: target.revisionID
+            )
+            let lookalikeStrategy = "exactXrevisionYslice:characters=1987"
+            XCTAssertNotEqual(lookalikeStrategy, "exact_revision_slice:characters=1987")
+            try db.execute(
+                sql: "UPDATE corpus_analysis_runs SET partition_strategy = ? WHERE id = ?",
+                arguments: [lookalikeStrategy, target.runID]
+            )
+
+            XCTAssertThrowsError(
+                try persistCorpusComplete(db, runID: target.runID, exclusionsDisclosed: true),
+                "the exact strategy prefix must compare underscores literally"
+            )
+            try assertNotCorpusComplete(db, runID: target.runID)
+        }
+    }
+
+    func testTSTORE01V072RejectsMultiplePartIndicesForOneFrozenRevision() throws {
+        // T-STORE-01 review finding expected RED: range completeness is grouped
+        // by part_index, so the same frozen revision can be fully represented
+        // once at one part and again with different cuts at another part.
+        let queue = try DatabaseQueue()
+        try SupraMigrator.makeMigrator().migrate(queue)
+        let matter = try MattersRepository(writer: queue).createMatter(
+            name: "Synthetic once-only part guard 1991"
+        )
+
+        try queue.write { db in
+            let target = try insertCompletionBarrierRun(
+                db,
+                matterID: matter.id,
+                caseName: "duplicate-part-1991",
+                digestDigit: "2",
+                disposition: .succeeded
+            )
+            try insertSlice(
+                db,
+                id: "t-store-01-part-primary-1991",
+                partitionID: target.partitionID,
+                ordinal: 0,
+                charStart: 0,
+                charEnd: 100,
+                revisionCharCount: 100,
+                textSHA256: String(repeating: "2", count: 64),
+                runID: target.runID,
+                memberKey: target.memberKey,
+                documentID: target.documentID,
+                partIndex: 83,
+                revisionID: target.revisionID
+            )
+            let duplicatePartitionID = "t-store-01-part-duplicate-partition-1991"
+            try db.execute(
+                sql: """
+                    INSERT INTO corpus_analysis_partitions (
+                        id, run_id, partition_key, input_revision_ids_json, disposition
+                    ) VALUES (?, ?, ?, ?, 'succeeded')
+                    """,
+                arguments: [
+                    duplicatePartitionID,
+                    target.runID,
+                    "duplicate-part-index-89#revision:\(target.revisionID)",
+                    "[\"\(target.revisionID)\"]",
+                ]
+            )
+            try insertSlice(
+                db,
+                id: "t-store-01-part-duplicate-left-1991",
+                partitionID: duplicatePartitionID,
+                ordinal: 0,
+                charStart: 0,
+                charEnd: 37,
+                revisionCharCount: 100,
+                textSHA256: String(repeating: "3", count: 64),
+                runID: target.runID,
+                memberKey: target.memberKey,
+                documentID: target.documentID,
+                partIndex: 89,
+                revisionID: target.revisionID
+            )
+            try insertSlice(
+                db,
+                id: "t-store-01-part-duplicate-right-1991",
+                partitionID: duplicatePartitionID,
+                ordinal: 1,
+                charStart: 37,
+                charEnd: 100,
+                revisionCharCount: 100,
+                textSHA256: String(repeating: "4", count: 64),
+                runID: target.runID,
+                memberKey: target.memberKey,
+                documentID: target.documentID,
+                partIndex: 89,
+                revisionID: target.revisionID
+            )
+
+            XCTAssertThrowsError(
+                try persistCorpusComplete(
+                    db,
+                    runID: target.runID,
+                    exclusionsDisclosed: true,
+                    partitionCount: 2
+                ),
+                "one frozen member/document/revision identity must select exactly one part index"
+            )
+            try assertNotCorpusComplete(db, runID: target.runID)
+        }
+    }
+
+    func testTSTORE01V072RequiresTypedEqualPartitionRevisionLedger() throws {
+        // T-STORE-01 review finding expected RED: json_each accepts a scalar JSON
+        // string, and the trigger checks only slice-to-input membership. A scalar
+        // or an input array containing an unsliced revision can therefore finalize.
+        let queue = try DatabaseQueue()
+        try SupraMigrator.makeMigrator().migrate(queue)
+        let matter = try MattersRepository(writer: queue).createMatter(
+            name: "Synthetic typed revision ledger 1993"
+        )
+
+        try queue.write { db in
+            let scalar = try insertCompletionBarrierRun(
+                db,
+                matterID: matter.id,
+                caseName: "scalar-revision-ledger-1993",
+                digestDigit: "3",
+                disposition: .succeeded
+            )
+            try insertSlice(
+                db,
+                id: "t-store-01-scalar-revision-slice-1993",
+                partitionID: scalar.partitionID,
+                ordinal: 0,
+                charStart: 0,
+                charEnd: 100,
+                revisionCharCount: 100,
+                textSHA256: String(repeating: "5", count: 64),
+                runID: scalar.runID,
+                memberKey: scalar.memberKey,
+                documentID: scalar.documentID,
+                partIndex: 97,
+                revisionID: scalar.revisionID
+            )
+            try db.execute(
+                sql: "UPDATE corpus_analysis_partitions SET input_revision_ids_json = ? WHERE id = ?",
+                arguments: ["\"\(scalar.revisionID)\"", scalar.partitionID]
+            )
+            XCTAssertThrowsError(
+                try persistCorpusComplete(db, runID: scalar.runID, exclusionsDisclosed: true),
+                "partition input revisions must be encoded as a JSON array"
+            )
+            try assertNotCorpusComplete(db, runID: scalar.runID)
+
+            let extra = try insertCompletionBarrierRun(
+                db,
+                matterID: matter.id,
+                caseName: "extra-revision-ledger-1997",
+                digestDigit: "4",
+                disposition: .succeeded
+            )
+            try insertSlice(
+                db,
+                id: "t-store-01-extra-revision-slice-1997",
+                partitionID: extra.partitionID,
+                ordinal: 0,
+                charStart: 0,
+                charEnd: 100,
+                revisionCharCount: 100,
+                textSHA256: String(repeating: "6", count: 64),
+                runID: extra.runID,
+                memberKey: extra.memberKey,
+                documentID: extra.documentID,
+                partIndex: 101,
+                revisionID: extra.revisionID
+            )
+            let unslicedRevisionID = "t-store-01-unsliced-revision-1997"
+            try db.execute(
+                sql: "UPDATE corpus_analysis_partitions SET input_revision_ids_json = ? WHERE id = ?",
+                arguments: [
+                    "[\"\(extra.revisionID)\",\"\(unslicedRevisionID)\"]",
+                    extra.partitionID,
+                ]
+            )
+            XCTAssertThrowsError(
+                try persistCorpusComplete(db, runID: extra.runID, exclusionsDisclosed: true),
+                "partition input revisions and exact-slice revisions must be equal in both directions"
+            )
+            try assertNotCorpusComplete(db, runID: extra.runID)
+        }
+    }
+
+    func testTSTORE01V072RejectsMalformedOrDuplicateSnapshotMembers() throws {
+        // T-STORE-01 review finding expected RED: `WHERE disposition = 'eligible'`
+        // silently filters NULL dispositions, while duplicate revision IDs are
+        // each satisfied by the same slice. Both malformed denominators finalize.
+        let queue = try DatabaseQueue()
+        try SupraMigrator.makeMigrator().migrate(queue)
+        let matter = try MattersRepository(writer: queue).createMatter(
+            name: "Synthetic snapshot member validation 2003"
+        )
+
+        try queue.write { db in
+            let missingDisposition = try insertCompletionBarrierRun(
+                db,
+                matterID: matter.id,
+                caseName: "missing-disposition-2003",
+                digestDigit: "5",
+                disposition: .succeeded
+            )
+            try insertSlice(
+                db,
+                id: "t-store-01-missing-disposition-slice-2003",
+                partitionID: missingDisposition.partitionID,
+                ordinal: 0,
+                charStart: 0,
+                charEnd: 100,
+                revisionCharCount: 100,
+                textSHA256: String(repeating: "7", count: 64),
+                runID: missingDisposition.runID,
+                memberKey: missingDisposition.memberKey,
+                documentID: missingDisposition.documentID,
+                partIndex: 103,
+                revisionID: missingDisposition.revisionID
+            )
+            let malformedSnapshot = """
+                {"schema_version":23,"members":[
+                    {"member_key":"\(missingDisposition.memberKey)","document_id":"\(missingDisposition.documentID)","display_name":"Valid-2003.txt","revision_ids":["\(missingDisposition.revisionID)"],"index_state":"ready","disposition":"eligible"},
+                    {"member_key":"hidden-null-disposition-2003","display_name":"Hidden-2003.txt"}
+                ]}
+                """
+            try db.execute(
+                sql: "UPDATE corpus_analysis_runs SET corpus_snapshot_json = ? WHERE id = ?",
+                arguments: [malformedSnapshot, missingDisposition.runID]
+            )
+            XCTAssertThrowsError(
+                try persistCorpusComplete(
+                    db,
+                    runID: missingDisposition.runID,
+                    exclusionsDisclosed: true
+                ),
+                "every frozen snapshot member must have a typed supported disposition"
+            )
+            try assertNotCorpusComplete(db, runID: missingDisposition.runID)
+
+            let duplicateRevision = try insertCompletionBarrierRun(
+                db,
+                matterID: matter.id,
+                caseName: "duplicate-revision-2011",
+                digestDigit: "6",
+                disposition: .succeeded
+            )
+            try insertSlice(
+                db,
+                id: "t-store-01-duplicate-revision-slice-2011",
+                partitionID: duplicateRevision.partitionID,
+                ordinal: 0,
+                charStart: 0,
+                charEnd: 100,
+                revisionCharCount: 100,
+                textSHA256: String(repeating: "8", count: 64),
+                runID: duplicateRevision.runID,
+                memberKey: duplicateRevision.memberKey,
+                documentID: duplicateRevision.documentID,
+                partIndex: 107,
+                revisionID: duplicateRevision.revisionID
+            )
+            let duplicateSnapshot = """
+                {"schema_version":29,"members":[
+                    {"member_key":"\(duplicateRevision.memberKey)","document_id":"\(duplicateRevision.documentID)","display_name":"Duplicate-2011.txt","revision_ids":["\(duplicateRevision.revisionID)","\(duplicateRevision.revisionID)"],"index_state":"ready","disposition":"eligible"}
+                ]}
+                """
+            try db.execute(
+                sql: "UPDATE corpus_analysis_runs SET corpus_snapshot_json = ? WHERE id = ?",
+                arguments: [duplicateSnapshot, duplicateRevision.runID]
+            )
+            XCTAssertThrowsError(
+                try persistCorpusComplete(
+                    db,
+                    runID: duplicateRevision.runID,
+                    exclusionsDisclosed: true
+                ),
+                "eligible revision IDs must be unique rather than sharing one exact slice"
+            )
+            try assertNotCorpusComplete(db, runID: duplicateRevision.runID)
+        }
+    }
+
+    func testTSTORE01V072FreezesFinalizedRequestIdentityAndLedger() throws {
+        // T-STORE-01 review finding expected RED: finalized child rows are guarded,
+        // but the root digest/task identity is still mutable. Changing task_kind to
+        // chronology disables the child trigger and permits deletion of all slices.
+        let queue = try DatabaseQueue()
+        try SupraMigrator.makeMigrator().migrate(queue)
+        let matter = try MattersRepository(writer: queue).createMatter(
+            name: "Synthetic finalized proof root 2017"
+        )
+
+        try queue.write { db in
+            let target = try insertCompletionBarrierRun(
+                db,
+                matterID: matter.id,
+                caseName: "immutable-root-2017",
+                digestDigit: "a",
+                disposition: .succeeded
+            )
+            try insertSlice(
+                db,
+                id: "t-store-01-immutable-root-slice-2017",
+                partitionID: target.partitionID,
+                ordinal: 0,
+                charStart: 0,
+                charEnd: 100,
+                revisionCharCount: 100,
+                textSHA256: String(repeating: "9", count: 64),
+                runID: target.runID,
+                memberKey: target.memberKey,
+                documentID: target.documentID,
+                partIndex: 109,
+                revisionID: target.revisionID
+            )
+            try persistCorpusComplete(db, runID: target.runID, exclusionsDisclosed: true)
+
+            let originalDigest = String(repeating: "a", count: 64)
+            let forgedDigest = String(repeating: "b", count: 64)
+            XCTAssertNotEqual(forgedDigest, originalDigest)
+            XCTAssertThrowsError(
+                try db.execute(
+                    sql: "UPDATE corpus_analysis_runs SET request_digest = ? WHERE id = ?",
+                    arguments: [forgedDigest, target.runID]
+                ),
+                "the finalized request digest must remain bound to the frozen proof"
+            )
+            XCTAssertEqual(
+                try String.fetchOne(
+                    db,
+                    sql: "SELECT request_digest FROM corpus_analysis_runs WHERE id = ?",
+                    arguments: [target.runID]
+                ),
+                originalDigest
+            )
+
+            XCTAssertThrowsError(
+                try db.execute(
+                    sql: "UPDATE corpus_analysis_runs SET task_kind = 'chronology' WHERE id = ?",
+                    arguments: [target.runID]
+                ),
+                "an export-eligible exhaustive claim cannot change task identity without downgrade"
+            )
+            XCTAssertEqual(
+                try String.fetchOne(
+                    db,
+                    sql: "SELECT task_kind FROM corpus_analysis_runs WHERE id = ?",
+                    arguments: [target.runID]
+                ),
+                CorpusAnalysisTaskKind.exhaustiveList.rawValue
+            )
+            XCTAssertThrowsError(
+                try db.execute(
+                    sql: "DELETE FROM corpus_analysis_partition_slices WHERE run_id = ?",
+                    arguments: [target.runID]
+                ),
+                "task-identity laundering must not disable finalized ledger immutability"
+            )
+            XCTAssertEqual(
+                try Int.fetchOne(
+                    db,
+                    sql: "SELECT COUNT(*) FROM corpus_analysis_partition_slices WHERE run_id = ?",
+                    arguments: [target.runID]
+                ),
+                1
+            )
+        }
+    }
+
+    func testTSTORE01V072RejectsUndecodableCoverageJSON() throws {
+        // T-STORE-01 review finding expected RED: the completion trigger calls
+        // coverage valid after checking only four fields, so corpus_complete can
+        // persist coverage that the required CorpusAnalysisCoverage type rejects.
+        let queue = try DatabaseQueue()
+        try SupraMigrator.makeMigrator().migrate(queue)
+        let matter = try MattersRepository(writer: queue).createMatter(
+            name: "Synthetic complete coverage schema 2027"
+        )
+
+        try queue.write { db in
+            let target = try insertCompletionBarrierRun(
+                db,
+                matterID: matter.id,
+                caseName: "incomplete-coverage-2027",
+                digestDigit: "c",
+                disposition: .succeeded
+            )
+            try insertSlice(
+                db,
+                id: "t-store-01-incomplete-coverage-slice-2027",
+                partitionID: target.partitionID,
+                ordinal: 0,
+                charStart: 0,
+                charEnd: 100,
+                revisionCharCount: 100,
+                textSHA256: String(repeating: "c", count: 64),
+                runID: target.runID,
+                memberKey: target.memberKey,
+                documentID: target.documentID,
+                partIndex: 113,
+                revisionID: target.revisionID
+            )
+            let incompleteCoverage =
+                #"{"schema_version":31,"excluded_members_disclosed":true,"partition_count":1,"succeeded_partition_count":1,"balance_error_count":0}"#
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(
+                    CorpusAnalysisCoverage.self,
+                    from: Data(incompleteCoverage.utf8)
+                ),
+                "the fixture must remain observably incomplete for the domain schema"
+            )
+            XCTAssertThrowsError(
+                try db.execute(
+                    sql: """
+                        UPDATE corpus_analysis_runs
+                        SET status = 'persisted', assurance_state = 'corpus_complete',
+                            coverage_json = ?
+                        WHERE id = ?
+                        """,
+                    arguments: [incompleteCoverage, target.runID]
+                ),
+                "undecodable coverage must not cross the completion barrier"
+            )
+            try assertNotCorpusComplete(db, runID: target.runID)
+        }
+    }
+
+    func testTSTORE02V072StalesLinkedExportVersionDespiteDriftedRunAssurance() throws {
+        // T-STORE-02 review finding expected RED: the migration selects linked
+        // versions through the run's assurance value. If that value drifted weak
+        // while the linked version stayed corpus_complete, the actual export gate
+        // survives v072 even though the legacy run has no exact request lineage.
+        let migrator = SupraMigrator.makeMigrator()
+        let queue = try DatabaseQueue()
+        try migrator.migrate(queue, upTo: "v071_create_draft_artifact_intents")
+        let matter = try MattersRepository(writer: queue).createMatter(
+            name: "Synthetic drifted legacy assurance 2039"
+        )
+        let outputs = StructuredOutputRepository(writer: queue)
+        let output = try outputs.createOutput(
+            matterID: matter.id,
+            title: "Drifted legacy exact proof 2039",
+            outputType: .documentExhaustiveList
+        )
+        let version = try outputs.createVersion(
+            structuredOutputID: output.id,
+            contentMarkdown: "# Preserved drifted legacy output\n\nSynthetic value 2039 [S2039].",
+            requiredSections: ["Synthetic value 2039"],
+            presentSections: ["Synthetic value 2039"],
+            missingSections: [],
+            verificationStatus: .allSupported,
+            verificationVersion: "legacy-drift-verifier/2039",
+            verificationResults: [try supportedResult(sourceID: "legacy-drift-source-2039")],
+            verificationDimensions: supportedDimensions(),
+            verifiedAt: Date(timeIntervalSince1970: 1_790_203_901),
+            promptBuilderVersion: "legacy-drift-prompt/2039",
+            assuranceState: .corpusComplete,
+            outputStatus: .complete
+        )
+        try queue.write { db in
+            try db.execute(
+                sql: """
+                    INSERT INTO corpus_analysis_runs (
+                        id, run_key, matter_id, task_kind, scope_json,
+                        corpus_snapshot_json, partition_strategy,
+                        partition_strategy_version, model_lineage_json, status,
+                        assurance_state, structured_output_version_id,
+                        created_at, completed_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                arguments: [
+                    "t-store-02-drifted-run-2039",
+                    "t-store-02-drifted-key-2039",
+                    matter.id,
+                    CorpusAnalysisTaskKind.exhaustiveList.rawValue,
+                    #"{"document_ids":["legacy-drift-document-2039"],"schema_version":37}"#,
+                    #"{"schema_version":37,"members":[{"member_key":"legacy-drift-member-2039","document_id":"legacy-drift-document-2039","display_name":"Legacy-drift-2039.txt","revision_ids":["legacy-drift-revision-2039"],"index_state":"ready","disposition":"eligible"}]}"#,
+                    "part_range:characters=2039",
+                    1,
+                    #"{"repository":"synthetic/drift-model","revision":"legacy-drift-2039"}"#,
+                    CorpusAnalysisRunStatus.persisted.rawValue,
+                    OutputAssuranceState.corpusIncomplete.rawValue,
+                    version.id,
+                    Date(timeIntervalSince1970: 1_790_203_801),
+                    Date(timeIntervalSince1970: 1_790_203_901),
+                ]
+            )
+        }
+
+        try migrator.migrate(queue)
+
+        try queue.read { db in
+            let migratedRun = try XCTUnwrap(
+                CorpusAnalysisRunRecord.fetchOne(db, key: "t-store-02-drifted-run-2039")
+            )
+            XCTAssertNil(migratedRun.requestSchemaVersion)
+            XCTAssertNil(migratedRun.requestDigest)
+            XCTAssertEqual(
+                migratedRun.assuranceState,
+                OutputAssuranceState.corpusIncomplete.rawValue,
+                "the already-weak run does not need fabricated stronger or different assurance"
+            )
+
+            let migratedVersion = try XCTUnwrap(
+                StructuredOutputVersionRecord.fetchOne(db, key: version.id)
+            )
+            XCTAssertEqual(migratedVersion.assuranceState, OutputAssuranceState.stale.rawValue)
+            XCTAssertNotEqual(
+                migratedVersion.assuranceState,
+                OutputAssuranceState.corpusComplete.rawValue,
+                "the legacy export-eligible default must be absent after fail-closed migration"
+            )
+            let assurance = migratedVersion.assuranceState.flatMap(OutputAssuranceState.init(rawValue:))
+            XCTAssertFalse(assurance.map(OutputAssurancePresentation.isExportEligible) ?? true)
+            let migratedOutput = try XCTUnwrap(StructuredOutputRecord.fetchOne(db, key: output.id))
+            XCTAssertEqual(migratedOutput.status, StructuredOutputStatus.needsReview.rawValue)
+            XCTAssertNotEqual(migratedOutput.status, StructuredOutputStatus.complete.rawValue)
+        }
+    }
+
     private func insertSlice(
         _ db: Database,
         id: String,
@@ -1247,7 +1801,7 @@ final class CaseFileReviewIntegrityMigrationTests: XCTestCase {
                 runID, "t-store-01-barrier-\(caseName)-key", matterID,
                 CorpusAnalysisTaskKind.exhaustiveList.rawValue,
                 "{\"document_ids\":[\"\(documentID)\"],\"schema_version\":7}",
-                "{\"members\":[{\"member_key\":\"\(memberKey)\",\"document_id\":\"\(documentID)\",\"display_name\":\"Synthetic-\(caseName).txt\",\"revision_ids\":[\"\(revisionID)\"],\"index_state\":\"ready\",\"disposition\":\"eligible\"}]}",
+                "{\"schema_version\":7,\"members\":[{\"member_key\":\"\(memberKey)\",\"document_id\":\"\(documentID)\",\"display_name\":\"Synthetic-\(caseName).txt\",\"revision_ids\":[\"\(revisionID)\"],\"index_state\":\"ready\",\"disposition\":\"eligible\"}]}",
                 "exact_revision_slice", 2, 2,
                 String(repeating: digestDigit, count: 64),
                 CorpusAnalysisRunStatus.planning.rawValue,
@@ -1380,7 +1934,12 @@ final class CaseFileReviewIntegrityMigrationTests: XCTestCase {
         exclusionsDisclosed: Bool,
         partitionCount: Int = 1
     ) throws {
-        let disclosed = exclusionsDisclosed ? "true" : "false"
+        let coverageJSON = try completeCoverageJSON(
+            db,
+            runID: runID,
+            exclusionsDisclosed: exclusionsDisclosed,
+            partitionCount: partitionCount
+        )
         try db.execute(
             sql: """
                 UPDATE corpus_analysis_runs
@@ -1390,10 +1949,72 @@ final class CaseFileReviewIntegrityMigrationTests: XCTestCase {
             arguments: [
                 CorpusAnalysisRunStatus.persisted.rawValue,
                 OutputAssuranceState.corpusComplete.rawValue,
-                "{\"excluded_members_disclosed\":\(disclosed),\"partition_count\":\(partitionCount),\"succeeded_partition_count\":\(partitionCount),\"balance_error_count\":0}",
+                coverageJSON,
                 runID,
             ]
         )
+    }
+
+    private func completeCoverageJSON(
+        _ db: Database,
+        runID: String,
+        exclusionsDisclosed: Bool,
+        partitionCount: Int
+    ) throws -> String {
+        let snapshotMemberCount = try XCTUnwrap(
+            Int.fetchOne(
+                db,
+                sql: """
+                    SELECT json_array_length(corpus_snapshot_json, '$.members')
+                    FROM corpus_analysis_runs WHERE id = ?
+                    """,
+                arguments: [runID]
+            )
+        )
+        let eligibleMemberCount = try XCTUnwrap(
+            Int.fetchOne(
+                db,
+                sql: """
+                    SELECT COUNT(*)
+                    FROM corpus_analysis_runs AS run,
+                         json_each(run.corpus_snapshot_json, '$.members') AS member
+                    WHERE run.id = ?
+                      AND json_extract(member.value, '$.disposition') = 'eligible'
+                    """,
+                arguments: [runID]
+            )
+        )
+        let excludedMemberCount = try XCTUnwrap(
+            Int.fetchOne(
+                db,
+                sql: """
+                    SELECT COUNT(*)
+                    FROM corpus_analysis_runs AS run,
+                         json_each(run.corpus_snapshot_json, '$.members') AS member
+                    WHERE run.id = ?
+                      AND json_extract(member.value, '$.disposition') = 'excluded'
+                    """,
+                arguments: [runID]
+            )
+        )
+        let coverage = CorpusAnalysisCoverage(
+            schemaVersion: 37,
+            snapshotMemberCount: snapshotMemberCount,
+            eligibleMemberCount: eligibleMemberCount,
+            excludedMemberCount: excludedMemberCount,
+            excludedMembersDisclosed: exclusionsDisclosed,
+            partitionCount: partitionCount,
+            pendingPartitionCount: 0,
+            succeededPartitionCount: partitionCount,
+            failedPartitionCount: 0,
+            cancelledPartitionCount: 0,
+            excludedPartitionCount: 0,
+            terminalPartitionCount: partitionCount,
+            balanceErrorCount: 0
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        return String(decoding: try encoder.encode(coverage), as: UTF8.self)
     }
 
     private func assertNotCorpusComplete(

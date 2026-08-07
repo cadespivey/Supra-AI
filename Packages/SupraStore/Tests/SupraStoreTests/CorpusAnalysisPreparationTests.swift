@@ -137,6 +137,62 @@ final class CorpusAnalysisPreparationTests: XCTestCase {
             )
         )
 
+        // T-STORE-05 review finding expected RED: the atomic entry point checks
+        // only the run's planning fields, so a caller can pre-mark a partition
+        // succeeded and persist fabricated attempt/findings state without any
+        // mapper execution. Preparation must accept only pristine pending work.
+        let dirtyStartedAt = Date(timeIntervalSince1970: 1_790_097_131)
+        let dirtyCompletedAt = Date(timeIntervalSince1970: 1_790_097_197)
+        var dirtyRun = run
+        dirtyRun.id = "atomic-prepare-dirty-run-971"
+        dirtyRun.runKey = "atomic-prepare-dirty-key-971"
+        var dirtyPartition = partition
+        dirtyPartition.id = "atomic-prepare-dirty-partition-971"
+        dirtyPartition.runID = dirtyRun.id
+        dirtyPartition.attemptCount = 1
+        dirtyPartition.attemptHistoryJSON = try canonicalJSON([
+            CorpusAnalysisAttemptHistoryEntry(
+                attemptNumber: 1,
+                outcome: .succeeded,
+                retryable: false,
+                startedAt: dirtyStartedAt,
+                completedAt: dirtyCompletedAt
+            )
+        ])
+        dirtyPartition.disposition = CorpusAnalysisPartitionDisposition.succeeded.rawValue
+        dirtyPartition.dispositionReason = "fabricated_preparation_success_971"
+        dirtyPartition.findingsJSON = #"[{"finding_id":"fabricated-971"}]"#
+        dirtyPartition.startedAt = dirtyStartedAt
+        dirtyPartition.completedAt = dirtyCompletedAt
+        var dirtySlice = valid
+        dirtySlice.id = "atomic-prepare-dirty-slice-971"
+        dirtySlice.runID = dirtyRun.id
+        dirtySlice.partitionID = dirtyPartition.id
+
+        XCTAssertThrowsError(
+            try store.corpusAnalysis.createOrFetchPreparedRun(
+                run: dirtyRun,
+                partitions: [dirtyPartition],
+                slices: [dirtySlice]
+            ),
+            "atomic preparation must reject precompleted partition lifecycle state"
+        )
+        XCTAssertNil(
+            try store.corpusAnalysis.fetchRun(matterID: matter.id, id: dirtyRun.id),
+            "the rejected dirty preparation must leave no run behind"
+        )
+        try store.database.writer.read { db in
+            XCTAssertEqual(
+                try Int.fetchOne(
+                    db,
+                    sql: "SELECT COUNT(*) FROM corpus_analysis_partitions WHERE run_id = ?",
+                    arguments: [dirtyRun.id]
+                ),
+                0,
+                "the rejected dirty preparation must leave no non-pending partition behind"
+            )
+        }
+
         var seedRun = run
         seedRun.id = "atomic-prepare-seed-run-971"
         seedRun.runKey = "atomic-prepare-seed-key-971"
