@@ -6,6 +6,158 @@ import SupraStore
 import XCTest
 
 final class CorpusAnalysisEngineTests: XCTestCase {
+    func testTCORP01And02LongRevisionTailIsPackedAsExactOnceOnlySlices() async throws {
+        // T-CORP-01 expected RED: a long revision is persisted as one revision-only
+        // partition, so the shared 3,000-character source packer omits the tail sentinel.
+        // T-CORP-02 expected RED: persisted partition input has revision IDs but no exact
+        // character ranges, so gap/overlap/once-only balance cannot be proven.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic exact-slice corpus")
+        let headSentinel = "HEAD-RANGE-217-NONDEFAULT"
+        let middleSentinel = "MIDDLE-RANGE-431-NONDEFAULT"
+        let tailSentinel = "TAIL-RANGE-863-NONDEFAULT"
+        let revisionText = headSentinel
+            + String(repeating: "A", count: 3_211)
+            + middleSentinel
+            + String(repeating: "B", count: 3_223)
+            + tailSentinel
+        let fixture = try insertDocument(
+            store: store,
+            matterID: matter.id,
+            name: "long-single-revision.txt",
+            status: .ready,
+            extractionStatus: .extracted,
+            indexStatus: .textIndexed,
+            partTexts: [revisionText]
+        )
+        let frozenRevisionID = try XCTUnwrap(fixture.revisionIDs.first)
+        let probe = EngineProbe()
+
+        let result = try await CorpusAnalysisEngine(store: store).run(
+            request: CorpusAnalysisRequest(
+                runKey: "exact-slice-long-tail-run",
+                matterID: matter.id,
+                taskKind: .customExtraction,
+                scope: CorpusAnalysisScope(documentIDs: [fixture.documentID]),
+                characterBudget: 2_417
+            )
+        ) { input in
+            await probe.record(input)
+            return CorpusAnalysisMapOutput(findings: [])
+        }
+
+        let inputs = await probe.inputs
+        let observedSources = inputs.flatMap(\.sources)
+        let observedSlices = try observedSources.map { source -> ExactSliceProbe in
+            let locator = try JSONDecoder().decode(
+                DocumentSourceLocator.self,
+                from: Data(source.locatorJSON.utf8)
+            )
+            let start = try XCTUnwrap(locator.charStart)
+            let end = try XCTUnwrap(locator.charEnd)
+            XCTAssertEqual(source.revisionID, frozenRevisionID)
+            XCTAssertEqual(source.text.count, end - start)
+            XCTAssertEqual(source.text, Self.substring(revisionText, from: start, to: end))
+            return ExactSliceProbe(revisionID: source.revisionID, charStart: start, charEnd: end)
+        }.sorted { $0.charStart < $1.charStart }
+
+        XCTAssertGreaterThan(observedSlices.count, 1, "one long revision must become multiple prompt-safe slices")
+        XCTAssertTrue(observedSources.allSatisfy {
+            $0.text.count <= DocumentQAPromptBuilder.maxSourceTextChars
+        })
+        XCTAssertEqual(observedSlices.first?.charStart, 0)
+        XCTAssertEqual(observedSlices.last?.charEnd, revisionText.count)
+        for pair in zip(observedSlices, observedSlices.dropFirst()) {
+            XCTAssertEqual(pair.0.charEnd, pair.1.charStart, "exact slices must have neither a gap nor overlap")
+        }
+        XCTAssertEqual(Set(observedSlices).count, observedSlices.count, "no exact range may be presented twice")
+        XCTAssertEqual(
+            observedSlices.map { Self.substring(revisionText, from: $0.charStart, to: $0.charEnd) }.joined(),
+            revisionText
+        )
+
+        for input in inputs {
+            for source in input.sources {
+                XCTAssertTrue(
+                    input.promptEnvelope.contains(source.text),
+                    "the exact source range recorded as covered must be present in that mapper prompt"
+                )
+            }
+        }
+        let allPrompts = inputs.map(\.promptEnvelope).joined(separator: "\n---exact-slice-boundary---\n")
+        XCTAssertEqual(Self.occurrenceCount(of: headSentinel, in: allPrompts), 1)
+        XCTAssertEqual(Self.occurrenceCount(of: middleSentinel, in: allPrompts), 1)
+        XCTAssertEqual(Self.occurrenceCount(of: tailSentinel, in: allPrompts), 1)
+        XCTAssertFalse(allPrompts.contains("…[source text truncated to fit the context window]"))
+
+        let persistedSliceLists = result.partitions.map { partition in
+            try? JSONDecoder().decode(
+                [ExactSliceProbe].self,
+                from: Data(partition.inputRevisionIDsJSON.utf8)
+            )
+        }
+        XCTAssertTrue(
+            persistedSliceLists.allSatisfy { $0 != nil },
+            "partition input must persist revision identity plus exact character ranges"
+        )
+        let persistedSlices = persistedSliceLists.compactMap { $0 }.flatMap { $0 }
+            .sorted { $0.charStart < $1.charStart }
+        XCTAssertEqual(persistedSlices, observedSlices)
+        XCTAssertEqual(Set(persistedSlices).count, persistedSlices.count)
+        XCTAssertEqual(result.coverage.succeededPartitionCount, result.coverage.partitionCount)
+    }
+
+    func testTCORP03ZeroEligibleSelectedSourcesFailsBeforeRunCreation() async throws {
+        // T-CORP-03 expected RED: a selected scope containing zero eligible sources
+        // creates and persists an empty run that can finalize as corpus_complete.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic zero-eligible corpus")
+        let blocked = try insertDocument(
+            store: store,
+            matterID: matter.id,
+            name: "review-required-only-source.txt",
+            status: .needsReview,
+            extractionStatus: .extracted,
+            indexStatus: .textIndexed,
+            partTexts: ["BLOCKED-SOURCE-751-NONDEFAULT"]
+        )
+        let runKey = "zero-eligible-preflight-run"
+        let probe = EngineProbe()
+        var returnedResult: CorpusAnalysisRunResult?
+        var capturedErrorDescription: String?
+
+        do {
+            returnedResult = try await CorpusAnalysisEngine(store: store).run(
+                request: CorpusAnalysisRequest(
+                    runKey: runKey,
+                    matterID: matter.id,
+                    taskKind: .customExtraction,
+                    scope: CorpusAnalysisScope(documentIDs: [blocked.documentID]),
+                    characterBudget: 1_937
+                )
+            ) { input in
+                await probe.record(input)
+                return CorpusAnalysisMapOutput(findings: [])
+            }
+        } catch {
+            capturedErrorDescription = error.localizedDescription
+        }
+
+        XCTAssertNil(returnedResult, "zero eligible sources must not return a successful run result")
+        XCTAssertFalse(
+            returnedResult?.run.assuranceState == OutputAssuranceState.corpusComplete.rawValue,
+            "the old empty corpus_complete result must be absent"
+        )
+        XCTAssertTrue(capturedErrorDescription?.localizedCaseInsensitiveContains("eligible") == true)
+        XCTAssertTrue(capturedErrorDescription?.localizedCaseInsensitiveContains("source") == true)
+        let mapperCallCount = await probe.inputs.count
+        XCTAssertEqual(mapperCallCount, 0, "preflight must fail before the mapper is called")
+        XCTAssertNil(
+            try store.corpusAnalysis.fetchRun(matterID: matter.id, runKey: runKey),
+            "preflight failure must happen before corpus run persistence"
+        )
+    }
+
     func testTENG01FrozenSnapshotIgnoresMidRunEditAndMarksResultStale() async throws {
         // T-ENG-01 expected RED: no frozen corpus snapshot or stale result contract exists.
         let store = try makeStore()
@@ -631,12 +783,34 @@ final class CorpusAnalysisEngineTests: XCTestCase {
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         return String(decoding: try encoder.encode(value), as: UTF8.self)
     }
+
+    private static func substring(_ value: String, from start: Int, to end: Int) -> String {
+        let lower = value.index(value.startIndex, offsetBy: start)
+        let upper = value.index(value.startIndex, offsetBy: end)
+        return String(value[lower..<upper])
+    }
+
+    private static func occurrenceCount(of needle: String, in haystack: String) -> Int {
+        haystack.components(separatedBy: needle).count - 1
+    }
 }
 
 private struct CorpusFixtureDocument: Sendable {
     var documentID: String
     var partIDs: [String]
     var revisionIDs: [String]
+}
+
+private struct ExactSliceProbe: Codable, Equatable, Hashable {
+    var revisionID: String
+    var charStart: Int
+    var charEnd: Int
+
+    private enum CodingKeys: String, CodingKey {
+        case revisionID = "revision_id"
+        case charStart = "char_start"
+        case charEnd = "char_end"
+    }
 }
 
 private struct SyntheticAttemptHistoryEntry: Decodable {
