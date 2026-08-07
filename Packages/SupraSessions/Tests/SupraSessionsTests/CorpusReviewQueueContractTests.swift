@@ -158,7 +158,7 @@ final class CorpusReviewQueueContractTests: XCTestCase {
             charStart: overlapStart,
             charEnd: overlapEnd
         )
-        try store.database.writer.write { db in
+        try await store.database.writer.write { db in
             // Simulate hostile on-disk corruption without requiring the shipping
             // repository to expose mutation or weaken any immutability trigger.
             let immutabilityTriggers = try String.fetchAll(
