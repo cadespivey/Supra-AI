@@ -1980,6 +1980,196 @@ final class CaseFileReviewIntegrityMigrationTests: XCTestCase {
         }
     }
 
+    func testTSTORE01V072RequiresUniqueAttachmentAcrossRunAndInsertBoundaries() throws {
+        // T-STORE-01 final audit expected RED: the update guard validates the
+        // target version but does not prove that one version belongs to only one
+        // run, and direct INSERT can bypass the update-only attachment guard.
+        let queue = try DatabaseQueue()
+        try SupraMigrator.makeMigrator().migrate(queue)
+        let matter = try MattersRepository(writer: queue).createMatter(
+            name: "Synthetic unique attachment boundary 2161"
+        )
+        let outputs = StructuredOutputRepository(writer: queue)
+        let sharedArtifact = try createSyntheticOutputVersion(
+            repository: outputs,
+            matterID: matter.id,
+            marker: "shared-version-2161",
+            outputType: .documentExhaustiveList,
+            assuranceState: .corpusComplete
+        )
+        let wrongInsertArtifact = try createSyntheticOutputVersion(
+            repository: outputs,
+            matterID: matter.id,
+            marker: "wrong-insert-type-2167",
+            outputType: .documentQA,
+            assuranceState: .corpusIncomplete
+        )
+
+        try queue.write { db in
+            func makeFinalRun(caseName: String, digit: String, partIndex: Int) throws -> String {
+                let target = try insertCompletionBarrierRun(
+                    db,
+                    matterID: matter.id,
+                    caseName: caseName,
+                    digestDigit: digit,
+                    disposition: .succeeded
+                )
+                try insertSlice(
+                    db,
+                    id: "t-store-01-unique-\(caseName)-slice",
+                    partitionID: target.partitionID,
+                    ordinal: 0,
+                    charStart: 0,
+                    charEnd: 100,
+                    revisionCharCount: 100,
+                    textSHA256: String(repeating: digit, count: 64),
+                    runID: target.runID,
+                    memberKey: target.memberKey,
+                    documentID: target.documentID,
+                    partIndex: partIndex,
+                    revisionID: target.revisionID
+                )
+                try persistCorpusComplete(db, runID: target.runID, exclusionsDisclosed: true)
+                return target.runID
+            }
+
+            let ownerRunID = try makeFinalRun(
+                caseName: "unique-owner-2161", digit: "b", partIndex: 191
+            )
+            let foreignRunID = try makeFinalRun(
+                caseName: "unique-foreign-2163", digit: "c", partIndex: 193
+            )
+            try db.execute(
+                sql: "UPDATE corpus_analysis_runs SET structured_output_version_id = ? WHERE id = ?",
+                arguments: [sharedArtifact.version.id, ownerRunID]
+            )
+            XCTAssertThrowsError(
+                try db.execute(
+                    sql: "UPDATE corpus_analysis_runs SET structured_output_version_id = ? WHERE id = ?",
+                    arguments: [sharedArtifact.version.id, foreignRunID]
+                ),
+                "one output version must not ambiguously claim two exact proof roots"
+            )
+            XCTAssertEqual(
+                try CorpusAnalysisRunRecord.fetchOne(db, key: ownerRunID)?.structuredOutputVersionID,
+                sharedArtifact.version.id
+            )
+            XCTAssertNil(
+                try CorpusAnalysisRunRecord.fetchOne(db, key: foreignRunID)?.structuredOutputVersionID
+            )
+
+            let insertedRunID = "t-store-01-direct-attachment-run-2167"
+            var insertError: Error?
+            do {
+                try db.execute(
+                    sql: """
+                        INSERT INTO corpus_analysis_runs (
+                            id, run_key, matter_id, task_kind, scope_json,
+                            corpus_snapshot_json, partition_strategy,
+                            partition_strategy_version, model_lineage_json,
+                            request_schema_version, request_digest, status,
+                            assurance_state, structured_output_version_id,
+                            created_at, completed_at
+                        ) VALUES (?, ?, ?, 'exhaustive_list', ?, ?, ?, 2, ?, 2, ?,
+                            'persisted', 'corpus_incomplete', ?, ?, ?)
+                        """,
+                    arguments: [
+                        insertedRunID,
+                        "t-store-01-direct-attachment-key-2167",
+                        matter.id,
+                        #"{"document_ids":["direct-attachment-document-2167"],"schema_version":37}"#,
+                        #"{"schema_version":37,"members":[{"member_key":"direct-attachment-member-2167","document_id":"direct-attachment-document-2167","display_name":"Direct-attachment-2167.txt","revision_ids":["direct-attachment-revision-2167"],"index_state":"ready","disposition":"eligible"}]}"#,
+                        "exact_revision_slice:characters=2167",
+                        #"{"model_repository":"synthetic/direct-attachment","model_revision":"revision-2167","model_artifact_sha256":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"}"#,
+                        String(repeating: "e", count: 64),
+                        wrongInsertArtifact.version.id,
+                        Date(timeIntervalSince1970: 1_790_321_607),
+                        Date(timeIntervalSince1970: 1_790_321_667),
+                    ]
+                )
+            } catch {
+                insertError = error
+            }
+            XCTAssertNotNil(
+                insertError,
+                "direct INSERT must enforce the same exhaustive output attachment contract"
+            )
+            XCTAssertNil(
+                try CorpusAnalysisRunRecord.fetchOne(db, key: insertedRunID),
+                "the wrong-type direct attachment must remain absent"
+            )
+            if insertError == nil {
+                try db.execute(
+                    sql: "DELETE FROM corpus_analysis_runs WHERE id = ?",
+                    arguments: [insertedRunID]
+                )
+            }
+        }
+    }
+
+    func testTSTORE01V072KeepsPermanentMatterDeletionCascading() throws {
+        // T-STORE-01 compatibility control: link immutability must not turn a
+        // permanent matter deletion into an undeletable graph.
+        let queue = try DatabaseQueue()
+        try SupraMigrator.makeMigrator().migrate(queue)
+        let matters = MattersRepository(writer: queue)
+        let matter = try matters.createMatter(name: "Synthetic cascade deletion 2179")
+        let outputs = StructuredOutputRepository(writer: queue)
+        let artifact = try createSyntheticOutputVersion(
+            repository: outputs,
+            matterID: matter.id,
+            marker: "cascade-delete-2179",
+            outputType: .documentExhaustiveList,
+            assuranceState: .corpusComplete
+        )
+        let runID: String = try queue.write { db in
+            let target = try insertCompletionBarrierRun(
+                db,
+                matterID: matter.id,
+                caseName: "cascade-delete-2179",
+                digestDigit: "f",
+                disposition: .succeeded
+            )
+            try insertSlice(
+                db,
+                id: "t-store-01-cascade-delete-slice-2179",
+                partitionID: target.partitionID,
+                ordinal: 0,
+                charStart: 0,
+                charEnd: 100,
+                revisionCharCount: 100,
+                textSHA256: String(repeating: "f", count: 64),
+                runID: target.runID,
+                memberKey: target.memberKey,
+                documentID: target.documentID,
+                partIndex: 197,
+                revisionID: target.revisionID
+            )
+            try persistCorpusComplete(db, runID: target.runID, exclusionsDisclosed: true)
+            try db.execute(
+                sql: "UPDATE corpus_analysis_runs SET structured_output_version_id = ? WHERE id = ?",
+                arguments: [artifact.version.id, target.runID]
+            )
+            return target.runID
+        }
+
+        XCTAssertNoThrow(try matters.permanentlyDeleteMatter(id: matter.id))
+        try queue.read { db in
+            XCTAssertNil(try MatterRecord.fetchOne(db, key: matter.id))
+            XCTAssertNil(try CorpusAnalysisRunRecord.fetchOne(db, key: runID))
+            XCTAssertNil(try StructuredOutputVersionRecord.fetchOne(db, key: artifact.version.id))
+            XCTAssertNil(try StructuredOutputRecord.fetchOne(db, key: artifact.output.id))
+            XCTAssertEqual(
+                try Int.fetchOne(
+                    db,
+                    sql: "SELECT COUNT(*) FROM corpus_analysis_partition_slices WHERE run_id = ?",
+                    arguments: [runID]
+                ),
+                0
+            )
+        }
+    }
+
     func testTSTORE01V072FinalizationRequiresCoherentSucceededAttemptHistory() throws {
         // T-STORE-01 review finding expected RED: the completion trigger checks
         // only disposition, so direct SQL can mark pristine pending work succeeded
