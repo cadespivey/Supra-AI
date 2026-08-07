@@ -448,11 +448,16 @@ final class ExhaustiveListTaskTests: XCTestCase {
         XCTAssertEqual(snapshot.members.compactMap(\.documentID), [original.documentID])
         XCTAssertFalse(snapshot.members.compactMap(\.documentID).contains(addedDocumentID))
         XCTAssertEqual(snapshot.members.first?.disposition, .eligible)
+        let partitionKeyByID = Dictionary(
+            uniqueKeysWithValues: result.partitions.map { ($0.id, $0.partitionKey) }
+        )
         let frozenSlices = try store.corpusAnalysis.fetchSlices(
             matterID: matter.id,
             runID: result.run.id
         ).map {
             FrozenSliceLineageProbe(
+                partitionKey: try XCTUnwrap(partitionKeyByID[$0.partitionID]),
+                ordinal: $0.ordinal,
                 memberKey: $0.memberKey,
                 documentID: $0.documentID,
                 partIndex: $0.partIndex,
@@ -460,7 +465,11 @@ final class ExhaustiveListTaskTests: XCTestCase {
                 charStart: $0.charStart,
                 charEnd: $0.charEnd,
                 revisionCharCount: $0.revisionCharCount,
-                textSHA256: $0.textSHA256
+                textSHA256: $0.textSHA256,
+                locator: try JSONDecoder().decode(
+                    DocumentSourceLocator.self,
+                    from: Data($0.locatorJSON.utf8)
+                )
             )
         }
         let frozenLineageHash = try Self.frozenCorpusLineageHash(
@@ -494,6 +503,36 @@ final class ExhaustiveListTaskTests: XCTestCase {
             ),
             frozenLineageHash,
             "revision identity must remain content-significant even when every range and text hash is unchanged"
+        )
+        var ordinalChangedSlices = frozenSlices
+        ordinalChangedSlices[0].ordinal += 17
+        XCTAssertNotEqual(
+            try Self.frozenCorpusLineageHash(
+                snapshot: snapshot,
+                slices: ordinalChangedSlices
+            ),
+            frozenLineageHash,
+            "slice presentation order must be content-significant"
+        )
+        var partitionChangedSlices = frozenSlices
+        partitionChangedSlices[0].partitionKey += "|regrouped-991-nondefault"
+        XCTAssertNotEqual(
+            try Self.frozenCorpusLineageHash(
+                snapshot: snapshot,
+                slices: partitionChangedSlices
+            ),
+            frozenLineageHash,
+            "partition grouping must be content-significant"
+        )
+        var locatorChangedSlices = frozenSlices
+        locatorChangedSlices[0].locator.pageLabel = "page-label-drift-983-nondefault"
+        XCTAssertNotEqual(
+            try Self.frozenCorpusLineageHash(
+                snapshot: snapshot,
+                slices: locatorChangedSlices
+            ),
+            frozenLineageHash,
+            "citation locator metadata must be content-significant"
         )
 
         let outputSources = try store.documentSources.fetchSources(
@@ -550,11 +589,16 @@ final class ExhaustiveListTaskTests: XCTestCase {
             CorpusAnalysisSnapshot.self,
             from: Data(beforeRun.corpusSnapshotJSON.utf8)
         )
+        let partitionKeyByID = Dictionary(
+            uniqueKeysWithValues: first.partitions.map { ($0.id, $0.partitionKey) }
+        )
         let frozenSlices = try store.corpusAnalysis.fetchSlices(
             matterID: matter.id,
             runID: first.run.id
         ).map {
             FrozenSliceLineageProbe(
+                partitionKey: try XCTUnwrap(partitionKeyByID[$0.partitionID]),
+                ordinal: $0.ordinal,
                 memberKey: $0.memberKey,
                 documentID: $0.documentID,
                 partIndex: $0.partIndex,
@@ -562,7 +606,11 @@ final class ExhaustiveListTaskTests: XCTestCase {
                 charStart: $0.charStart,
                 charEnd: $0.charEnd,
                 revisionCharCount: $0.revisionCharCount,
-                textSHA256: $0.textSHA256
+                textSHA256: $0.textSHA256,
+                locator: try JSONDecoder().decode(
+                    DocumentSourceLocator.self,
+                    from: Data($0.locatorJSON.utf8)
+                )
             )
         }
         let expectedRequestDigest = try Self.exhaustiveRequestDigest(
@@ -685,6 +733,49 @@ final class ExhaustiveListTaskTests: XCTestCase {
         let generation = try XCTUnwrap(store.generation.fetchGenerationSession(generationID: generationID))
         XCTAssertTrue(generation.prompt.contains(firstQuery))
         XCTAssertFalse(generation.prompt.contains(changedQuery))
+    }
+
+    func testTCORP05NormalizedQueryIsTheOnlyQueryExecutedAndPersisted() async throws {
+        // T-CORP-05 expected RED: request_digest collapses query whitespace but
+        // the generator and generation audit receive the raw query, so a
+        // whitespace-only payload mutation preserves identity while changing
+        // the executed prompt bytes.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic normalized query execution")
+        _ = try insertDocument(
+            store: store,
+            matterID: matter.id,
+            name: "normalized-query-source.txt",
+            partTexts: ["NORMALIZED-QUERY-SOURCE-1993-NONDEFAULT"]
+        )
+        let rawQuery = "Extract   every\n\t  normalized-query   value 1993."
+        let normalizedQuery = "Extract every normalized-query value 1993."
+        let probe = ListPartitionProbe()
+
+        let result = try await ExhaustiveListTask(store: store).run(
+            request: ExhaustiveListRequest(
+                runKey: "normalized-query-run-1993",
+                matterID: matter.id,
+                title: "Normalized query review",
+                query: rawQuery,
+                characterBudget: 1_993,
+                modelLineageJSON: Self.modelLineageJSON
+            )
+        ) { input in
+            await probe.record(input)
+            return try Self.response(input, items: [])
+        }
+
+        let inputs = await probe.inputs
+        XCTAssertFalse(inputs.isEmpty)
+        XCTAssertTrue(inputs.allSatisfy { $0.prompt.contains(normalizedQuery) })
+        XCTAssertTrue(inputs.allSatisfy { !$0.prompt.contains(rawQuery) })
+        let generationID = try XCTUnwrap(result.version.generationSessionID)
+        let generation = try XCTUnwrap(
+            store.generation.fetchGenerationSession(generationID: generationID)
+        )
+        XCTAssertTrue(generation.prompt.contains(normalizedQuery))
+        XCTAssertFalse(generation.prompt.contains(rawQuery))
     }
 
     func testTENG09ListReconcilesDuplicatesConflictsContraryEvidenceAndNamedOmissions() async throws {
@@ -1507,6 +1598,8 @@ private struct FrozenScopeProbe: Codable, Sendable {
 }
 
 private struct FrozenSliceLineageProbe: Codable, Sendable {
+    var partitionKey: String
+    var ordinal: Int
     var memberKey: String
     var documentID: String
     var partIndex: Int
@@ -1515,8 +1608,11 @@ private struct FrozenSliceLineageProbe: Codable, Sendable {
     var charEnd: Int
     var revisionCharCount: Int
     var textSHA256: String
+    var locator: DocumentSourceLocator
 
     static func lessThan(_ lhs: Self, _ rhs: Self) -> Bool {
+        if lhs.partitionKey != rhs.partitionKey { return lhs.partitionKey < rhs.partitionKey }
+        if lhs.ordinal != rhs.ordinal { return lhs.ordinal < rhs.ordinal }
         if lhs.memberKey != rhs.memberKey { return lhs.memberKey < rhs.memberKey }
         if lhs.documentID != rhs.documentID { return lhs.documentID < rhs.documentID }
         if lhs.partIndex != rhs.partIndex { return lhs.partIndex < rhs.partIndex }
@@ -1527,6 +1623,8 @@ private struct FrozenSliceLineageProbe: Codable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
+        case partitionKey = "partition_key"
+        case ordinal
         case memberKey = "member_key"
         case documentID = "document_id"
         case partIndex = "part_index"
@@ -1535,6 +1633,7 @@ private struct FrozenSliceLineageProbe: Codable, Sendable {
         case charEnd = "char_end"
         case revisionCharCount = "revision_char_count"
         case textSHA256 = "text_sha256"
+        case locator
     }
 }
 
