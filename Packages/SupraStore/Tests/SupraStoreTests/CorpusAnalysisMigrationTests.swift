@@ -16,13 +16,14 @@ final class CorpusAnalysisMigrationTests: XCTestCase {
         try migrator.migrate(queue)
 
         try queue.read { db in
-            XCTAssertEqual(try appliedMigrations(db).last, "v071_create_draft_artifact_intents")
+            XCTAssertEqual(try appliedMigrations(db).last, "v072_harden_corpus_review_integrity")
             XCTAssertEqual(Set(try db.columns(in: "corpus_analysis_runs").map(\.name)), Set([
                 "id", "run_key", "matter_id", "task_kind", "scope_json",
                 "corpus_snapshot_json", "partition_strategy", "partition_strategy_version",
                 "model_lineage_json", "status", "coverage_json", "reconciliation_json",
                 "validation_results_json", "assurance_state", "assurance_reasons_json",
                 "structured_output_version_id", "created_at", "completed_at",
+                "request_schema_version", "request_digest",
             ]))
             XCTAssertEqual(Set(try db.columns(in: "corpus_analysis_partitions").map(\.name)), Set([
                 "id", "run_id", "partition_key", "input_revision_ids_json", "attempt_count",

@@ -1,0 +1,166 @@
+import CryptoKit
+import Foundation
+import SupraCore
+@testable import SupraStore
+import XCTest
+
+final class CorpusAnalysisPreparationTests: XCTestCase {
+    func testTSTORE05PreparedRunRollsBackRunPartitionsAndSlicesWhenLaterSliceFails() throws {
+        // T-STORE-05 expected RED: preparation is currently split across run and
+        // partition transactions, and there is no normalized slice record or one
+        // atomic repository entry point. A later slice failure could therefore
+        // leave runnable partial work behind.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic atomic corpus preparation")
+        let text = "ATOMIC-PREPARE-RANGE-971-NONDEFAULT"
+        let blob = try store.documentLibrary.upsertBlob(DocumentBlobRecord(
+            sha256: "atomic-prepare-blob-971",
+            byteSize: text.utf8.count,
+            originalExtension: "txt",
+            managedRelativePath: "blobs/atomic-prepare-971.txt"
+        )).blob
+        let document = try store.documentLibrary.insertDocument(MatterDocumentRecord(
+            matterID: matter.id,
+            blobID: blob.id,
+            displayName: "atomic-prepare-971.txt",
+            status: MatterDocumentStatus.ready.rawValue,
+            extractionStatus: DocumentExtractionStatus.extracted.rawValue,
+            indexStatus: DocumentIndexStatus.textIndexed.rawValue
+        ))
+        let part = DocumentPagePartRecord(
+            id: "atomic-prepare-part-971",
+            documentID: document.id,
+            partIndex: 0,
+            sourceKind: DocumentSourceKind.text.rawValue,
+            normalizedText: text,
+            charCount: text.count
+        )
+        let revision = DocumentPartRevisionRecord(
+            id: "atomic-prepare-revision-971",
+            documentID: document.id,
+            partIndex: 0,
+            derivationKey: "atomic-prepare-971",
+            origin: "synthetic_test",
+            method: "plain-text",
+            text: text,
+            charCount: text.count
+        )
+        let selection = DocumentPartSelectionRecord(
+            id: "atomic-prepare-selection-971",
+            documentID: document.id,
+            partIndex: 0,
+            selectedRevisionID: revision.id,
+            selectionKey: "atomic-prepare-971",
+            selectedBy: "test",
+            decisionJSON: #"{"rule":"atomic-prepare"}"#
+        )
+        _ = try store.documentRevisions.replacePartsAndPersistLineage(
+            documentID: document.id,
+            parts: [part],
+            revisions: [revision],
+            selections: [selection]
+        )
+
+        let runID = "atomic-prepare-run-971"
+        let partitionID = "atomic-prepare-partition-971"
+        let memberKey = "document:\(document.id)"
+        let snapshot = CorpusAnalysisSnapshot(
+            schemaVersion: 2,
+            members: [CorpusAnalysisSnapshotMember(
+                memberKey: memberKey,
+                documentID: document.id,
+                displayName: document.displayName,
+                revisionIDs: [revision.id],
+                indexState: document.indexStatus,
+                disposition: .eligible
+            )]
+        )
+        let run = CorpusAnalysisRunRecord(
+            id: runID,
+            runKey: "atomic-prepare-key-971",
+            matterID: matter.id,
+            taskKind: CorpusAnalysisTaskKind.exhaustiveList.rawValue,
+            scopeJSON: "{\"document_ids\":[\"\(document.id)\"],\"schema_version\":2}",
+            corpusSnapshotJSON: try canonicalJSON(snapshot),
+            partitionStrategy: "exact_revision_slice:characters=1971",
+            partitionStrategyVersion: 2,
+            modelLineageJSON: #"{"artifact_fingerprint_sha256":"7777777777777777777777777777777777777777777777777777777777777777","content_binding_algorithm":"supra-release-model-sha256-v1","content_binding_schema_version":1,"model_repository":"synthetic/atomic-prepare","model_revision":"0123456789abcdef0123456789abcdef01234567"}"#,
+            status: CorpusAnalysisRunStatus.planning.rawValue,
+            requestSchemaVersion: 2,
+            requestDigest: String(repeating: "9", count: 64)
+        )
+        let partition = CorpusAnalysisPartitionRecord(
+            id: partitionID,
+            runID: runID,
+            partitionKey: "000000|\(memberKey)#revision:\(revision.id)#chars:0-\(text.count)",
+            inputRevisionIDsJSON: try canonicalJSON([revision.id])
+        )
+        let valid = CorpusAnalysisPartitionSliceRecord(
+            id: "atomic-prepare-slice-valid-971",
+            runID: runID,
+            partitionID: partitionID,
+            ordinal: 0,
+            memberKey: memberKey,
+            documentID: document.id,
+            partIndex: 0,
+            revisionID: revision.id,
+            charStart: 0,
+            charEnd: text.count,
+            revisionCharCount: text.count,
+            textSHA256: sha256(text),
+            locatorJSON: "{\"source_kind\":\"text\",\"char_start\":0,\"char_end\":\(text.count)}"
+        )
+        var duplicateOrdinal = valid
+        duplicateOrdinal.id = "atomic-prepare-slice-invalid-duplicate-ordinal-971"
+        duplicateOrdinal.charStart = 1
+        duplicateOrdinal.textSHA256 = sha256(String(text.dropFirst()))
+        duplicateOrdinal.locatorJSON =
+            "{\"source_kind\":\"text\",\"char_start\":1,\"char_end\":\(text.count)}"
+
+        XCTAssertThrowsError(
+            try store.corpusAnalysis.createOrFetchPreparedRun(
+                run: run,
+                partitions: [partition],
+                slices: [valid, duplicateOrdinal]
+            )
+        )
+        XCTAssertNil(try store.corpusAnalysis.fetchRun(matterID: matter.id, id: runID))
+        try store.database.writer.read { db in
+            XCTAssertEqual(
+                try Int.fetchOne(
+                    db,
+                    sql: "SELECT COUNT(*) FROM corpus_analysis_partitions WHERE run_id = ?",
+                    arguments: [runID]
+                ),
+                0
+            )
+            XCTAssertEqual(
+                try Int.fetchOne(
+                    db,
+                    sql: "SELECT COUNT(*) FROM corpus_analysis_partition_slices WHERE run_id = ?",
+                    arguments: [runID]
+                ),
+                0
+            )
+        }
+    }
+
+    private func makeStore() throws -> SupraStore {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "CorpusAnalysisPreparation-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return try SupraStore(url: directory.appendingPathComponent("test.sqlite"))
+    }
+
+    private func canonicalJSON<T: Encodable>(_ value: T) throws -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        return String(decoding: try encoder.encode(value), as: UTF8.self)
+    }
+
+    private func sha256(_ value: String) -> String {
+        SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+}

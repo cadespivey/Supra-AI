@@ -706,7 +706,7 @@ final class ExhaustiveListTaskTests: XCTestCase {
                 query: "Extract every invoice reference.",
                 characterBudget: 1,
                 evaluationExpectedItemKeys: ["invoice-a", "invoice-b", "invoice-c"],
-                modelLineageJSON: #"{"model_repository":"synthetic/exhaustive-runtime","model_revision":"exhaustive-revision-nondefault"}"#
+                modelLineageJSON: Self.modelLineageJSON
             )
         ) { input in
             let source = try XCTUnwrap(input.partition.sources.first)

@@ -636,18 +636,19 @@ final class CaseFileReviewIntegrityMigrationTests: XCTestCase {
         let migrator = SupraMigrator.makeMigrator()
         let queue = try DatabaseQueue()
         try migrator.migrate(queue, upTo: "v071_create_draft_artifact_intents")
-        let store = SupraStore(database: try SupraDatabase(writer: queue))
-        let matter = try store.matters.createMatter(
+        let matters = MattersRepository(writer: queue)
+        let outputs = StructuredOutputRepository(writer: queue)
+        let matter = try matters.createMatter(
             name: "Synthetic legacy corpus claim",
             jurisdiction: "Virginia",
             partyPerspective: .plaintiff
         )
-        let output = try store.structuredOutputs.createOutput(
+        let output = try outputs.createOutput(
             matterID: matter.id,
             title: "Historical exact-slice unknown",
             outputType: .documentExhaustiveList
         )
-        let version = try store.structuredOutputs.createVersion(
+        let version = try outputs.createVersion(
             structuredOutputID: output.id,
             contentMarkdown: "# Preserved synthetic reconciliation\n\nLegacy finding 97 [S97].",
             requiredSections: ["Finding 97"],
@@ -665,27 +666,37 @@ final class CaseFileReviewIntegrityMigrationTests: XCTestCase {
         let preservedReconciliation = #"{"finding":"Legacy value 97","schema_version":7}"#
         let preservedAuditMetadata = #"{"run_id":"t-store-02-run","retained_marker":97}"#
         try queue.write { db in
-            try CorpusAnalysisRunRecord(
-                id: "t-store-02-run",
-                runKey: "t-store-02-key",
-                matterID: matter.id,
-                taskKind: CorpusAnalysisTaskKind.exhaustiveList.rawValue,
-                scopeJSON: #"{"document_ids":["legacy-document-97"],"schema_version":7}"#,
-                corpusSnapshotJSON:
+            // Seed through the exact v071 column surface. Using the current
+            // PersistableRecord here would let future record fields leak into
+            // this historical fixture before the migration under test runs.
+            try db.execute(
+                sql: """
+                    INSERT INTO corpus_analysis_runs (
+                        id, run_key, matter_id, task_kind, scope_json,
+                        corpus_snapshot_json, partition_strategy,
+                        partition_strategy_version, model_lineage_json, status,
+                        coverage_json, reconciliation_json, assurance_state,
+                        assurance_reasons_json, structured_output_version_id,
+                        created_at, completed_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                arguments: [
+                    "t-store-02-run", "t-store-02-key", matter.id,
+                    CorpusAnalysisTaskKind.exhaustiveList.rawValue,
+                    #"{"document_ids":["legacy-document-97"],"schema_version":7}"#,
                     #"{"members":[{"member_key":"legacy-member-97","document_id":"legacy-document-97","display_name":"Legacy-97.txt","revision_ids":["legacy-revision-97"],"index_state":"ready","disposition":"eligible"}]}"#,
-                partitionStrategy: "part_range",
-                partitionStrategyVersion: 1,
-                modelLineageJSON: #"{"repository":"synthetic/model","revision":"legacy-revision-7"}"#,
-                status: CorpusAnalysisRunStatus.persisted.rawValue,
-                coverageJSON:
+                    "part_range", 1,
+                    #"{"repository":"synthetic/model","revision":"legacy-revision-7"}"#,
+                    CorpusAnalysisRunStatus.persisted.rawValue,
                     #"{"excluded_members_disclosed":true,"partition_count":1,"succeeded_partition_count":1,"balance_error_count":0}"#,
-                reconciliationJSON: preservedReconciliation,
-                assuranceState: OutputAssuranceState.corpusComplete.rawValue,
-                assuranceReasonsJSON: #"["Legacy revision-only ledger passed"]"#,
-                structuredOutputVersionID: version.id,
-                createdAt: Date(timeIntervalSince1970: 1_790_000_197),
-                completedAt: Date(timeIntervalSince1970: 1_790_000_297)
-            ).insert(db)
+                    preservedReconciliation,
+                    OutputAssuranceState.corpusComplete.rawValue,
+                    #"["Legacy revision-only ledger passed"]"#,
+                    version.id,
+                    Date(timeIntervalSince1970: 1_790_000_197),
+                    Date(timeIntervalSince1970: 1_790_000_297),
+                ]
+            )
             try CorpusAnalysisPartitionRecord(
                 id: "t-store-02-partition",
                 runID: "t-store-02-run",
@@ -765,6 +776,131 @@ final class CaseFileReviewIntegrityMigrationTests: XCTestCase {
             let preservedAudit = try XCTUnwrap(AuditEventRecord.fetchOne(db, key: "t-store-02-audit"))
             XCTAssertEqual(preservedAudit.summary, "Preserved historical corpus event 97")
             XCTAssertEqual(preservedAudit.metadataJSON, preservedAuditMetadata)
+        }
+    }
+
+    func testTSTORE02V072DoesNotExpandCaseFileReviewEnforcementIntoChronology() throws {
+        // T-STORE-02 compatibility guard expected RED: v072 does not yet exist.
+        // When it lands, its exact-slice upgrade must not revoke or block the
+        // separate chronology path, which still owns a v1 revision ledger and
+        // requires its own future migration packet.
+        let migrator = SupraMigrator.makeMigrator()
+        XCTAssertTrue(migrator.migrations.contains("v072_harden_corpus_review_integrity"))
+        let queue = try DatabaseQueue()
+        try migrator.migrate(queue, upTo: "v071_create_draft_artifact_intents")
+        let matter = try MattersRepository(writer: queue).createMatter(
+            name: "Synthetic chronology compatibility",
+            jurisdiction: "Colorado",
+            partyPerspective: .plaintiff
+        )
+
+        try queue.write { db in
+            try db.execute(
+                sql: """
+                    INSERT INTO corpus_analysis_runs (
+                        id, run_key, matter_id, task_kind, scope_json,
+                        corpus_snapshot_json, partition_strategy,
+                        partition_strategy_version, status, coverage_json,
+                        assurance_state, created_at, completed_at
+                    ) VALUES (?, ?, ?, ?, '{}', ?, 'chronology_document', 1,
+                        'persisted', ?, 'corpus_complete', ?, ?)
+                    """,
+                arguments: [
+                    "t-store-02-legacy-chronology-run",
+                    "t-store-02-legacy-chronology-key",
+                    matter.id,
+                    CorpusAnalysisTaskKind.chronology.rawValue,
+                    #"{"schema_version":1,"members":[{"member_key":"document:chronology-legacy","document_id":"chronology-legacy","display_name":"Chronology legacy.txt","revision_ids":["chronology-legacy-revision"],"index_state":"ready","disposition":"eligible"}]}"#,
+                    #"{"excluded_members_disclosed":true,"partition_count":1,"succeeded_partition_count":1,"balance_error_count":0}"#,
+                    Date(timeIntervalSince1970: 1_790_001_001),
+                    Date(timeIntervalSince1970: 1_790_001_101),
+                ]
+            )
+            try db.execute(
+                sql: """
+                    INSERT INTO corpus_analysis_partitions (
+                        id, run_id, partition_key, input_revision_ids_json,
+                        disposition
+                    ) VALUES (?, ?, ?, ?, 'succeeded')
+                    """,
+                arguments: [
+                    "t-store-02-legacy-chronology-partition",
+                    "t-store-02-legacy-chronology-run",
+                    "chronology-legacy#document",
+                    #"["chronology-legacy-revision"]"#,
+                ]
+            )
+        }
+
+        try migrator.migrate(queue)
+
+        try queue.write { db in
+            let legacy = try XCTUnwrap(
+                CorpusAnalysisRunRecord.fetchOne(
+                    db,
+                    key: "t-store-02-legacy-chronology-run"
+                )
+            )
+            XCTAssertNil(legacy.requestSchemaVersion)
+            XCTAssertNil(legacy.requestDigest)
+            XCTAssertEqual(
+                legacy.assuranceState,
+                OutputAssuranceState.corpusComplete.rawValue,
+                "the Case File Review migration must not revoke chronology assurance"
+            )
+
+            try db.execute(
+                sql: """
+                    INSERT INTO corpus_analysis_runs (
+                        id, run_key, matter_id, task_kind, scope_json,
+                        corpus_snapshot_json, partition_strategy,
+                        partition_strategy_version, status, created_at
+                    ) VALUES (?, ?, ?, ?, '{}', ?, 'chronology_document', 1,
+                        'planning', ?)
+                    """,
+                arguments: [
+                    "t-store-02-current-chronology-run",
+                    "t-store-02-current-chronology-key",
+                    matter.id,
+                    CorpusAnalysisTaskKind.chronology.rawValue,
+                    #"{"schema_version":1,"members":[{"member_key":"document:chronology-current","document_id":"chronology-current","display_name":"Chronology current.txt","revision_ids":["chronology-current-revision"],"index_state":"ready","disposition":"eligible"}]}"#,
+                    Date(timeIntervalSince1970: 1_790_001_201),
+                ]
+            )
+            try db.execute(
+                sql: """
+                    INSERT INTO corpus_analysis_partitions (
+                        id, run_id, partition_key, input_revision_ids_json,
+                        disposition
+                    ) VALUES (?, ?, ?, ?, 'succeeded')
+                    """,
+                arguments: [
+                    "t-store-02-current-chronology-partition",
+                    "t-store-02-current-chronology-run",
+                    "chronology-current#document",
+                    #"["chronology-current-revision"]"#,
+                ]
+            )
+            try db.execute(
+                sql: """
+                    UPDATE corpus_analysis_runs
+                    SET status = 'persisted', assurance_state = 'corpus_complete',
+                        coverage_json = ?
+                    WHERE id = ?
+                    """,
+                arguments: [
+                    #"{"excluded_members_disclosed":true,"partition_count":1,"succeeded_partition_count":1,"balance_error_count":0}"#,
+                    "t-store-02-current-chronology-run",
+                ]
+            )
+            XCTAssertEqual(
+                try String.fetchOne(
+                    db,
+                    sql: "SELECT assurance_state FROM corpus_analysis_runs WHERE id = ?",
+                    arguments: ["t-store-02-current-chronology-run"]
+                ),
+                OutputAssuranceState.corpusComplete.rawValue
+            )
         }
     }
 
