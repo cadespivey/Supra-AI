@@ -322,6 +322,84 @@ final class AtomicSourcePublicationIntegrityTests: XCTestCase {
         )
     }
 
+    func testTSTORE03AtomicPublisherRejectsUnusedInvalidRowsInSupportedPacket() throws {
+        // T-STORE-03 expected RED: evidence validation visits only the cited
+        // row. A valid supported citation can therefore smuggle an unused,
+        // provenance-free row into the same retained source packet.
+        for invalidKind in ["wholly-unbound", "revisionless-chunk"] {
+            let fixture = try makeFixture(caseName: "mixed-packet-\(invalidKind)")
+            let validSource = primarySource(
+                fixture,
+                id: "t-store-03-mixed-packet-valid-\(invalidKind)",
+                citationLabel: "S101"
+            )
+            let invalidSource: DocumentOutputSourceRecord
+            if invalidKind == "revisionless-chunk" {
+                var revisionlessChunk = fixture.siblingChunk
+                revisionlessChunk.id = "t-store-03-mixed-packet-revisionless-chunk"
+                revisionlessChunk.revisionID = nil
+                try fixture.store.documentIndex.replaceChunks(
+                    documentID: fixture.siblingDocument.id,
+                    chunks: [revisionlessChunk]
+                )
+                invalidSource = DocumentOutputSourceRecord(
+                    id: "t-store-03-mixed-packet-revisionless-source",
+                    sourceSetID: "replaced-by-test",
+                    documentID: fixture.siblingDocument.id,
+                    chunkID: revisionlessChunk.id,
+                    revisionID: nil,
+                    citationLabel: "S103",
+                    locatorJSON: #"{"source_kind":"text"}"#,
+                    excerpt: fixture.siblingExcerpt,
+                    rank: 47,
+                    warningsJSON: #"["synthetic_unused_revisionless_probe"]"#,
+                    createdAt: Date(timeIntervalSince1970: 1_790_003_103)
+                )
+            } else {
+                invalidSource = DocumentOutputSourceRecord(
+                    id: "t-store-03-mixed-packet-unbound-source",
+                    sourceSetID: "replaced-by-test",
+                    documentID: nil,
+                    chunkID: nil,
+                    revisionID: nil,
+                    citationLabel: "S107",
+                    locatorJSON: #"{"source_kind":"text","part_index":107,"char_start":211,"char_end":307}"#,
+                    excerpt: "Synthetic unused unbound evidence value 107.",
+                    rank: 53,
+                    warningsJSON: #"["synthetic_unused_unbound_probe"]"#,
+                    createdAt: Date(timeIntervalSince1970: 1_790_003_107)
+                )
+            }
+
+            let publicationError = capturedError {
+                _ = try publishAtomically(
+                    sources: [validSource, invalidSource],
+                    caseName: "mixed-packet-\(invalidKind)",
+                    fixture: fixture,
+                    verificationResults: [try supportedResult(for: validSource)]
+                )
+            }
+            XCTAssertNotNil(
+                publicationError,
+                "every retained source row must carry immutable provenance even when unused by verifier evidence"
+            )
+            XCTAssertNil(
+                try fixture.store.documentSources.fetchSource(id: validSource.id),
+                "packet-wide rejection must roll back the otherwise-valid cited row"
+            )
+            XCTAssertNil(
+                try fixture.store.documentSources.fetchSource(id: invalidSource.id),
+                "packet-wide rejection must roll back the unused invalid row"
+            )
+            XCTAssertNil(
+                try fixture.store.documentSources.fetchSourceSet(
+                    id: "t-store-03-source-set-mixed-packet-\(invalidKind)"
+                ),
+                "packet-wide rejection must roll back the source set"
+            )
+        }
+    }
+
     func testTSTORE03AtomicPublisherRejectsRevisionlessChunkForPropositionSupportedOutput() throws {
         // T-STORE-03 expected RED: a legacy-compatible chunk may retain a nil
         // revision id. The atomic publisher currently treats the mutable chunk
@@ -346,7 +424,7 @@ final class AtomicSourcePublicationIntegrityTests: XCTestCase {
             chunkID: revisionlessChunk.id,
             revisionID: nil,
             citationLabel: "S93",
-            locatorJSON: fixture.primaryLocatorJSON,
+            locatorJSON: #"{"source_kind":"text"}"#,
             excerpt: fixture.primaryExcerpt,
             rank: 41,
             warningsJSON: #"["synthetic_revisionless_chunk_probe"]"#,
@@ -499,6 +577,20 @@ final class AtomicSourcePublicationIntegrityTests: XCTestCase {
         fixture: PublicationFixture,
         verificationResults: [PropositionSupportResult]
     ) throws -> StructuredOutputVersionRecord {
+        try publishAtomically(
+            sources: [source],
+            caseName: caseName,
+            fixture: fixture,
+            verificationResults: verificationResults
+        )
+    }
+
+    private func publishAtomically(
+        sources: [DocumentOutputSourceRecord],
+        caseName: String,
+        fixture: PublicationFixture,
+        verificationResults: [PropositionSupportResult]
+    ) throws -> StructuredOutputVersionRecord {
         let outputID = "t-store-03-output-\(caseName)"
         let sourceSetID = "t-store-03-source-set-\(caseName)"
         let sourceSet = DocumentSourceSetRecord(
@@ -517,8 +609,11 @@ final class AtomicSourcePublicationIntegrityTests: XCTestCase {
             corpusSnapshotHash: String(repeating: "9", count: 64),
             createdAt: Date(timeIntervalSince1970: 1_790_003_097)
         )
-        var atomicSource = source
-        atomicSource.sourceSetID = sourceSetID
+        let atomicSources = sources.map { source in
+            var atomicSource = source
+            atomicSource.sourceSetID = sourceSetID
+            return atomicSource
+        }
         let newOutput = StructuredOutputRecord(
             id: outputID,
             matterID: fixture.outputMatter.id,
@@ -532,9 +627,9 @@ final class AtomicSourcePublicationIntegrityTests: XCTestCase {
             structuredOutputID: outputID,
             newOutput: newOutput,
             sourceSet: sourceSet,
-            outputSources: [atomicSource],
+            outputSources: atomicSources,
             contentMarkdown:
-                "Synthetic publication \(caseName) value 97 [\(atomicSource.citationLabel)].",
+                "Synthetic publication \(caseName) value 97 [\(atomicSources[0].citationLabel)].",
             verificationStatus: .allSupported,
             verificationVersion: "atomic-source-integrity/7",
             verificationResults: verificationResults,
