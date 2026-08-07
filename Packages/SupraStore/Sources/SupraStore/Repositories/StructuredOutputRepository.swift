@@ -300,8 +300,23 @@ public final class StructuredOutputRepository: @unchecked Sendable {
             }
 
             try sourceSet.insert(db)
+            var preparedSources: [DocumentOutputSourceRecord] = []
             for source in outputSources {
-                try source.insert(db)
+                let prepared = try DocumentSourceIntegrityValidator.prepare(
+                    source,
+                    preserveUnknownRevision: false,
+                    db: db
+                )
+                try prepared.insert(db)
+                preparedSources.append(prepared)
+            }
+            if resolvedAssurance == .propositionSupported {
+                try DocumentSourceIntegrityValidator.validateEvidence(
+                    verificationResults,
+                    against: preparedSources,
+                    matterID: sourceSet.matterID,
+                    db: db
+                )
             }
 
             let now = Date()
@@ -852,4 +867,5 @@ public enum StructuredOutputRepositoryError: Error, Equatable, Sendable {
     case corpusRunUnavailable(String)
     case versionUnavailable(String)
     case staleVersionRequiresNewVersion(String)
+    case verificationEvidenceMismatch(String)
 }

@@ -36,6 +36,17 @@ claims:
     last_reviewed: "2026-07-18"
     publication_anchor: "ARCHITECTURE.md"
 
+  - id: "ATOMIC-SOURCE-PUBLICATION-INTEGRITY"
+    topic: "document-source-publication"
+    wording: "Atomic proposition-supported document Q&A publications validate every retained row for live matter-scoped source identity and, for revision-bound sources, exact chunk and revision provenance, the stored anchor excerpt, and a locator contained within the cited immutable revision; revision-bound verifier evidence must be grounded within that locator, all verifier evidence must resolve uniquely to the retained packet, and rejection rolls back the output, version, source set, and source rows together."
+    owner: "Document reliability engineering"
+    code_anchor: "Packages/SupraStore/Sources/SupraStore/Repositories/DocumentSourceIntegrityValidator.swift"
+    verification: "Packages/SupraStore/Tests/SupraStoreTests/AtomicSourcePublicationIntegrityTests.swift"
+    ci_job: "macos-ci/swift-packages"
+    applicable_version: "Next release after 2.3.4"
+    last_reviewed: "2026-08-07"
+    publication_anchor: "ARCHITECTURE.md"
+
   - id: "DOCUMENT-CLASSIFICATION-LINEAGE"
     topic: "document-classification-lineage"
     wording: "Completed document classification attempts append exact revision, model, prompt, sampler, calibration, abstention, and validated evidence lineage; uncertain or ungrounded results expose no primary category and classification never writes user tags."

@@ -132,6 +132,7 @@ repository:
   structure nodes and matter-scoped edges. Formats without specialized adapters emit a
   deterministic document/part wrapper tree; pre-v062 documents acquire wrappers lazily
   on their next extraction or indexing pass rather than through fabricated backfill.
+- Atomic proposition-supported document Q&A publications validate every retained row for live matter-scoped source identity and, for revision-bound sources, exact chunk and revision provenance, the stored anchor excerpt, and a locator contained within the cited immutable revision; revision-bound verifier evidence must be grounded within that locator, all verifier evidence must resolve uniquely to the retained packet, and rejection rolls back the output, version, source set, and source rows together.
 - Chunker v2 is the owner-approved default and aligns retrieval chunks to revision-bound
   structure nodes while preserving table headers and linked legal units as context. Existing
   stores receive one all-matter rebuild; the v2 setting and completion marker are persisted
