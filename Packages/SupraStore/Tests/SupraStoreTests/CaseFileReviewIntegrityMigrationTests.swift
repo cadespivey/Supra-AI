@@ -612,9 +612,10 @@ final class CaseFileReviewIntegrityMigrationTests: XCTestCase {
                 )
                 XCTAssertThrowsError(
                     try persistCorpusComplete(db, runID: exact.runID, exclusionsDisclosed: true))
-                try db.execute(
-                    sql: "UPDATE corpus_analysis_partitions SET disposition = ? WHERE id = ?",
-                    arguments: [CorpusAnalysisPartitionDisposition.succeeded.rawValue, exact.partitionID]
+                try markPartitionSucceededWithCoherentAttempt(
+                    db,
+                    partitionID: exact.partitionID,
+                    timestampMarker: 541
                 )
                 try db.execute(
                     sql: "UPDATE corpus_analysis_runs SET request_schema_version = 1 WHERE id = ?",
@@ -1269,8 +1270,8 @@ final class CaseFileReviewIntegrityMigrationTests: XCTestCase {
             try db.execute(
                 sql: """
                     INSERT INTO corpus_analysis_partitions (
-                        id, run_id, partition_key, input_revision_ids_json, disposition
-                    ) VALUES (?, ?, ?, ?, 'succeeded')
+                        id, run_id, partition_key, input_revision_ids_json
+                    ) VALUES (?, ?, ?, ?)
                     """,
                 arguments: [
                     duplicatePartitionID,
@@ -1278,6 +1279,11 @@ final class CaseFileReviewIntegrityMigrationTests: XCTestCase {
                     "duplicate-part-index-89#revision:\(target.revisionID)",
                     "[\"\(target.revisionID)\"]",
                 ]
+            )
+            try markPartitionSucceededWithCoherentAttempt(
+                db,
+                partitionID: duplicatePartitionID,
+                timestampMarker: 1_991
             )
             try insertSlice(
                 db,
@@ -2493,6 +2499,40 @@ final class CaseFileReviewIntegrityMigrationTests: XCTestCase {
                 partIndex, revisionID, charStart, charEnd,
                 revisionCharCount, textSHA256, locatorJSON,
             ]
+        )
+    }
+
+    private func markPartitionSucceededWithCoherentAttempt(
+        _ db: Database,
+        partitionID: String,
+        timestampMarker: Int
+    ) throws {
+        let startedAt = Date(
+            timeIntervalSince1970: 1_790_400_000 + Double(timestampMarker)
+        )
+        let completedAt = Date(
+            timeIntervalSince1970: 1_790_400_100 + Double(timestampMarker)
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        let historyJSON = String(decoding: try encoder.encode([
+            CorpusAnalysisAttemptHistoryEntry(
+                attemptNumber: 1,
+                outcome: .succeeded,
+                retryable: false,
+                startedAt: startedAt,
+                completedAt: completedAt
+            ),
+        ]), as: UTF8.self)
+        try db.execute(
+            sql: """
+                UPDATE corpus_analysis_partitions
+                SET attempt_count = 1, attempt_history_json = ?,
+                    disposition = 'succeeded', findings_json = '[]',
+                    started_at = ?, completed_at = ?
+                WHERE id = ?
+                """,
+            arguments: [historyJSON, startedAt, completedAt, partitionID]
         )
     }
 
