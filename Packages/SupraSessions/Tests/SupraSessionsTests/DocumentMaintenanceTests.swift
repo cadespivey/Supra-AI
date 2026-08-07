@@ -9,7 +9,7 @@ final class DocumentMaintenanceTests: XCTestCase {
     func testPurgeRemovesExpiredButKeepsRecentAndCleansBlob() throws {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "Acme")
-        let now = Date()
+        let now = Date(timeIntervalSince1970: 1_790_006_401)
 
         // One blob shared by an expired and a recent instance → blob kept until both gone.
         let oldBlob = try store.documentLibrary.upsertBlob(DocumentBlobRecord(sha256: "old", byteSize: 1, originalExtension: "txt", managedRelativePath: "blobs/old.txt")).blob
