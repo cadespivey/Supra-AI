@@ -163,6 +163,143 @@ final class DocumentExportTests: XCTestCase {
         XCTAssertTrue(try store.documentSources.fetchExports(structuredOutputID: output.id).isEmpty)
     }
 
+    func testTEXACTEXPORT01CorpusCompleteExhaustiveVersionRequiresMatchingPersistedV2ExactRun() throws {
+        // T-EXACT-EXPORT-01 expected RED: DocumentExportService trusts an active
+        // all_supported/corpus_complete exhaustive-list version without resolving
+        // exactly one linked persisted v2 exact-slice run, so the poison legacy
+        // planning link below still produces an export file and success metadata.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic exact export proof")
+        let title = "Unproven exhaustive marker 734"
+        let output = try store.structuredOutputs.createOutput(
+            matterID: matter.id,
+            title: title,
+            outputType: .documentExhaustiveList,
+            status: .complete
+        )
+        let version = try createExportableVersion(
+            store: store,
+            structuredOutputID: output.id,
+            versionIndex: 1,
+            contentMarkdown: "UNPROVEN-EXHAUSTIVE-CONTENT-734-MUST-NOT-EXPORT",
+            assuranceState: .corpusComplete
+        )
+        let poisonRun = CorpusAnalysisRunRecord(
+            runKey: "legacy-planning-export-poison-734",
+            matterID: matter.id,
+            taskKind: CorpusAnalysisTaskKind.exhaustiveList.rawValue,
+            scopeJSON: #"{"schema_version":1,"document_ids":null}"#,
+            corpusSnapshotJSON: #"{"schema_version":1,"members":[]}"#,
+            partitionStrategy: "part_range:characters=734",
+            partitionStrategyVersion: 1,
+            status: CorpusAnalysisRunStatus.planning.rawValue,
+            structuredOutputVersionID: version.id
+        )
+        _ = try store.corpusAnalysis.createOrFetchRun(poisonRun)
+        let persistedPoison = try XCTUnwrap(
+            store.corpusAnalysis.fetchRun(matterID: matter.id, runKey: poisonRun.runKey)
+        )
+        let activeOutput = try XCTUnwrap(
+            store.structuredOutputs.fetchOutputs(matterID: matter.id).first { $0.id == output.id }
+        )
+        XCTAssertEqual(activeOutput.activeVersionID, version.id)
+        XCTAssertEqual(version.verificationStatus, OutputVerificationStatus.allSupported.rawValue)
+        XCTAssertEqual(version.assuranceState, OutputAssuranceState.corpusComplete.rawValue)
+        XCTAssertEqual(persistedPoison.structuredOutputVersionID, version.id)
+        XCTAssertEqual(persistedPoison.status, CorpusAnalysisRunStatus.planning.rawValue)
+        XCTAssertNotEqual(persistedPoison.status, CorpusAnalysisRunStatus.persisted.rawValue)
+        XCTAssertNotEqual(persistedPoison.requestSchemaVersion, 2)
+        XCTAssertNotEqual(persistedPoison.partitionStrategyVersion, 2)
+
+        let storage = DocumentStorage(
+            root: FileManager.default.temporaryDirectory
+                .appendingPathComponent("ExactExportProof-\(UUID().uuidString)")
+        )
+        let destination = storage.exportsDirectory(forMatterID: matter.id)
+            .appendingPathComponent("Unproven-exhaustive-marker-734-v1.md")
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
+        XCTAssertThrowsError(
+            try DocumentExportService(store: store, storage: storage).export(
+                matterID: matter.id,
+                structuredOutputID: output.id,
+                format: .markdown
+            )
+        ) { error in
+            guard case DocumentExportService.ExportError.assuranceBlocked = error else {
+                return XCTFail("expected assuranceBlocked for missing exact corpus proof, got \(error)")
+            }
+        }
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: destination.path),
+            "the unproven nondefault exhaustive artifact must not be written"
+        )
+        XCTAssertTrue(try store.documentSources.fetchExports(structuredOutputID: output.id).isEmpty)
+        XCTAssertFalse(
+            try store.auditEvents.fetchEvents(matterID: matter.id).contains {
+                $0.eventType == "export_completed" && $0.relatedID == output.id
+            }
+        )
+    }
+
+    func testTEXACTEXPORT02NilActiveVersionFailsClosedInsteadOfFallingBackToLatest() throws {
+        // T-EXACT-EXPORT-02 expected RED: DocumentExportService falls back to the
+        // newest version when active_version_id is nil, writes its nondefault
+        // content, and records a successful export instead of throwing noActiveVersion.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic nil active export")
+        let title = "Nil active marker 862"
+        let output = try store.structuredOutputs.createOutput(
+            matterID: matter.id,
+            title: title,
+            outputType: .documentQA,
+            status: .complete
+        )
+        let inactiveVersion = try createExportableVersion(
+            store: store,
+            structuredOutputID: output.id,
+            versionIndex: 1,
+            contentMarkdown: "LATEST-INACTIVE-CONTENT-862-MUST-NOT-EXPORT",
+            makeActive: false
+        )
+        let persistedOutput = try XCTUnwrap(
+            store.structuredOutputs.fetchOutputs(matterID: matter.id).first { $0.id == output.id }
+        )
+        XCTAssertNil(persistedOutput.activeVersionID)
+        XCTAssertEqual(inactiveVersion.verificationStatus, OutputVerificationStatus.allSupported.rawValue)
+        XCTAssertEqual(inactiveVersion.assuranceState, OutputAssuranceState.propositionSupported.rawValue)
+
+        let storage = DocumentStorage(
+            root: FileManager.default.temporaryDirectory
+                .appendingPathComponent("NilActiveExport-\(UUID().uuidString)")
+        )
+        let destination = storage.exportsDirectory(forMatterID: matter.id)
+            .appendingPathComponent("Nil-active-marker-862-v1.md")
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
+        XCTAssertThrowsError(
+            try DocumentExportService(store: store, storage: storage).export(
+                matterID: matter.id,
+                structuredOutputID: output.id,
+                format: .markdown
+            )
+        ) { error in
+            guard case DocumentExportService.ExportError.noActiveVersion = error else {
+                return XCTFail("expected noActiveVersion, got \(error)")
+            }
+        }
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: destination.path),
+            "the inactive nondefault artifact must not be written"
+        )
+        XCTAssertTrue(try store.documentSources.fetchExports(structuredOutputID: output.id).isEmpty)
+        XCTAssertFalse(
+            try store.auditEvents.fetchEvents(matterID: matter.id).contains {
+                $0.eventType == "export_completed" && $0.relatedID == output.id
+            }
+        )
+    }
+
     private func makeFixture() throws -> (store: SupraStore, storage: DocumentStorage, matterID: String, outputID: String) {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "Acme")
@@ -188,7 +325,9 @@ final class DocumentExportTests: XCTestCase {
         store: SupraStore,
         structuredOutputID: String,
         versionIndex: Int,
-        contentMarkdown: String
+        contentMarkdown: String,
+        assuranceState: OutputAssuranceState = .propositionSupported,
+        makeActive: Bool = true
     ) throws -> StructuredOutputVersionRecord {
         let support = try PropositionSupportResult(
             propositionID: "export-proposition",
@@ -217,8 +356,9 @@ final class DocumentExportTests: XCTestCase {
             verificationDimensions: VerificationDimensionsMapper.dimensions(
                 verificationResults: [support]
             ),
-            assuranceState: .propositionSupported,
-            outputStatus: .complete
+            assuranceState: assuranceState,
+            outputStatus: .complete,
+            makeActive: makeActive
         )
     }
 
