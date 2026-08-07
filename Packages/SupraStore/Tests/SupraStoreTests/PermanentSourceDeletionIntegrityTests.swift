@@ -177,6 +177,72 @@ final class PermanentSourceDeletionIntegrityTests: XCTestCase {
         )
     }
 
+    func testTSTORE04DeletionRetainsButStalesSavedProofAndLeavesWrittenExportFile() throws {
+        // Characterization gate: source deletion intentionally preserves saved
+        // work product and denormalized proof excerpts for review, but it must
+        // revoke their assurance. Repository deletion never unlinks an export.
+        let fixture = try makeFixture(caseName: "retained-proof")
+        let findings =
+            #"{"evidence":[{"document_name":"Synthetic deletion source","quote":"Synthetic retained proof quote 613"}],"schema_version":1}"#
+        let partition = CorpusAnalysisPartitionRecord(
+            id: "t-store-04-retained-proof-partition",
+            runID: fixture.corpusRun.id,
+            partitionKey: "retained-proof-613",
+            inputRevisionIDsJSON: "[\"\(fixture.revision.id)\"]",
+            disposition: CorpusAnalysisPartitionDisposition.succeeded.rawValue,
+            findingsJSON: findings
+        )
+        try fixture.store.database.writer.write { db in try partition.insert(db) }
+        let priorAudit = try fixture.store.auditEvents.recordEvent(
+            matterID: fixture.matter.id,
+            eventType: "synthetic_prior_review_613",
+            actor: "user",
+            summary: "Prior review history 613",
+            relatedTable: MatterDocumentRecord.databaseTableName,
+            relatedID: fixture.document.id
+        )
+        let exportURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("TSTORE04-export-\(UUID().uuidString).md")
+        try "Previously written export 613".write(
+            to: exportURL,
+            atomically: true,
+            encoding: .utf8
+        )
+        defer { try? FileManager.default.removeItem(at: exportURL) }
+
+        _ = try fixture.store.documentLibrary.permanentlyDeleteDocument(
+            id: fixture.document.id
+        )
+
+        let retainedRun = try XCTUnwrap(
+            try fixture.store.corpusAnalysis.fetchRun(
+                matterID: fixture.matter.id,
+                id: fixture.corpusRun.id
+            )
+        )
+        XCTAssertEqual(retainedRun.assuranceState, OutputAssuranceState.stale.rawValue)
+        XCTAssertEqual(retainedRun.corpusSnapshotJSON, fixture.corpusRun.corpusSnapshotJSON)
+        XCTAssertEqual(retainedRun.reconciliationJSON, fixture.corpusRun.reconciliationJSON)
+        let retainedPartition = try XCTUnwrap(
+            try fixture.store.corpusAnalysis.fetchPartitions(
+                matterID: fixture.matter.id,
+                runID: fixture.corpusRun.id
+            ).first { $0.id == partition.id }
+        )
+        XCTAssertEqual(retainedPartition.findingsJSON, findings)
+        XCTAssertTrue(retainedPartition.findingsJSON?.contains("proof quote 613") == true)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: exportURL.path))
+        let retainedAudit = try XCTUnwrap(
+            try fixture.store.auditEvents.fetchEvents(
+                relatedTable: MatterDocumentRecord.databaseTableName,
+                relatedID: fixture.document.id,
+                eventType: priorAudit.eventType
+            ).first
+        )
+        XCTAssertEqual(retainedAudit.id, priorAudit.id)
+        XCTAssertEqual(retainedAudit.summary, "Prior review history 613")
+    }
+
     func testTSTORE04GlobalMatterDeletionWritesSurvivingBaseAudit() throws {
         // T-STORE-04 expected RED: global matter deletion cascades the matter,
         // document, FTS, and output rows without creating the surviving base
@@ -186,6 +252,22 @@ final class PermanentSourceDeletionIntegrityTests: XCTestCase {
             id: fixture.matter.id,
             deletedAt: Date(timeIntervalSince1970: 1_790_004_701)
         )
+        let priorAudit = try fixture.store.auditEvents.recordEvent(
+            matterID: fixture.matter.id,
+            eventType: "synthetic_prior_matter_review_613",
+            actor: "user",
+            summary: "Prior matter review history 613",
+            relatedTable: MatterRecord.databaseTableName,
+            relatedID: fixture.matter.id
+        )
+        let exportURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("TSTORE04-matter-export-\(UUID().uuidString).md")
+        try "Previously written matter export 613".write(
+            to: exportURL,
+            atomically: true,
+            encoding: .utf8
+        )
+        defer { try? FileManager.default.removeItem(at: exportURL) }
 
         let removedBlobPaths = try fixture.store.matters.permanentlyDeleteMatter(id: fixture.matter.id)
 
@@ -217,6 +299,16 @@ final class PermanentSourceDeletionIntegrityTests: XCTestCase {
             Set(metadata["removed_document_ids"] as? [String] ?? []),
             Set([fixture.document.id, fixture.unrelated.document.id])
         )
+        XCTAssertTrue(FileManager.default.fileExists(atPath: exportURL.path))
+        let retainedAudit = try XCTUnwrap(
+            try fixture.store.auditEvents.fetchEvents(
+                relatedTable: MatterRecord.databaseTableName,
+                relatedID: fixture.matter.id,
+                eventType: priorAudit.eventType
+            ).first
+        )
+        XCTAssertEqual(retainedAudit.id, priorAudit.id)
+        XCTAssertNil(retainedAudit.matterID)
     }
 
     func testTSTORE04InjectedMatterAuditFailureRollsBackGlobalCascade() throws {
