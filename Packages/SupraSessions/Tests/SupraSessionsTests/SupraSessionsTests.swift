@@ -1,6 +1,7 @@
 import Foundation
 import GRDB
 import SupraCore
+import SupraDocuments
 import SupraNetworking
 import SupraResearch
 import SupraRuntimeClient
@@ -866,6 +867,75 @@ final class SupraSessionsTests: XCTestCase {
             try store.database.writer.read { db in
                 try MatterRecord.fetchOne(db, key: matter.id)
             }
+        )
+    }
+
+    func testDocumentCleanupFailureAuditStaysInOwningMatter() throws {
+        // Expected RED: RecycleBinController drops the deleted document's
+        // matter id before recording post-commit file-cleanup failure, so the
+        // warning audit is written globally even though its matter survives.
+        let store = try makeStore()
+        let owner = try store.matters.createMatter(name: "Scoped cleanup 613")
+        let unrelated = try store.matters.createMatter(name: "Unrelated cleanup 911")
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("RecycleCleanup-\(UUID().uuidString)", isDirectory: true)
+        let storage = DocumentStorage(root: root)
+        try storage.initializeStorage()
+        let relativePath = "blobs/61/cleanup-613.bin"
+        let managedURL = storage.url(forManagedRelativePath: relativePath)
+        try FileManager.default.createDirectory(
+            at: managedURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data("KEEP-613".utf8).write(to: managedURL)
+        try FileManager.default.setAttributes(
+            [.immutable: true],
+            ofItemAtPath: managedURL.path
+        )
+        defer {
+            try? FileManager.default.setAttributes(
+                [.immutable: false],
+                ofItemAtPath: managedURL.path
+            )
+            try? FileManager.default.removeItem(at: root)
+        }
+        let blob = try store.documentLibrary.upsertBlob(DocumentBlobRecord(
+            sha256: "cleanup-scope-613",
+            byteSize: 8,
+            originalExtension: "bin",
+            managedRelativePath: relativePath
+        )).blob
+        let document = try store.documentLibrary.insertDocument(MatterDocumentRecord(
+            id: "cleanup-document-613",
+            matterID: owner.id,
+            blobID: blob.id,
+            displayName: "Cleanup 613.bin"
+        ))
+        try store.documentLibrary.softDeleteDocument(id: document.id)
+        let bin = RecycleBinController(store: store, storage: storage)
+        bin.reload()
+
+        bin.permanentlyDeleteDocument(id: document.id)
+
+        XCTAssertNil(try store.documentLibrary.fetchDocument(id: document.id))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: managedURL.path))
+        XCTAssertEqual(
+            bin.deletionError,
+            "The source was removed, but 1 managed file(s) still need cleanup."
+        )
+        let event = try XCTUnwrap(
+            try store.auditEvents.fetchEvents(
+                relatedTable: MatterDocumentRecord.databaseTableName,
+                relatedID: document.id,
+                eventType: "document_blob_cleanup_failed"
+            ).first
+        )
+        XCTAssertEqual(event.matterID, owner.id)
+        XCTAssertNotEqual(event.matterID, unrelated.id)
+        XCTAssertEqual(event.actor, "user")
+        XCTAssertEqual(
+            event.metadataJSON,
+            "{\"orphaned_blob_count\":1,\"schema_version\":1}"
         )
     }
 

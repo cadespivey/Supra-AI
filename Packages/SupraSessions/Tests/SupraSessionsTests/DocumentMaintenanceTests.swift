@@ -60,6 +60,47 @@ final class DocumentMaintenanceTests: XCTestCase {
         XCTAssertEqual(maintenance.purgeExpired(), 0)
     }
 
+    func testAutoPurgeDoesNotHollowADeletedButRestorableMatter() throws {
+        // Expected RED: the expiry query includes documents soft-deleted by a
+        // matter delete, so maintenance permanently removes their source graph
+        // even though matters are manual-delete-only and still restorable.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Restorable matter 613")
+        let blob = try store.documentLibrary.upsertBlob(DocumentBlobRecord(
+            sha256: "restorable-matter-blob-613",
+            byteSize: 613,
+            originalExtension: "txt",
+            managedRelativePath: "blobs/restorable-matter-613.txt"
+        )).blob
+        let document = try store.documentLibrary.insertDocument(MatterDocumentRecord(
+            matterID: matter.id,
+            blobID: blob.id,
+            displayName: "Restorable source 613.txt"
+        ))
+        let now = Date(timeIntervalSince1970: 1_790_106_401)
+        try store.matters.softDeleteMatter(
+            id: matter.id,
+            deletedAt: now.addingTimeInterval(-40 * 86_400)
+        )
+        let storageRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("RestorableMatter-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: storageRoot) }
+        let maintenance = DocumentMaintenance(
+            store: store,
+            storage: DocumentStorage(root: storageRoot)
+        )
+        maintenance.setAutoPurgeDays(30)
+
+        XCTAssertEqual(maintenance.purgeExpired(now: now), 0)
+        XCTAssertNotNil(try store.documentLibrary.fetchDocument(id: document.id))
+        XCTAssertNotNil(try store.documentLibrary.fetchBlob(id: blob.id))
+
+        XCTAssertTrue(try store.matters.restoreMatter(id: matter.id))
+        let restored = try XCTUnwrap(try store.documentLibrary.fetchDocument(id: document.id))
+        XCTAssertNil(restored.deletedAt)
+        XCTAssertEqual(restored.status, MatterDocumentStatus.ready.rawValue)
+    }
+
     private func makeStore() throws -> SupraStore {
         let directoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("MaintStore-\(UUID().uuidString)", isDirectory: true)

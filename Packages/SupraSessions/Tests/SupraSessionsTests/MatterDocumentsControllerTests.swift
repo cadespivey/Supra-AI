@@ -62,7 +62,16 @@ final class MatterDocumentsControllerTests: XCTestCase {
 
         XCTAssertNotNil(try store.documentLibrary.fetchDocument(id: document.id))
         XCTAssertTrue(controller.trashedDocuments.contains { $0.id == document.id })
-        XCTAssertTrue(controller.message?.contains("synthetic controller delete rollback") ?? false)
+        XCTAssertNil(
+            controller.message,
+            "permanent deletion must not reuse the general import/search message bucket"
+        )
+        XCTAssertEqual(controller.permanentDeletionNotice?.title, "Deletion needs attention")
+        XCTAssertTrue(
+            controller.permanentDeletionNotice?.message.contains(
+                "synthetic controller delete rollback"
+            ) ?? false
+        )
         XCTAssertTrue(
             try store.auditEvents.fetchEvents(
                 relatedTable: "matter_documents",

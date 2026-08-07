@@ -72,6 +72,29 @@ final class CorpusReviewQueueCompositionUITests: XCTestCase {
         )
     }
 
+    func testTDELUI01BothDocumentTrashSurfacesShareConfirmationAndRenderFailure() throws {
+        // Expected RED: MatterDocumentsView hard-deletes directly from its trash
+        // row and never renders the controller's deletion-specific notice.
+        let matterDocuments = try appSource(
+            relativePath: "SupraAI/Documents/MatterDocumentsView.swift"
+        )
+        let recycleBin = try appSource(relativePath: "SupraAI/RecycleBinView.swift")
+
+        XCTAssertTrue(matterDocuments.contains(".permanentDeletionConfirmation("))
+        XCTAssertTrue(recycleBin.contains(".permanentDeletionConfirmation("))
+        XCTAssertTrue(matterDocuments.contains("controller.permanentDeletionNotice"))
+        XCTAssertTrue(matterDocuments.contains("controller.clearPermanentDeletionNotice()"))
+        XCTAssertFalse(
+            matterDocuments.contains(
+                "Button(\"Delete Permanently\", role: .destructive) { controller.permanentlyDelete"
+            ),
+            "a trash-row click must select a pending item, not perform deletion"
+        )
+        XCTAssertTrue(
+            recycleBin.contains("Saved analysis, output text, citation and evidence excerpts")
+        )
+    }
+
     private func appEnvironmentSource() throws -> String {
         let testFile = URL(fileURLWithPath: #filePath)
         let appEnvironmentURL = testFile
@@ -79,6 +102,17 @@ final class CorpusReviewQueueCompositionUITests: XCTestCase {
             .deletingLastPathComponent()
             .appendingPathComponent("SupraAI/AppEnvironment.swift")
         return try String(contentsOf: appEnvironmentURL, encoding: .utf8)
+    }
+
+    private func appSource(relativePath: String) throws -> String {
+        let testFile = URL(fileURLWithPath: #filePath)
+        let appRoot = testFile
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        return try String(
+            contentsOf: appRoot.appendingPathComponent(relativePath),
+            encoding: .utf8
+        )
     }
 
     private func initializerSource(named marker: String, in source: String) throws -> String {
