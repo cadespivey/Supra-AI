@@ -2888,19 +2888,20 @@ final class CaseFileReviewIntegrityMigrationTests: XCTestCase {
     func testTSTORE01V072RevalidatesAttachmentWhenRunIsReclassifiedExact() throws {
         // T-STORE-01 classification-laundering audit expected RED: attachment
         // checks run only when structured_output_version_id changes. A chronology
-        // run can first share a version, then change task/request/strategy identity
-        // into exact v2 and bypass the one-proof-root uniqueness contract.
+        // run can first attach an incompatible output version, then change its
+        // task/request/strategy identity into exact v2 without revalidating that
+        // already-present attachment against the exact-output contract.
         let queue = try DatabaseQueue()
         try SupraMigrator.makeMigrator().migrate(queue)
         let matter = try MattersRepository(writer: queue).createMatter(
             name: "Synthetic classification laundering 2293"
         )
-        let owner = try createLinkedExactOutputFixture(
-            queue: queue,
+        let incompatible = try createSyntheticOutputVersion(
+            repository: StructuredOutputRepository(writer: queue),
             matterID: matter.id,
-            marker: "classification-owner-2293",
-            digestDigit: "b",
-            partIndex: 263
+            marker: "classification-incompatible-2293",
+            outputType: .factChronologyTable,
+            assuranceState: .corpusComplete
         )
         let candidateRunID: String = try queue.write { db in
             let candidate = try insertCompletionBarrierRun(
@@ -2938,7 +2939,7 @@ final class CaseFileReviewIntegrityMigrationTests: XCTestCase {
             try persistCorpusComplete(db, runID: candidate.runID, exclusionsDisclosed: true)
             try db.execute(
                 sql: "UPDATE corpus_analysis_runs SET structured_output_version_id = ? WHERE id = ?",
-                arguments: [owner.version.id, candidate.runID]
+                arguments: [incompatible.version.id, candidate.runID]
             )
             return candidate.runID
         }
@@ -2956,15 +2957,13 @@ final class CaseFileReviewIntegrityMigrationTests: XCTestCase {
                     arguments: [String(repeating: "c", count: 64), candidateRunID]
                 )
             },
-            "becoming exact v2 must revalidate that the output version has one proof root"
+            "becoming exact v2 must revalidate the already-attached output contract"
         )
         try queue.read { db in
-            let ownerRun = try XCTUnwrap(CorpusAnalysisRunRecord.fetchOne(db, key: owner.runID))
             let candidate = try XCTUnwrap(
                 CorpusAnalysisRunRecord.fetchOne(db, key: candidateRunID)
             )
-            XCTAssertEqual(ownerRun.structuredOutputVersionID, owner.version.id)
-            XCTAssertEqual(candidate.structuredOutputVersionID, owner.version.id)
+            XCTAssertEqual(candidate.structuredOutputVersionID, incompatible.version.id)
             XCTAssertEqual(candidate.taskKind, CorpusAnalysisTaskKind.chronology.rawValue)
             XCTAssertNotEqual(candidate.taskKind, CorpusAnalysisTaskKind.exhaustiveList.rawValue)
             XCTAssertNil(candidate.requestSchemaVersion)
