@@ -563,6 +563,15 @@ else
   record_failure 'app smoke does not execute the guided document Q&A hosted guard'
 fi
 
+# T-QUEUE-03 expected RED: the shipping composition proof exists in the UI-test
+# target, but the protected app-smoke command does not select it yet. A test that
+# CI never executes cannot guard production runner wiring.
+if grep -Fq -- '-only-testing:SupraAIUITests/CorpusReviewQueueCompositionUITests' "$app_smoke_script"; then
+  printf '%s\n' 'PASS: app smoke executes the corpus review queue composition guard'
+else
+  record_failure 'app smoke does not execute the corpus review queue composition guard'
+fi
+
 # The deterministic guided-Q&A runtime and model fixture are test authority, not
 # ordinary launch flags. They must require the hermetic XCUITest launch and keep
 # their artifacts out of the user's managed model directory.
