@@ -51,6 +51,27 @@ final class CorpusReviewQueueCompositionUITests: XCTestCase {
         XCTAssertLessThan(guardedAutoload.lowerBound, autoload.lowerBound)
     }
 
+    func testTQUEUE03ContentBoundLoadAndCorpusGenerationShareTaskRuntimeClient() throws {
+        // T-QUEUE-03 expected RED: guided UI-test composition loads the pinned
+        // model through taskRuntimeClient but gives the live corpus runner the
+        // separate real XPC client, splitting load from generation/cancellation.
+        let source = try appEnvironmentSource()
+        let modelLibrary = try initializerSource(
+            named: "let modelLibrary = ModelLibrary(",
+            in: source
+        )
+        let corpusRunner = try initializerSource(
+            named: "let corpusAnalysisRunner = CorpusAnalysisQueueRunner.live(",
+            in: source
+        )
+
+        XCTAssertTrue(modelLibrary.contains("runtimeClient: taskRuntimeClient"))
+        XCTAssertTrue(
+            corpusRunner.contains("runtimeClient: taskRuntimeClient"),
+            "content-bound load and corpus generation must use the identical runtime client"
+        )
+    }
+
     private func appEnvironmentSource() throws -> String {
         let testFile = URL(fileURLWithPath: #filePath)
         let appEnvironmentURL = testFile
@@ -58,5 +79,13 @@ final class CorpusReviewQueueCompositionUITests: XCTestCase {
             .deletingLastPathComponent()
             .appendingPathComponent("SupraAI/AppEnvironment.swift")
         return try String(contentsOf: appEnvironmentURL, encoding: .utf8)
+    }
+
+    private func initializerSource(named marker: String, in source: String) throws -> String {
+        let start = try XCTUnwrap(source.range(of: marker))
+        let end = try XCTUnwrap(
+            source.range(of: "\n        )", range: start.lowerBound..<source.endIndex)
+        )
+        return String(source[start.lowerBound..<end.upperBound])
     }
 }

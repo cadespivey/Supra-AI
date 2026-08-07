@@ -385,6 +385,62 @@ final class CorpusReviewQueueExecutionTests: XCTestCase {
         XCTAssertEqual(outcome, .cancelled)
     }
 
+    func testTQUEUE03LiveGenerationAuditPersistsExactRuntimeConfiguration() async throws {
+        // T-QUEUE-03 expected RED: the runtime receives a strict system prompt
+        // and non-default extraction options, but the published generation audit
+        // persists neither that system prompt nor those exact runtime options.
+        let store = try makeStore(testName: "TQUEUE03-LIVE-AUDIT")
+        let runtime = LiveCompletingRuntimeStub()
+        let liveModel = try installLiveContentBoundModel(store: store)
+        let fixture = try prepareFixture(
+            store: store,
+            caseName: "live-generation-audit",
+            partCount: 1,
+            pinnedModel: liveModel.pinnedModel
+        )
+        let library = ModelLibrary(
+            store: store,
+            runtimeClient: runtime,
+            managedModelRoots: [liveModel.managedRoot]
+        )
+        library.refresh()
+        let runner = CorpusAnalysisQueueRunner.live(
+            store: store,
+            modelLibrary: library,
+            runtimeClient: runtime
+        )
+
+        try await runner.run(fixture.payload)
+
+        XCTAssertEqual(runtime.generatedRequests.count, 1)
+        let request = try XCTUnwrap(runtime.generatedRequests.first)
+        let run = try XCTUnwrap(
+            store.corpusAnalysis.fetchRun(
+                matterID: fixture.matterID,
+                id: fixture.payload.runID
+            )
+        )
+        let versionID = try XCTUnwrap(run.structuredOutputVersionID)
+        let version = try XCTUnwrap(store.structuredOutputs.fetchVersion(id: versionID))
+        let generationID = try XCTUnwrap(version.generationSessionID)
+        let generation = try XCTUnwrap(
+            store.generation.fetchGenerationSession(generationID: generationID)
+        )
+        let audit = try JSONDecoder().decode(
+            PersistedExhaustiveGenerationAudit.self,
+            from: Data(generation.optionsJSON.utf8)
+        )
+
+        XCTAssertFalse(request.systemPrompt?.isEmpty ?? true)
+        XCTAssertEqual(generation.systemPrompt, request.systemPrompt)
+        XCTAssertEqual(audit.generationOptions, request.options)
+        XCTAssertEqual(audit.generationOptions?.maxOutputTokens, 4_096)
+        XCTAssertNotEqual(audit.generationOptions?.maxOutputTokens, GenerationOptions().maxOutputTokens)
+        XCTAssertEqual(audit.characterBudget, 100)
+        XCTAssertEqual(audit.maximumRetryCount, 3)
+        XCTAssertEqual(audit.taskKind, CorpusAnalysisTaskKind.exhaustiveList.rawValue)
+    }
+
     func testTQUEUE06SoftDeleteCancellationWinsActiveRunnerSuccess() async throws {
         // T-QUEUE-06 success expected RED: softDeleteMatter changes the active row
         // to cancelled, but runCorpusAnalysis later completes it unconditionally.
@@ -882,6 +938,20 @@ private struct LiveContentBoundModelFixture {
     var pinnedModel: CorpusAnalysisPinnedModel
 }
 
+private struct PersistedExhaustiveGenerationAudit: Decodable {
+    var characterBudget: Int
+    var maximumRetryCount: Int
+    var taskKind: String
+    var generationOptions: GenerationOptions?
+
+    private enum CodingKeys: String, CodingKey {
+        case characterBudget = "character_budget"
+        case maximumRetryCount = "maximum_retry_count"
+        case taskKind = "task_kind"
+        case generationOptions = "generation_options"
+    }
+}
+
 private enum QueueExecutionTestError: Error {
     case missingCoverage(String)
     case runnerDidNotStart
@@ -907,6 +977,84 @@ private actor LiveRunnerCompletionProbe {
     func record(_ outcome: LiveRunnerOutcome) {
         self.outcome = outcome
     }
+}
+
+private final class LiveCompletingRuntimeStub: RuntimeClientProtocol, @unchecked Sendable {
+    private let lock = NSLock()
+    private var loadedModelID: ModelID?
+    private var requests: [GenerateRequest] = []
+
+    var generatedRequests: [GenerateRequest] {
+        lock.withLock { requests }
+    }
+
+    func connect() async throws {}
+
+    func loadModel(_ request: LoadModelRequest) async throws -> LoadModelResponse {
+        lock.withLock { loadedModelID = request.modelID }
+        return LoadModelResponse(
+            status: .loaded,
+            modelID: request.modelID,
+            verifiedModelSHA256: request.contentBinding?.fingerprintSHA256
+        )
+    }
+
+    func generate(
+        _ request: GenerateRequest
+    ) throws -> AsyncThrowingStream<GenerationEvent, Error> {
+        lock.withLock { requests.append(request) }
+        return AsyncThrowingStream { continuation in
+            continuation.yield(GenerationEvent(
+                generationID: request.generationID,
+                sequenceNumber: 1,
+                timestamp: Date(timeIntervalSince1970: 1_700_000_000),
+                type: .token,
+                tokenText: #"{"schema_version":1,"items":[]}"#
+            ))
+            continuation.yield(GenerationEvent(
+                generationID: request.generationID,
+                sequenceNumber: 2,
+                timestamp: Date(timeIntervalSince1970: 1_700_000_001),
+                type: .generationCompleted
+            ))
+            continuation.finish()
+        }
+    }
+
+    func cancelGeneration(
+        _ generationID: GenerationID
+    ) async throws -> CancelGenerationResponse {
+        CancelGenerationResponse(status: .notFound, generationID: generationID)
+    }
+
+    func recentEvents(
+        for generationID: GenerationID,
+        after sequenceNumber: Int
+    ) async throws -> [GenerationEvent] {
+        []
+    }
+
+    func unloadModel() async throws -> UnloadModelResponse {
+        lock.withLock { loadedModelID = nil }
+        return UnloadModelResponse(status: .unloaded)
+    }
+
+    func reloadCurrentModel() async throws -> LoadModelResponse {
+        LoadModelResponse(status: .loaded, modelID: lock.withLock { loadedModelID })
+    }
+
+    func runtimeStatus() async throws -> RuntimeStatus {
+        let modelID = lock.withLock { loadedModelID }
+        return RuntimeStatus(
+            state: modelID == nil ? .modelUnloaded : .modelLoaded,
+            loadedModelID: modelID,
+            activeGenerationID: nil,
+            message: nil,
+            metrics: nil
+        )
+    }
+
+    func restartRuntimeService() async throws {}
 }
 
 private enum SyntheticRunnerOutcome: String, Sendable {
