@@ -51,10 +51,10 @@ final class CorpusReviewQueueCompositionUITests: XCTestCase {
         XCTAssertLessThan(guardedAutoload.lowerBound, autoload.lowerBound)
     }
 
-    func testTQUEUE03ContentBoundLoadAndCorpusGenerationShareTaskRuntimeClient() throws {
-        // T-QUEUE-03 expected RED: guided UI-test composition loads the pinned
-        // model through taskRuntimeClient but gives the live corpus runner the
-        // separate real XPC client, splitting load from generation/cancellation.
+    func testTQUEUE03ContentBoundLoadAndCorpusGenerationShareAdmittedRuntimeClient() throws {
+        // T-QUEUE-03 lease-composition expected RED: content-bound loading and
+        // generation must share the one admitted runtime facade. The historical
+        // taskRuntimeClient alias is incompatible with the process-wide boundary.
         let source = try appEnvironmentSource()
         let modelLibrary = try initializerSource(
             named: "let modelLibrary = ModelLibrary(",
@@ -65,10 +65,10 @@ final class CorpusReviewQueueCompositionUITests: XCTestCase {
             in: source
         )
 
-        XCTAssertTrue(modelLibrary.contains("runtimeClient: taskRuntimeClient"))
+        XCTAssertTrue(modelLibrary.contains("runtimeClient: runtimeClient"))
         XCTAssertTrue(
-            corpusRunner.contains("runtimeClient: taskRuntimeClient"),
-            "content-bound load and corpus generation must use the identical runtime client"
+            corpusRunner.contains("runtimeClient: runtimeClient"),
+            "content-bound load and corpus generation must use the identical admitted runtime client"
         )
     }
 
