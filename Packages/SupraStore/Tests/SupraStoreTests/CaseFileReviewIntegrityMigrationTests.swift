@@ -906,7 +906,7 @@ final class CaseFileReviewIntegrityMigrationTests: XCTestCase {
             XCTAssertEqual(
                 try String.fetchOne(
                     db, sql: "SELECT identifier FROM grdb_migrations ORDER BY rowid DESC LIMIT 1"),
-                "v072_harden_corpus_review_integrity"
+                "v073_create_case_file_review_projects"
             )
             let runColumns = Set(try db.columns(in: "corpus_analysis_runs").map(\.name))
             XCTAssertTrue(runColumns.contains("request_schema_version"))

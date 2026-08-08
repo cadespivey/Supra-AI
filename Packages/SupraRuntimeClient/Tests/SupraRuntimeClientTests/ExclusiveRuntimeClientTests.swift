@@ -14,7 +14,7 @@ final class ExclusiveRuntimeClientTests: XCTestCase {
         let purpose = RuntimeLeasePurpose.caseFileReview(runID: "review-run-writer-preference")
         let modelID = ModelID()
         let ordinaryGenerationID = GenerationID()
-        let ordinaryStream = try client.generate(makeRequest(
+        let ordinaryStream = try client.generate(makeRuntimeLeaseRequest(
             generationID: ordinaryGenerationID,
             modelID: modelID,
             prompt: "ordinary-in-flight"
@@ -75,14 +75,14 @@ final class ExclusiveRuntimeClientTests: XCTestCase {
                     modelPath: "/synthetic/review-model",
                     displayName: "Synthetic Review Model"
                 ))
-                try await drain(try client.generate(makeRequest(
+                try await drain(try client.generate(makeRuntimeLeaseRequest(
                     generationID: GenerationID(),
                     modelID: modelID,
                     prompt: "review-partition-1"
                 )))
                 await gapReached.signal()
                 await continueReview.wait()
-                try await drain(try client.generate(makeRequest(
+                try await drain(try client.generate(makeRuntimeLeaseRequest(
                     generationID: GenerationID(),
                     modelID: modelID,
                     prompt: "review-partition-2"
@@ -96,7 +96,7 @@ final class ExclusiveRuntimeClientTests: XCTestCase {
         XCTAssertEqual(gapSnapshot.purpose, purpose)
 
         let outsiderError = await capturedError {
-            try await drain(try client.generate(makeRequest(
+            try await drain(try client.generate(makeRuntimeLeaseRequest(
                 generationID: GenerationID(),
                 modelID: modelID,
                 prompt: "ordinary-gap-intruder"
@@ -129,7 +129,7 @@ final class ExclusiveRuntimeClientTests: XCTestCase {
 
         let reviewTask = Task {
             try await client.withExclusiveLease(purpose: purpose) { lease in
-                try await drain(try client.generate(makeRequest(
+                try await drain(try client.generate(makeRuntimeLeaseRequest(
                     generationID: GenerationID(),
                     modelID: modelID,
                     prompt: "final-review-partition"
@@ -300,7 +300,7 @@ final class ExclusiveRuntimeClientTests: XCTestCase {
         let purpose = RuntimeLeasePurpose.caseFileReview(runID: "cancelled-waiter-808")
         let generationID = GenerationID()
         let ordinaryTask = Task {
-            try await drain(try client.generate(makeRequest(
+            try await drain(try client.generate(makeRuntimeLeaseRequest(
                 generationID: generationID,
                 modelID: ModelID(),
                 prompt: "ordinary-owner-before-cancelled-waiter"
@@ -337,19 +337,20 @@ final class ExclusiveRuntimeClientTests: XCTestCase {
         try await ordinaryTask.value
     }
 
-    private func makeRequest(
-        generationID: GenerationID,
-        modelID: ModelID,
-        prompt: String
-    ) -> GenerateRequest {
-        GenerateRequest(
-            generationID: generationID,
-            modelID: modelID,
-            prompt: prompt,
-            systemPrompt: nil,
-            options: GenerationOptions(maxOutputTokens: 32)
-        )
-    }
+}
+
+private func makeRuntimeLeaseRequest(
+    generationID: GenerationID,
+    modelID: ModelID,
+    prompt: String
+) -> GenerateRequest {
+    GenerateRequest(
+        generationID: generationID,
+        modelID: modelID,
+        prompt: prompt,
+        systemPrompt: nil,
+        options: GenerationOptions(maxOutputTokens: 32)
+    )
 }
 
 private actor RuntimeLeaseFlag {
@@ -641,7 +642,7 @@ private func drain(
 }
 
 private func capturedError(
-    _ operation: @escaping @Sendable () async throws -> Void
+    _ operation: () async throws -> Void
 ) async -> Error? {
     do {
         try await operation()
