@@ -512,7 +512,10 @@ final class AppEnvironment: ObservableObject {
         // Seed UI-test data before any runtime/status refresh that may take time on
         // a machine without the helper service running; the shell can render matters
         // immediately while the rest of bootstrap finishes.
-        if Self.isUITestMode { seedUITestFixturesIfNeeded() }
+        if Self.isUITestMode {
+            seedUITestFixturesIfNeeded()
+            await seedUITestReviewProjectIfNeeded()
+        }
         if Self.isDemoMode { seedDemoFixturesIfNeeded() }
         #if DEBUG
         dumpStoreToPasteboardIfRequested()
@@ -973,6 +976,219 @@ final class AppEnvironment: ObservableObject {
         seedUITestDocumentRelationsIfNeeded()
         seedUITestGuidedQAIfNeeded()
         seedUITestMotionDraftIfNeeded()
+    }
+
+    /// Builds one coverage-complete, exact-v2 exhaustive result whose contrary
+    /// evidence intentionally leaves it review-required, then freezes it as a
+    /// Review Project only for the dedicated hosted Review tests. The base UI-test
+    /// launch remains small, and `-uiTestMode` keeps this synthetic graph in a
+    /// fresh, throwaway store rather than the user's database.
+    private func seedUITestReviewProjectIfNeeded() async {
+        guard Self.isUITestMode,
+              ProcessInfo.processInfo.arguments.contains("-uiTestReviewProject"),
+              let matterID = mattersController.matters.first?.id else { return }
+
+        do {
+            guard try store.caseFileReviews.fetchProjects(matterID: matterID).isEmpty else {
+                return
+            }
+
+            let alphaExcerpt =
+                "The fictional Atlas Supply Agreement fixes payment on March 18, 2031."
+            let betaSupportingExcerpt =
+                "The fictional Atlas Supply Agreement requires renewal notice at least 120 calendar days before expiration."
+            let betaContraryExcerpt =
+                "A fictional amendment states that either party may give renewal notice 90 calendar days before expiration."
+            let sourceSpecs = [
+                (
+                    documentID: "ui-review-a-payment-document",
+                    revisionID: "ui-review-a-payment-revision",
+                    displayName: "Atlas Payment Schedule.txt",
+                    text: alphaExcerpt
+                ),
+                (
+                    documentID: "ui-review-b-renewal-document",
+                    revisionID: "ui-review-b-renewal-revision",
+                    displayName: "Atlas Renewal Clause.txt",
+                    text: betaSupportingExcerpt
+                ),
+                (
+                    documentID: "ui-review-c-amendment-document",
+                    revisionID: "ui-review-c-amendment-revision",
+                    displayName: "Atlas Amendment.txt",
+                    text: betaContraryExcerpt
+                ),
+            ]
+
+            for spec in sourceSpecs where try store.documentLibrary.fetchDocument(
+                id: spec.documentID
+            ) == nil {
+                let contentDigest = SHA256.hash(data: Data(spec.text.utf8))
+                    .map { String(format: "%02x", $0) }
+                    .joined()
+                let blob = try store.documentLibrary.upsertBlob(DocumentBlobRecord(
+                    id: "\(spec.documentID)-blob",
+                    sha256: contentDigest,
+                    byteSize: spec.text.utf8.count,
+                    originalExtension: "txt",
+                    managedRelativePath: "uitest/\(spec.displayName)"
+                )).blob
+                let document = try store.documentLibrary.insertDocument(MatterDocumentRecord(
+                    id: spec.documentID,
+                    matterID: matterID,
+                    blobID: blob.id,
+                    displayName: spec.displayName,
+                    status: MatterDocumentStatus.ready.rawValue,
+                    extractionStatus: DocumentExtractionStatus.extracted.rawValue,
+                    indexStatus: DocumentIndexStatus.textIndexed.rawValue,
+                    sourceKind: DocumentSourceKind.text.rawValue,
+                    extractionMethod: "synthetic@toolchain:review-uitest"
+                ))
+                _ = try store.documentRevisions.replacePartsAndPersistLineage(
+                    documentID: document.id,
+                    parts: [DocumentPagePartRecord(
+                        id: "\(spec.documentID)-part",
+                        documentID: document.id,
+                        partIndex: 0,
+                        sourceKind: DocumentSourceKind.text.rawValue,
+                        normalizedText: spec.text,
+                        charCount: spec.text.count
+                    )],
+                    revisions: [DocumentPartRevisionRecord(
+                        id: spec.revisionID,
+                        documentID: document.id,
+                        partIndex: 0,
+                        derivationKey: "review-uitest:\(spec.documentID)",
+                        origin: "synthetic_test",
+                        method: "plain-text",
+                        text: spec.text,
+                        charCount: spec.text.count
+                    )],
+                    selections: [DocumentPartSelectionRecord(
+                        id: "\(spec.documentID)-selection",
+                        documentID: document.id,
+                        partIndex: 0,
+                        selectedRevisionID: spec.revisionID,
+                        selectionKey: "review-uitest:\(spec.documentID)",
+                        selectedBy: "test",
+                        decisionJSON: #"{"rule":"synthetic_review_ui_fixture"}"#
+                    )]
+                )
+            }
+
+            let result = try await ExhaustiveListTask(store: store).run(
+                request: ExhaustiveListRequest(
+                    runKey: "ui-review-project-run",
+                    matterID: matterID,
+                    title: "Atlas Supply Agreement review",
+                    query: "Extract the exact payment deadline and renewal notice period, retaining contrary terms.",
+                    scope: CorpusAnalysisScope(documentIDs: sourceSpecs.map(\.documentID)),
+                    characterBudget: 4_219,
+                    modelLineageJSON: #"{"artifact_fingerprint_sha256":"7777777777777777777777777777777777777777777777777777777777777777","content_binding_algorithm":"supra-release-model-sha256-v1","content_binding_schema_version":1,"model_repository":"synthetic/review-uitest","model_revision":"0123456789abcdef0123456789abcdef01234567"}"#
+                )
+            ) { input in
+                func reference(
+                    documentID: String,
+                    revisionID: String,
+                    quote: String
+                ) throws -> CorpusAnalysisEvidenceReference {
+                    guard let source = input.partition.sources.first(where: {
+                        $0.documentID == documentID && $0.revisionID == revisionID
+                    }) else {
+                        throw CorpusAnalysisMapFailure.permanent(
+                            "Synthetic Review UI source was not presented to the mapper."
+                        )
+                    }
+                    guard let range = Self.reviewUITestCharacterRange(of: quote, in: source.text) else {
+                        throw CorpusAnalysisMapFailure.permanent(
+                            "Synthetic Review UI excerpt was not present in its exact slice."
+                        )
+                    }
+                    return CorpusAnalysisEvidenceReference(
+                        documentID: source.documentID,
+                        revisionID: source.revisionID,
+                        locatorJSON: source.locatorJSON,
+                        quote: quote,
+                        charStart: range.lowerBound,
+                        charEnd: range.upperBound
+                    )
+                }
+
+                let response = ReviewUITestMapResponse(items: [
+                    ReviewUITestMapItem(
+                        itemKey: "Synthetic payment deadline",
+                        value: "March 18, 2031",
+                        evidence: [try reference(
+                            documentID: sourceSpecs[0].documentID,
+                            revisionID: sourceSpecs[0].revisionID,
+                            quote: alphaExcerpt
+                        )],
+                        contraryEvidence: []
+                    ),
+                    ReviewUITestMapItem(
+                        itemKey: "Synthetic renewal notice period",
+                        value: "120 calendar days",
+                        evidence: [try reference(
+                            documentID: sourceSpecs[1].documentID,
+                            revisionID: sourceSpecs[1].revisionID,
+                            quote: betaSupportingExcerpt
+                        )],
+                        contraryEvidence: [try reference(
+                            documentID: sourceSpecs[2].documentID,
+                            revisionID: sourceSpecs[2].revisionID,
+                            quote: betaContraryExcerpt
+                        )]
+                    ),
+                ])
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+                return String(decoding: try encoder.encode(response), as: UTF8.self)
+            }
+
+            _ = try store.caseFileReviews.createOrFetchProject(
+                matterID: matterID,
+                sourceRunID: result.run.id,
+                title: "Atlas Supply Agreement review",
+                actor: "Synthetic UI reviewer",
+                at: Date(timeIntervalSince1970: 1_931_478_400)
+            )
+            mattersController.caseFileReviewController?.load()
+        } catch {
+            assertionFailure("Could not seed Review Project accessibility fixture: \(error)")
+        }
+    }
+
+    nonisolated private static func reviewUITestCharacterRange(
+        of quote: String,
+        in value: String
+    ) -> Range<Int>? {
+        guard let range = value.range(of: quote) else { return nil }
+        return value.distance(from: value.startIndex, to: range.lowerBound)
+            ..< value.distance(from: value.startIndex, to: range.upperBound)
+    }
+
+    private struct ReviewUITestMapResponse: Encodable, Sendable {
+        var schemaVersion = 1
+        var items: [ReviewUITestMapItem]
+
+        private enum CodingKeys: String, CodingKey {
+            case schemaVersion = "schema_version"
+            case items
+        }
+    }
+
+    private struct ReviewUITestMapItem: Encodable, Sendable {
+        var itemKey: String
+        var value: String
+        var evidence: [CorpusAnalysisEvidenceReference]
+        var contraryEvidence: [CorpusAnalysisEvidenceReference]
+
+        private enum CodingKeys: String, CodingKey {
+            case itemKey = "item_key"
+            case value
+            case evidence
+            case contraryEvidence = "contrary_evidence"
+        }
     }
 
     /// Seeds one ready and one review-required revision-bound passage plus a
