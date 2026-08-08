@@ -174,6 +174,31 @@ final class CaseFileReviewCompositionUITests: XCTestCase {
         }
     }
 
+    func testTRPUI05StaleProjectStateRemainsPersistentlyVisible() throws {
+        // T-RP-UI-05 expected RED: deletion can mark a durable Review Project
+        // stale, but the first view draft only reveals unavailable state after
+        // opening an individual source. The matrix itself must keep a literal,
+        // accessible project-level notice visible.
+        let review = try caseFileReviewSource()
+
+        XCTAssertTrue(
+            review.contains(#"project.status == "stale""#),
+            "the view must derive its notice from the persisted project state"
+        )
+        XCTAssertTrue(
+            review.contains("Review source changed"),
+            "stale state needs concise, literal user-facing copy"
+        )
+        XCTAssertTrue(
+            review.contains("Frozen findings and excerpts remain available"),
+            "the notice must distinguish retained review work from unavailable live proof"
+        )
+        XCTAssertTrue(
+            review.contains(#".accessibilityIdentifier("review.staleNotice")"#),
+            "the persistent stale notice needs a stable native accessibility surface"
+        )
+    }
+
     private func caseFileReviewSource() throws -> String {
         try appSource(relativePath: "SupraAI/Review/CaseFileReviewView.swift")
     }
