@@ -80,6 +80,9 @@ public final class DocumentProcessingQueue: ObservableObject {
     @Published public private(set) var resumableJobs: [DocumentProcessingJobRecord] = []
     @Published public private(set) var resumableImports: [ResumableDocumentImport] = []
     @Published public private(set) var lastError: String?
+    /// Active Review job that has received a cooperative pause request and is
+    /// finishing its current partition before the durable job becomes paused.
+    @Published public private(set) var pausingCorpusJobID: String?
     /// The most recent import that completed with per-file failures, for in-app
     /// surfacing (the Documents tab shows a banner). Cleared on a later clean
     /// import of the same matter or via `clearImportFailure()`.
@@ -93,6 +96,7 @@ public final class DocumentProcessingQueue: ObservableObject {
     private let classificationService: DocumentClassificationService?
     private let notifier: any DocumentNotifying
     private let corpusAnalysisRunner: (@Sendable (CorpusAnalysisJobPayload) async throws -> Void)?
+    private let corpusAnalysisPauseRequester: (@Sendable (String) -> Void)?
 
     /// Fast-path URLs for jobs that run in this process. Durable selected-source
     /// rows and bookmarks are written before enqueue returns, so these are never
@@ -109,7 +113,8 @@ public final class DocumentProcessingQueue: ObservableObject {
         makeIndexingService: @escaping @Sendable () -> DocumentIndexingService,
         classificationService: DocumentClassificationService? = nil,
         notifier: any DocumentNotifying = SystemDocumentNotifier(),
-        corpusAnalysisRunner: (@Sendable (CorpusAnalysisJobPayload) async throws -> Void)? = nil
+        corpusAnalysisRunner: (@Sendable (CorpusAnalysisJobPayload) async throws -> Void)? = nil,
+        corpusAnalysisPauseRequester: (@Sendable (String) -> Void)? = nil
     ) {
         self.store = store
         self.importService = importService
@@ -117,6 +122,7 @@ public final class DocumentProcessingQueue: ObservableObject {
         self.classificationService = classificationService
         self.notifier = notifier
         self.corpusAnalysisRunner = corpusAnalysisRunner
+        self.corpusAnalysisPauseRequester = corpusAnalysisPauseRequester
     }
 
     deinit {
@@ -357,6 +363,23 @@ public final class DocumentProcessingQueue: ObservableObject {
         cancelQueuedJob(id: jobID)
     }
 
+    /// Requests a cooperative Review pause. The active mapper is not cancelled:
+    /// its current partition checkpoints normally, then the runner stops before
+    /// beginning the next partition and this job moves to the existing paused state.
+    public func pause(jobID: String) {
+        guard activeCorpusJobID == jobID,
+              pausingCorpusJobID != jobID,
+              let corpusAnalysisPauseRequester,
+              let job = try? store.documentJobs.fetchJob(id: jobID),
+              let json = job.payloadJSON,
+              let payload = try? JSONDecoder().decode(
+                  CorpusAnalysisJobPayload.self,
+                  from: Data(json.utf8)
+              ) else { return }
+        pausingCorpusJobID = jobID
+        corpusAnalysisPauseRequester(payload.runID)
+    }
+
     /// Resumes a paused job. Sources from the original session are reused if still
     /// held; otherwise the job reconciles by re-indexing already-imported docs.
     public func resume(jobID: String) {
@@ -492,9 +515,15 @@ public final class DocumentProcessingQueue: ObservableObject {
                     activeCorpusJobID = nil
                     activeCorpusTask = nil
                 }
+                if pausingCorpusJobID == job.id {
+                    pausingCorpusJobID = nil
+                }
             }
             try await task.value
             _ = try store.documentJobs.completeActiveJob(id: job.id)
+            refresh()
+        } catch CorpusAnalysisQueueRunnerError.paused {
+            try? store.documentJobs.pauseJob(id: job.id)
             refresh()
         } catch is CancellationError {
             _ = try? store.documentJobs.cancelActiveJob(id: job.id)

@@ -103,6 +103,79 @@ public struct ExhaustiveListMetrics: Codable, Equatable, Sendable {
     }
 }
 
+/// Stable, public projection of the exact reconciliation payload persisted for an
+/// exhaustive-list run. Review Projects decode this envelope instead of inferring
+/// rows or evidence from rendered Markdown.
+public struct ExhaustiveListReviewSnapshot: Codable, Equatable, Sendable {
+    public var schemaVersion: Int
+    public var items: [ExhaustiveListItem]
+    public var omissions: [ExhaustiveListOmission]
+    public var metrics: ExhaustiveListMetrics
+    public var failedPartitions: [ExhaustiveListReviewFailedPartition]
+    public var excludedMembers: [ExhaustiveListReviewExcludedMember]
+
+    public init(
+        schemaVersion: Int = 1,
+        items: [ExhaustiveListItem],
+        omissions: [ExhaustiveListOmission],
+        metrics: ExhaustiveListMetrics,
+        failedPartitions: [ExhaustiveListReviewFailedPartition],
+        excludedMembers: [ExhaustiveListReviewExcludedMember]
+    ) {
+        self.schemaVersion = schemaVersion
+        self.items = items
+        self.omissions = omissions
+        self.metrics = metrics
+        self.failedPartitions = failedPartitions
+        self.excludedMembers = excludedMembers
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case items
+        case omissions
+        case metrics
+        case failedPartitions = "failed_partitions"
+        case excludedMembers = "excluded_members"
+    }
+}
+
+public struct ExhaustiveListReviewFailedPartition: Codable, Equatable, Sendable {
+    public var partitionKey: String
+    public var documentNames: [String]
+    public var reason: String
+    public var errorSummary: String
+
+    public init(
+        partitionKey: String,
+        documentNames: [String],
+        reason: String,
+        errorSummary: String
+    ) {
+        self.partitionKey = partitionKey
+        self.documentNames = documentNames
+        self.reason = reason
+        self.errorSummary = errorSummary
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case partitionKey = "partition_key"
+        case documentNames = "document_names"
+        case reason
+        case errorSummary = "error_summary"
+    }
+}
+
+public struct ExhaustiveListReviewExcludedMember: Codable, Equatable, Sendable {
+    public var name: String
+    public var reason: String
+
+    public init(name: String, reason: String) {
+        self.name = name
+        self.reason = reason
+    }
+}
+
 public struct ExhaustiveListResult: Sendable {
     public var run: CorpusAnalysisRunRecord
     public var coverage: CorpusAnalysisCoverage
@@ -278,6 +351,8 @@ public enum CorpusNegativeGate {
 /// strict schema boundary and response-digest failure record.
 public final class ExhaustiveListTask: @unchecked Sendable {
     public typealias Generator = @Sendable (ExhaustiveListGenerationInput) async throws -> String
+    public typealias PartitionBoundaryHandler = @Sendable () async throws -> Void
+    public typealias ModelPhaseCompletionHandler = @Sendable () async -> Void
 
     public static let schemaVersion = 1
     public static let verificationVersion = "exhaustive-list-v1"
@@ -317,6 +392,8 @@ public final class ExhaustiveListTask: @unchecked Sendable {
             evaluationExpectedItemKeys: request.evaluationExpectedItemKeys,
             generationConfiguration: nil,
             progressHandler: { _ in },
+            partitionBoundaryHandler: {},
+            modelPhaseDidComplete: {},
             generator: generator
         )
     }
@@ -328,6 +405,8 @@ public final class ExhaustiveListTask: @unchecked Sendable {
         payload: CorpusAnalysisJobPayload,
         generationConfiguration: ExhaustiveListGenerationConfiguration? = nil,
         progressHandler: @escaping @Sendable (CorpusAnalysisCoverage) async -> Void = { _ in },
+        partitionBoundaryHandler: @escaping PartitionBoundaryHandler = {},
+        modelPhaseDidComplete: @escaping ModelPhaseCompletionHandler = {},
         generator: @escaping Generator
     ) async throws -> ExhaustiveListResult {
         try await runPrepared(
@@ -335,6 +414,8 @@ public final class ExhaustiveListTask: @unchecked Sendable {
             evaluationExpectedItemKeys: [],
             generationConfiguration: generationConfiguration,
             progressHandler: progressHandler,
+            partitionBoundaryHandler: partitionBoundaryHandler,
+            modelPhaseDidComplete: modelPhaseDidComplete,
             generator: generator
         )
     }
@@ -344,6 +425,8 @@ public final class ExhaustiveListTask: @unchecked Sendable {
         evaluationExpectedItemKeys: [String],
         generationConfiguration: ExhaustiveListGenerationConfiguration?,
         progressHandler: @escaping @Sendable (CorpusAnalysisCoverage) async -> Void,
+        partitionBoundaryHandler: @escaping PartitionBoundaryHandler,
+        modelPhaseDidComplete: @escaping ModelPhaseCompletionHandler,
         generator: @escaping Generator
     ) async throws -> ExhaustiveListResult {
         guard payload.schemaVersion == 2 else {
@@ -393,7 +476,9 @@ public final class ExhaustiveListTask: @unchecked Sendable {
             ),
             runID: payload.runID,
             requestDigest: payload.requestDigest,
-            progressHandler: progressHandler
+            progressHandler: progressHandler,
+            partitionBoundaryHandler: partitionBoundaryHandler,
+            modelPhaseDidComplete: modelPhaseDidComplete
         ) { partition in
             let prompt = Self.prompt(query: frozenRequest.query, partition: partition)
             let raw = try await generator(ExhaustiveListGenerationInput(
@@ -420,8 +505,13 @@ public final class ExhaustiveListTask: @unchecked Sendable {
         )
         let excludedMembers = engineResult.snapshot.members
             .filter { $0.disposition == .excluded }
-            .map { ExhaustiveListExcludedMember(name: $0.displayName, reason: $0.reason ?? "excluded") }
-        let reconciliationRecord = ExhaustiveListReconciliationRecord(
+            .map {
+                ExhaustiveListReviewExcludedMember(
+                    name: $0.displayName,
+                    reason: $0.reason ?? "excluded"
+                )
+            }
+        let reconciliationRecord = ExhaustiveListReviewSnapshot(
             items: reconciliation.items,
             omissions: reconciliation.omissions,
             metrics: reconciliation.metrics,
@@ -762,7 +852,7 @@ public final class ExhaustiveListTask: @unchecked Sendable {
     private func failedPartitionDisclosures(
         partitions: [CorpusAnalysisPartitionRecord],
         snapshot: CorpusAnalysisSnapshot
-    ) throws -> [ExhaustiveListFailedPartition] {
+    ) throws -> [ExhaustiveListReviewFailedPartition] {
         let nameByRevision = Dictionary(uniqueKeysWithValues: snapshot.members.flatMap { member in
             member.revisionIDs.map { ($0, member.displayName) }
         })
@@ -774,7 +864,7 @@ public final class ExhaustiveListTask: @unchecked Sendable {
                 from: Data(partition.inputRevisionIDsJSON.utf8)
             )
             let names = Array(Set(revisionIDs.compactMap { nameByRevision[$0] })).sorted()
-            return ExhaustiveListFailedPartition(
+            return ExhaustiveListReviewFailedPartition(
                 partitionKey: partition.partitionKey,
                 documentNames: names,
                 reason: partition.dispositionReason ?? "failed",
@@ -785,8 +875,8 @@ public final class ExhaustiveListTask: @unchecked Sendable {
 
     private static func coverageFailures(
         coverage: CorpusAnalysisCoverage,
-        disclosures: [ExhaustiveListFailedPartition],
-        excludedMembers: [ExhaustiveListExcludedMember]
+        disclosures: [ExhaustiveListReviewFailedPartition],
+        excludedMembers: [ExhaustiveListReviewExcludedMember]
     ) -> [String] {
         var failures = disclosures.map { disclosure in
             let name = disclosure.documentNames.isEmpty
@@ -804,8 +894,8 @@ public final class ExhaustiveListTask: @unchecked Sendable {
 
     private static func listFailures(
         reconciliation: ExhaustiveListReconciliation,
-        disclosures: [ExhaustiveListFailedPartition],
-        excludedMembers: [ExhaustiveListExcludedMember]
+        disclosures: [ExhaustiveListReviewFailedPartition],
+        excludedMembers: [ExhaustiveListReviewExcludedMember]
     ) -> [String] {
         var failures = reconciliation.omissions.map {
             "Omitted evaluation item \($0.itemKey): \($0.reason)."
@@ -1004,7 +1094,7 @@ public final class ExhaustiveListTask: @unchecked Sendable {
         title: String,
         assuranceState: OutputAssuranceState,
         coverage: CorpusAnalysisCoverage,
-        reconciliation: ExhaustiveListReconciliationRecord,
+        reconciliation: ExhaustiveListReviewSnapshot,
         labels: [CorpusAnalysisEvidenceReference: String]
     ) -> String {
         var lines = [
@@ -1118,24 +1208,6 @@ private struct ExhaustiveListReconciliation {
     var metrics: ExhaustiveListMetrics
 }
 
-private struct ExhaustiveListReconciliationRecord: Codable {
-    var schemaVersion = 1
-    var items: [ExhaustiveListItem]
-    var omissions: [ExhaustiveListOmission]
-    var metrics: ExhaustiveListMetrics
-    var failedPartitions: [ExhaustiveListFailedPartition]
-    var excludedMembers: [ExhaustiveListExcludedMember]
-
-    private enum CodingKeys: String, CodingKey {
-        case schemaVersion = "schema_version"
-        case items
-        case omissions
-        case metrics
-        case failedPartitions = "failed_partitions"
-        case excludedMembers = "excluded_members"
-    }
-}
-
 private struct ExhaustiveListValidationRecord: Codable {
     var schemaVersion = 1
     var schemaInvalidPartitionCount: Int
@@ -1148,25 +1220,6 @@ private struct ExhaustiveListValidationRecord: Codable {
         case metrics
         case verificationDimensions = "verification_dimensions"
     }
-}
-
-private struct ExhaustiveListFailedPartition: Codable {
-    var partitionKey: String
-    var documentNames: [String]
-    var reason: String
-    var errorSummary: String
-
-    private enum CodingKeys: String, CodingKey {
-        case partitionKey = "partition_key"
-        case documentNames = "document_names"
-        case reason
-        case errorSummary = "error_summary"
-    }
-}
-
-private struct ExhaustiveListExcludedMember: Codable {
-    var name: String
-    var reason: String
 }
 
 private struct ExhaustiveListEvidenceSource {

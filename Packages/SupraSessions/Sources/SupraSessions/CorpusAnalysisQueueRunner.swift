@@ -12,6 +12,7 @@ public enum CorpusAnalysisQueueRunnerError: Error, LocalizedError, Equatable, Se
     case resolvedModelMismatch(repository: String, revision: String)
     case liveModelNotResolved
     case runtimeCancellationUnconfirmed
+    case paused
 
     public var errorDescription: String? {
         switch self {
@@ -29,6 +30,8 @@ public enum CorpusAnalysisQueueRunnerError: Error, LocalizedError, Equatable, Se
             "The exact content-bound model was not resolved before corpus generation."
         case .runtimeCancellationUnconfirmed:
             "The runtime did not confirm that the cancelled corpus generation became quiescent."
+        case .paused:
+            "Corpus analysis paused after its current partition."
         }
     }
 }
@@ -51,23 +54,66 @@ public final class CorpusAnalysisQueueRunner: @unchecked Sendable {
     private let exhaustiveListGenerator: ExhaustiveListTask.Generator
     private let generationConfiguration: ExhaustiveListGenerationConfiguration?
     private let progressHandler: ProgressHandler
+    private let exclusiveRuntimeClient: ExclusiveRuntimeClient?
+    private let pauseRequests = CorpusAnalysisPauseRequests()
 
     public init(
         store: SupraStore,
         resolvePinnedModel: @escaping PinnedModelResolver,
         exhaustiveListGenerator: @escaping ExhaustiveListTask.Generator,
         generationConfiguration: ExhaustiveListGenerationConfiguration? = nil,
-        progressHandler: @escaping ProgressHandler = { _, _ in }
+        progressHandler: @escaping ProgressHandler = { _, _ in },
+        exclusiveRuntimeClient: ExclusiveRuntimeClient? = nil
     ) {
         self.store = store
         self.resolvePinnedModel = resolvePinnedModel
         self.exhaustiveListGenerator = exhaustiveListGenerator
         self.generationConfiguration = generationConfiguration
         self.progressHandler = progressHandler
+        self.exclusiveRuntimeClient = exclusiveRuntimeClient
     }
 
     public func run(_ payload: CorpusAnalysisJobPayload) async throws {
         let request = try validatePreparedRequest(payload)
+        defer { pauseRequests.clear(runID: payload.runID) }
+        if let exclusiveRuntimeClient {
+            try await exclusiveRuntimeClient.withExclusiveLease(
+                purpose: .caseFileReview(runID: payload.runID)
+            ) { lease in
+                do {
+                    try await self.runValidated(
+                        payload,
+                        request: request,
+                        lease: lease
+                    )
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    if Task.isCancelled
+                        || (error as? CorpusAnalysisQueueRunnerError) == .runtimeCancellationUnconfirmed {
+                        await lease.markRecoveryRequired(
+                            message: "Review cancellation did not confirm runtime quiescence: \(error.localizedDescription)"
+                        )
+                    }
+                    throw error
+                }
+            }
+        } else {
+            try await runValidated(payload, request: request, lease: nil)
+        }
+    }
+
+    /// Thread-safe, non-cancelling signal consumed only after a partition has
+    /// checkpointed. The queue uses this synchronous seam from its main-actor API.
+    public func requestPause(runID: String) {
+        pauseRequests.request(runID: runID)
+    }
+
+    private func runValidated(
+        _ payload: CorpusAnalysisJobPayload,
+        request: ExhaustiveListQueuedRequest,
+        lease: ExclusiveRuntimeLease?
+    ) async throws {
         let resolved: CorpusAnalysisPinnedModel?
         do {
             try Task.checkCancellation()
@@ -93,14 +139,26 @@ public final class CorpusAnalysisQueueRunner: @unchecked Sendable {
                 revision: payload.pinnedModel.modelRevision
             )
         }
-        _ = try await ExhaustiveListTask(store: store).runPrepared(
-            payload: payload,
-            generationConfiguration: generationConfiguration,
-            progressHandler: { [progressHandler] coverage in
-                await progressHandler(payload.runID, coverage)
-            },
-            generator: exhaustiveListGenerator
-        )
+        do {
+            _ = try await ExhaustiveListTask(store: store).runPrepared(
+                payload: payload,
+                generationConfiguration: generationConfiguration,
+                progressHandler: { [progressHandler] coverage in
+                    await progressHandler(payload.runID, coverage)
+                },
+                partitionBoundaryHandler: { [pauseRequests] in
+                    if pauseRequests.consume(runID: payload.runID) {
+                        throw CorpusAnalysisExecutionInterruption.pauseRequested
+                    }
+                },
+                modelPhaseDidComplete: {
+                    await lease?.release()
+                },
+                generator: exhaustiveListGenerator
+            )
+        } catch CorpusAnalysisExecutionInterruption.pauseRequested {
+            throw CorpusAnalysisQueueRunnerError.paused
+        }
     }
 
     private func balancePreparedCancellation(
@@ -276,8 +334,32 @@ extension CorpusAnalysisQueueRunner {
                 }
             },
             generationConfiguration: generationConfiguration,
-            progressHandler: progressHandler
+            progressHandler: progressHandler,
+            exclusiveRuntimeClient: runtimeClient as? ExclusiveRuntimeClient
         )
+    }
+}
+
+private final class CorpusAnalysisPauseRequests: @unchecked Sendable {
+    private let lock = NSLock()
+    private var runIDs: Set<String> = []
+
+    func request(runID: String) {
+        _ = lock.withLock {
+            runIDs.insert(runID)
+        }
+    }
+
+    func consume(runID: String) -> Bool {
+        lock.withLock {
+            runIDs.remove(runID) != nil
+        }
+    }
+
+    func clear(runID: String) {
+        _ = lock.withLock {
+            runIDs.remove(runID)
+        }
     }
 }
 

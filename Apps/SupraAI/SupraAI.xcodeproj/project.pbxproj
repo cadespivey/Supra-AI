@@ -79,6 +79,7 @@
 		E4A400010000000000000001 /* RestoreSettingsUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4A400010000000000000101 /* RestoreSettingsUITests.swift */; };
 		C0A720260807000000000001 /* CorpusReviewQueueCompositionUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0A720260807000000000101 /* CorpusReviewQueueCompositionUITests.swift */; };
 		C0A820260808000000000001 /* CaseFileReviewUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0A820260808000000000101 /* CaseFileReviewUITests.swift */; };
+		C0A920260808000000000001 /* CaseFileReviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0A920260808000000000101 /* CaseFileReviewView.swift */; };
 		D8049735424078FD470EAD6B /* RecycleBinView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF9D6D522EA0F7997D75B63B /* RecycleBinView.swift */; };
 		F56264303FD9BE608870FB9F /* MultilineField.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E06DCE8DB8B78E41F939F2C /* MultilineField.swift */; };
 /* End PBXBuildFile section */
@@ -120,6 +121,7 @@
 		E4A400010000000000000101 /* RestoreSettingsUITests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RestoreSettingsUITests.swift; sourceTree = "<group>"; };
 		C0A720260807000000000101 /* CorpusReviewQueueCompositionUITests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CorpusReviewQueueCompositionUITests.swift; sourceTree = "<group>"; };
 		C0A820260808000000000101 /* CaseFileReviewUITests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CaseFileReviewUITests.swift; sourceTree = "<group>"; };
+		C0A920260808000000000101 /* CaseFileReviewView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CaseFileReviewView.swift; sourceTree = "<group>"; };
 		45DF0346474345DA98F88B95 /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/Cocoa.framework; sourceTree = DEVELOPER_DIR; };
 		5A0000000000000000000101 /* SupraAIApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupraAIApp.swift; sourceTree = "<group>"; };
 		5A0000000000000000000102 /* AppEnvironment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppEnvironment.swift; sourceTree = "<group>"; };
@@ -250,6 +252,7 @@
 				5A0000000000000000000907 /* Research */,
 				5A0000000000000000000909 /* Authorities */,
 				5A000000000000000000090A /* Outputs */,
+				C0A920260808000000000901 /* Review */,
 				5A000000000000000000090B /* Documents */,
 				5A0000000000000000000903 /* Navigation */,
 				5A0000000000000000000904 /* Status */,
@@ -347,6 +350,14 @@
 				5A000000000000000000011F /* OutputDetailView.swift */,
 			);
 			path = Outputs;
+			sourceTree = "<group>";
+		};
+		C0A920260808000000000901 /* Review */ = {
+			isa = PBXGroup;
+			children = (
+				C0A920260808000000000101 /* CaseFileReviewView.swift */,
+			);
+			path = Review;
 			sourceTree = "<group>";
 		};
 		5A000000000000000000090B /* Documents */ = {
@@ -618,6 +629,7 @@
 				5A000000000000000000002C /* MatterAuthoritiesView.swift in Sources */,
 				5A000000000000000000002D /* AuthorityDetailView.swift in Sources */,
 				5A000000000000000000002E /* MatterOutputsView.swift in Sources */,
+				C0A920260808000000000001 /* CaseFileReviewView.swift in Sources */,
 				5A00000000000000000000E3 /* MatterDocumentsView.swift in Sources */,
 				5A00000000000000000000E4 /* PartTextEditSheet.swift in Sources */,
 				F7A000000000000000000001 /* DocumentRelationReviewSheet.swift in Sources */,

@@ -3,7 +3,7 @@ import SupraSessions
 import SwiftUI
 
 /// The workspace for a single matter: a detail header plus the matter tab set
-/// (Chat, Research, Authorities, Outputs, Documents, and Audit). Audit is placed
+/// (Chat, Research, Authorities, Outputs, Review, Documents, and Audit). Audit is placed
 /// last as the least frequently used tab.
 struct MatterWorkspaceView: View {
     @ObservedObject var controller: MattersController
@@ -26,6 +26,7 @@ struct MatterWorkspaceView: View {
         case research = "Research"
         case authorities = "Authorities"
         case outputs = "Outputs"
+        case review = "Review"
         case documents = "Documents"
         case billing = "Billing"
         case audit = "Audit"
@@ -240,6 +241,16 @@ struct MatterWorkspaceView: View {
                     "Outputs unavailable",
                     "Select the matter again to load its structured outputs.",
                     systemImage: "doc.text"
+                )
+            }
+        case .review:
+            if let review = controller.caseFileReviewController {
+                CaseFileReviewView(controller: review)
+            } else {
+                placeholder(
+                    "Review unavailable",
+                    "Select the matter again to load its Review Projects.",
+                    systemImage: "tablecells"
                 )
             }
         case .billing:

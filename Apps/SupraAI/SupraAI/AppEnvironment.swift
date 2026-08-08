@@ -129,7 +129,7 @@ final class AppEnvironment: ObservableObject {
     private let interruptedDraftRecoveryUITestRoot: URL?
 
     private let runtimeStatusController: RuntimeStatusController
-    private let runtimeClient: RuntimeClient
+    private let runtimeClient: ExclusiveRuntimeClient
     /// Non-nil only for the explicitly authorized guided-Q&A XCUITest launch.
     /// The synthetic model fixture is confined to this throwaway root.
     private let guidedQAUITestModelRoot: URL?
@@ -142,9 +142,12 @@ final class AppEnvironment: ObservableObject {
     init() {
         let coldStartRestore = AppEnvironment.prepareColdStartRestore()
         let restoreActivation = coldStartRestore?.activation
-        let interruptedDraftRecoveryUITestRoot = Self.interruptedDraftRecoveryUITestRoot()
-        let runtimeClient = RuntimeClient()
         let guidedQAUITestAuthorized = Self.isUITestMode && ProcessInfo.processInfo.arguments.contains("-uiTestGuidedQA")
+        let interruptedDraftRecoveryUITestRoot = Self.interruptedDraftRecoveryUITestRoot()
+        let baseRuntimeClient: any RuntimeClientProtocol = guidedQAUITestAuthorized
+            ? GuidedQAUITestRuntimeClient()
+            : RuntimeClient()
+        let runtimeClient = ExclusiveRuntimeClient(base: baseRuntimeClient)
         let guidedQAUITestModelRoot = guidedQAUITestAuthorized
             ? Optional(FileManager.default.temporaryDirectory.appendingPathComponent(
                 "SupraAI-UITest-GuidedQA-\(UUID().uuidString)",
@@ -153,7 +156,6 @@ final class AppEnvironment: ObservableObject {
             : nil
         let guidedQAUITestManagedRoots = guidedQAUITestModelRoot.map { [$0] }
             ?? [ManagedModelStorage.modelsDirectory()]
-        let taskRuntimeClient: any RuntimeClientProtocol = guidedQAUITestAuthorized ? GuidedQAUITestRuntimeClient() : runtimeClient
         let storeResult = AppEnvironment.makeStore(
             after: restoreActivation,
             replayOutcome: coldStartRestore?.outcome,
@@ -164,7 +166,7 @@ final class AppEnvironment: ObservableObject {
         let appVersion = AppEnvironment.currentAppVersion()
         let modelLibrary = ModelLibrary(
             store: store,
-            runtimeClient: taskRuntimeClient,
+            runtimeClient: runtimeClient,
             managedModelRoots: guidedQAUITestManagedRoots
         )
         let tokenStore = APIKeyStoreComposition.live()
@@ -295,7 +297,7 @@ final class AppEnvironment: ObservableObject {
         let corpusAnalysisRunner = CorpusAnalysisQueueRunner.live(
             store: store,
             modelLibrary: modelLibrary,
-            runtimeClient: taskRuntimeClient
+            runtimeClient: runtimeClient
         )
         let importService = DocumentImportService(store: store)
         let queue = DocumentProcessingQueue(
@@ -315,10 +317,13 @@ final class AppEnvironment: ObservableObject {
             classificationService: Self.isUITestMode ? nil : DocumentClassificationService(
                 store: store,
                 modelLibrary: modelLibrary,
-                runtimeClient: taskRuntimeClient
+                runtimeClient: runtimeClient
             ),
             corpusAnalysisRunner: { payload in
                 try await corpusAnalysisRunner.run(payload)
+            },
+            corpusAnalysisPauseRequester: { runID in
+                corpusAnalysisRunner.requestPause(runID: runID)
             }
         )
         documentSetup.setReindexEnqueuer { [weak queue] matterID in
@@ -356,7 +361,7 @@ final class AppEnvironment: ObservableObject {
         }
         self.mattersController = MattersController(
             store: store,
-            runtimeClient: taskRuntimeClient,
+            runtimeClient: runtimeClient,
             defaultSystemPrompt: systemPrompt,
             documentQueue: queue,
             isImportReady: { documentSetup.isReadyForImport },
@@ -376,6 +381,7 @@ final class AppEnvironment: ObservableObject {
         // Let speculative pre-warms back off while a generation is running, so they
         // never evict the model out from under an in-flight answer.
         modelLibrary.isRuntimeGenerating = { [weak self] in self?.runtimeServiceState == .generating }
+        modelLibrary.isRuntimeReserved = { runtimeClient.ordinaryWorkIsBlocked }
         // When a model becomes loaded, classify any pending documents in the selected
         // matter (a no-op when none are pending). Collapse the load state to a Bool and
         // fire only on the transition into loaded.

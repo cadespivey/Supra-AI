@@ -772,6 +772,19 @@ public final class DocumentLibraryRepository: @unchecked Sendable {
                 )
             }
 
+            // Review evidence retains its frozen source snapshot, but every
+            // live preview pointer and dependent support projection must be
+            // degraded before document/revision FK actions set live IDs null.
+            let impactedReviewProjectIDs = try CaseFileReviewRepository
+                .degradeForPermanentSourceDeletion(
+                    matterID: root.matterID,
+                    documentIDs: subtreeIDs,
+                    revisionIDs: revisionIDs.sorted(),
+                    actor: normalizedActor,
+                    at: timestamp,
+                    db: db
+                )
+
             // Capture blob ids and clear the standalone FTS5 index (no FK cascade)
             // for every document in the subtree BEFORE deleting any rows, so a FK
             // cascade on parent_document_id cannot remove a child row before we
@@ -809,6 +822,7 @@ public final class DocumentLibraryRepository: @unchecked Sendable {
                 "removed_document_ids": subtreeIDs.sorted(),
                 "invalidated_output_version_ids": impactedVersions,
                 "invalidated_corpus_run_ids": impactedRuns,
+                "invalidated_case_file_review_project_ids": impactedReviewProjectIDs,
             ])
             try AuditEventRecord(
                 matterID: root.matterID,

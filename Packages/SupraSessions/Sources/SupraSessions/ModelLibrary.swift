@@ -113,6 +113,7 @@ public final class ModelLibrary: ObservableObject {
     /// preference. App-wide and persisted across launches.
     @Published public private(set) var forcedModelID: ModelID?
     static let forcedChatModelSettingsKey = "chat.forced_model_id"
+    private static let runtimeReservedMessage = "Case File Review is using the local runtime. Try this model change after the Review pauses or finishes."
 
     private let store: SupraStore
     private let runtimeClient: any RuntimeClientProtocol
@@ -123,6 +124,10 @@ public final class ModelLibrary: ObservableObject {
     /// they never evict the model out from under an in-flight generation; wired by the
     /// app to the runtime status (defaults to "not generating" for tests/headless).
     public var isRuntimeGenerating: () -> Bool = { false }
+    /// True while process-wide admission is waiting for, owned by, or recovering
+    /// from exclusive Review work. Speculative and manual model mutation must not
+    /// race that owner even when the XPC service is idle between partitions.
+    public var isRuntimeReserved: () -> Bool = { false }
 
     public convenience init(
         store: SupraStore,
@@ -294,6 +299,7 @@ public final class ModelLibrary: ObservableObject {
     public func prewarmChatModel(configuration: LegalModelConfiguration = .fromEnvironment()) {
         if case .loading = loadState { return }
         if isRuntimeGenerating() { return }
+        if isRuntimeReserved() { return }
         Task { _ = await ensureLoadedChatModelID(for: .legalReasoning, configuration: configuration) }
     }
 
@@ -304,6 +310,7 @@ public final class ModelLibrary: ObservableObject {
     public func prewarm(role: ModelRole, configuration: LegalModelConfiguration = .fromEnvironment()) {
         if case .loading = loadState { return }
         if isRuntimeGenerating() { return }
+        if isRuntimeReserved() { return }
         Task { _ = await ensureLoadedRoutedModelID(for: role, configuration: configuration) }
     }
 
@@ -470,6 +477,9 @@ public final class ModelLibrary: ObservableObject {
     /// assignments pointing at it are cleared so no "Missing model" ghost remains.
     @discardableResult
     public func deleteModel(modelID: String) async -> DeleteModelResult {
+        guard !isRuntimeReserved() else {
+            return .blocked(message: Self.runtimeReservedMessage)
+        }
         if case let .loading(id) = loadState, id == modelID {
             return .blocked(message: "This model is still loading. Wait for it to finish before deleting it.")
         }
@@ -479,7 +489,11 @@ public final class ModelLibrary: ObservableObject {
 
         // Evict it from the runtime first if it's the one currently loaded.
         if loadedModelID?.rawValue.uuidString == modelID {
-            _ = try? await runtimeClient.unloadModel()
+            do {
+                _ = try await runtimeClient.unloadModel()
+            } catch {
+                return .blocked(message: error.localizedDescription)
+            }
             loadState = .idle
         }
 
@@ -720,6 +734,10 @@ public final class ModelLibrary: ObservableObject {
     /// Marks the given model active in the store and loads it into the runtime service.
     public func activateAndLoad(modelID modelIDString: String) async {
         guard !Task.isCancelled else { return }
+        guard !isRuntimeReserved() else {
+            loadState = .failed(message: Self.runtimeReservedMessage)
+            return
+        }
         // Ignore overlapping loads so concurrent taps cannot leave the published
         // load state and the runtime out of sync.
         if case .loading = loadState { return }

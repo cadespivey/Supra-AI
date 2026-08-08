@@ -203,8 +203,14 @@ public enum CorpusAnalysisMapFailure: Error, LocalizedError, Equatable, Sendable
 /// maps every planned revision range and therefore has no top-k/per-document
 /// retrieval cap. Partition checkpoints support cancellation, relaunch resume,
 /// orphan-attempt recovery, and explicitly bounded transient retries.
+enum CorpusAnalysisExecutionInterruption: Error {
+    case pauseRequested
+}
+
 public final class CorpusAnalysisEngine: @unchecked Sendable {
     public typealias Mapper = @Sendable (CorpusAnalysisPartitionInput) async throws -> CorpusAnalysisMapOutput
+    typealias PartitionBoundaryHandler = @Sendable () async throws -> Void
+    typealias ModelPhaseCompletionHandler = @Sendable () async -> Void
 
     private let store: SupraStore
 
@@ -226,6 +232,8 @@ public final class CorpusAnalysisEngine: @unchecked Sendable {
             preparedRunID: nil,
             expectedRequestDigest: nil,
             progressHandler: { _ in },
+            partitionBoundaryHandler: {},
+            modelPhaseDidComplete: {},
             mapper: mapper
         )
     }
@@ -235,6 +243,8 @@ public final class CorpusAnalysisEngine: @unchecked Sendable {
         runID: String,
         requestDigest: String,
         progressHandler: @escaping @Sendable (CorpusAnalysisCoverage) async -> Void = { _ in },
+        partitionBoundaryHandler: @escaping PartitionBoundaryHandler = {},
+        modelPhaseDidComplete: @escaping ModelPhaseCompletionHandler = {},
         mapper: @escaping Mapper
     ) async throws -> CorpusAnalysisRunResult {
         try await execute(
@@ -242,6 +252,8 @@ public final class CorpusAnalysisEngine: @unchecked Sendable {
             preparedRunID: runID,
             expectedRequestDigest: requestDigest,
             progressHandler: progressHandler,
+            partitionBoundaryHandler: partitionBoundaryHandler,
+            modelPhaseDidComplete: modelPhaseDidComplete,
             mapper: mapper
         )
     }
@@ -286,6 +298,8 @@ public final class CorpusAnalysisEngine: @unchecked Sendable {
         preparedRunID: String?,
         expectedRequestDigest: String?,
         progressHandler: @escaping @Sendable (CorpusAnalysisCoverage) async -> Void,
+        partitionBoundaryHandler: @escaping PartitionBoundaryHandler,
+        modelPhaseDidComplete: @escaping ModelPhaseCompletionHandler,
         mapper: @escaping Mapper
     ) async throws -> CorpusAnalysisRunResult {
         let scopeJSON = try canonicalJSON(request.scope)
@@ -312,6 +326,7 @@ public final class CorpusAnalysisEngine: @unchecked Sendable {
             }
             snapshot = try decodeSnapshot(existing)
             if existing.status == CorpusAnalysisRunStatus.persisted.rawValue {
+                await modelPhaseDidComplete()
                 return try persistedResult(existing)
             }
             if existing.status == CorpusAnalysisRunStatus.planning.rawValue {
@@ -347,6 +362,7 @@ public final class CorpusAnalysisEngine: @unchecked Sendable {
                 throw CorpusAnalysisEngineError.runKeyCollision(request.runKey)
             }
             if existing.status == CorpusAnalysisRunStatus.persisted.rawValue {
+                await modelPhaseDidComplete()
                 return try persistedResult(existing)
             }
             snapshot = try decodeSnapshot(existing)
@@ -380,6 +396,7 @@ public final class CorpusAnalysisEngine: @unchecked Sendable {
             )
             snapshot = plan.snapshot
             if prepared.status == CorpusAnalysisRunStatus.persisted.rawValue {
+                await modelPhaseDidComplete()
                 return try persistedResult(prepared)
             }
             run = try store.corpusAnalysis.updateStatus(
@@ -467,8 +484,10 @@ public final class CorpusAnalysisEngine: @unchecked Sendable {
                     matterID: request.matterID,
                     runID: run.id
                 ))
+                try await partitionBoundaryHandler()
             }
 
+            await modelPhaseDidComplete()
             try Task.checkCancellation()
             _ = try store.corpusAnalysis.updateStatus(
                 matterID: request.matterID,
@@ -587,6 +606,8 @@ public final class CorpusAnalysisEngine: @unchecked Sendable {
                 findings: findings,
                 assuranceReasons: reasons
             )
+        } catch let interruption as CorpusAnalysisExecutionInterruption {
+            throw interruption
         } catch is CancellationError {
             _ = try? store.corpusAnalysis.cancelRun(
                 matterID: request.matterID,

@@ -196,6 +196,7 @@ public final class MattersController: ObservableObject {
     @Published public private(set) var researchController: ResearchSessionController?
     @Published public private(set) var authoritiesController: AuthoritiesController?
     @Published public private(set) var outputsController: StructuredOutputController?
+    @Published public private(set) var caseFileReviewController: CaseFileReviewController?
     @Published public private(set) var documentsController: MatterDocumentsController?
     @Published public private(set) var documentQAController: DocumentQAController?
     @Published public private(set) var documentChronologyController: DocumentChronologyController?
@@ -384,6 +385,7 @@ public final class MattersController: ObservableObject {
             researchController = nil
             authoritiesController = nil
             outputsController = nil
+            caseFileReviewController = nil
             documentsController = nil
             documentQAController = nil
             documentChronologyController = nil
@@ -438,6 +440,13 @@ public final class MattersController: ObservableObject {
         )
         outputs.loadOutputs()
         outputsController = outputs
+
+        let caseFileReview = CaseFileReviewController(
+            matterID: matterID,
+            store: store
+        )
+        caseFileReview.load()
+        caseFileReviewController = caseFileReview
 
         if let documentQueue {
             documentsController = MatterDocumentsController(

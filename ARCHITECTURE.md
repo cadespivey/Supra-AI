@@ -108,6 +108,9 @@ citations when the complete packet cannot fit. The deterministic benchmark compa
 B-CTX utilization, estimate-error, omission, recovery, and silent-overflow measurements;
 protected model runs replace its frozen count matrix with the loaded tokenizer's counts.
 
+Review runtime admission uses a cooperative app-process `ExclusiveRuntimeClient` lease: the shipping app routes normal model/data-plane calls through one wrapper, waits for admitted ordinary work, blocks later ordinary calls across Review partition gaps, and keeps cancellation/status control-plane calls available. This lease is not XPC-enforced and does not govern a client that bypasses the app-process wrapper.
+An XPC-enforced, connection-owned Review lease remains a later architecture checkpoint.
+
 Model weights may live outside the app sandbox. The app mints a transferable security-scoped
 bookmark while holding its own scope; the sandboxed service resolves it and holds the scope
 across the full load. Nil/stale/invalid bookmarks and canonical managed-root escapes fail
@@ -119,7 +122,7 @@ Managed model downloads are bound to a repository revision and verified manifest
 ## Persistence
 
 `SupraStore` uses [GRDB](https://github.com/groue/GRDB.swift) over SQLite with an ordered
-migration list. The shipping database schema registers a contiguous migration sequence from v001 through v072. Each feature area adds migrations and a
+migration list. The shipping database schema registers a contiguous migration sequence from v001 through v073. Each feature area adds migrations and a
 repository:
 
 - Milestone 1 established chats, messages, models, and validation runs.
@@ -168,6 +171,9 @@ repository:
   The v2 exhaustive-list mapper boundary accepts primary or contrary evidence only when the host resolves it to exactly one presented frozen slice, normalizes it to a nonempty quote and slice-relative Character range, and derives the retained excerpt and absolute output locator from the frozen revision; a value absent from every retained primary excerpt fails proposition verification.
   Store v072 requires a complete exact-slice ledger relative to the frozen snapshot before an exhaustive-list run may retain either export-eligible assurance state, preserves legacy content without fabricating lineage while marking prior export-eligible assurance stale, and leaves chronology on its v1 revision ledger without imposing the exhaustive-list exact-slice contract; universal corpus-complete prerequisites are enforced on insert and update.
   Store v072 admits an export-eligible v2 exact-slice proof only when every succeeded checkpoint has coherent terminal attempt history, valid ordered row timestamps, and a typed findings array whose findings each cite at least one primary or contrary reference anchored to that checkpoint's own exact partition slice; optional quote and slice-relative range fields fail closed when malformed or outside that slice. Exact publication also requires the attached source set's independent frozen-corpus hash to equal the Store recomputation over the run's canonical membership and slices. While its matter exists, Store prevents drift of the exact source-set attachment/mode/hash, linked version identity/content/verification, parent matter/type, single-run ownership, and proof-linked export-eligible active selection.
+  The first Review workbench creates a durable Review Project only from a uniquely linked exact v2 exhaustive output that is either export-eligible or fully covered with retained contrary evidence as its sole failed verification dimension; it then persists its four-column Finding / Generated value / Sources / Review Matrix, exact generated values, supporting and contrary source edges, append-only frozen evidence, and Mark Reviewed metadata across Store reopen.
+  Review admission and project freezing share one Store transaction. The corpus-incomplete source proof is not protected by a database terminal-stale trigger; database-enforced terminal staleness remains a later architecture checkpoint.
+  Permanent document deletion precision-degrades only affected Review evidence and projects: live proof pointers become unavailable and dependent support and project state become stale, while frozen source identity, citation label, locator, excerpt, generated value, review state, and reviewer metadata remain retained; unrelated Review work remains unchanged.
   Failed or schema-invalid partitions force an attached `needs_review` output with
   `corpus_incomplete`; negative conclusions are blocked unless coverage is complete and the run
   found no positive item. Chronology also adopts this ledger without changing its established

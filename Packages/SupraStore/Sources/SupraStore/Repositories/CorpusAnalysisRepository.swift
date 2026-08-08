@@ -216,6 +216,297 @@ public final class CorpusAnalysisRepository: @unchecked Sendable {
         }
     }
 
+    /// Resolves an exact exhaustive-list run that can seed a Review Project.
+    /// Export eligibility remains unchanged: this accessor first accepts the
+    /// existing export contract, then narrowly admits a fully covered
+    /// `corpus_incomplete` result when retained contrary evidence is the only
+    /// failed required verification dimension.
+    public func fetchExactReviewRun(
+        matterID: String,
+        structuredOutputVersionID: String
+    ) throws -> CorpusAnalysisRunRecord? {
+        try writer.read { db in
+            try Self.fetchExactReviewRun(
+                in: db,
+                matterID: matterID,
+                structuredOutputVersionID: structuredOutputVersionID
+            )
+        }
+    }
+
+    /// Transaction-scoped form used while atomically freezing a Review Project.
+    /// Keeping the complete admission decision on the caller's database handle
+    /// prevents a mutable corpus-incomplete proof from changing between
+    /// validation and the durable Review snapshot.
+    static func fetchExactReviewRun(
+        in db: Database,
+        matterID: String,
+        structuredOutputVersionID: String
+    ) throws -> CorpusAnalysisRunRecord? {
+        let exportRuns = try CorpusAnalysisRunRecord.fetchAll(
+            db,
+            sql: """
+                SELECT * FROM corpus_analysis_runs
+                WHERE matter_id = ?
+                  AND structured_output_version_id = ?
+                  AND task_kind = 'exhaustive_list'
+                  AND request_schema_version = 2
+                  AND partition_strategy_version = 2
+                  AND partition_strategy GLOB 'exact_revision_slice*'
+                  AND status = 'persisted'
+                  AND assurance_state IN ('corpus_complete', 'proposition_supported')
+                ORDER BY id
+                """,
+            arguments: [matterID, structuredOutputVersionID]
+        )
+        if exportRuns.count == 1,
+           let exportRun = exportRuns.first,
+           try CorpusAnalysisProofIdentity.attachedSourceSetMatchesFrozenCorpus(
+               versionID: structuredOutputVersionID,
+               run: exportRun,
+               db: db
+           ) {
+            return exportRun
+        }
+
+        let runs = try CorpusAnalysisRunRecord.fetchAll(
+                db,
+                sql: """
+                    SELECT * FROM corpus_analysis_runs
+                    WHERE matter_id = ?
+                      AND structured_output_version_id = ?
+                      AND task_kind = 'exhaustive_list'
+                      AND request_schema_version = 2
+                      AND partition_strategy_version = 2
+                      AND partition_strategy GLOB 'exact_revision_slice*'
+                      AND status = 'persisted'
+                      AND assurance_state = 'corpus_incomplete'
+                    ORDER BY id
+                    """,
+                arguments: [matterID, structuredOutputVersionID]
+            )
+            guard runs.count == 1 else { return nil }
+            let run = runs[0]
+
+            // The relaxed path must still have one proof owner across every
+            // assurance state, not merely one corpus-incomplete candidate.
+            guard try Int.fetchOne(
+                db,
+                sql: """
+                    SELECT COUNT(*) FROM corpus_analysis_runs
+                    WHERE matter_id = ?
+                      AND structured_output_version_id = ?
+                      AND task_kind = 'exhaustive_list'
+                      AND request_schema_version = 2
+                      AND partition_strategy_version = 2
+                      AND partition_strategy GLOB 'exact_revision_slice*'
+                    """,
+                arguments: [matterID, structuredOutputVersionID]
+            ) == 1,
+            run.requestDigest.map(Self.isSHA256) == true,
+            run.completedAt != nil,
+            let version = try StructuredOutputVersionRecord.fetchOne(
+                db,
+                key: structuredOutputVersionID
+            ),
+            version.assuranceState == OutputAssuranceState.corpusIncomplete.rawValue,
+            version.staleReason == nil,
+            version.verificationStatus == OutputVerificationStatus.needsReview.rawValue,
+            let output = try StructuredOutputRecord.fetchOne(db, key: version.structuredOutputID),
+            output.matterID == matterID,
+            output.outputType == StructuredOutputType.documentExhaustiveList.rawValue,
+            output.activeVersionID == version.id,
+            output.status == StructuredOutputStatus.needsReview.rawValue,
+            output.deletedAt == nil else {
+                return nil
+            }
+
+            guard let coverageJSON = run.coverageJSON,
+                  let coverage = try? JSONDecoder().decode(
+                      CorpusAnalysisCoverage.self,
+                      from: Data(coverageJSON.utf8)
+                  ),
+                  coverage.schemaVersion == 1,
+                  coverage.partitionCount > 0,
+                  coverage.pendingPartitionCount == 0,
+                  coverage.failedPartitionCount == 0,
+                  coverage.cancelledPartitionCount == 0,
+                  coverage.excludedPartitionCount == 0,
+                  coverage.balanceErrorCount == 0,
+                  coverage.succeededPartitionCount == coverage.partitionCount,
+                  coverage.terminalPartitionCount == coverage.partitionCount,
+                  coverage.excludedMemberCount == 0,
+                  coverage.snapshotMemberCount == coverage.eligibleMemberCount,
+                  coverage.excludedMembersDisclosed else {
+                return nil
+            }
+
+            let partitions = try CorpusAnalysisPartitionRecord.fetchAll(
+                db,
+                sql: """
+                    SELECT * FROM corpus_analysis_partitions
+                    WHERE run_id = ? ORDER BY partition_key, id
+                    """,
+                arguments: [run.id]
+            )
+            let slices = try CorpusAnalysisPartitionSliceRecord.fetchAll(
+                db,
+                sql: """
+                    SELECT * FROM corpus_analysis_partition_slices
+                    WHERE run_id = ? ORDER BY partition_id, ordinal, id
+                    """,
+                arguments: [run.id]
+            )
+            guard partitions.count == coverage.partitionCount,
+                  partitions.allSatisfy({
+                      $0.disposition == CorpusAnalysisPartitionDisposition.succeeded.rawValue
+                  }) else {
+                return nil
+            }
+            do {
+                try Self.validatePreparedRun(
+                    run,
+                    partitions: partitions,
+                    slices: slices,
+                    db: db,
+                    requireLiveCurrentRevision: true
+                )
+            } catch {
+                return nil
+            }
+
+            guard let snapshot = try? JSONDecoder().decode(
+                CorpusAnalysisSnapshot.self,
+                from: Data(run.corpusSnapshotJSON.utf8)
+            ),
+            snapshot.members.count == coverage.snapshotMemberCount,
+            snapshot.members.allSatisfy({ $0.disposition == .eligible }) else {
+                return nil
+            }
+
+            let sourceSets = try DocumentSourceSetRecord.fetchAll(
+                db,
+                sql: """
+                    SELECT * FROM document_source_sets
+                    WHERE structured_output_version_id = ? ORDER BY id
+                    """,
+                arguments: [structuredOutputVersionID]
+            )
+            guard sourceSets.count == 1,
+                  let sourceSet = sourceSets.first,
+                  sourceSet.matterID == matterID,
+                  sourceSet.status == DocumentSourceSetStatus.attached.rawValue,
+                  sourceSet.mode == DocumentSourceSetMode.exhaustive.rawValue,
+                  sourceSet.scopeJSON == run.scopeJSON,
+                  try CorpusAnalysisProofIdentity.attachedSourceSetMatchesFrozenCorpus(
+                      versionID: structuredOutputVersionID,
+                      run: run,
+                      db: db
+                  ) else {
+                return nil
+            }
+
+            let dimensions = version.verificationDimensions
+            let requiredSatisfiedDimensions: Set<VerificationDimensionName> = [
+                .propositionSupport,
+                .citationResolution,
+                .criticalValueFidelity,
+                .listCompleteness,
+                .lowConfidenceHandling,
+                .corpusCoverage,
+            ]
+            let contraryDimension = dimensions.result(for: .contraryEvidence)
+            guard dimensions.isComplete,
+                  dimensions.satisfies(required: requiredSatisfiedDimensions),
+                  contraryDimension.status == .failed,
+                  !contraryDimension.evidence.isEmpty,
+                  dimensions.results.allSatisfy({ result in
+                      result.dimension == .contraryEvidence || result.status != .failed
+                  }),
+                  contraryDimension.evidence.allSatisfy({ evidence in
+                      !evidence.sourceID.isEmpty
+                          && !evidence.locator.isEmpty
+                          && !evidence.excerpt.isEmpty
+                  }) else {
+                return nil
+            }
+
+            guard let reconciliationJSON = run.reconciliationJSON,
+                  let reconciliation = try? JSONDecoder().decode(
+                      ReviewAdmissionReconciliation.self,
+                      from: Data(reconciliationJSON.utf8)
+                  ),
+                  reconciliation.isContraryOnlyReviewCandidate,
+                  let validationJSON = run.validationResultsJSON,
+                  let validation = try? JSONDecoder().decode(
+                      ReviewAdmissionValidation.self,
+                      from: Data(validationJSON.utf8)
+                  ),
+                  validation.schemaVersion == 1,
+                  validation.schemaInvalidPartitionCount == 0,
+                  validation.metrics == reconciliation.metrics,
+                  validation.verificationDimensions == dimensions else {
+                return nil
+            }
+
+            let sourceRows = try DocumentOutputSourceRecord.fetchAll(
+                db,
+                sql: """
+                    SELECT * FROM document_output_sources
+                    WHERE source_set_id = ? AND structured_output_version_id = ?
+                    ORDER BY rank, id
+                    """,
+                arguments: [sourceSet.id, structuredOutputVersionID]
+            )
+            guard !sourceRows.isEmpty else { return nil }
+
+            var matchedSourceIDs = Set<String>()
+            var contrarySignatures = Set<ReviewAdmissionEvidenceSignature>()
+            for item in reconciliation.items {
+                for reference in item.evidence {
+                    guard let source = try Self.boundReviewSource(
+                        reference,
+                        runID: run.id,
+                        sourceRows: sourceRows,
+                        slices: slices,
+                        db: db
+                    ) else {
+                        return nil
+                    }
+                    matchedSourceIDs.insert(source.id)
+                }
+                for reference in item.contraryEvidence {
+                    guard let source = try Self.boundReviewSource(
+                        reference,
+                        runID: run.id,
+                        sourceRows: sourceRows,
+                        slices: slices,
+                        db: db
+                    ), let revisionID = source.revisionID else {
+                        return nil
+                    }
+                    matchedSourceIDs.insert(source.id)
+                    contrarySignatures.insert(ReviewAdmissionEvidenceSignature(
+                        revisionID: revisionID,
+                        locatorJSON: source.locatorJSON,
+                        excerpt: source.excerpt
+                    ))
+                }
+            }
+            let dimensionSignatures = Set(contraryDimension.evidence.map {
+                ReviewAdmissionEvidenceSignature(
+                    revisionID: $0.sourceID,
+                    locatorJSON: $0.locator,
+                    excerpt: $0.excerpt
+                )
+            })
+            guard matchedSourceIDs == Set(sourceRows.map(\.id)),
+                  contrarySignatures == dimensionSignatures else {
+                return nil
+            }
+        return run
+    }
+
     public func createPartitions(
         matterID: String,
         runID: String,
@@ -1245,6 +1536,71 @@ public final class CorpusAnalysisRepository: @unchecked Sendable {
         return true
     }
 
+    /// Resolves one reconciliation reference to the one attached output-source
+    /// row that represents the same exact Character range. The source-set hash
+    /// proves the frozen corpus ledger; this check binds the Review-facing
+    /// excerpt and locator back to that ledger rather than trusting matching IDs.
+    private static func boundReviewSource(
+        _ reference: ReviewAdmissionEvidenceReference,
+        runID: String,
+        sourceRows: [DocumentOutputSourceRecord],
+        slices: [CorpusAnalysisPartitionSliceRecord],
+        db: Database
+    ) throws -> DocumentOutputSourceRecord? {
+        guard !reference.documentID.isEmpty,
+              !reference.revisionID.isEmpty,
+              let relativeStart = reference.charStart,
+              let relativeEnd = reference.charEnd,
+              relativeStart >= 0,
+              relativeEnd > relativeStart,
+              let quote = reference.quote,
+              !quote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+        let matchingSlices = slices.filter {
+            $0.runID == runID
+                && $0.documentID == reference.documentID
+                && $0.revisionID == reference.revisionID
+                && $0.locatorJSON == reference.locatorJSON
+                && relativeEnd <= $0.charEnd - $0.charStart
+        }
+        guard matchingSlices.count == 1,
+              let slice = matchingSlices.first,
+              let referenceLocator = parsedLocator(reference.locatorJSON) else {
+            return nil
+        }
+        let absoluteStart = slice.charStart + relativeStart
+        let absoluteEnd = slice.charStart + relativeEnd
+        let matchingSources = sourceRows.filter { source in
+            guard source.documentID == reference.documentID,
+                  source.revisionID == reference.revisionID,
+                  source.excerpt == quote,
+                  !source.citationLabel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  let sourceLocator = parsedLocator(source.locatorJSON) else {
+                return false
+            }
+            return sourceLocator.dimensionJSON == referenceLocator.dimensionJSON
+                && sourceLocator.charStart == absoluteStart
+                && sourceLocator.charEnd == absoluteEnd
+        }
+        guard matchingSources.count == 1,
+              let source = matchingSources.first,
+              let revision = try DocumentPartRevisionRecord.fetchOne(
+                  db,
+                  key: reference.revisionID
+              ),
+              revision.documentID == reference.documentID,
+              revision.partIndex == slice.partIndex,
+              revision.text.count == slice.revisionCharCount,
+              absoluteEnd <= revision.text.count else {
+            return nil
+        }
+        let lower = revision.text.index(revision.text.startIndex, offsetBy: absoluteStart)
+        let upper = revision.text.index(revision.text.startIndex, offsetBy: absoluteEnd)
+        guard String(revision.text[lower..<upper]) == quote else { return nil }
+        return source
+    }
+
     private static func locatorSourceKind(_ json: String) -> String? {
         parsedLocator(json)?.sourceKind
     }
@@ -1259,6 +1615,7 @@ public final class CorpusAnalysisRepository: @unchecked Sendable {
         var charStart: Int
         var charEnd: Int
         var canonicalJSON: String
+        var dimensionJSON: String
     }
 
     private static func parsedLocator(_ json: String) -> ParsedLocator? {
@@ -1316,13 +1673,187 @@ public final class CorpusAnalysisRepository: @unchecked Sendable {
               ) else {
             return nil
         }
+        var dimensions = normalized
+        dimensions.removeValue(forKey: "char_start")
+        dimensions.removeValue(forKey: "char_end")
+        guard JSONSerialization.isValidJSONObject(dimensions),
+              let dimensionData = try? JSONSerialization.data(
+                  withJSONObject: dimensions,
+                  options: [.sortedKeys, .withoutEscapingSlashes]
+              ) else {
+            return nil
+        }
         return ParsedLocator(
             sourceKind: sourceKind,
             partIndex: partIndex,
             charStart: charStart,
             charEnd: charEnd,
-            canonicalJSON: String(decoding: canonicalData, as: UTF8.self)
+            canonicalJSON: String(decoding: canonicalData, as: UTF8.self),
+            dimensionJSON: String(decoding: dimensionData, as: UTF8.self)
         )
+    }
+
+    private struct ReviewAdmissionReconciliation: Decodable {
+        var schemaVersion: Int
+        var items: [ReviewAdmissionItem]
+        var omissions: [ReviewAdmissionOmission]
+        var metrics: ReviewAdmissionMetrics
+        var failedPartitions: [ReviewAdmissionFailedPartition]
+        var excludedMembers: [ReviewAdmissionExcludedMember]
+
+        var isContraryOnlyReviewCandidate: Bool {
+            let keys = items.map { $0.itemKey.trimmingCharacters(in: .whitespacesAndNewlines) }
+            let references = items.flatMap { $0.evidence + $0.contraryEvidence }
+            return schemaVersion == 1
+                && !items.isEmpty
+                && omissions.isEmpty
+                && failedPartitions.isEmpty
+                && excludedMembers.isEmpty
+                && keys.allSatisfy { !$0.isEmpty }
+                && Set(keys).count == keys.count
+                && items.allSatisfy { item in
+                    item.values.count == 1
+                        && item.values.allSatisfy {
+                            !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        }
+                        && !item.evidence.isEmpty
+                }
+                && items.contains { !$0.contraryEvidence.isEmpty }
+                && references.allSatisfy(\.hasExactIdentity)
+                && metrics.isInternallyValid(itemCount: items.count)
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case schemaVersion = "schema_version"
+            case items, omissions, metrics
+            case failedPartitions = "failed_partitions"
+            case excludedMembers = "excluded_members"
+        }
+    }
+
+    private struct ReviewAdmissionItem: Decodable {
+        var itemKey: String
+        var values: [String]
+        var evidence: [ReviewAdmissionEvidenceReference]
+        var contraryEvidence: [ReviewAdmissionEvidenceReference]
+
+        private enum CodingKeys: String, CodingKey {
+            case itemKey = "item_key"
+            case values, evidence
+            case contraryEvidence = "contrary_evidence"
+        }
+    }
+
+    private struct ReviewAdmissionEvidenceReference: Decodable {
+        var documentID: String
+        var revisionID: String
+        var locatorJSON: String
+        var quote: String?
+        var charStart: Int?
+        var charEnd: Int?
+
+        var hasExactIdentity: Bool {
+            !documentID.isEmpty
+                && !revisionID.isEmpty
+                && !locatorJSON.isEmpty
+                && quote?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                && charStart.map { $0 >= 0 } == true
+                && charEnd.map { end in
+                    charStart.map { end > $0 } == true
+                } == true
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case documentID = "document_id"
+            case revisionID = "revision_id"
+            case locatorJSON = "locator_json"
+            case quote
+            case charStart = "char_start"
+            case charEnd = "char_end"
+        }
+    }
+
+    private struct ReviewAdmissionOmission: Decodable {
+        var itemKey: String
+        var reason: String
+
+        private enum CodingKeys: String, CodingKey {
+            case itemKey = "item_key"
+            case reason
+        }
+    }
+
+    private struct ReviewAdmissionFailedPartition: Decodable {
+        var partitionKey: String
+        var documentNames: [String]
+        var reason: String
+        var errorSummary: String
+
+        private enum CodingKeys: String, CodingKey {
+            case partitionKey = "partition_key"
+            case documentNames = "document_names"
+            case reason
+            case errorSummary = "error_summary"
+        }
+    }
+
+    private struct ReviewAdmissionExcludedMember: Decodable {
+        var name: String
+        var reason: String
+    }
+
+    private struct ReviewAdmissionMetrics: Codable, Equatable {
+        var expectedCount: Int
+        var emittedCount: Int
+        var truePositiveCount: Int
+        var recall: Double
+        var precision: Double
+        var duplicateCount: Int
+        var conflictCount: Int
+        var unexpectedItemKeys: [String]
+
+        func isInternallyValid(itemCount: Int) -> Bool {
+            expectedCount >= 0
+                && emittedCount == itemCount
+                && truePositiveCount >= 0
+                && truePositiveCount <= expectedCount
+                && truePositiveCount <= emittedCount
+                && recall.isFinite && (0...1).contains(recall)
+                && precision.isFinite && (0...1).contains(precision)
+                && duplicateCount >= 0
+                && conflictCount == 0
+                && unexpectedItemKeys.isEmpty
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case expectedCount = "expected_count"
+            case emittedCount = "emitted_count"
+            case truePositiveCount = "true_positive_count"
+            case recall, precision
+            case duplicateCount = "duplicate_count"
+            case conflictCount = "conflict_count"
+            case unexpectedItemKeys = "unexpected_item_keys"
+        }
+    }
+
+    private struct ReviewAdmissionValidation: Decodable {
+        var schemaVersion: Int
+        var schemaInvalidPartitionCount: Int
+        var metrics: ReviewAdmissionMetrics
+        var verificationDimensions: VerificationDimensions
+
+        private enum CodingKeys: String, CodingKey {
+            case schemaVersion = "schema_version"
+            case schemaInvalidPartitionCount = "schema_invalid_partition_count"
+            case metrics
+            case verificationDimensions = "verification_dimensions"
+        }
+    }
+
+    private struct ReviewAdmissionEvidenceSignature: Hashable {
+        var revisionID: String
+        var locatorJSON: String
+        var excerpt: String
     }
 
     private static func validPinnedModelJSON(_ json: String) -> Bool {
