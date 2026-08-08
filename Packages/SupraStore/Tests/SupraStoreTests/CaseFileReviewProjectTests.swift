@@ -1118,6 +1118,85 @@ final class CaseFileReviewProjectTests: XCTestCase {
         )
     }
 
+    func testTRPSTORE11SoftDeletedMatterRejectsRetainedReviewMutationHandles() throws {
+        // T-RP-STORE-11 expected RED: the scoped Review mutation query checks the
+        // project matter ID but not whether that matter is still live, so a
+        // retained controller/repository handle can edit or attest work after the
+        // matter has moved to Trash.
+        let store = try SupraStore.inMemory()
+        let fixture = try makeExactFixture(store: store, marker: "1601")
+        let graph = try store.caseFileReviews.createOrFetchProject(
+            matterID: fixture.matterID,
+            sourceRunID: fixture.runID,
+            title: "Soft-deleted Review 1601",
+            actor: "attorney:create-1601",
+            at: Date(timeIntervalSince1970: 1_799_001_601)
+        )
+        let cellID = try valueCellID(
+            store,
+            projectID: graph.project.id,
+            rowKey: fixture.alphaKey
+        )
+        let cellBefore = try reviewCell(store, cellID: cellID)
+        let projectBefore = try reviewProject(store, projectID: graph.project.id)
+        let frozenBefore = try frozenPayload(store, cellID: cellID)
+        try store.matters.softDeleteMatter(
+            id: fixture.matterID,
+            deletedAt: Date(timeIntervalSince1970: 1_799_001_607)
+        )
+
+        XCTAssertThrowsError(try store.caseFileReviews.editCellValue(
+            matterID: fixture.matterID,
+            projectID: graph.project.id,
+            cellID: cellID,
+            attorneyValue: "TRASHED-MATTER-EDIT-MUST-NOT-PERSIST-1601",
+            editedBy: "attorney:stale-handle-1601",
+            editedAt: Date(timeIntervalSince1970: 1_799_001_613)
+        )) { error in
+            XCTAssertEqual(
+                error as? CaseFileReviewRepositoryError,
+                .matterUnavailable(fixture.matterID)
+            )
+        }
+        XCTAssertThrowsError(try store.caseFileReviews.restoreGeneratedCellValue(
+            matterID: fixture.matterID,
+            projectID: graph.project.id,
+            cellID: cellID,
+            actor: "attorney:stale-restore-1601",
+            at: Date(timeIntervalSince1970: 1_799_001_619)
+        )) { error in
+            XCTAssertEqual(
+                error as? CaseFileReviewRepositoryError,
+                .matterUnavailable(fixture.matterID)
+            )
+        }
+        XCTAssertThrowsError(try store.caseFileReviews.markCellReviewed(
+            matterID: fixture.matterID,
+            projectID: graph.project.id,
+            cellID: cellID,
+            reviewedBy: "attorney:stale-review-1601",
+            reviewedAt: Date(timeIntervalSince1970: 1_799_001_631)
+        )) { error in
+            XCTAssertEqual(
+                error as? CaseFileReviewRepositoryError,
+                .matterUnavailable(fixture.matterID)
+            )
+        }
+
+        XCTAssertEqual(try reviewCell(store, cellID: cellID), cellBefore)
+        XCTAssertEqual(try reviewProject(store, projectID: graph.project.id), projectBefore)
+        XCTAssertEqual(try frozenPayload(store, cellID: cellID), frozenBefore)
+        XCTAssertEqual(try valueTransitionAuditCount(store, cellID: cellID), 0)
+        XCTAssertEqual(
+            try store.auditEvents.fetchEvents(
+                relatedTable: CaseFileReviewCellRecord.databaseTableName,
+                relatedID: cellID,
+                eventType: "case_file_review_cell_reviewed"
+            ).count,
+            0
+        )
+    }
+
     private let reviewTables = [
         "case_file_review_projects", "case_file_review_tables", "case_file_review_columns",
         "case_file_review_rows", "case_file_review_cells", "case_file_review_cell_generations",
