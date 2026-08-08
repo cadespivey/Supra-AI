@@ -398,6 +398,230 @@ final class CaseFileReviewProjectTests: XCTestCase {
         XCTAssertEqual(try frozenPayload(reopened, cellID: expected.cellID), expected.frozenPayload)
     }
 
+    func testTRPSTORE06ParentDeletesCannotEraseFrozenReviewGraphAndTopologyFailsClosed() throws {
+        // T-RP-STORE-06 expected RED: the generation/evidence DELETE guards
+        // inspect owners that SQLite has already removed during a parent cascade.
+        // Direct project/table/column/row/cell deletion can therefore erase frozen
+        // proof, and aggregate graph checks accept a cell on the wrong column or a
+        // current generation swapped from another cell.
+        let deleteTables = [
+            "case_file_review_projects",
+            "case_file_review_tables",
+            "case_file_review_columns",
+            "case_file_review_rows",
+            "case_file_review_cells",
+        ]
+        for (index, table) in deleteTables.enumerated() {
+            let store = try SupraStore.inMemory()
+            let marker = "1409-\(index)"
+            let fixture = try makeExactFixture(store: store, marker: marker)
+            let graph = try store.caseFileReviews.createOrFetchProject(
+                matterID: fixture.matterID,
+                sourceRunID: fixture.runID,
+                title: "Parent guard review \(marker)",
+                actor: "attorney:\(marker)"
+            )
+            let id: String
+            switch table {
+            case "case_file_review_projects": id = graph.project.id
+            case "case_file_review_tables": id = graph.table.id
+            case "case_file_review_columns": id = graph.columns[0].id
+            case "case_file_review_rows": id = graph.rows[0].id
+            case "case_file_review_cells": id = graph.cells[0].id
+            default: return XCTFail("unhandled Review parent table \(table)")
+            }
+            XCTAssertThrowsError(try store.database.writer.write { db in
+                try db.execute(sql: "DELETE FROM \(table) WHERE id = ?", arguments: [id])
+            }, "direct deletion from \(table) must not cascade through a live Review Project")
+            XCTAssertNotNil(try? store.caseFileReviews.fetchProjectGraph(
+                matterID: fixture.matterID,
+                projectID: graph.project.id
+            ))
+        }
+
+        let store = try SupraStore.inMemory()
+        let fixture = try makeExactFixture(store: store, marker: "1417")
+        let graph = try store.caseFileReviews.createOrFetchProject(
+            matterID: fixture.matterID,
+            sourceRunID: fixture.runID,
+            title: "Topology review 1417",
+            actor: "attorney:1417"
+        )
+        let cells = graph.cells.sorted { $0.id < $1.id }
+        let generations = graph.generations.sorted { $0.cellID < $1.cellID }
+        XCTAssertEqual(cells.count, 2)
+        XCTAssertEqual(generations.count, 2)
+        let generatedColumn = try XCTUnwrap(graph.columns.first { $0.columnKey == "generated_value" })
+        let findingColumn = try XCTUnwrap(graph.columns.first { $0.columnKey == "finding" })
+        try store.database.writer.write { db in
+            try db.execute(
+                sql: "UPDATE case_file_review_cells SET column_id = ? WHERE id = ?",
+                arguments: [findingColumn.id, cells[0].id]
+            )
+        }
+        XCTAssertThrowsError(try store.caseFileReviews.fetchProjectGraph(
+            matterID: fixture.matterID,
+            projectID: graph.project.id
+        ))
+        try store.database.writer.write { db in
+            try db.execute(
+                sql: "UPDATE case_file_review_cells SET column_id = ? WHERE id = ?",
+                arguments: [generatedColumn.id, cells[0].id]
+            )
+            try db.execute(
+                sql: """
+                    UPDATE case_file_review_cells
+                    SET current_generation_id = CASE id
+                        WHEN ? THEN ?
+                        WHEN ? THEN ?
+                    END
+                    WHERE id IN (?, ?)
+                    """,
+                arguments: [
+                    cells[0].id, generations[1].id,
+                    cells[1].id, generations[0].id,
+                    cells[0].id, cells[1].id,
+                ]
+            )
+        }
+        XCTAssertThrowsError(try store.caseFileReviews.fetchProjectGraph(
+            matterID: fixture.matterID,
+            projectID: graph.project.id
+        ))
+
+        // The direct-delete guards must not turn the owning matter's explicit,
+        // audited permanent-delete workflow into an undeletable graph.
+        let cascadeStore = try SupraStore.inMemory()
+        let cascadeFixture = try makeExactFixture(store: cascadeStore, marker: "1421")
+        _ = try cascadeStore.caseFileReviews.createOrFetchProject(
+            matterID: cascadeFixture.matterID,
+            sourceRunID: cascadeFixture.runID,
+            title: "Matter cascade review 1421",
+            actor: "attorney:1421"
+        )
+        try cascadeStore.matters.softDeleteMatter(id: cascadeFixture.matterID)
+        _ = try cascadeStore.matters.permanentlyDeleteMatter(
+            id: cascadeFixture.matterID,
+            actor: "attorney:delete-matter-1421"
+        )
+        try assertReviewCounts(cascadeStore, allEqual: 0)
+    }
+
+    func testTRPSTORE07LatePermanentDeletionFailureRollsBackReviewDegradation() throws {
+        // T-RP-STORE-07 standing guard: Review availability, support, project
+        // state, and audit must roll back if the enclosing permanent-deletion
+        // transaction fails after degradation has begun.
+        let store = try SupraStore.inMemory()
+        let fixture = try makeExactFixture(store: store, marker: "1423")
+        let graph = try store.caseFileReviews.createOrFetchProject(
+            matterID: fixture.matterID,
+            sourceRunID: fixture.runID,
+            title: "Rollback review 1423",
+            actor: "attorney:1423"
+        )
+        let cellID = try valueCellID(store, projectID: graph.project.id, rowKey: fixture.alphaKey)
+        let frozenBefore = try frozenPayload(store, cellID: cellID)
+        let evidenceBefore = try store.caseFileReviews.fetchCurrentEvidence(
+            matterID: fixture.matterID,
+            projectID: graph.project.id,
+            cellID: cellID
+        )
+        try store.database.writer.write { db in
+            try db.execute(sql: """
+                CREATE TRIGGER fail_review_document_deletion_audit
+                BEFORE INSERT ON audit_events
+                WHEN NEW.event_type = 'document_permanently_deleted'
+                BEGIN SELECT RAISE(ABORT, 'synthetic late deletion failure'); END
+                """)
+        }
+
+        XCTAssertThrowsError(try store.documentLibrary.permanentlyDeleteDocument(
+            id: fixture.documentID,
+            actor: "attorney:rollback-1423"
+        ))
+
+        let reopened = try XCTUnwrap(store.caseFileReviews.fetchProjectGraph(
+            matterID: fixture.matterID,
+            projectID: graph.project.id
+        ))
+        XCTAssertEqual(reopened.project.status, "active")
+        let reopenedCell = try XCTUnwrap(reopened.cells.first { $0.id == cellID })
+        XCTAssertEqual(reopenedCell.supportState, "supported")
+        XCTAssertEqual(try frozenPayload(store, cellID: cellID), frozenBefore)
+        XCTAssertEqual(
+            try store.caseFileReviews.fetchCurrentEvidence(
+                matterID: fixture.matterID,
+                projectID: graph.project.id,
+                cellID: cellID
+            ),
+            evidenceBefore
+        )
+        try store.database.writer.read { db in
+            XCTAssertEqual(try Int.fetchOne(
+                db,
+                sql: "SELECT COUNT(*) FROM audit_events WHERE event_type = 'case_file_review_source_unavailable' AND related_id = ?",
+                arguments: [graph.project.id]
+            ), 0)
+        }
+    }
+
+    func testTRPSTORE08ReviewAdmitsCompleteExactContraryOutputWithoutWeakeningExport() throws {
+        // T-RP-STORE-08 expected RED: Review reuses the export-only assurance
+        // boundary, even though retained contrary evidence intentionally makes an
+        // otherwise complete exact exhaustive output corpus_incomplete/needs_review.
+        let store = try SupraStore.inMemory()
+        let fixture = try makeExactFixture(
+            store: store,
+            marker: "1439",
+            assuranceState: .corpusIncomplete
+        )
+
+        XCTAssertNil(try store.corpusAnalysis.fetchExactExportRun(
+            matterID: fixture.matterID,
+            structuredOutputVersionID: fixture.versionID
+        ), "the export boundary must remain strong")
+        let graph: CaseFileReviewProjectGraph
+        do {
+            graph = try store.caseFileReviews.createOrFetchProject(
+                matterID: fixture.matterID,
+                sourceRunID: fixture.runID,
+                title: "Contrary evidence review 1439",
+                actor: "attorney:1439"
+            )
+        } catch {
+            XCTFail("a complete exact contrary-evidence run must remain reviewable: \(error)")
+            return
+        }
+        XCTAssertEqual(graph.rows.count, 2)
+        let betaCellID = try valueCellID(store, projectID: graph.project.id, rowKey: fixture.betaKey)
+        XCTAssertEqual(
+            try store.caseFileReviews.fetchCurrentEvidence(
+                matterID: fixture.matterID,
+                projectID: graph.project.id,
+                cellID: betaCellID
+            ).map(\.kind),
+            ["supporting", "contrary"]
+        )
+
+        let forged = try makeExactFixture(
+            store: store,
+            marker: "1451",
+            assuranceState: .corpusIncomplete
+        )
+        try store.database.writer.write { db in
+            try db.execute(
+                sql: "UPDATE corpus_analysis_runs SET validation_results_json = ? WHERE id = ?",
+                arguments: [#"{"schema_version":1}"#, forged.runID]
+            )
+        }
+        XCTAssertThrowsError(try store.caseFileReviews.createOrFetchProject(
+            matterID: forged.matterID,
+            sourceRunID: forged.runID,
+            title: "Malformed contrary review 1451",
+            actor: "attorney:1451"
+        ))
+    }
+
     private let reviewTables = [
         "case_file_review_projects", "case_file_review_tables", "case_file_review_columns",
         "case_file_review_rows", "case_file_review_cells", "case_file_review_cell_generations",
@@ -407,7 +631,8 @@ final class CaseFileReviewProjectTests: XCTestCase {
     private func makeExactFixture(
         store: SupraStore,
         marker: String,
-        reconciliationJSON override: String? = nil
+        reconciliationJSON override: String? = nil,
+        assuranceState: OutputAssuranceState = .corpusComplete
     ) throws -> ReviewFixture {
         let matter = try store.matters.createMatter(name: "Synthetic Review \(marker)")
         let text = "ALPHA-EVIDENCE-\(marker)-NONDEFAULT. BETA-SUPPORT-\(marker)-NONDEFAULT. BETA-CONTRARY-\(marker)-NONDEFAULT."
@@ -502,10 +727,51 @@ final class CaseFileReviewProjectTests: XCTestCase {
                         "conflict_count": 0, "unexpected_item_keys": []],
             "failed_partitions": [], "excluded_members": [],
         ] as [String: Any])
+        let contraryDimensions = VerificationDimensions.complete(overrides: [
+            .init(dimension: .propositionSupport, status: .satisfied),
+            .init(dimension: .citationResolution, status: .satisfied),
+            .init(dimension: .criticalValueFidelity, status: .satisfied),
+            .init(
+                dimension: .contraryEvidence,
+                status: .failed,
+                reason: "Synthetic retained contrary evidence.",
+                evidence: [VerificationDimensionEvidence(
+                    sourceID: revision.id,
+                    sourceLabel: document.displayName,
+                    locator: sliceLocator,
+                    excerpt: excerpts[2]
+                )]
+            ),
+            .init(dimension: .listCompleteness, status: .satisfied),
+            .init(dimension: .lowConfidenceHandling, status: .satisfied),
+            .init(dimension: .corpusCoverage, status: .satisfied),
+        ])
+        let contraryDimensionsObject = try JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(contraryDimensions)
+        )
+        let validationJSON = try json([
+            "schema_version": 1,
+            "schema_invalid_partition_count": 0,
+            "metrics": [
+                "expected_count": 2,
+                "emitted_count": 2,
+                "true_positive_count": 2,
+                "recall": 1.0,
+                "precision": 1.0,
+                "duplicate_count": 0,
+                "conflict_count": 0,
+                "unexpected_item_keys": [],
+            ],
+            "verification_dimensions": contraryDimensionsObject,
+        ] as [String: Any])
         _ = try store.corpusAnalysis.saveReconciliation(
-            matterID: matter.id, runID: runID, reconciliationJSON: override ?? reconciliation)
+            matterID: matter.id,
+            runID: runID,
+            reconciliationJSON: override ?? reconciliation,
+            validationResultsJSON: assuranceState == .corpusIncomplete ? validationJSON : nil
+        )
         _ = try store.corpusAnalysis.finalizeRun(
-            matterID: matter.id, runID: runID, assuranceState: .corpusComplete,
+            matterID: matter.id, runID: runID, assuranceState: assuranceState,
             assuranceReasons: ["synthetic review fixture"], exclusionsDisclosed: true)
 
         let sourceSetID = "review-source-set-\(marker)"
@@ -533,11 +799,14 @@ final class CaseFileReviewProjectTests: XCTestCase {
                 corpusSnapshotHash: lineageHash),
             outputSources: outputSources,
             contentMarkdown: "# Synthetic Review \(marker)\n\n\(alphaValue) [S431]\n\n\(betaValue) [S977].",
-            verificationStatus: .allSupported, verificationVersion: "review-verifier/1",
+            verificationStatus: assuranceState == .corpusIncomplete ? .needsReview : .allSupported,
+            verificationVersion: "review-verifier/1",
             verificationResults: [try supportedResult(sourceID: sourceIDs[0])],
-            verificationDimensions: supportedDimensions(), outputStatus: .complete,
+            verificationDimensions: assuranceState == .corpusIncomplete
+                ? contraryDimensions : supportedDimensions(),
+            outputStatus: assuranceState == .corpusIncomplete ? .needsReview : .complete,
             corpusAnalysisRunID: runID, promptBuilderVersion: "review-prompt/1",
-            assuranceState: .corpusComplete
+            assuranceState: assuranceState
         )
         return ReviewFixture(
             matterID: matter.id, documentID: document.id, runID: runID, outputID: outputID,

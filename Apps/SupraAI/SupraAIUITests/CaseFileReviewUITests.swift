@@ -199,6 +199,26 @@ final class CaseFileReviewCompositionUITests: XCTestCase {
         )
     }
 
+    func testTRPUI06ReviewAttestationCopyAndActorRemainTruthful() throws {
+        // T-RP-UI-06 expected RED: Mark Reviewed is available before Sources are
+        // opened, but its hint currently claims the sources were reviewed and the
+        // action writes the literal actor "user".
+        let review = try caseFileReviewSource()
+
+        XCTAssertTrue(
+            review.contains("Record that this finding was reviewed"),
+            "the first attestation must describe only the finding-level action it records"
+        )
+        XCTAssertFalse(
+            review.contains("finding and its sources were reviewed"),
+            "the UI must not claim source review without requiring a Sources inspection"
+        )
+        XCTAssertFalse(
+            review.contains(#"reviewedBy: "user""#),
+            "review identity must come from the local profile rather than a literal placeholder"
+        )
+    }
+
     private func caseFileReviewSource() throws -> String {
         try appSource(relativePath: "SupraAI/Review/CaseFileReviewView.swift")
     }

@@ -142,6 +142,33 @@ final class CaseFileReviewControllerTests: XCTestCase {
         XCTAssertTrue(controller.projects.isEmpty)
     }
 
+    func testTRPSESS04MarkReviewedUsesTrimmedLocalProfileIdentity() async throws {
+        // T-RP-SESS-04 expected RED: the native Review action supplies the
+        // literal actor "user" instead of deriving the durable reviewer identity
+        // from the local profile with Supra's established fallback policy.
+        let fixture = try await makeExactReviewFixture()
+        var profile = AssistantProfile()
+        profile.fullName = "  Casey Finch  \n"
+        try fixture.store.appSettings.setSetting(AssistantProfile.profileKey, value: profile)
+        let controller = CaseFileReviewController(
+            matterID: fixture.matterID,
+            store: fixture.store
+        )
+        controller.load()
+        try controller.openReview(
+            sourceRunID: fixture.result.run.id,
+            title: "Profile-bound review"
+        )
+        let row = try XCTUnwrap(controller.rows.first)
+
+        try controller.markReviewed(cellID: row.cellID)
+
+        let reviewed = try XCTUnwrap(controller.rows.first)
+        XCTAssertEqual(reviewed.reviewState, .reviewed)
+        XCTAssertEqual(reviewed.reviewedBy, "Casey Finch")
+        XCTAssertNotEqual(reviewed.reviewedBy, "user")
+    }
+
     private func makeExactReviewFixture() async throws -> ReviewControllerFixture {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
             "CaseFileReviewController-\(UUID().uuidString)",
