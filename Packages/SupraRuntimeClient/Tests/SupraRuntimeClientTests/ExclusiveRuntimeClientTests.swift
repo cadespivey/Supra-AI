@@ -337,6 +337,69 @@ final class ExclusiveRuntimeClientTests: XCTestCase {
         try await ordinaryTask.value
     }
 
+    func testTLEASE09UnconfirmedOrdinaryCancellationEntersGenericRecoveryQuarantine() async throws {
+        // T-LEASE-09 expected RED: failDataPlane(.ordinary) records recovery only
+        // when a Review waiter already supplies a purpose. Without one, the
+        // snapshot stays available, recovery is impossible, and a later Review
+        // waits forever behind the deliberately retained ordinary permit.
+        let generationID = GenerationID()
+        let base = RuntimeLeaseBaseClient(
+            autoCompletesGenerations: false,
+            rejectsCancellation: true
+        )
+        let client = ExclusiveRuntimeClient(base: base)
+        let stream = try client.generate(makeRuntimeLeaseRequest(
+            generationID: generationID,
+            modelID: ModelID(),
+            prompt: "ordinary-unconfirmed-cancellation"
+        ))
+        let consumer = Task {
+            try await drain(stream)
+        }
+        try await waitUntil("ordinary generation reaches the base before cancellation") {
+            base.generatedPrompts == ["ordinary-unconfirmed-cancellation"]
+        }
+
+        consumer.cancel()
+        _ = await consumer.result
+
+        try await waitUntil("unowned cancellation publishes recovery quarantine") {
+            let snapshot = await client.currentAdmissionSnapshot()
+            return snapshot.phase == .recoveryRequired
+                && snapshot.purpose == nil
+                && snapshot.blocksOrdinaryWork
+        }
+        let quarantined = await client.currentAdmissionSnapshot()
+        XCTAssertNotNil(quarantined.message)
+
+        let blockedError = await capturedError {
+            _ = try await client.countTokens(
+                CountTokensRequest(modelID: ModelID(), texts: ["blocked by generic quarantine"])
+            )
+        }
+        guard case .runtimeRecoveryRequired = blockedError as? RuntimeLeaseError else {
+            return XCTFail("expected generic typed recovery error, got \(String(describing: blockedError))")
+        }
+        XCTAssertEqual(base.countTokenCallCount, 0)
+
+        base.setRuntimeStatus(RuntimeStatus(
+            state: .modelLoaded,
+            loadedModelID: ModelID(),
+            activeGenerationID: nil,
+            message: nil,
+            metrics: nil
+        ))
+        try await client.recoverRuntime()
+
+        let recovered = await client.currentAdmissionSnapshot()
+        XCTAssertEqual(recovered, .available)
+        XCTAssertEqual(base.restartCallCount, 1)
+        _ = try await client.countTokens(
+            CountTokensRequest(modelID: ModelID(), texts: ["admitted after generic recovery"])
+        )
+        XCTAssertEqual(base.countTokenCallCount, 1)
+    }
+
 }
 
 private func makeRuntimeLeaseRequest(
@@ -419,6 +482,7 @@ private struct RuntimeRecentEventRequest: Equatable {
 private final class RuntimeLeaseBaseClient: RuntimeClientProtocol, @unchecked Sendable {
     private let lock = NSLock()
     private let autoCompletesGenerations: Bool
+    private let rejectsCancellation: Bool
     private var status: RuntimeStatus
     private var heldGenerations: [
         GenerationID: AsyncThrowingStream<GenerationEvent, Error>.Continuation
@@ -435,6 +499,7 @@ private final class RuntimeLeaseBaseClient: RuntimeClientProtocol, @unchecked Se
 
     init(
         autoCompletesGenerations: Bool,
+        rejectsCancellation: Bool = false,
         initialStatus: RuntimeStatus = RuntimeStatus(
             state: .modelLoaded,
             loadedModelID: ModelID(),
@@ -444,6 +509,7 @@ private final class RuntimeLeaseBaseClient: RuntimeClientProtocol, @unchecked Se
         )
     ) {
         self.autoCompletesGenerations = autoCompletesGenerations
+        self.rejectsCancellation = rejectsCancellation
         self.status = initialStatus
     }
 
@@ -567,6 +633,9 @@ private final class RuntimeLeaseBaseClient: RuntimeClientProtocol, @unchecked Se
         lock.withLock {
             storedCancelledGenerationIDs.append(generationID)
         }
+        if rejectsCancellation {
+            throw RuntimeLeaseBaseError.cancellationRejected
+        }
         return CancelGenerationResponse(status: .cancelled, generationID: generationID)
     }
 
@@ -633,6 +702,10 @@ private final class RuntimeLeaseBaseClient: RuntimeClientProtocol, @unchecked Se
         }
         return EmbeddingModelStatus(state: .unloaded)
     }
+}
+
+private enum RuntimeLeaseBaseError: Error {
+    case cancellationRejected
 }
 
 private func drain(
