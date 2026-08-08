@@ -622,6 +622,502 @@ final class CaseFileReviewProjectTests: XCTestCase {
         ))
     }
 
+    func testTRPSTORE09EditedValueIsScopedAuditedDurableAndExplicitlyRestorable() throws {
+        // T-RP-STORE-09 expected RED: Review cells expose no Store-owned edit or
+        // explicit restore transition, so an attorney override cannot be
+        // persisted, audited, reopened, or returned to its frozen generation.
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("T-RP-STORE-09-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let databaseURL = directory.appendingPathComponent("SupraAI.sqlite")
+        let editedValue = "105 calendar days after written notice"
+        let editedAt = Date(timeIntervalSince1970: 1_799_001_493)
+        let restoredAt = Date(timeIntervalSince1970: 1_799_001_517)
+
+        let expected: ReviewEditReopenExpectation
+        do {
+            let store = try SupraStore(url: databaseURL)
+            let fixture = try makeExactFixture(store: store, marker: "1493")
+            let graph = try store.caseFileReviews.createOrFetchProject(
+                matterID: fixture.matterID,
+                sourceRunID: fixture.runID,
+                title: "Editable Review 1493",
+                actor: "attorney:create-1493",
+                at: Date(timeIntervalSince1970: 1_799_001_459)
+            )
+            let alphaCellID = try valueCellID(
+                store,
+                projectID: graph.project.id,
+                rowKey: fixture.alphaKey
+            )
+            let betaCellID = try valueCellID(
+                store,
+                projectID: graph.project.id,
+                rowKey: fixture.betaKey
+            )
+            _ = try store.caseFileReviews.markCellReviewed(
+                matterID: fixture.matterID,
+                projectID: graph.project.id,
+                cellID: alphaCellID,
+                reviewedBy: "attorney:prior-review-1493",
+                reviewedAt: Date(timeIntervalSince1970: 1_799_001_471)
+            )
+            try store.database.writer.write { db in
+                try db.execute(
+                    sql: """
+                        UPDATE case_file_review_projects
+                        SET status = 'stale', stale_reason = 'synthetic_scope_changed'
+                        WHERE id = ?
+                        """,
+                    arguments: [graph.project.id]
+                )
+            }
+            let alphaBefore = try reviewCell(store, cellID: alphaCellID)
+            let betaBefore = try reviewCell(store, cellID: betaCellID)
+            let frozenBefore = try frozenPayload(store, cellID: alphaCellID)
+            let evidenceBefore = try store.caseFileReviews.fetchCurrentEvidence(
+                matterID: fixture.matterID,
+                projectID: graph.project.id,
+                cellID: alphaCellID
+            )
+            let generationID = try XCTUnwrap(alphaBefore.currentGenerationID)
+
+            let edited = try store.caseFileReviews.editCellValue(
+                matterID: fixture.matterID,
+                projectID: graph.project.id,
+                cellID: alphaCellID,
+                attorneyValue: "  \(editedValue)\n",
+                editedBy: "  attorney:editor-1493  ",
+                editedAt: editedAt
+            )
+            XCTAssertEqual(edited.id, alphaCellID)
+            XCTAssertEqual(edited.attorneyValue, editedValue)
+            XCTAssertEqual(edited.valueState, "edited")
+            XCTAssertEqual(edited.reviewState, "needs_review")
+            XCTAssertNil(edited.reviewedBy)
+            XCTAssertNil(edited.reviewedAt)
+            XCTAssertEqual(edited.supportState, alphaBefore.supportState)
+            XCTAssertEqual(edited.currentGenerationID, generationID)
+            XCTAssertEqual(edited.updatedAt, editedAt)
+            XCTAssertEqual(try frozenPayload(store, cellID: alphaCellID), frozenBefore)
+            XCTAssertEqual(
+                try store.caseFileReviews.fetchCurrentEvidence(
+                    matterID: fixture.matterID,
+                    projectID: graph.project.id,
+                    cellID: alphaCellID
+                ),
+                evidenceBefore
+            )
+            XCTAssertEqual(try reviewCell(store, cellID: betaCellID), betaBefore,
+                "editing alpha must not mutate the neighboring beta cell")
+
+            let projectAfterEdit = try reviewProject(store, projectID: graph.project.id)
+            XCTAssertEqual(projectAfterEdit.status, "stale")
+            XCTAssertEqual(projectAfterEdit.staleReason, "synthetic_scope_changed")
+            XCTAssertEqual(projectAfterEdit.updatedAt, editedAt)
+
+            let editAudits = try store.auditEvents.fetchEvents(
+                relatedTable: CaseFileReviewCellRecord.databaseTableName,
+                relatedID: alphaCellID,
+                eventType: "case_file_review_cell_value_edited"
+            )
+            XCTAssertEqual(editAudits.count, 1)
+            let editAudit = try XCTUnwrap(editAudits.first)
+            XCTAssertEqual(editAudit.matterID, fixture.matterID)
+            XCTAssertEqual(editAudit.timestamp, editedAt)
+            XCTAssertEqual(editAudit.actor, "attorney:editor-1493")
+            XCTAssertEqual(editAudit.relatedID, alphaCellID)
+            let editMetadataJSON = try XCTUnwrap(editAudit.metadataJSON)
+            let editMetadata = try jsonObject(editMetadataJSON)
+            XCTAssertEqual(Set(editMetadata.keys), Set([
+                "schema_version", "project_id", "cell_id", "current_generation_id",
+                "prior_value_state", "new_value_state", "prior_attorney_value",
+                "new_attorney_value", "review_attestation_cleared",
+            ]))
+            XCTAssertEqual(editMetadata["schema_version"] as? Int, 1)
+            XCTAssertEqual(editMetadata["project_id"] as? String, graph.project.id)
+            XCTAssertEqual(editMetadata["cell_id"] as? String, alphaCellID)
+            XCTAssertEqual(editMetadata["current_generation_id"] as? String, generationID)
+            XCTAssertEqual(editMetadata["prior_value_state"] as? String, "generated")
+            XCTAssertEqual(editMetadata["new_value_state"] as? String, "edited")
+            XCTAssertTrue(editMetadata["prior_attorney_value"] is NSNull)
+            XCTAssertEqual(editMetadata["new_attorney_value"] as? String, editedValue)
+            XCTAssertEqual(editMetadata["review_attestation_cleared"] as? Bool, true)
+            XCTAssertFalse(editMetadataJSON.contains(fixture.alphaValue),
+                "the audit may carry the exact override but must not duplicate frozen generated proof")
+            XCTAssertFalse(editMetadataJSON.contains(fixture.excerpts[0]),
+                "the audit must not duplicate frozen evidence text")
+
+            let idempotent = try store.caseFileReviews.editCellValue(
+                matterID: fixture.matterID,
+                projectID: graph.project.id,
+                cellID: alphaCellID,
+                attorneyValue: "\n\(editedValue)  ",
+                editedBy: "attorney:retry-must-not-audit",
+                editedAt: editedAt.addingTimeInterval(7)
+            )
+            XCTAssertEqual(idempotent, edited)
+            XCTAssertEqual(
+                try store.auditEvents.fetchEvents(
+                    relatedTable: CaseFileReviewCellRecord.databaseTableName,
+                    relatedID: alphaCellID,
+                    eventType: "case_file_review_cell_value_edited"
+                ).count,
+                1
+            )
+            XCTAssertEqual(
+                try reviewProject(store, projectID: graph.project.id).updatedAt,
+                editedAt,
+                "an exact edit retry must not move the project timestamp"
+            )
+
+            expected = ReviewEditReopenExpectation(
+                matterID: fixture.matterID,
+                projectID: graph.project.id,
+                cellID: alphaCellID,
+                neighboringCell: betaBefore,
+                generatedValue: fixture.alphaValue,
+                editedValue: editedValue,
+                generationID: generationID,
+                supportState: alphaBefore.supportState,
+                frozenPayload: frozenBefore,
+                evidenceSourceIDs: evidenceBefore.map(\.frozenOutputSourceID)
+            )
+        }
+
+        let reopened = try SupraStore(url: databaseURL)
+        let reopenedGraph = try XCTUnwrap(reopened.caseFileReviews.fetchProjectGraph(
+            matterID: expected.matterID,
+            projectID: expected.projectID
+        ))
+        let reopenedCell = try XCTUnwrap(reopenedGraph.cells.first { $0.id == expected.cellID })
+        XCTAssertEqual(reopenedCell.attorneyValue, expected.editedValue)
+        XCTAssertEqual(reopenedCell.valueState, "edited")
+        XCTAssertEqual(reopenedCell.reviewState, "needs_review")
+        XCTAssertNil(reopenedCell.reviewedBy)
+        XCTAssertNil(reopenedCell.reviewedAt)
+        XCTAssertEqual(reopenedCell.currentGenerationID, expected.generationID)
+        XCTAssertEqual(reopenedCell.supportState, expected.supportState)
+        let reopenedGeneration = try XCTUnwrap(
+            reopenedGraph.generations.first { $0.id == expected.generationID }
+        )
+        XCTAssertEqual(
+            reopenedGeneration.generatedValuesJSON,
+            try json([expected.generatedValue])
+        )
+        XCTAssertNotEqual(
+            reopenedGeneration.generatedValuesJSON,
+            try json([expected.editedValue]),
+            "the attorney override must not replace the frozen generated-value element"
+        )
+        XCTAssertEqual(
+            try XCTUnwrap(reopenedGraph.cells.first { $0.id == expected.neighboringCell.id }),
+            expected.neighboringCell,
+            "the neighboring row must remain exact after file-backed reopen"
+        )
+        XCTAssertEqual(reopenedGraph.project.status, "stale")
+        XCTAssertEqual(reopenedGraph.project.staleReason, "synthetic_scope_changed")
+        XCTAssertEqual(try frozenPayload(reopened, cellID: expected.cellID), expected.frozenPayload)
+        XCTAssertEqual(
+            try reopened.caseFileReviews.fetchCurrentEvidence(
+                matterID: expected.matterID,
+                projectID: expected.projectID,
+                cellID: expected.cellID
+            ).map(\.frozenOutputSourceID),
+            expected.evidenceSourceIDs
+        )
+
+        let reReviewedAt = restoredAt.addingTimeInterval(-5)
+        let reviewedEdit = try reopened.caseFileReviews.markCellReviewed(
+            matterID: expected.matterID,
+            projectID: expected.projectID,
+            cellID: expected.cellID,
+            reviewedBy: "attorney:review-edited-1493",
+            reviewedAt: reReviewedAt
+        )
+        let editedReviewAudits = try reopened.auditEvents.fetchEvents(
+            relatedTable: CaseFileReviewCellRecord.databaseTableName,
+            relatedID: expected.cellID,
+            eventType: "case_file_review_cell_reviewed"
+        )
+        let editedReviewAudit = try XCTUnwrap(
+            editedReviewAudits.first { $0.timestamp == reReviewedAt }
+        )
+        XCTAssertEqual(editedReviewAudit.summary, "Marked one edited Review value as reviewed.")
+        XCTAssertNotEqual(editedReviewAudit.summary, "Marked one generated Review value as reviewed.",
+            "reviewing an override must not describe it as a generated value")
+        let editedReviewMetadata = try jsonObject(
+            try XCTUnwrap(editedReviewAudit.metadataJSON)
+        )
+        XCTAssertEqual(Set(editedReviewMetadata.keys), Set([
+            "schema_version", "project_id", "cell_id", "value_state",
+        ]))
+        XCTAssertEqual(editedReviewMetadata["value_state"] as? String, "edited")
+        let reviewedNoOp = try reopened.caseFileReviews.editCellValue(
+            matterID: expected.matterID,
+            projectID: expected.projectID,
+            cellID: expected.cellID,
+            attorneyValue: "  \(expected.editedValue)  ",
+            editedBy: "attorney:reviewed-retry-must-not-clear",
+            editedAt: restoredAt.addingTimeInterval(-2)
+        )
+        XCTAssertEqual(reviewedNoOp, reviewedEdit,
+            "an exact edit retry must retain an existing Reviewed attestation")
+        XCTAssertEqual(
+            try reviewProject(reopened, projectID: expected.projectID).updatedAt,
+            reReviewedAt,
+            "an exact reviewed-value retry must not move the project timestamp"
+        )
+        XCTAssertEqual(
+            try reopened.auditEvents.fetchEvents(
+                relatedTable: CaseFileReviewCellRecord.databaseTableName,
+                relatedID: expected.cellID,
+                eventType: "case_file_review_cell_value_edited"
+            ).count,
+            1
+        )
+        let restored = try reopened.caseFileReviews.restoreGeneratedCellValue(
+            matterID: expected.matterID,
+            projectID: expected.projectID,
+            cellID: expected.cellID,
+            actor: "  attorney:restore-1493  ",
+            at: restoredAt
+        )
+        XCTAssertNil(restored.attorneyValue)
+        XCTAssertEqual(restored.valueState, "generated")
+        XCTAssertEqual(restored.reviewState, "needs_review")
+        XCTAssertNil(restored.reviewedBy)
+        XCTAssertNil(restored.reviewedAt)
+        XCTAssertEqual(restored.currentGenerationID, expected.generationID)
+        XCTAssertEqual(restored.supportState, expected.supportState)
+        XCTAssertEqual(try frozenPayload(reopened, cellID: expected.cellID), expected.frozenPayload)
+        XCTAssertEqual(try reviewCell(reopened, cellID: expected.neighboringCell.id), expected.neighboringCell)
+        let restoredProject = try reviewProject(reopened, projectID: expected.projectID)
+        XCTAssertEqual(restoredProject.status, "stale")
+        XCTAssertEqual(restoredProject.staleReason, "synthetic_scope_changed")
+        XCTAssertEqual(restoredProject.updatedAt, restoredAt)
+
+        let restoreAudits = try reopened.auditEvents.fetchEvents(
+            relatedTable: CaseFileReviewCellRecord.databaseTableName,
+            relatedID: expected.cellID,
+            eventType: "case_file_review_cell_value_restored"
+        )
+        XCTAssertEqual(restoreAudits.count, 1)
+        let restoreAudit = try XCTUnwrap(restoreAudits.first)
+        XCTAssertEqual(restoreAudit.matterID, expected.matterID)
+        XCTAssertEqual(restoreAudit.timestamp, restoredAt)
+        XCTAssertEqual(restoreAudit.actor, "attorney:restore-1493")
+        let restoreMetadata = try jsonObject(try XCTUnwrap(restoreAudit.metadataJSON))
+        XCTAssertEqual(Set(restoreMetadata.keys), Set([
+            "schema_version", "project_id", "cell_id", "current_generation_id",
+            "prior_value_state", "new_value_state", "prior_attorney_value",
+            "new_attorney_value", "review_attestation_cleared",
+        ]))
+        XCTAssertEqual(restoreMetadata["project_id"] as? String, expected.projectID)
+        XCTAssertEqual(restoreMetadata["cell_id"] as? String, expected.cellID)
+        XCTAssertEqual(restoreMetadata["current_generation_id"] as? String, expected.generationID)
+        XCTAssertEqual(restoreMetadata["prior_value_state"] as? String, "edited")
+        XCTAssertEqual(restoreMetadata["new_value_state"] as? String, "generated")
+        XCTAssertEqual(restoreMetadata["prior_attorney_value"] as? String, expected.editedValue)
+        XCTAssertTrue(restoreMetadata["new_attorney_value"] is NSNull)
+        XCTAssertEqual(restoreMetadata["review_attestation_cleared"] as? Bool, true)
+
+        let idempotentRestore = try reopened.caseFileReviews.restoreGeneratedCellValue(
+            matterID: expected.matterID,
+            projectID: expected.projectID,
+            cellID: expected.cellID,
+            actor: "attorney:restore-retry-must-not-audit",
+            at: restoredAt.addingTimeInterval(11)
+        )
+        XCTAssertEqual(idempotentRestore, restored)
+        XCTAssertEqual(
+            try reopened.auditEvents.fetchEvents(
+                relatedTable: CaseFileReviewCellRecord.databaseTableName,
+                relatedID: expected.cellID,
+                eventType: "case_file_review_cell_value_restored"
+            ).count,
+            1
+        )
+        XCTAssertEqual(
+            try reviewProject(reopened, projectID: expected.projectID).updatedAt,
+            restoredAt,
+            "an already-generated restore retry must not move the project timestamp"
+        )
+    }
+
+    func testTRPSTORE10ValueTransitionsRejectInvalidScopeAndRollBackOnAuditFailure() throws {
+        // T-RP-STORE-10 expected RED: Review has no fail-closed value-transition
+        // boundary that rejects blank/cross-scope input and rolls the cell and
+        // project back when either edit or restore audit insertion fails.
+        let store = try SupraStore.inMemory()
+        let fixture = try makeExactFixture(store: store, marker: "1531")
+        let graph = try store.caseFileReviews.createOrFetchProject(
+            matterID: fixture.matterID,
+            sourceRunID: fixture.runID,
+            title: "Scoped Review 1531",
+            actor: "attorney:create-1531",
+            at: Date(timeIntervalSince1970: 1_799_001_531)
+        )
+        let cellID = try valueCellID(store, projectID: graph.project.id, rowKey: fixture.alphaKey)
+        _ = try store.caseFileReviews.markCellReviewed(
+            matterID: fixture.matterID,
+            projectID: graph.project.id,
+            cellID: cellID,
+            reviewedBy: "attorney:prior-review-1531",
+            reviewedAt: Date(timeIntervalSince1970: 1_799_001_537)
+        )
+        let untouchedCell = try reviewCell(store, cellID: cellID)
+        let untouchedProject = try reviewProject(store, projectID: graph.project.id)
+        let untouchedFrozen = try frozenPayload(store, cellID: cellID)
+        let otherMatter = try store.matters.createMatter(name: "Synthetic foreign Review matter 1531")
+        let foreignFixture = try makeExactFixture(store: store, marker: "1543")
+        let foreignGraph = try store.caseFileReviews.createOrFetchProject(
+            matterID: foreignFixture.matterID,
+            sourceRunID: foreignFixture.runID,
+            title: "Foreign Review 1543",
+            actor: "attorney:create-1543"
+        )
+        let foreignCellID = try valueCellID(
+            store,
+            projectID: foreignGraph.project.id,
+            rowKey: foreignFixture.alphaKey
+        )
+
+        XCTAssertThrowsError(try store.caseFileReviews.editCellValue(
+            matterID: fixture.matterID,
+            projectID: graph.project.id,
+            cellID: cellID,
+            attorneyValue: " \n\t ",
+            editedBy: "attorney:invalid-value"
+        ))
+        XCTAssertThrowsError(try store.caseFileReviews.editCellValue(
+            matterID: fixture.matterID,
+            projectID: graph.project.id,
+            cellID: cellID,
+            attorneyValue: "INVALID-ACTOR-VALUE-1531",
+            editedBy: " \n\t "
+        ))
+        XCTAssertThrowsError(try store.caseFileReviews.restoreGeneratedCellValue(
+            matterID: fixture.matterID,
+            projectID: graph.project.id,
+            cellID: cellID,
+            actor: " \n\t "
+        ))
+        XCTAssertThrowsError(try store.caseFileReviews.editCellValue(
+            matterID: otherMatter.id,
+            projectID: graph.project.id,
+            cellID: cellID,
+            attorneyValue: "CROSS-MATTER-VALUE-1531",
+            editedBy: "attorney:cross-matter"
+        ))
+        XCTAssertThrowsError(try store.caseFileReviews.editCellValue(
+            matterID: fixture.matterID,
+            projectID: "foreign-project-1531",
+            cellID: cellID,
+            attorneyValue: "CROSS-PROJECT-VALUE-1531",
+            editedBy: "attorney:cross-project"
+        ))
+        XCTAssertThrowsError(try store.caseFileReviews.editCellValue(
+            matterID: fixture.matterID,
+            projectID: graph.project.id,
+            cellID: foreignCellID,
+            attorneyValue: "CROSS-CELL-VALUE-1531",
+            editedBy: "attorney:cross-cell"
+        ))
+        XCTAssertThrowsError(try store.caseFileReviews.restoreGeneratedCellValue(
+            matterID: otherMatter.id,
+            projectID: graph.project.id,
+            cellID: cellID,
+            actor: "attorney:cross-matter-restore"
+        ))
+        XCTAssertEqual(try reviewCell(store, cellID: cellID), untouchedCell)
+        XCTAssertEqual(try reviewProject(store, projectID: graph.project.id), untouchedProject)
+        XCTAssertEqual(try frozenPayload(store, cellID: cellID), untouchedFrozen)
+        XCTAssertEqual(
+            try valueTransitionAuditCount(store, cellID: cellID),
+            0,
+            "invalid and cross-scope calls must not emit value-transition audits"
+        )
+
+        try store.database.writer.write { db in
+            try db.execute(sql: """
+                CREATE TRIGGER fail_review_value_edit_audit
+                BEFORE INSERT ON audit_events
+                WHEN NEW.event_type = 'case_file_review_cell_value_edited'
+                BEGIN SELECT RAISE(ABORT, 'synthetic Review edit audit failure'); END
+                """)
+        }
+        XCTAssertThrowsError(try store.caseFileReviews.editCellValue(
+            matterID: fixture.matterID,
+            projectID: graph.project.id,
+            cellID: cellID,
+            attorneyValue: "AUDIT-ROLLBACK-EDIT-VALUE-1531",
+            editedBy: "attorney:rollback-edit-1531",
+            editedAt: Date(timeIntervalSince1970: 1_799_001_559)
+        ))
+        XCTAssertEqual(try reviewCell(store, cellID: cellID), untouchedCell,
+            "a failed edit audit must roll the review attestation and value axes back")
+        XCTAssertEqual(try reviewProject(store, projectID: graph.project.id), untouchedProject,
+            "a failed edit audit must roll the project timestamp back")
+        XCTAssertEqual(try frozenPayload(store, cellID: cellID), untouchedFrozen)
+        XCTAssertEqual(try valueTransitionAuditCount(store, cellID: cellID), 0)
+        try store.database.writer.write { db in
+            try db.execute(sql: "DROP TRIGGER fail_review_value_edit_audit")
+        }
+
+        let successfulEdit = try store.caseFileReviews.editCellValue(
+            matterID: fixture.matterID,
+            projectID: graph.project.id,
+            cellID: cellID,
+            attorneyValue: "RESTORE-ROLLBACK-CANARY-1531",
+            editedBy: "attorney:prepare-restore-1531",
+            editedAt: Date(timeIntervalSince1970: 1_799_001_563)
+        )
+        let reviewedEdit = try store.caseFileReviews.markCellReviewed(
+            matterID: fixture.matterID,
+            projectID: graph.project.id,
+            cellID: cellID,
+            reviewedBy: "attorney:review-edit-1531",
+            reviewedAt: Date(timeIntervalSince1970: 1_799_001_569)
+        )
+        XCTAssertEqual(successfulEdit.currentGenerationID, reviewedEdit.currentGenerationID)
+        let beforeRestoreFailure = try reviewCell(store, cellID: cellID)
+        let projectBeforeRestoreFailure = try reviewProject(store, projectID: graph.project.id)
+        let frozenBeforeRestoreFailure = try frozenPayload(store, cellID: cellID)
+        try store.database.writer.write { db in
+            try db.execute(sql: """
+                CREATE TRIGGER fail_review_value_restore_audit
+                BEFORE INSERT ON audit_events
+                WHEN NEW.event_type = 'case_file_review_cell_value_restored'
+                BEGIN SELECT RAISE(ABORT, 'synthetic Review restore audit failure'); END
+                """)
+        }
+        XCTAssertThrowsError(try store.caseFileReviews.restoreGeneratedCellValue(
+            matterID: fixture.matterID,
+            projectID: graph.project.id,
+            cellID: cellID,
+            actor: "attorney:rollback-restore-1531",
+            at: Date(timeIntervalSince1970: 1_799_001_577)
+        ))
+        XCTAssertEqual(try reviewCell(store, cellID: cellID), beforeRestoreFailure,
+            "a failed restore audit must retain the edited value and its review attestation")
+        XCTAssertEqual(
+            try reviewProject(store, projectID: graph.project.id),
+            projectBeforeRestoreFailure,
+            "a failed restore audit must roll the project timestamp back"
+        )
+        XCTAssertEqual(try frozenPayload(store, cellID: cellID), frozenBeforeRestoreFailure)
+        XCTAssertEqual(
+            try store.auditEvents.fetchEvents(
+                relatedTable: CaseFileReviewCellRecord.databaseTableName,
+                relatedID: cellID,
+                eventType: "case_file_review_cell_value_restored"
+            ).count,
+            0
+        )
+    }
+
     private let reviewTables = [
         "case_file_review_projects", "case_file_review_tables", "case_file_review_columns",
         "case_file_review_rows", "case_file_review_cells", "case_file_review_cell_generations",
@@ -851,6 +1347,38 @@ final class CaseFileReviewProjectTests: XCTestCase {
         }
     }
 
+    private func reviewCell(_ store: SupraStore, cellID: String) throws -> CaseFileReviewCellRecord {
+        try store.database.writer.read { db in
+            try XCTUnwrap(CaseFileReviewCellRecord.fetchOne(db, key: cellID))
+        }
+    }
+
+    private func reviewProject(
+        _ store: SupraStore,
+        projectID: String
+    ) throws -> CaseFileReviewProjectRecord {
+        try store.database.writer.read { db in
+            try XCTUnwrap(CaseFileReviewProjectRecord.fetchOne(db, key: projectID))
+        }
+    }
+
+    private func valueTransitionAuditCount(_ store: SupraStore, cellID: String) throws -> Int {
+        try store.database.writer.read { db in
+            try Int.fetchOne(
+                db,
+                sql: """
+                    SELECT COUNT(*) FROM audit_events
+                    WHERE related_table = ? AND related_id = ?
+                      AND event_type IN (
+                        'case_file_review_cell_value_edited',
+                        'case_file_review_cell_value_restored'
+                      )
+                    """,
+                arguments: [CaseFileReviewCellRecord.databaseTableName, cellID]
+            ) ?? 0
+        }
+    }
+
     private func frozenPayload(_ store: SupraStore, cellID: String) throws -> [String] {
         try store.database.writer.read { db in
             try String.fetchAll(db, sql: """
@@ -912,6 +1440,12 @@ final class CaseFileReviewProjectTests: XCTestCase {
         String(decoding: try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]), as: UTF8.self)
     }
 
+    private func jsonObject(_ json: String) throws -> [String: Any] {
+        try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any]
+        )
+    }
+
     private func sha256(_ value: String) -> String {
         SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined()
     }
@@ -940,4 +1474,17 @@ private struct ReviewReopenExpectation {
     let generatedValues: Set<String>
     let evidenceSourceIDs: [String]
     let frozenPayload: [String]
+}
+
+private struct ReviewEditReopenExpectation {
+    let matterID: String
+    let projectID: String
+    let cellID: String
+    let neighboringCell: CaseFileReviewCellRecord
+    let generatedValue: String
+    let editedValue: String
+    let generationID: String
+    let supportState: String
+    let frozenPayload: [String]
+    let evidenceSourceIDs: [String]
 }

@@ -67,14 +67,20 @@ final class CaseFileReviewHostedUITests: XCTestCase {
             1,
             "The beta row must render its exact persisted generated value"
         )
-        XCTAssertTrue(app.buttons["review.sources.\(alphaCellID)"].exists)
-        XCTAssertTrue(app.buttons["review.sources.\(betaCellID)"].exists)
+        let alphaSources = app.buttons["review.sources.\(alphaCellID)"]
+        let betaSources = app.buttons["review.sources.\(betaCellID)"]
+        XCTAssertTrue(alphaSources.exists)
+        XCTAssertTrue(betaSources.exists)
         XCTAssertTrue(app.buttons["review.markReviewed.\(alphaCellID)"].exists)
         XCTAssertTrue(app.buttons["review.markReviewed.\(betaCellID)"].exists)
 
         XCTAssertFalse(
-            renderedElements(label: Fixture.defaultSourceCountCanary, in: matrix).firstMatch.exists,
-            "Both exact rows have retained evidence; a zero-source default must stay absent"
+            alphaSources.label.contains(Fixture.defaultSourceCountCanary),
+            "The exact alpha Sources control must not render the zero-source default"
+        )
+        XCTAssertFalse(
+            betaSources.label.contains(Fixture.defaultSourceCountCanary),
+            "The exact beta Sources control must not render the zero-source default"
         )
     }
 
@@ -223,6 +229,266 @@ final class CaseFileReviewHostedUITests: XCTestCase {
         XCTAssertEqual(renderedElements(label: Fixture.betaGeneratedValue, in: matrix).count, 1)
     }
 
+    func testTRPUI10RowBoundValueEditorCancelsThenEditsOnlyBetaAndClearsReview() throws {
+        // T-RP-UI-10 expected RED: generated values are inert matrix-wide Text,
+        // so no row-bound value control or popover can cancel/save an attorney
+        // override and return only the changed row to needs-review.
+        let app = launchReviewProject()
+        let matrix = app.descendants(matching: .any)["review.matrix"]
+        XCTAssertTrue(matrix.waitForExistence(timeout: 20), "Review matrix did not appear")
+
+        let alphaFinding = element(
+            in: matrix,
+            identifierPrefix: Fixture.findingIdentifierPrefix,
+            value: Fixture.alphaFinding
+        )
+        let betaFinding = element(
+            in: matrix,
+            identifierPrefix: Fixture.findingIdentifierPrefix,
+            value: Fixture.betaFinding
+        )
+        XCTAssertTrue(alphaFinding.exists, "The alpha row did not appear")
+        XCTAssertTrue(betaFinding.exists, "The beta row did not appear")
+        let alphaCellID = try cellID(
+            of: alphaFinding,
+            identifierPrefix: Fixture.findingIdentifierPrefix
+        )
+        let betaCellID = try cellID(
+            of: betaFinding,
+            identifierPrefix: Fixture.findingIdentifierPrefix
+        )
+
+        let alphaValue = app.buttons["review.value.\(alphaCellID)"]
+        let betaValue = app.buttons["review.value.\(betaCellID)"]
+        XCTAssertTrue(alphaValue.exists, "The alpha value needs its exact row-bound edit control")
+        XCTAssertTrue(betaValue.exists, "The beta value needs its exact row-bound edit control")
+        XCTAssertEqual(alphaValue.label, Fixture.alphaGeneratedValue)
+        XCTAssertEqual(betaValue.label, Fixture.betaGeneratedValue)
+        XCTAssertEqual(alphaValue.value as? String, "Generated")
+        XCTAssertEqual(betaValue.value as? String, "Generated")
+        XCTAssertFalse(
+            alphaValue.label.contains(Fixture.betaGeneratedValue),
+            "The alpha value control must not bind beta's generated value"
+        )
+        XCTAssertFalse(
+            betaValue.label.contains(Fixture.alphaGeneratedValue),
+            "The beta value control must not bind alpha's generated value"
+        )
+
+        let betaMark = app.buttons["review.markReviewed.\(betaCellID)"]
+        let betaReviewed = app.descendants(matching: .any)["review.reviewed.\(betaCellID)"]
+        betaMark.click()
+        XCTAssertTrue(
+            betaReviewed.waitForExistence(timeout: 10),
+            "Beta must be reviewed before testing that an effective-value change clears it"
+        )
+
+        betaValue.click()
+        let editor = app.descendants(matching: .any)["review.valueEditor"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 10), "The beta value popover did not open")
+        let generatedBaseline = editor.descendants(matching: .any)[
+            "review.valueEditor.generatedValue"
+        ]
+        XCTAssertTrue(generatedBaseline.exists, "The editor must retain the frozen generated baseline")
+        XCTAssertEqual(generatedBaseline.label, Fixture.betaGeneratedValue)
+        let field = editor.descendants(matching: .any)["review.valueEditor.field"]
+        let cancel = app.buttons["review.valueEditor.cancel"]
+        let save = app.buttons["review.valueEditor.save"]
+        XCTAssertTrue(field.exists, "The reviewed-value field is missing")
+        XCTAssertTrue(cancel.exists, "The editor needs an explicit Cancel action")
+        XCTAssertTrue(save.exists, "The editor needs an explicit Save changes action")
+        replaceText(in: field, with: Fixture.cancelledBetaEdit)
+        cancel.click()
+
+        XCTAssertTrue(editor.waitForNonExistence(timeout: 5), "Cancel must dismiss the editor")
+        XCTAssertEqual(betaValue.label, Fixture.betaGeneratedValue)
+        XCTAssertEqual(betaValue.value as? String, "Generated")
+        XCTAssertTrue(betaReviewed.exists, "Cancelling must not clear the prior beta attestation")
+        XCTAssertFalse(
+            app.descendants(matching: .any)["review.edited.\(betaCellID)"].exists,
+            "Cancel must not leave an Edited marker"
+        )
+
+        betaValue.click()
+        XCTAssertTrue(editor.waitForExistence(timeout: 10), "The beta editor did not reopen")
+        let reopenedField = editor.descendants(matching: .any)["review.valueEditor.field"]
+        XCTAssertTrue(reopenedField.exists)
+        replaceText(in: reopenedField, with: Fixture.editedBetaValue)
+        let reopenedSave = app.buttons["review.valueEditor.save"]
+        XCTAssertTrue(reopenedSave.isEnabled, "A non-default reviewed value must enable Save changes")
+        reopenedSave.click()
+
+        let editedBetaValue = valueButton(
+            in: app,
+            cellID: betaCellID,
+            displayedValue: Fixture.editedBetaValue
+        )
+        XCTAssertTrue(
+            editedBetaValue.waitForExistence(timeout: 10),
+            "Saving must replace beta's displayed effective value"
+        )
+        XCTAssertEqual(editedBetaValue.value as? String, "Edited")
+        XCTAssertFalse(
+            editedBetaValue.label.contains(Fixture.betaGeneratedValue),
+            "Beta's exact value control must not keep displaying the generated default after Save"
+        )
+        let betaEdited = app.descendants(matching: .any)["review.edited.\(betaCellID)"]
+        XCTAssertTrue(betaEdited.waitForExistence(timeout: 5), "Beta needs a visible Edited marker")
+        XCTAssertEqual(betaEdited.label, "Edited")
+        XCTAssertFalse(
+            app.descendants(matching: .any)["review.edited.\(alphaCellID)"].exists,
+            "Editing beta must not mark alpha as edited"
+        )
+        XCTAssertEqual(alphaValue.label, Fixture.alphaGeneratedValue)
+        XCTAssertEqual(alphaValue.value as? String, "Generated")
+        XCTAssertFalse(
+            alphaValue.label.contains(Fixture.editedBetaValue),
+            "The beta override must stay absent from alpha's exact value control"
+        )
+        XCTAssertTrue(
+            betaReviewed.waitForNonExistence(timeout: 5),
+            "Changing beta's effective value must clear its prior Reviewed attestation"
+        )
+        XCTAssertTrue(
+            app.buttons["review.markReviewed.\(betaCellID)"].waitForExistence(timeout: 5),
+            "After an effective edit, beta must return to the actionable needs-review state"
+        )
+    }
+
+    func testTRPUI11EditedSourcesStayBoundToGeneratedProofAndUseGeneratedRestoresBeta() throws {
+        // T-RP-UI-11 expected RED: there is no attorney-edited state, no warning
+        // that frozen Sources prove the generated result rather than the override,
+        // and no reversible Use generated value action scoped to beta.
+        let app = launchReviewProject()
+        let matrix = app.descendants(matching: .any)["review.matrix"]
+        XCTAssertTrue(matrix.waitForExistence(timeout: 20), "Review matrix did not appear")
+        let alphaFinding = element(
+            in: matrix,
+            identifierPrefix: Fixture.findingIdentifierPrefix,
+            value: Fixture.alphaFinding
+        )
+        let betaFinding = element(
+            in: matrix,
+            identifierPrefix: Fixture.findingIdentifierPrefix,
+            value: Fixture.betaFinding
+        )
+        XCTAssertTrue(alphaFinding.exists)
+        XCTAssertTrue(betaFinding.exists)
+        let alphaCellID = try cellID(
+            of: alphaFinding,
+            identifierPrefix: Fixture.findingIdentifierPrefix
+        )
+        let betaCellID = try cellID(
+            of: betaFinding,
+            identifierPrefix: Fixture.findingIdentifierPrefix
+        )
+        let alphaValue = app.buttons["review.value.\(alphaCellID)"]
+        let betaValue = app.buttons["review.value.\(betaCellID)"]
+        XCTAssertTrue(alphaValue.exists)
+        XCTAssertTrue(betaValue.exists)
+
+        betaValue.click()
+        let editor = app.descendants(matching: .any)["review.valueEditor"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 10), "The beta value editor did not open")
+        let generatedBaseline = editor.descendants(matching: .any)[
+            "review.valueEditor.generatedValue"
+        ]
+        XCTAssertTrue(generatedBaseline.exists)
+        XCTAssertEqual(generatedBaseline.label, Fixture.betaGeneratedValue)
+        let field = editor.descendants(matching: .any)["review.valueEditor.field"]
+        XCTAssertTrue(field.exists)
+        replaceText(in: field, with: Fixture.editedBetaValue)
+        app.buttons["review.valueEditor.save"].click()
+        let editedBetaValue = valueButton(
+            in: app,
+            cellID: betaCellID,
+            displayedValue: Fixture.editedBetaValue
+        )
+        XCTAssertTrue(editedBetaValue.waitForExistence(timeout: 10))
+
+        let inspector = app.scrollViews["review.sourcesInspector"]
+        if !inspector.exists {
+            app.buttons["review.sources.\(betaCellID)"].click()
+        }
+        XCTAssertTrue(inspector.waitForExistence(timeout: 10), "Beta Sources did not open")
+        let editedNotice = inspector.descendants(matching: .any)["review.sourcesEditedNotice"]
+        XCTAssertTrue(
+            editedNotice.waitForExistence(timeout: 5),
+            "Edited beta needs a visible generated-proof warning"
+        )
+        XCTAssertEqual(editedNotice.label, Fixture.editedSourcesWarning)
+        let inspectorBaseline = inspector.descendants(matching: .any)[
+            "review.sourcesGeneratedValue.\(betaCellID)"
+        ]
+        XCTAssertTrue(inspectorBaseline.exists, "Sources must name beta's original generated result")
+        XCTAssertEqual(inspectorBaseline.label, Fixture.betaGeneratedValue)
+        XCTAssertEqual(
+            inspector.descendants(matching: .button).matching(
+                NSPredicate(
+                    format: "identifier BEGINSWITH %@ AND label CONTAINS %@",
+                    Fixture.evidenceIdentifierPrefix,
+                    Fixture.editedBetaValue
+                )
+            ).count,
+            0,
+            "Beta's attorney override must not be presented as a frozen evidence-card excerpt"
+        )
+        XCTAssertEqual(
+            evidenceElements(
+                citationLabel: Fixture.betaSupportingLabel,
+                excerpt: Fixture.betaSupportingExcerpt,
+                in: inspector
+            ).count,
+            1,
+            "The frozen supporting proof must remain the original beta evidence"
+        )
+        XCTAssertEqual(
+            evidenceElements(
+                citationLabel: Fixture.betaContraryLabel,
+                excerpt: Fixture.betaContraryExcerpt,
+                in: inspector
+            ).count,
+            1,
+            "The frozen contrary proof must remain the original beta evidence"
+        )
+
+        app.buttons["Close Sources"].click()
+        XCTAssertTrue(inspector.waitForNonExistence(timeout: 5), "Sources did not close")
+        editedBetaValue.click()
+        XCTAssertTrue(editor.waitForExistence(timeout: 10), "The edited beta editor did not reopen")
+        let useGenerated = app.buttons["review.valueEditor.useGenerated"]
+        XCTAssertTrue(
+            useGenerated.waitForExistence(timeout: 5),
+            "An edited row needs a reversible Use generated value action"
+        )
+        useGenerated.click()
+
+        let restoredBetaValue = valueButton(
+            in: app,
+            cellID: betaCellID,
+            displayedValue: Fixture.betaGeneratedValue
+        )
+        XCTAssertTrue(
+            restoredBetaValue.waitForExistence(timeout: 10),
+            "Use generated value must restore beta's original display"
+        )
+        XCTAssertEqual(restoredBetaValue.value as? String, "Generated")
+        XCTAssertFalse(
+            restoredBetaValue.label.contains(Fixture.editedBetaValue),
+            "The restored beta value must not retain the attorney override"
+        )
+        XCTAssertTrue(
+            app.descendants(matching: .any)["review.edited.\(betaCellID)"].waitForNonExistence(timeout: 5),
+            "Restoring beta must remove its Edited marker"
+        )
+        XCTAssertEqual(alphaValue.label, Fixture.alphaGeneratedValue)
+        XCTAssertEqual(alphaValue.value as? String, "Generated")
+        XCTAssertFalse(
+            alphaValue.label.contains(Fixture.editedBetaValue),
+            "Restoring beta must leave alpha's exact value control untouched"
+        )
+    }
+
     private func launchReviewProject() -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments += [
@@ -275,6 +541,26 @@ final class CaseFileReviewHostedUITests: XCTestCase {
                 label
             )
         )
+    }
+
+    private func valueButton(
+        in app: XCUIApplication,
+        cellID: String,
+        displayedValue: String
+    ) -> XCUIElement {
+        app.buttons.matching(
+            NSPredicate(
+                format: "identifier == %@ AND label == %@",
+                "review.value.\(cellID)",
+                displayedValue
+            )
+        ).firstMatch
+    }
+
+    private func replaceText(in field: XCUIElement, with value: String) {
+        field.click()
+        field.typeKey("a", modifierFlags: .command)
+        field.typeText(value)
     }
 
     private func evidenceElements(
@@ -330,6 +616,8 @@ final class CaseFileReviewHostedUITests: XCTestCase {
 
         static let betaFinding = "synthetic renewal notice period"
         static let betaGeneratedValue = "120 calendar days"
+        static let editedBetaValue = "105 calendar days after written notice"
+        static let cancelledBetaEdit = "111 days must remain a cancelled draft"
         static let betaSourceSummary = "1 supporting · 1 contrary"
         static let betaSupportingLabel = "E2"
         static let betaContraryLabel = "E3"
@@ -337,6 +625,8 @@ final class CaseFileReviewHostedUITests: XCTestCase {
             "The fictional Atlas Supply Agreement requires renewal notice at least 120 calendar days before expiration."
         static let betaContraryExcerpt =
             "A fictional amendment states that either party may give renewal notice 90 calendar days before expiration."
+        static let editedSourcesWarning =
+            "Sources are frozen from the generated result. They do not validate the attorney-edited value."
 
         static let defaultSourceCountCanary = "0 supporting"
         static let emptySupportingCanary =
@@ -562,6 +852,97 @@ final class CaseFileReviewCompositionUITests: XCTestCase {
             review.contains(#"reviewedBy: "user""#),
             "review identity must come from the local profile rather than a literal placeholder"
         )
+    }
+
+    func testTRPUI12ValueEditorPinsPopoverProvenanceCopyAndPolishedActivityLabels() throws {
+        // T-RP-UI-12 expected RED: CaseFileReviewView has no row-bound value
+        // popover, edit-state/provenance accessibility contract, or explicit
+        // Activity Log labels for the new audited edit and restore transitions.
+        let review = try caseFileReviewSource()
+        let workspace = try appSource(
+            relativePath: "SupraAI/Matters/MatterWorkspaceView.swift"
+        )
+
+        let exactIdentifiers = [
+            "review.valueEditor",
+            "review.valueEditor.field",
+            "review.valueEditor.generatedValue",
+            "review.valueEditor.save",
+            "review.valueEditor.cancel",
+            "review.valueEditor.useGenerated",
+            "review.sourcesEditedNotice",
+        ]
+        for identifier in exactIdentifiers {
+            XCTAssertTrue(
+                review.contains(".accessibilityIdentifier(\"\(identifier)\")"),
+                "missing exact Review value accessibility identifier \(identifier)"
+            )
+        }
+
+        let dynamicIdentifierPrefixes = [
+            "review.value.",
+            "review.edited.",
+            "review.sourcesGeneratedValue.",
+        ]
+        for prefix in dynamicIdentifierPrefixes {
+            XCTAssertTrue(
+                review.contains(".accessibilityIdentifier(\"\(prefix)\\("),
+                "missing row-bound Review value accessibility prefix \(prefix)"
+            )
+        }
+
+        XCTAssertGreaterThanOrEqual(
+            try matchCount(#"\.popover\s*\("#, in: review),
+            1,
+            "the compact Review value editor must be presented as a row-anchored popover"
+        )
+        XCTAssertTrue(
+            review.contains("Generated result"),
+            "the popover must label the immutable generated baseline"
+        )
+        XCTAssertTrue(
+            review.contains("Reviewed value"),
+            "the popover must label the attorney-controlled effective value"
+        )
+        XCTAssertTrue(
+            review.contains("Sources remain attached to the generated result."),
+            "the editor must not imply frozen proof validates the override"
+        )
+        XCTAssertTrue(
+            review.contains("Saving a change clears any prior Reviewed mark."),
+            "the editor must disclose the review-attestation reset before Save"
+        )
+        XCTAssertTrue(
+            review.contains(
+                "Sources are frozen from the generated result. They do not validate the attorney-edited value."
+            ),
+            "edited Sources need the approved provenance warning"
+        )
+        XCTAssertTrue(
+            review.contains("controller.editValue("),
+            "Save changes must call the matter-scoped Review controller"
+        )
+        XCTAssertTrue(
+            review.contains("controller.useGeneratedValue("),
+            "Use generated value must call the reversible controller transition"
+        )
+
+        let activityLabels = [
+            (
+                eventType: "case_file_review_cell_value_edited",
+                label: "Review Value Edited"
+            ),
+            (
+                eventType: "case_file_review_cell_value_restored",
+                label: "Generated Review Value Restored"
+            ),
+        ]
+        for item in activityLabels {
+            XCTAssertTrue(
+                workspace.contains("case \"\(item.eventType)\": \"\(item.label)\""),
+                "Activity Log needs the concise label \(item.label)"
+            )
+        }
     }
 
     private func caseFileReviewSource() throws -> String {

@@ -169,6 +169,127 @@ final class CaseFileReviewControllerTests: XCTestCase {
         XCTAssertNotEqual(reviewed.reviewedBy, "user")
     }
 
+    func testTRPSESS05AttorneyValueEditAndRestoreProjectThroughTheExactCell() async throws {
+        // T-RP-SESS-05 expected RED: Review rows do not expose a typed effective-value
+        // projection, and the controller has no cell-scoped edit/reset actions that
+        // preserve frozen proof while clearing a prior review attestation.
+        let fixture = try await makeExactReviewFixture()
+        var profile = AssistantProfile()
+        profile.fullName = "  Casey Finch  \n"
+        try fixture.store.appSettings.setSetting(AssistantProfile.profileKey, value: profile)
+        let controller = CaseFileReviewController(
+            matterID: fixture.matterID,
+            store: fixture.store
+        )
+        controller.load()
+        try controller.openReview(
+            sourceRunID: fixture.result.run.id,
+            title: "Editable Review value"
+        )
+        let original = try XCTUnwrap(
+            controller.rows.first { $0.finding == "repair-obligation-4219" }
+        )
+        XCTAssertEqual(controller.rows.map(\.cellID), [original.cellID])
+        XCTAssertEqual(original.valueState, .generated)
+        XCTAssertNil(original.attorneyValue)
+        XCTAssertEqual(original.displayValue, "$4,219.00")
+        XCTAssertFalse(original.displayValue.contains("105 calendar days after written notice"))
+
+        controller.selectCell(original.cellID)
+        let evidenceBefore = controller.selectedEvidence
+        let generatedBefore = original.generatedValues
+        let supportingBefore = original.supportingSourceCount
+        let contraryBefore = original.contrarySourceCount
+        let reviewedAt = Date(timeIntervalSince1970: 2_031_102_005)
+        try controller.markReviewed(
+            cellID: original.cellID,
+            reviewedBy: "attorney-review-canary-2005",
+            reviewedAt: reviewedAt
+        )
+        XCTAssertEqual(
+            try XCTUnwrap(controller.rows.first { $0.cellID == original.cellID }).reviewState,
+            .reviewed
+        )
+
+        let editedAt = Date(timeIntervalSince1970: 2_031_102_011)
+        try controller.editValue(
+            cellID: original.cellID,
+            value: "  105 calendar days after written notice  \n",
+            at: editedAt
+        )
+
+        let edited = try XCTUnwrap(controller.rows.first { $0.cellID == original.cellID })
+        XCTAssertEqual(edited.cellID, original.cellID)
+        XCTAssertEqual(edited.finding, "repair-obligation-4219")
+        XCTAssertEqual(edited.valueState, .edited)
+        XCTAssertEqual(edited.attorneyValue, "105 calendar days after written notice")
+        XCTAssertEqual(edited.displayValue, "105 calendar days after written notice")
+        XCTAssertFalse(edited.displayValue.contains("$4,219.00"))
+        XCTAssertEqual(edited.generatedValues, generatedBefore)
+        XCTAssertEqual(edited.supportingSourceCount, supportingBefore)
+        XCTAssertEqual(edited.contrarySourceCount, contraryBefore)
+        XCTAssertEqual(edited.reviewState, .needsReview)
+        XCTAssertNil(edited.reviewedBy)
+        XCTAssertNil(edited.reviewedAt)
+        XCTAssertEqual(controller.selectedCellID, original.cellID)
+        XCTAssertEqual(controller.selectedEvidence, evidenceBefore)
+        let editAudit = try XCTUnwrap(
+            try fixture.store.auditEvents.fetchEvents(
+                relatedTable: "case_file_review_cells",
+                relatedID: original.cellID,
+                eventType: "case_file_review_cell_value_edited"
+            ).first
+        )
+        XCTAssertEqual(editAudit.actor, "Casey Finch")
+        XCTAssertEqual(editAudit.timestamp, editedAt)
+        XCTAssertNotEqual(editAudit.actor, "  Casey Finch  \n")
+
+        let reopened = CaseFileReviewController(
+            matterID: fixture.matterID,
+            store: fixture.store
+        )
+        reopened.load()
+        let persisted = try XCTUnwrap(reopened.rows.first { $0.cellID == original.cellID })
+        XCTAssertEqual(persisted.valueState, .edited)
+        XCTAssertEqual(persisted.attorneyValue, "105 calendar days after written notice")
+        XCTAssertEqual(persisted.displayValue, "105 calendar days after written notice")
+        XCTAssertEqual(persisted.generatedValues, generatedBefore)
+        reopened.selectCell(original.cellID)
+        XCTAssertEqual(reopened.selectedEvidence, evidenceBefore)
+        try reopened.markReviewed(
+            cellID: original.cellID,
+            reviewedBy: "attorney-edited-review-canary-2023",
+            reviewedAt: Date(timeIntervalSince1970: 2_031_102_023)
+        )
+
+        let restoredAt = Date(timeIntervalSince1970: 2_031_102_029)
+        try reopened.useGeneratedValue(cellID: original.cellID, at: restoredAt)
+
+        let restored = try XCTUnwrap(reopened.rows.first { $0.cellID == original.cellID })
+        XCTAssertEqual(restored.cellID, original.cellID)
+        XCTAssertEqual(restored.valueState, .generated)
+        XCTAssertNil(restored.attorneyValue)
+        XCTAssertEqual(restored.displayValue, "$4,219.00")
+        XCTAssertFalse(restored.displayValue.contains("105 calendar days after written notice"))
+        XCTAssertEqual(restored.generatedValues, generatedBefore)
+        XCTAssertEqual(restored.supportingSourceCount, supportingBefore)
+        XCTAssertEqual(restored.contrarySourceCount, contraryBefore)
+        XCTAssertEqual(restored.reviewState, .needsReview)
+        XCTAssertNil(restored.reviewedBy)
+        XCTAssertNil(restored.reviewedAt)
+        XCTAssertEqual(reopened.selectedCellID, original.cellID)
+        XCTAssertEqual(reopened.selectedEvidence, evidenceBefore)
+        let restoreAudit = try XCTUnwrap(
+            try fixture.store.auditEvents.fetchEvents(
+                relatedTable: "case_file_review_cells",
+                relatedID: original.cellID,
+                eventType: "case_file_review_cell_value_restored"
+            ).first
+        )
+        XCTAssertEqual(restoreAudit.actor, "Casey Finch")
+        XCTAssertEqual(restoreAudit.timestamp, restoredAt)
+    }
+
     private func makeExactReviewFixture() async throws -> ReviewControllerFixture {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
             "CaseFileReviewController-\(UUID().uuidString)",
