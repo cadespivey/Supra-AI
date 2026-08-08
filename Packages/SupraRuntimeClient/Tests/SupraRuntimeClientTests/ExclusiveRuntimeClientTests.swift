@@ -400,6 +400,70 @@ final class ExclusiveRuntimeClientTests: XCTestCase {
         XCTAssertEqual(base.countTokenCallCount, 1)
     }
 
+    func testTLEASE10RecoveryWaitsForOtherAdmittedOrdinaryWorkToQuiesce() async throws {
+        // T-LEASE-10 expected RED: recovery currently reconnects and clears the
+        // admission count while a separately admitted ordinary call can still be
+        // executing. Runtime status does not expose in-flight token or embedding
+        // work, so an idle status cannot prove those host permits have quiesced.
+        let base = RuntimeLeaseBaseClient(
+            autoCompletesGenerations: false,
+            rejectsCancellation: true,
+            holdsTokenCounts: true
+        )
+        let client = ExclusiveRuntimeClient(base: base)
+        let countTask = Task {
+            try await client.countTokens(
+                CountTokensRequest(modelID: ModelID(), texts: ["already admitted ordinary call"])
+            )
+        }
+        defer {
+            base.releaseTokenCounts()
+            countTask.cancel()
+        }
+        try await waitUntil("ordinary token count is admitted and held") {
+            base.countTokenCallCount == 1
+        }
+
+        let generationID = GenerationID()
+        let stream = try client.generate(makeRuntimeLeaseRequest(
+            generationID: generationID,
+            modelID: ModelID(),
+            prompt: "second-ordinary-call-that-cannot-confirm-cancellation"
+        ))
+        let consumer = Task {
+            try await drain(stream)
+        }
+        try await waitUntil("second ordinary call reaches the base") {
+            base.generatedPrompts == ["second-ordinary-call-that-cannot-confirm-cancellation"]
+        }
+        consumer.cancel()
+        _ = await consumer.result
+        try await waitUntil("failed generation cancellation enters recovery") {
+            let snapshot = await client.currentAdmissionSnapshot()
+            return snapshot.phase == .recoveryRequired
+        }
+
+        let prematureRecoveryError = await capturedError {
+            try await client.recoverRuntime()
+        }
+        let typedRecoveryError = try XCTUnwrap(prematureRecoveryError as? RuntimeLeaseError)
+        guard case let .recoveryFailed(message) = typedRecoveryError else {
+            return XCTFail("expected typed recovery deferral, got \(typedRecoveryError)")
+        }
+        XCTAssertTrue(message.contains("admitted runtime operation"))
+        XCTAssertEqual(base.restartCallCount, 0, "recovery must not reconnect over admitted work")
+        let stillQuarantined = await client.currentAdmissionSnapshot()
+        XCTAssertEqual(stillQuarantined.phase, .recoveryRequired)
+
+        base.releaseTokenCounts()
+        _ = try await countTask.value
+        try await client.recoverRuntime()
+
+        let recovered = await client.currentAdmissionSnapshot()
+        XCTAssertEqual(recovered, .available)
+        XCTAssertEqual(base.restartCallCount, 1)
+    }
+
 }
 
 private func makeRuntimeLeaseRequest(
@@ -484,6 +548,8 @@ private final class RuntimeLeaseBaseClient: RuntimeClientProtocol, @unchecked Se
     private let autoCompletesGenerations: Bool
     private let rejectsCancellation: Bool
     private var status: RuntimeStatus
+    private var tokenCountGateOpen: Bool
+    private var heldTokenCountWaiters: [CheckedContinuation<Void, Never>] = []
     private var heldGenerations: [
         GenerationID: AsyncThrowingStream<GenerationEvent, Error>.Continuation
     ] = [:]
@@ -500,6 +566,7 @@ private final class RuntimeLeaseBaseClient: RuntimeClientProtocol, @unchecked Se
     init(
         autoCompletesGenerations: Bool,
         rejectsCancellation: Bool = false,
+        holdsTokenCounts: Bool = false,
         initialStatus: RuntimeStatus = RuntimeStatus(
             state: .modelLoaded,
             loadedModelID: ModelID(),
@@ -510,6 +577,7 @@ private final class RuntimeLeaseBaseClient: RuntimeClientProtocol, @unchecked Se
     ) {
         self.autoCompletesGenerations = autoCompletesGenerations
         self.rejectsCancellation = rejectsCancellation
+        self.tokenCountGateOpen = !holdsTokenCounts
         self.status = initialStatus
     }
 
@@ -552,6 +620,19 @@ private final class RuntimeLeaseBaseClient: RuntimeClientProtocol, @unchecked Se
     func setRuntimeStatus(_ status: RuntimeStatus) {
         lock.withLock {
             self.status = status
+        }
+    }
+
+    func releaseTokenCounts() {
+        let waiters = lock.withLock {
+            guard !tokenCountGateOpen else { return [CheckedContinuation<Void, Never>]() }
+            tokenCountGateOpen = true
+            let waiters = heldTokenCountWaiters
+            heldTokenCountWaiters.removeAll()
+            return waiters
+        }
+        for waiter in waiters {
+            waiter.resume()
         }
     }
 
@@ -620,6 +701,18 @@ private final class RuntimeLeaseBaseClient: RuntimeClientProtocol, @unchecked Se
     func countTokens(_ request: CountTokensRequest) async throws -> CountTokensResponse {
         lock.withLock {
             storedCountTokenCallCount += 1
+        }
+        await withCheckedContinuation { continuation in
+            let resumeNow = lock.withLock {
+                if tokenCountGateOpen {
+                    return true
+                }
+                heldTokenCountWaiters.append(continuation)
+                return false
+            }
+            if resumeNow {
+                continuation.resume()
+            }
         }
         return CountTokensResponse(
             modelID: request.modelID,
