@@ -290,7 +290,7 @@ final class CaseFileReviewHostedUITests: XCTestCase {
             "review.valueEditor.generatedValue"
         ]
         XCTAssertTrue(generatedBaseline.exists, "The editor must retain the frozen generated baseline")
-        XCTAssertEqual(generatedBaseline.label, Fixture.betaGeneratedValue)
+        XCTAssertEqual(accessibleText(of: generatedBaseline), Fixture.betaGeneratedValue)
         let field = editor.descendants(matching: .any)["review.valueEditor.field"]
         let cancel = app.buttons["review.valueEditor.cancel"]
         let save = app.buttons["review.valueEditor.save"]
@@ -334,7 +334,7 @@ final class CaseFileReviewHostedUITests: XCTestCase {
         )
         let betaEdited = app.descendants(matching: .any)["review.edited.\(betaCellID)"]
         XCTAssertTrue(betaEdited.waitForExistence(timeout: 5), "Beta needs a visible Edited marker")
-        XCTAssertEqual(betaEdited.label, "Edited")
+        XCTAssertEqual(accessibleText(of: betaEdited), "Edited")
         XCTAssertFalse(
             app.descendants(matching: .any)["review.edited.\(alphaCellID)"].exists,
             "Editing beta must not mark alpha as edited"
@@ -394,7 +394,7 @@ final class CaseFileReviewHostedUITests: XCTestCase {
             "review.valueEditor.generatedValue"
         ]
         XCTAssertTrue(generatedBaseline.exists)
-        XCTAssertEqual(generatedBaseline.label, Fixture.betaGeneratedValue)
+        XCTAssertEqual(accessibleText(of: generatedBaseline), Fixture.betaGeneratedValue)
         let field = editor.descendants(matching: .any)["review.valueEditor.field"]
         XCTAssertTrue(field.exists)
         replaceText(in: field, with: Fixture.editedBetaValue)
@@ -416,12 +416,12 @@ final class CaseFileReviewHostedUITests: XCTestCase {
             editedNotice.waitForExistence(timeout: 5),
             "Edited beta needs a visible generated-proof warning"
         )
-        XCTAssertEqual(editedNotice.label, Fixture.editedSourcesWarning)
+        XCTAssertEqual(accessibleText(of: editedNotice), Fixture.editedSourcesWarning)
         let inspectorBaseline = inspector.descendants(matching: .any)[
             "review.sourcesGeneratedValue.\(betaCellID)"
         ]
         XCTAssertTrue(inspectorBaseline.exists, "Sources must name beta's original generated result")
-        XCTAssertEqual(inspectorBaseline.label, Fixture.betaGeneratedValue)
+        XCTAssertEqual(accessibleText(of: inspectorBaseline), Fixture.betaGeneratedValue)
         XCTAssertEqual(
             inspector.descendants(matching: .button).matching(
                 NSPredicate(
@@ -561,6 +561,13 @@ final class CaseFileReviewHostedUITests: XCTestCase {
         field.click()
         field.typeKey("a", modifierFlags: .command)
         field.typeText(value)
+    }
+
+    private func accessibleText(of element: XCUIElement) -> String {
+        if !element.label.isEmpty {
+            return element.label
+        }
+        return element.value as? String ?? ""
     }
 
     private func evidenceElements(
