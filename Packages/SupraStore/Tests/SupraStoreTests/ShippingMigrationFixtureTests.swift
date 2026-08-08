@@ -82,7 +82,7 @@ final class ShippingMigrationFixtureTests: XCTestCase {
         // names v071, and upgrading those databases creates no v072 exact-slice
         // schema on which legacy-unknown lineage can be asserted.
         let manifest = try loadManifest()
-        XCTAssertEqual(manifest.currentMigration, "v072_harden_corpus_review_integrity")
+        XCTAssertEqual(manifest.currentMigration, "v073_create_case_file_review_projects")
 
         for fixture in manifest.fixtures {
             try XCTContext.runActivity(named: fixture.seedVersion) { _ in
@@ -247,7 +247,7 @@ final class ShippingMigrationFixtureTests: XCTestCase {
 
         try migrator.migrate(queue)
         try queue.read { db in
-            XCTAssertEqual(try appliedMigrations(db).last, "v072_harden_corpus_review_integrity")
+            XCTAssertEqual(try appliedMigrations(db).last, "v073_create_case_file_review_projects")
             XCTAssertEqual(try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM document_import_sources"), 0)
         }
     }

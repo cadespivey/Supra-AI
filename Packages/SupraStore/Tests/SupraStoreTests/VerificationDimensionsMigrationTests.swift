@@ -46,7 +46,7 @@ final class VerificationDimensionsMigrationTests: XCTestCase {
         try queue.read { db in
             XCTAssertEqual(
                 try String.fetchAll(db, sql: "SELECT identifier FROM grdb_migrations ORDER BY rowid").last,
-                "v072_harden_corpus_review_integrity"
+                "v073_create_case_file_review_projects"
             )
             XCTAssertTrue(try db.columns(in: "structured_output_versions").contains {
                 $0.name == "verification_dimensions_json" && !$0.isNotNull

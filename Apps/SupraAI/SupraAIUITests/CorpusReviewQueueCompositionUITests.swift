@@ -72,6 +72,67 @@ final class CorpusReviewQueueCompositionUITests: XCTestCase {
         )
     }
 
+    func testTLEASE07ShippingCompositionUsesOneExclusiveWrapperAndNoOrdinaryRawEscape() throws {
+        // T-LEASE-07 expected RED: AppEnvironment currently retains and distributes
+        // a raw RuntimeClient, while RuntimeStatusController can construct another.
+        // The shipping app therefore has no single process-wide admission boundary.
+        let source = try appEnvironmentSource()
+        let rawConstructorPattern = #"\bRuntimeClient\s*\("#
+
+        XCTAssertEqual(
+            try matchCount(pattern: rawConstructorPattern, in: source),
+            1,
+            "AppEnvironment may construct exactly one raw base client"
+        )
+        XCTAssertTrue(
+            source.contains("let baseRuntimeClient: any RuntimeClientProtocol"),
+            "the one raw client must be held behind a protocol-typed local base"
+        )
+        XCTAssertTrue(
+            source.contains("let runtimeClient = ExclusiveRuntimeClient(base: baseRuntimeClient)"),
+            "all normal app runtime work must enter through the one admitted wrapper"
+        )
+        XCTAssertTrue(source.contains("private let runtimeClient: ExclusiveRuntimeClient"))
+        XCTAssertEqual(
+            source.components(separatedBy: "baseRuntimeClient").count - 1,
+            2,
+            "the raw base may appear only in its declaration and wrapper construction"
+        )
+        XCTAssertFalse(
+            source.contains("taskRuntimeClient"),
+            "a second task-client alias makes raw/wrapped composition too easy to split"
+        )
+
+        let modelLibrary = try initializerSource(
+            named: "let modelLibrary = ModelLibrary(",
+            in: source
+        )
+        let corpusRunner = try initializerSource(
+            named: "let corpusAnalysisRunner = CorpusAnalysisQueueRunner.live(",
+            in: source
+        )
+        XCTAssertTrue(modelLibrary.contains("runtimeClient: runtimeClient"))
+        XCTAssertTrue(corpusRunner.contains("runtimeClient: runtimeClient"))
+
+        let allowedDirectHosts: Set<String> = [
+            // DEBUG-only hosted-XPC lifecycle probes deliberately create multiple
+            // connections and replace the normal application root.
+            "RuntimeXPCIntegrationView.swift",
+            // The signed release-smoke entry point exits before SupraAIApp starts.
+            "SignedReleaseSmokeHost.swift",
+            // The sole normal-path construction immediately enters the wrapper.
+            "AppEnvironment.swift",
+        ]
+        for url in try appSwiftSourceURLs() where !allowedDirectHosts.contains(url.lastPathComponent) {
+            let candidate = try String(contentsOf: url, encoding: .utf8)
+            XCTAssertEqual(
+                try matchCount(pattern: rawConstructorPattern, in: candidate),
+                0,
+                "normal app source \(url.lastPathComponent) must not construct a raw RuntimeClient"
+            )
+        }
+    }
+
     func testTDELUI01BothDocumentTrashSurfacesShareConfirmationAndRenderFailure() throws {
         // Expected RED: MatterDocumentsView hard-deletes directly from its trash
         // row and never renders the controller's deletion-specific notice.
@@ -124,6 +185,32 @@ final class CorpusReviewQueueCompositionUITests: XCTestCase {
             contentsOf: appRoot.appendingPathComponent(relativePath),
             encoding: .utf8
         )
+    }
+
+    private func appSwiftSourceURLs() throws -> [URL] {
+        let testFile = URL(fileURLWithPath: #filePath)
+        let sourceRoot = testFile
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("SupraAI", isDirectory: true)
+        let enumerator = try XCTUnwrap(
+            FileManager.default.enumerator(
+                at: sourceRoot,
+                includingPropertiesForKeys: [.isRegularFileKey],
+                options: [.skipsHiddenFiles]
+            )
+        )
+        var results: [URL] = []
+        for case let url as URL in enumerator where url.pathExtension == "swift" {
+            results.append(url)
+        }
+        return results.sorted { $0.path < $1.path }
+    }
+
+    private func matchCount(pattern: String, in source: String) throws -> Int {
+        let expression = try NSRegularExpression(pattern: pattern)
+        let range = NSRange(source.startIndex..<source.endIndex, in: source)
+        return expression.numberOfMatches(in: source, range: range)
     }
 
     private func initializerSource(named marker: String, in source: String) throws -> String {

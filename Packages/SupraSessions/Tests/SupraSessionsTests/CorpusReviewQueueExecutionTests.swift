@@ -441,6 +441,90 @@ final class CorpusReviewQueueExecutionTests: XCTestCase {
         XCTAssertEqual(audit.taskKind, CorpusAnalysisTaskKind.exhaustiveList.rawValue)
     }
 
+    func testTPAUSE01PauseFinishesCurrentPartitionAndResumeRunsOnlyRemainingWork() async throws {
+        // T-PAUSE-01 expected RED: DocumentProcessingQueue exposes cancellation
+        // but no cooperative Review pause. The runner has no boundary hook, so it
+        // cannot stop after one successful partition without cancelling or
+        // failing the frozen ledger.
+        let store = try makeStore(testName: "TPAUSE01")
+        let fixture = try prepareFixture(
+            store: store,
+            caseName: "partition-boundary-pause",
+            partCount: 3
+        )
+        let partitions = try store.corpusAnalysis.fetchPartitions(
+            matterID: fixture.matterID,
+            runID: fixture.payload.runID
+        )
+        XCTAssertEqual(partitions.count, 3, "wire proof requires three source sections")
+        let probe = PauseBoundaryProbe()
+        let runner = CorpusAnalysisQueueRunner(
+            store: store,
+            resolvePinnedModel: { pinnedModel, _ in pinnedModel },
+            exhaustiveListGenerator: { input in
+                try await probe.generate(input)
+            }
+        )
+        let queue = makeQueue(
+            store: store,
+            pauseRequester: { runID in runner.requestPause(runID: runID) }
+        ) { payload in
+            try await runner.run(payload)
+        }
+        queue.bootstrap()
+        let jobID = try XCTUnwrap(queue.enqueueCorpusAnalysis(
+            matterID: fixture.matterID,
+            payload: fixture.payload
+        ))
+        await probe.waitUntilFirstPartitionStarted()
+
+        queue.pause(jobID: jobID)
+        XCTAssertEqual(queue.pausingCorpusJobID, jobID)
+        await probe.finishFirstPartition()
+        await queue.waitUntilIdle()
+
+        let pausedJob = try XCTUnwrap(store.documentJobs.fetchJob(id: jobID))
+        let pausedRun = try XCTUnwrap(
+            store.corpusAnalysis.fetchRun(
+                matterID: fixture.matterID,
+                id: fixture.payload.runID
+            )
+        )
+        let pausedCoverage = try store.corpusAnalysis.coverage(
+            matterID: fixture.matterID,
+            runID: fixture.payload.runID
+        )
+        let generatedAtPause = await probe.generatedPartitionIDs
+        XCTAssertEqual(pausedJob.status, DocumentProcessingJobStatus.paused.rawValue)
+        XCTAssertEqual(pausedJob.phase, DocumentProcessingPhase.paused.rawValue)
+        XCTAssertEqual(pausedRun.status, CorpusAnalysisRunStatus.running.rawValue)
+        XCTAssertEqual(generatedAtPause.count, 1)
+        XCTAssertEqual(pausedCoverage.succeededPartitionCount, 1)
+        XCTAssertEqual(pausedCoverage.pendingPartitionCount, 2)
+        XCTAssertEqual(pausedCoverage.failedPartitionCount, 0)
+        XCTAssertEqual(pausedCoverage.cancelledPartitionCount, 0)
+        XCTAssertNil(queue.pausingCorpusJobID)
+
+        queue.resume(jobID: jobID)
+        await queue.waitUntilIdle()
+
+        let finalJob = try XCTUnwrap(store.documentJobs.fetchJob(id: jobID))
+        let finalRun = try XCTUnwrap(
+            store.corpusAnalysis.fetchRun(
+                matterID: fixture.matterID,
+                id: fixture.payload.runID
+            )
+        )
+        let finalCoverage = try decodeCoverage(finalRun)
+        let finalGenerated = await probe.generatedPartitionIDs
+        XCTAssertEqual(finalJob.status, DocumentProcessingJobStatus.complete.rawValue)
+        XCTAssertEqual(Set(finalGenerated), Set(partitions.map(\.id)))
+        XCTAssertEqual(finalGenerated.count, 3, "the completed first partition must not replay")
+        XCTAssertEqual(finalCoverage.succeededPartitionCount, 3)
+        XCTAssertEqual(finalCoverage.pendingPartitionCount, 0)
+        XCTAssertEqual(finalCoverage.balanceErrorCount, 0)
+    }
+
     func testTQUEUE06SoftDeleteCancellationWinsActiveRunnerSuccess() async throws {
         // T-QUEUE-06 success expected RED: softDeleteMatter changes the active row
         // to cancelled, but runCorpusAnalysis later completes it unconditionally.
@@ -845,6 +929,7 @@ final class CorpusReviewQueueExecutionTests: XCTestCase {
 
     private func makeQueue(
         store: SupraStore,
+        pauseRequester: (@Sendable (String) -> Void)? = nil,
         runner: @escaping @Sendable (CorpusAnalysisJobPayload) async throws -> Void
     ) -> DocumentProcessingQueue {
         let storage = DocumentStorage(
@@ -858,7 +943,8 @@ final class CorpusReviewQueueExecutionTests: XCTestCase {
             importService: DocumentImportService(store: store, storage: storage, ocr: nil),
             makeIndexingService: { DocumentIndexingService(store: store) },
             notifier: SilentExecutionNotifier(),
-            corpusAnalysisRunner: runner
+            corpusAnalysisRunner: runner,
+            corpusAnalysisPauseRequester: pauseRequester
         )
     }
 
@@ -1092,6 +1178,44 @@ private actor DeletionRaceRunnerGate {
 private actor PayloadRecorder {
     private(set) var payloads: [CorpusAnalysisJobPayload] = []
     func record(_ payload: CorpusAnalysisJobPayload) { payloads.append(payload) }
+}
+
+private actor PauseBoundaryProbe {
+    private(set) var generatedPartitionIDs: [String] = []
+    private var firstStarted = false
+    private var firstStartWaiters: [CheckedContinuation<Void, Never>] = []
+    private var mayFinishFirst = false
+    private var firstFinishWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func generate(_ input: ExhaustiveListGenerationInput) async throws -> String {
+        generatedPartitionIDs.append(input.partition.partitionID)
+        if generatedPartitionIDs.count == 1 {
+            firstStarted = true
+            let startWaiters = firstStartWaiters
+            firstStartWaiters.removeAll()
+            for waiter in startWaiters { waiter.resume() }
+            if !mayFinishFirst {
+                await withCheckedContinuation { continuation in
+                    firstFinishWaiters.append(continuation)
+                }
+            }
+        }
+        return #"{"schema_version":1,"items":[]}"#
+    }
+
+    func waitUntilFirstPartitionStarted() async {
+        if firstStarted { return }
+        await withCheckedContinuation { continuation in
+            firstStartWaiters.append(continuation)
+        }
+    }
+
+    func finishFirstPartition() {
+        mayFinishFirst = true
+        let waiters = firstFinishWaiters
+        firstFinishWaiters.removeAll()
+        for waiter in waiters { waiter.resume() }
+    }
 }
 
 private actor CancellationAndFollowerProbe {
