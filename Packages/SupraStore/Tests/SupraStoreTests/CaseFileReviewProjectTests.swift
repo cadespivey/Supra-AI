@@ -699,6 +699,9 @@ final class CaseFileReviewProjectTests: XCTestCase {
             let range = text.range(of: excerpt)!
             return text.distance(from: text.startIndex, to: range.lowerBound)..<text.distance(from: text.startIndex, to: range.upperBound)
         }
+        let outputLocators = ranges.map { range in
+            "{\"source_kind\":\"text\",\"char_start\":\(range.lowerBound),\"char_end\":\(range.upperBound)}"
+        }
         func evidence(_ index: Int) -> [String: Any] {
             ["document_id": document.id, "revision_id": revision.id, "locator_json": sliceLocator,
              "quote": excerpts[index], "char_start": ranges[index].lowerBound, "char_end": ranges[index].upperBound]
@@ -738,7 +741,7 @@ final class CaseFileReviewProjectTests: XCTestCase {
                 evidence: [VerificationDimensionEvidence(
                     sourceID: revision.id,
                     sourceLabel: document.displayName,
-                    locator: sliceLocator,
+                    locator: outputLocators[2],
                     excerpt: excerpts[2]
                 )]
             ),
@@ -780,7 +783,7 @@ final class CaseFileReviewProjectTests: XCTestCase {
             DocumentOutputSourceRecord(
                 id: id, sourceSetID: sourceSetID, documentID: document.id, revisionID: revision.id,
                 citationLabel: index == 0 ? "S431" : (index == 1 ? "S977" : "C983"),
-                locatorJSON: "{\"source_kind\":\"text\",\"char_start\":\(ranges[index].lowerBound),\"char_end\":\(ranges[index].upperBound)}",
+                locatorJSON: outputLocators[index],
                 excerpt: excerpts[index], rank: index
             )
         }
