@@ -12,6 +12,8 @@ struct CaseFileReviewView: View {
     @State private var sourcesWidth: CGFloat = 640
     @State private var previewModel: DocumentPreviewModel?
     @State private var actionError: String?
+    @State private var valueEditor: ValueEditorState?
+    @FocusState private var valueFieldFocused: Bool
 
     // Approved evidence rail: #A77920 in light appearance, #D2AC5C in dark.
     private var evidenceRailColor: Color {
@@ -62,6 +64,13 @@ struct CaseFileReviewView: View {
         .onAppear { controller.load() }
         .onChange(of: controller.selectedCellID) { _, _ in
             previewModel = nil
+            if controller.selectedCellID != nil {
+                valueEditor = nil
+            }
+        }
+        .onChange(of: controller.selectedProjectID) { _, _ in
+            valueEditor = nil
+            valueFieldFocused = false
         }
         .alert(
             "Review action failed",
@@ -185,15 +194,49 @@ struct CaseFileReviewView: View {
                     .width(min: 180, ideal: 240)
 
                     TableColumn("Generated value") { row in
-                        Text(row.generatedValues.joined(separator: " · "))
-                            .font(.supraBody)
-                            .lineLimit(2)
-                            .textSelection(.enabled)
+                        HStack(spacing: 8) {
+                            Button {
+                                beginEditing(row)
+                            } label: {
+                                HStack(spacing: 6) {
+                                    Text(row.displayValue)
+                                        .font(.supraBody)
+                                        .lineLimit(2)
+                                        .multilineTextAlignment(.leading)
+                                    Image(systemName: "pencil")
+                                        .font(.caption)
+                                        .foregroundStyle(.tertiary)
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(row.displayValue)
+                            .accessibilityValue(
+                                row.valueState == .edited ? "Edited" : "Generated"
+                            )
+                            .accessibilityIdentifier("review.value.\(row.cellID)")
+                            .accessibilityHint("Edit this Review value")
+                            .popover(
+                                isPresented: valueEditorPresented(for: row.cellID),
+                                arrowEdge: .bottom
+                            ) {
+                                valueEditorPopover
+                            }
+
+                            if row.valueState == .edited {
+                                Text("Edited")
+                                    .font(.supraCaption)
+                                    .foregroundStyle(.secondary)
+                                    .accessibilityIdentifier("review.edited.\(row.cellID)")
+                            }
+                        }
                     }
                     .width(min: 180, ideal: 300)
 
                     TableColumn("Sources") { row in
                         Button {
+                            valueEditor = nil
                             controller.selectCell(row.cellID)
                         } label: {
                             Text(sourceSummary(row))
@@ -219,7 +262,7 @@ struct CaseFileReviewView: View {
                             }
                             .buttonStyle(.ghost)
                             .accessibilityIdentifier("review.markReviewed.\(row.cellID)")
-                            .accessibilityHint("Record that this finding was reviewed")
+                            .accessibilityHint("Record that this finding was reviewed at its current value")
                         }
                     }
                     .width(min: 130, ideal: 150)
@@ -255,6 +298,9 @@ struct CaseFileReviewView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
+                    if let row = selectedRow, row.valueState == .edited {
+                        editedSourcesNotice(row)
+                    }
                     evidenceSection(
                         "Supporting evidence",
                         evidence: controller.selectedEvidence.filter { $0.kind == .supporting },
@@ -275,6 +321,29 @@ struct CaseFileReviewView: View {
                 .frame(width: evidenceRailWidth)
         }
         .accessibilityIdentifier("review.sourcesInspector")
+    }
+
+    private func editedSourcesNotice(_ row: CaseFileReviewController.Row) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label("Attorney-edited value", systemImage: "pencil")
+                .font(.supraHeadline)
+            Text("Sources are frozen from the generated result. They do not validate the attorney-edited value.")
+                .font(.supraSubheadline)
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier("review.sourcesEditedNotice")
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Generated result")
+                    .font(.supraCaption)
+                    .foregroundStyle(.secondary)
+                Text(row.generatedValue)
+                    .font(.supraBody)
+                    .textSelection(.enabled)
+                    .accessibilityIdentifier("review.sourcesGeneratedValue.\(row.cellID)")
+            }
+        }
+        .padding(12)
+        .background(.secondary.opacity(colorScheme == .dark ? 0.12 : 0.07))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
     private func evidenceSection(
@@ -394,8 +463,162 @@ struct CaseFileReviewView: View {
         }
     }
 
+    private func beginEditing(_ row: CaseFileReviewController.Row) {
+        closeSources()
+        valueEditor = ValueEditorState(
+            cellID: row.cellID,
+            finding: row.finding,
+            generatedValue: row.generatedValue,
+            currentValue: row.displayValue,
+            isEdited: row.valueState == .edited,
+            draft: row.displayValue
+        )
+    }
+
+    private func valueEditorPresented(for cellID: String) -> Binding<Bool> {
+        Binding(
+            get: { valueEditor?.cellID == cellID },
+            set: { isPresented in
+                if !isPresented, valueEditor?.cellID == cellID {
+                    valueEditor = nil
+                    valueFieldFocused = false
+                }
+            }
+        )
+    }
+
+    private var valueDraft: Binding<String> {
+        Binding(
+            get: { valueEditor?.draft ?? "" },
+            set: { valueEditor?.draft = $0 }
+        )
+    }
+
+    private var valueEditorPopover: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            if let editor = valueEditor {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Edit value")
+                        .font(.supraTitle)
+                    Text(editor.finding)
+                        .font(.supraCaption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Generated result")
+                        .font(.supraCaption)
+                        .foregroundStyle(.secondary)
+                    Text(editor.generatedValue)
+                        .font(.supraBody)
+                        .textSelection(.enabled)
+                        .accessibilityIdentifier("review.valueEditor.generatedValue")
+                }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Reviewed value")
+                        .font(.supraCaption)
+                        .foregroundStyle(.secondary)
+                    TextEditor(text: valueDraft)
+                        .font(.supraBody)
+                        .frame(minHeight: 72, maxHeight: 120)
+                        .padding(5)
+                        .background(.background)
+                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .stroke(.separator, lineWidth: 1)
+                        }
+                        .focused($valueFieldFocused)
+                        .accessibilityLabel("Reviewed value")
+                        .accessibilityIdentifier("review.valueEditor.field")
+                        .onAppear {
+                            DispatchQueue.main.async {
+                                valueFieldFocused = true
+                            }
+                        }
+                }
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Sources remain attached to the generated result.")
+                    Text("Changing this value—including Use generated value—clears any prior Reviewed mark.")
+                }
+                .font(.supraCaption)
+                .foregroundStyle(.secondary)
+
+                Divider()
+
+                HStack(spacing: 8) {
+                    if editor.isEdited {
+                        Button("Use generated value") {
+                            restoreGeneratedValue(editor)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("review.valueEditor.useGenerated")
+                    }
+                    Spacer()
+                    Button("Cancel") {
+                        valueEditor = nil
+                        valueFieldFocused = false
+                    }
+                    .buttonStyle(.ghost)
+                    .keyboardShortcut(.cancelAction)
+                    .accessibilityIdentifier("review.valueEditor.cancel")
+
+                    Button("Save changes") {
+                        saveValueEditor(editor)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.return, modifiers: .command)
+                    .disabled(!valueEditorHasChanges)
+                    .accessibilityIdentifier("review.valueEditor.save")
+                }
+            }
+        }
+        .padding(16)
+        .frame(width: 430)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("review.valueEditor")
+    }
+
+    private var valueEditorHasChanges: Bool {
+        guard let editor = valueEditor else { return false }
+        let normalized = editor.draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !normalized.isEmpty && normalized != editor.currentValue
+    }
+
+    private func saveValueEditor(_ editor: ValueEditorState) {
+        do {
+            try controller.editValue(cellID: editor.cellID, value: editor.draft)
+            valueEditor = nil
+            valueFieldFocused = false
+        } catch {
+            actionError = error.localizedDescription
+        }
+    }
+
+    private func restoreGeneratedValue(_ editor: ValueEditorState) {
+        do {
+            try controller.useGeneratedValue(cellID: editor.cellID)
+            valueEditor = nil
+            valueFieldFocused = false
+        } catch {
+            actionError = error.localizedDescription
+        }
+    }
+
     private func closeSources() {
         previewModel = nil
         controller.clearSelection()
     }
+}
+
+private struct ValueEditorState {
+    let cellID: String
+    let finding: String
+    let generatedValue: String
+    let currentValue: String
+    let isEdited: Bool
+    var draft: String
 }

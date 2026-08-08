@@ -343,6 +343,8 @@ struct MatterWorkspaceView: View {
         case "export_completed": "Export Completed"
         case "billing_draft_generated": "Billing Draft Generated"
         case "legal_model_route": "Model Route Used"
+        case "case_file_review_cell_value_edited": "Review Value Edited"
+        case "case_file_review_cell_value_restored": "Generated Review Value Restored"
         default:
             eventType
                 .split(separator: "_")

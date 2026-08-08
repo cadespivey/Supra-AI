@@ -67,18 +67,37 @@ public final class CaseFileReviewController: ObservableObject {
         case reviewed
     }
 
+    public enum ValueState: String, Sendable, Equatable {
+        case generated
+        case edited
+    }
+
     public struct Row: Identifiable, Sendable, Equatable {
         public var id: String { cellID }
         public let cellID: String
         public let finding: String
         public let generatedValues: [String]
+        public let attorneyValue: String?
         public let supportingSourceCount: Int
         public let contrarySourceCount: Int
         public let reviewState: ReviewState
-        public let valueState: String
+        public let valueState: ValueState
         public let supportState: String
         public let reviewedBy: String?
         public let reviewedAt: Date?
+
+        public var generatedValue: String {
+            generatedValues.joined(separator: " · ")
+        }
+
+        public var displayValue: String {
+            switch valueState {
+            case .generated:
+                generatedValue
+            case .edited:
+                attorneyValue ?? generatedValue
+            }
+        }
 
         public var sourceCount: Int {
             supportingSourceCount + contrarySourceCount
@@ -241,6 +260,50 @@ public final class CaseFileReviewController: ObservableObject {
         message = nil
     }
 
+    public func editValue(
+        cellID: String,
+        value: String,
+        editedBy: String? = nil,
+        at editedAt: Date = Date()
+    ) throws {
+        guard let selectedProjectID else {
+            throw CaseFileReviewControllerError.noSelectedProject
+        }
+        _ = try store.caseFileReviews.editCellValue(
+            matterID: matterID,
+            projectID: selectedProjectID,
+            cellID: cellID,
+            attorneyValue: value,
+            editedBy: reviewActor(explicit: editedBy),
+            editedAt: editedAt
+        )
+        try reloadSelectedProject(
+            projectID: selectedProjectID,
+            preservingCellID: selectedCellID
+        )
+    }
+
+    public func useGeneratedValue(
+        cellID: String,
+        actor: String? = nil,
+        at restoredAt: Date = Date()
+    ) throws {
+        guard let selectedProjectID else {
+            throw CaseFileReviewControllerError.noSelectedProject
+        }
+        _ = try store.caseFileReviews.restoreGeneratedCellValue(
+            matterID: matterID,
+            projectID: selectedProjectID,
+            cellID: cellID,
+            actor: reviewActor(explicit: actor),
+            at: restoredAt
+        )
+        try reloadSelectedProject(
+            projectID: selectedProjectID,
+            preservingCellID: selectedCellID
+        )
+    }
+
     public func preview(evidenceID: String) -> DocumentPreviewModel? {
         guard let item = selectedEvidence.first(where: { $0.id == evidenceID }) else {
             return nil
@@ -342,6 +405,26 @@ public final class CaseFileReviewController: ObservableObject {
             } catch {
                 throw CaseFileReviewControllerError.invalidGeneratedValues(cell.id)
             }
+            guard let valueState = ValueState(rawValue: cell.valueState) else {
+                throw CaseFileReviewControllerError.corruptProjectGraph(graph.project.id)
+            }
+            let attorneyValue: String?
+            switch valueState {
+            case .generated:
+                guard cell.attorneyValue == nil else {
+                    throw CaseFileReviewControllerError.corruptProjectGraph(graph.project.id)
+                }
+                attorneyValue = nil
+            case .edited:
+                guard let storedValue = cell.attorneyValue else {
+                    throw CaseFileReviewControllerError.corruptProjectGraph(graph.project.id)
+                }
+                let normalizedValue = storedValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !normalizedValue.isEmpty, normalizedValue == storedValue else {
+                    throw CaseFileReviewControllerError.corruptProjectGraph(graph.project.id)
+                }
+                attorneyValue = normalizedValue
+            }
             let edges = try store.caseFileReviews.fetchCurrentEvidence(
                 matterID: matterID,
                 projectID: graph.project.id,
@@ -351,10 +434,11 @@ public final class CaseFileReviewController: ObservableObject {
                 cellID: cell.id,
                 finding: row.rowKey,
                 generatedValues: generatedValues,
+                attorneyValue: attorneyValue,
                 supportingSourceCount: edges.count { $0.kind == EvidenceKind.supporting.rawValue },
                 contrarySourceCount: edges.count { $0.kind == EvidenceKind.contrary.rawValue },
                 reviewState: ReviewState(rawValue: cell.reviewState) ?? .needsReview,
-                valueState: cell.valueState,
+                valueState: valueState,
                 supportState: cell.supportState,
                 reviewedBy: cell.reviewedBy,
                 reviewedAt: cell.reviewedAt
@@ -369,6 +453,21 @@ public final class CaseFileReviewController: ObservableObject {
         } else {
             clearSelection()
         }
+    }
+
+    private func reloadSelectedProject(
+        projectID: String,
+        preservingCellID: String?
+    ) throws {
+        guard let graph = try store.caseFileReviews.fetchProjectGraph(
+            matterID: matterID,
+            projectID: projectID
+        ) else {
+            throw CaseFileReviewControllerError.projectUnavailable(projectID)
+        }
+        projects = try store.caseFileReviews.fetchProjects(matterID: matterID).map(Self.project)
+        try apply(graph: graph, preservingCellID: preservingCellID)
+        message = nil
     }
 
     private func evidence(_ records: [CaseFileReviewEvidenceEdgeRecord]) -> [Evidence] {

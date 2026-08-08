@@ -47,6 +47,17 @@ claims:
     last_reviewed: "2026-08-08"
     publication_anchor: "ARCHITECTURE.md"
 
+  - id: "CASE-FILE-REVIEW-VALUE-EDITS"
+    topic: "case-file-review-value-edits"
+    wording: "The Review Matrix persists a local-user-authored whole-cell value overlay per finding across Store reopen and lets the user replace or restore the displayed value without mutating the frozen generation or evidence; each effective-value transition is audited atomically, preserves independent support and project-staleness state, and clears any prior Mark Reviewed attestation."
+    owner: "Persistence and document reliability engineering"
+    code_anchor: "Packages/SupraStore/Sources/SupraStore/Repositories/CaseFileReviewRepository.swift"
+    verification: "Packages/SupraStore/Tests/SupraStoreTests/CaseFileReviewProjectTests.swift"
+    ci_job: "macos-ci/swift-packages"
+    applicable_version: "Next release after 2.3.4"
+    last_reviewed: "2026-08-08"
+    publication_anchor: "ARCHITECTURE.md"
+
   - id: "CASE-FILE-REVIEW-DELETION-PRECISION"
     topic: "case-file-review-deletion-precision"
     wording: "Permanent document deletion precision-degrades only affected Review evidence and projects: live proof pointers become unavailable and dependent support and project state become stale, while frozen source identity, citation label, locator, excerpt, generated value, review state, and reviewer metadata remain retained; unrelated Review work remains unchanged."

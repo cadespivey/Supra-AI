@@ -328,16 +328,17 @@ public final class CaseFileReviewRepository: @unchecked Sendable {
         reviewedBy: String,
         reviewedAt: Date = Date()
     ) throws -> CaseFileReviewCellRecord {
+        let normalizedMatterID = try Self.requireNonEmpty(matterID, field: "matterID")
+        let normalizedProjectID = try Self.requireNonEmpty(projectID, field: "projectID")
+        let normalizedCellID = try Self.requireNonEmpty(cellID, field: "cellID")
         let normalizedReviewer = try Self.requireNonEmpty(reviewedBy, field: "reviewedBy")
         return try writer.write { db in
-            guard var cell = try Self.scopedCell(
+            var cell = try Self.scopedGeneratedValueCell(
                 db,
-                matterID: matterID,
-                projectID: projectID,
-                cellID: cellID
-            ) else {
-                throw CaseFileReviewRepositoryError.cellScopeMismatch(cellID)
-            }
+                matterID: normalizedMatterID,
+                projectID: normalizedProjectID,
+                cellID: normalizedCellID
+            ).cell
             if cell.reviewState == "reviewed" {
                 return cell
             }
@@ -348,20 +349,141 @@ public final class CaseFileReviewRepository: @unchecked Sendable {
             try cell.update(db)
             try db.execute(
                 sql: "UPDATE case_file_review_projects SET updated_at = ? WHERE id = ?",
-                arguments: [reviewedAt, projectID]
+                arguments: [reviewedAt, normalizedProjectID]
             )
             try AuditEventRecord(
-                matterID: matterID,
+                matterID: normalizedMatterID,
                 timestamp: reviewedAt,
                 eventType: "case_file_review_cell_reviewed",
                 actor: normalizedReviewer,
-                summary: "Marked one generated Review value as reviewed.",
+                summary: "Marked one \(cell.valueState) Review value as reviewed.",
+                relatedTable: CaseFileReviewCellRecord.databaseTableName,
+                relatedID: cell.id,
+                metadataJSON: try Self.auditMetadata([
+                    "schema_version": 1,
+                    "project_id": normalizedProjectID,
+                    "cell_id": cell.id,
+                    "value_state": cell.valueState,
+                ])
+            ).insert(db)
+            return cell
+        }
+    }
+
+    /// Replaces the value displayed for one scoped generated-value cell without
+    /// mutating its immutable generation or evidence. Exact retries are no-ops,
+    /// including when the existing edited value has already been reviewed.
+    @discardableResult
+    public func editCellValue(
+        matterID: String,
+        projectID: String,
+        cellID: String,
+        attorneyValue: String,
+        editedBy: String,
+        editedAt: Date = Date()
+    ) throws -> CaseFileReviewCellRecord {
+        let normalizedMatterID = try Self.requireNonEmpty(matterID, field: "matterID")
+        let normalizedProjectID = try Self.requireNonEmpty(projectID, field: "projectID")
+        let normalizedCellID = try Self.requireNonEmpty(cellID, field: "cellID")
+        let normalizedValue = try Self.requireNonEmpty(attorneyValue, field: "attorneyValue")
+        let normalizedActor = try Self.requireNonEmpty(editedBy, field: "editedBy")
+        return try transitionCellValue(
+            matterID: normalizedMatterID,
+            projectID: normalizedProjectID,
+            cellID: normalizedCellID,
+            newValueState: "edited",
+            newAttorneyValue: normalizedValue,
+            actor: normalizedActor,
+            timestamp: editedAt,
+            eventType: "case_file_review_cell_value_edited",
+            summary: "Edited one Review value."
+        )
+    }
+
+    /// Removes one attorney override and returns the displayed value to the
+    /// cell's existing immutable generation. An already-generated cell is an
+    /// exact no-op and does not disturb a Reviewed attestation.
+    @discardableResult
+    public func restoreGeneratedCellValue(
+        matterID: String,
+        projectID: String,
+        cellID: String,
+        actor: String,
+        at timestamp: Date = Date()
+    ) throws -> CaseFileReviewCellRecord {
+        let normalizedMatterID = try Self.requireNonEmpty(matterID, field: "matterID")
+        let normalizedProjectID = try Self.requireNonEmpty(projectID, field: "projectID")
+        let normalizedCellID = try Self.requireNonEmpty(cellID, field: "cellID")
+        let normalizedActor = try Self.requireNonEmpty(actor, field: "actor")
+        return try transitionCellValue(
+            matterID: normalizedMatterID,
+            projectID: normalizedProjectID,
+            cellID: normalizedCellID,
+            newValueState: "generated",
+            newAttorneyValue: nil,
+            actor: normalizedActor,
+            timestamp: timestamp,
+            eventType: "case_file_review_cell_value_restored",
+            summary: "Restored one Review value to its generated result."
+        )
+    }
+
+    private func transitionCellValue(
+        matterID: String,
+        projectID: String,
+        cellID: String,
+        newValueState: String,
+        newAttorneyValue: String?,
+        actor: String,
+        timestamp: Date,
+        eventType: String,
+        summary: String
+    ) throws -> CaseFileReviewCellRecord {
+        try writer.write { db in
+            let scoped = try Self.scopedGeneratedValueCell(
+                db,
+                matterID: matterID,
+                projectID: projectID,
+                cellID: cellID
+            )
+            var cell = scoped.cell
+            guard cell.valueState != newValueState || cell.attorneyValue != newAttorneyValue else {
+                return cell
+            }
+
+            let priorValueState = cell.valueState
+            let priorAttorneyValue = cell.attorneyValue
+            let reviewAttestationCleared = cell.reviewState == "reviewed"
+            cell.attorneyValue = newAttorneyValue
+            cell.valueState = newValueState
+            cell.reviewState = "needs_review"
+            cell.reviewedBy = nil
+            cell.reviewedAt = nil
+            cell.updatedAt = timestamp
+            try cell.update(db)
+
+            try db.execute(
+                sql: "UPDATE case_file_review_projects SET updated_at = ? WHERE id = ?",
+                arguments: [timestamp, projectID]
+            )
+            try AuditEventRecord(
+                matterID: matterID,
+                timestamp: timestamp,
+                eventType: eventType,
+                actor: actor,
+                summary: summary,
                 relatedTable: CaseFileReviewCellRecord.databaseTableName,
                 relatedID: cell.id,
                 metadataJSON: try Self.auditMetadata([
                     "schema_version": 1,
                     "project_id": projectID,
                     "cell_id": cell.id,
+                    "current_generation_id": scoped.generationID,
+                    "prior_value_state": priorValueState,
+                    "new_value_state": newValueState,
+                    "prior_attorney_value": priorAttorneyValue ?? NSNull(),
+                    "new_attorney_value": newAttorneyValue ?? NSNull(),
+                    "review_attestation_cleared": reviewAttestationCleared,
                 ])
             ).insert(db)
             return cell
@@ -737,6 +859,47 @@ public final class CaseFileReviewRepository: @unchecked Sendable {
                 """,
             arguments: [cellID, projectID, matterID]
         )
+    }
+
+    private static func scopedGeneratedValueCell(
+        _ db: Database,
+        matterID: String,
+        projectID: String,
+        cellID: String
+    ) throws -> (cell: CaseFileReviewCellRecord, generationID: String) {
+        guard try Int.fetchOne(
+            db,
+            sql: "SELECT COUNT(*) FROM matters WHERE id = ? AND deleted_at IS NULL",
+            arguments: [matterID]
+        ) == 1 else {
+            throw CaseFileReviewRepositoryError.matterUnavailable(matterID)
+        }
+        guard let cell = try CaseFileReviewCellRecord.fetchOne(
+            db,
+            sql: """
+                SELECT cell.*
+                FROM case_file_review_cells AS cell
+                JOIN case_file_review_columns AS column ON column.id = cell.column_id
+                JOIN case_file_review_tables AS review_table ON review_table.id = cell.table_id
+                JOIN case_file_review_projects AS project ON project.id = review_table.project_id
+                WHERE cell.id = ? AND project.id = ? AND project.matter_id = ?
+                  AND project.active_table_id = cell.table_id
+                  AND column.table_id = cell.table_id
+                  AND column.column_key = 'generated_value'
+                """,
+            arguments: [cellID, projectID, matterID]
+        ) else {
+            throw CaseFileReviewRepositoryError.cellScopeMismatch(cellID)
+        }
+        guard let generationID = cell.currentGenerationID,
+              let generation = try CaseFileReviewCellGenerationRecord.fetchOne(
+                  db,
+                  key: generationID
+              ),
+              generation.cellID == cell.id else {
+            throw CaseFileReviewRepositoryError.corruptGraph(projectID)
+        }
+        return (cell, generationID)
     }
 
     private static func requireNonEmpty(_ value: String, field: String) throws -> String {
