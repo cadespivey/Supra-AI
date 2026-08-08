@@ -1,9 +1,354 @@
 import Foundation
 import XCTest
 
+/// T-RP-UI-07...09 exercise the native Review workbench against a hermetic,
+/// synthetic Review Project. The dedicated launch flag is intentionally separate
+/// from base `-uiTestMode` so unrelated hosted tests keep their smallest fixture.
+@MainActor
+final class CaseFileReviewHostedUITests: XCTestCase {
+    override func setUp() {
+        continueAfterFailure = false
+    }
+
+    func testTRPUI07ReviewProjectRendersFourColumnMatrixAndTwoExactRows() throws {
+        // T-RP-UI-07 expected RED: `-uiTestReviewProject` is not handled, so the
+        // hermetic matter has no Review Project and `review.matrix` never appears.
+        let app = launchReviewProject()
+        let matrix = app.descendants(matching: .any)["review.matrix"]
+        XCTAssertTrue(
+            matrix.waitForExistence(timeout: 20),
+            "The dedicated Review fixture must render the native four-column matrix"
+        )
+
+        for header in ["Finding", "Generated value", "Sources", "Review"] {
+            XCTAssertEqual(
+                renderedElements(label: header, in: matrix).count,
+                1,
+                "The hosted matrix must render one exact \(header) column header"
+            )
+        }
+
+        let findingRows = elements(
+            in: matrix,
+            identifierPrefix: Fixture.findingIdentifierPrefix
+        )
+        XCTAssertEqual(findingRows.count, 2, "The synthetic Review Project must render two rows")
+
+        let alphaFinding = element(
+            in: matrix,
+            identifierPrefix: Fixture.findingIdentifierPrefix,
+            value: Fixture.alphaFinding
+        )
+        let betaFinding = element(
+            in: matrix,
+            identifierPrefix: Fixture.findingIdentifierPrefix,
+            value: Fixture.betaFinding
+        )
+        XCTAssertTrue(alphaFinding.exists, "The non-default alpha finding is missing")
+        XCTAssertTrue(betaFinding.exists, "The non-default beta finding is missing")
+
+        let alphaCellID = try cellID(
+            of: alphaFinding,
+            identifierPrefix: Fixture.findingIdentifierPrefix
+        )
+        let betaCellID = try cellID(
+            of: betaFinding,
+            identifierPrefix: Fixture.findingIdentifierPrefix
+        )
+        XCTAssertNotEqual(alphaCellID, betaCellID, "Each Review row needs a stable, distinct cell identity")
+
+        XCTAssertEqual(
+            renderedElements(label: Fixture.alphaGeneratedValue, in: matrix).count,
+            1,
+            "The alpha row must render its exact persisted generated value"
+        )
+        XCTAssertEqual(
+            renderedElements(label: Fixture.betaGeneratedValue, in: matrix).count,
+            1,
+            "The beta row must render its exact persisted generated value"
+        )
+        XCTAssertTrue(app.buttons["review.sources.\(alphaCellID)"].exists)
+        XCTAssertTrue(app.buttons["review.sources.\(betaCellID)"].exists)
+        XCTAssertTrue(app.buttons["review.markReviewed.\(alphaCellID)"].exists)
+        XCTAssertTrue(app.buttons["review.markReviewed.\(betaCellID)"].exists)
+
+        XCTAssertFalse(
+            renderedElements(label: Fixture.defaultSourceCountCanary, in: matrix).firstMatch.exists,
+            "Both exact rows have retained evidence; a zero-source default must stay absent"
+        )
+    }
+
+    func testTRPUI08BetaSourcesOpensDistinctSupportingAndContraryEvidence() throws {
+        // T-RP-UI-08 expected RED: without the dedicated Review Project seed,
+        // there is no beta Sources control and no inspector/evidence to inspect.
+        let app = launchReviewProject()
+        let matrix = app.descendants(matching: .any)["review.matrix"]
+        XCTAssertTrue(matrix.waitForExistence(timeout: 20), "Review matrix did not appear")
+
+        let betaFinding = element(
+            in: matrix,
+            identifierPrefix: Fixture.findingIdentifierPrefix,
+            value: Fixture.betaFinding
+        )
+        XCTAssertTrue(betaFinding.exists, "The beta row did not appear")
+        let betaCellID = try cellID(
+            of: betaFinding,
+            identifierPrefix: Fixture.findingIdentifierPrefix
+        )
+        let sources = app.buttons["review.sources.\(betaCellID)"]
+        XCTAssertTrue(sources.exists, "The beta Sources control is missing")
+        XCTAssertEqual(
+            sources.label,
+            Fixture.betaSourceSummary,
+            "The beta source count must distinguish supporting from contrary proof"
+        )
+        sources.click()
+
+        let inspector = app.scrollViews["review.sourcesInspector"]
+        XCTAssertTrue(inspector.waitForExistence(timeout: 10), "The beta Sources inspector did not open")
+        XCTAssertGreaterThan(
+            inspector.frame.midX,
+            app.windows.firstMatch.frame.midX,
+            "Sources must open as a trailing inspector"
+        )
+
+        for heading in ["Supporting evidence", "Contrary evidence"] {
+            XCTAssertEqual(
+                renderedElements(label: heading, in: inspector).count,
+                1,
+                "The inspector must render one exact \(heading) section"
+            )
+        }
+        let expectedEvidence = [
+            (Fixture.betaSupportingLabel, Fixture.betaSupportingExcerpt),
+            (Fixture.betaContraryLabel, Fixture.betaContraryExcerpt),
+        ]
+        XCTAssertEqual(
+            elements(in: inspector, identifierPrefix: Fixture.evidenceIdentifierPrefix).count,
+            2,
+            "The beta inspector must contain exactly its supporting and contrary proof cards"
+        )
+        for (label, excerpt) in expectedEvidence {
+            XCTAssertEqual(
+                evidenceElements(
+                    citationLabel: label,
+                    excerpt: excerpt,
+                    in: inspector
+                ).count,
+                1,
+                "The inspector is missing exact frozen evidence card \(label)"
+            )
+        }
+
+        XCTAssertEqual(
+            evidenceElements(
+                citationLabel: Fixture.alphaCitationLabel,
+                in: inspector
+            ).count,
+            0,
+            "Opening beta Sources must not leak evidence from the alpha row"
+        )
+        XCTAssertFalse(
+            renderedElements(label: Fixture.emptySupportingCanary, in: inspector).firstMatch.exists,
+            "The supporting section must not silently render its empty-state default"
+        )
+        XCTAssertFalse(
+            renderedElements(label: Fixture.emptyContraryCanary, in: inspector).firstMatch.exists,
+            "The contrary section must not silently render its empty-state default"
+        )
+    }
+
+    func testTRPUI09MarkReviewedAttestsOnlyTheBetaRow() throws {
+        // T-RP-UI-09 expected RED: without the dedicated Review Project seed,
+        // neither row-level Mark Reviewed control exists to drive the attestation.
+        let app = launchReviewProject()
+        let matrix = app.descendants(matching: .any)["review.matrix"]
+        XCTAssertTrue(matrix.waitForExistence(timeout: 20), "Review matrix did not appear")
+
+        let alphaFinding = element(
+            in: matrix,
+            identifierPrefix: Fixture.findingIdentifierPrefix,
+            value: Fixture.alphaFinding
+        )
+        let betaFinding = element(
+            in: matrix,
+            identifierPrefix: Fixture.findingIdentifierPrefix,
+            value: Fixture.betaFinding
+        )
+        XCTAssertTrue(alphaFinding.exists, "The alpha row did not appear")
+        XCTAssertTrue(betaFinding.exists, "The beta row did not appear")
+        let alphaCellID = try cellID(
+            of: alphaFinding,
+            identifierPrefix: Fixture.findingIdentifierPrefix
+        )
+        let betaCellID = try cellID(
+            of: betaFinding,
+            identifierPrefix: Fixture.findingIdentifierPrefix
+        )
+
+        let alphaMark = app.buttons["review.markReviewed.\(alphaCellID)"]
+        let betaMark = app.buttons["review.markReviewed.\(betaCellID)"]
+        let alphaReviewed = app.descendants(matching: .any)["review.reviewed.\(alphaCellID)"]
+        let betaReviewed = app.descendants(matching: .any)["review.reviewed.\(betaCellID)"]
+        XCTAssertTrue(alphaMark.exists, "Alpha must begin in the needs-review state")
+        XCTAssertTrue(betaMark.exists, "Beta must begin in the needs-review state")
+        XCTAssertFalse(alphaReviewed.exists, "Alpha must not begin with a reviewed attestation")
+        XCTAssertFalse(betaReviewed.exists, "Beta must not begin with a reviewed attestation")
+
+        betaMark.click()
+
+        XCTAssertTrue(
+            betaReviewed.waitForExistence(timeout: 10),
+            "Mark Reviewed must replace beta's action with a reviewed attestation"
+        )
+        XCTAssertEqual(
+            renderedElements(label: "Reviewed", in: matrix).count,
+            1,
+            "The beta attestation must visibly read Reviewed"
+        )
+        XCTAssertTrue(alphaMark.exists, "Reviewing beta must leave alpha actionable")
+        XCTAssertFalse(alphaReviewed.exists, "Reviewing beta must not attest alpha")
+        XCTAssertTrue(betaMark.waitForNonExistence(timeout: 5))
+        XCTAssertEqual(
+            elements(in: app, identifierPrefix: "review.reviewed.").count,
+            1,
+            "Exactly one row may become reviewed"
+        )
+        XCTAssertEqual(
+            elements(in: app, identifierPrefix: "review.markReviewed.").count,
+            1,
+            "Exactly one other row must remain pending"
+        )
+        XCTAssertEqual(renderedElements(label: Fixture.alphaGeneratedValue, in: matrix).count, 1)
+        XCTAssertEqual(renderedElements(label: Fixture.betaGeneratedValue, in: matrix).count, 1)
+    }
+
+    private func launchReviewProject() -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchArguments += [
+            "-ApplePersistenceIgnoreState", "YES",
+            "-uiTestMode",
+            "-uiTestEnsureFreshWindow",
+            "-uiTestReviewProject",
+            "-uiTestSelectFirstMatter",
+            "-uiTestInitialMatterTab", "Review",
+        ]
+        app.launch()
+        app.activate()
+        XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 10), "Main window did not appear")
+        XCTAssertTrue(
+            app.staticTexts["McKernon Motors v. Liberty Rail"].waitForExistence(timeout: 20),
+            "The synthetic matter did not open"
+        )
+        return app
+    }
+
+    private func elements(
+        in scope: XCUIElement,
+        identifierPrefix: String
+    ) -> XCUIElementQuery {
+        scope.descendants(matching: .any).matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", identifierPrefix)
+        )
+    }
+
+    private func element(
+        in scope: XCUIElement,
+        identifierPrefix: String,
+        value: String
+    ) -> XCUIElement {
+        scope.descendants(matching: .any).matching(
+            NSPredicate(
+                format: "identifier BEGINSWITH %@ AND value == %@",
+                identifierPrefix,
+                value
+            )
+        ).firstMatch
+    }
+
+    private func renderedElements(label: String, in scope: XCUIElement) -> XCUIElementQuery {
+        scope.descendants(matching: .any).matching(
+            NSPredicate(
+                format: "label == %@ OR value == %@ OR title == %@",
+                label,
+                label,
+                label
+            )
+        )
+    }
+
+    private func evidenceElements(
+        citationLabel: String,
+        excerpt: String? = nil,
+        in scope: XCUIElement
+    ) -> XCUIElementQuery {
+        let base = scope.descendants(matching: .button).matching(
+            NSPredicate(
+                format: "identifier BEGINSWITH %@ AND label BEGINSWITH %@",
+                Fixture.evidenceIdentifierPrefix,
+                "\(citationLabel),"
+            )
+        )
+        guard let excerpt else { return base }
+        return base.matching(NSPredicate(format: "label CONTAINS %@", excerpt))
+    }
+
+    private func cellID(
+        of element: XCUIElement,
+        identifierPrefix: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) throws -> String {
+        XCTAssertTrue(
+            element.identifier.hasPrefix(identifierPrefix),
+            "Review row is missing the stable accessibility prefix",
+            file: file,
+            line: line
+        )
+        let suffix = String(element.identifier.dropFirst(identifierPrefix.count))
+        XCTAssertFalse(
+            suffix.isEmpty,
+            "Review row accessibility identity must not use the empty/default suffix",
+            file: file,
+            line: line
+        )
+        return try XCTUnwrap(
+            suffix.isEmpty ? nil : suffix,
+            "Review row accessibility identity is missing",
+            file: file,
+            line: line
+        )
+    }
+
+    private enum Fixture {
+        static let findingIdentifierPrefix = "review.row."
+        static let evidenceIdentifierPrefix = "review.evidence."
+
+        static let alphaFinding = "synthetic payment deadline"
+        static let alphaGeneratedValue = "March 18, 2031"
+        static let alphaCitationLabel = "E1"
+
+        static let betaFinding = "synthetic renewal notice period"
+        static let betaGeneratedValue = "120 calendar days"
+        static let betaSourceSummary = "1 supporting · 1 contrary"
+        static let betaSupportingLabel = "E2"
+        static let betaContraryLabel = "E3"
+        static let betaSupportingExcerpt =
+            "The fictional Atlas Supply Agreement requires renewal notice at least 120 calendar days before expiration."
+        static let betaContraryExcerpt =
+            "A fictional amendment states that either party may give renewal notice 90 calendar days before expiration."
+
+        static let defaultSourceCountCanary = "0 supporting"
+        static let emptySupportingCanary =
+            "No supporting evidence is recorded for this finding."
+        static let emptyContraryCanary =
+            "No contrary evidence is recorded for this finding."
+    }
+}
+
 /// Source/composition gates for the first visible Case File Review slice.
-/// Hosted interaction coverage follows once the production surface and its
-/// deterministic fixture exist; these tests first pin the approved native shape.
+/// The hosted gates above drive the native surface; these source checks retain
+/// the approved composition contract without replacing interaction coverage.
 final class CaseFileReviewCompositionUITests: XCTestCase {
     func testTRPUI01MatterWorkspaceComposesReviewTabAndScopedController() throws {
         // T-RP-UI-01 expected RED: MatterWorkspaceView has no Review tab or
