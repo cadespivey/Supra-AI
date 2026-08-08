@@ -454,6 +454,20 @@ final class CaseFileReviewHostedUITests: XCTestCase {
 
         app.buttons["Close Sources"].click()
         XCTAssertTrue(inspector.waitForNonExistence(timeout: 5), "Sources did not close")
+
+        let alphaMark = app.buttons["review.markReviewed.\(alphaCellID)"]
+        let alphaReviewed = app.descendants(matching: .any)["review.reviewed.\(alphaCellID)"]
+        let betaMark = app.buttons["review.markReviewed.\(betaCellID)"]
+        let betaReviewed = app.descendants(matching: .any)["review.reviewed.\(betaCellID)"]
+        XCTAssertTrue(alphaMark.exists, "Alpha must still need review before beta is attested")
+        XCTAssertFalse(alphaReviewed.exists, "Attesting beta must not pre-attest alpha")
+        XCTAssertTrue(betaMark.exists, "Edited beta must be independently reviewable")
+        betaMark.click()
+        XCTAssertTrue(
+            betaReviewed.waitForExistence(timeout: 10),
+            "Beta must be Reviewed before testing the Use generated value reset"
+        )
+
         editedBetaValue.click()
         XCTAssertTrue(editor.waitForExistence(timeout: 10), "The edited beta editor did not reopen")
         let useGenerated = app.buttons["review.valueEditor.useGenerated"]
@@ -481,8 +495,18 @@ final class CaseFileReviewHostedUITests: XCTestCase {
             app.descendants(matching: .any)["review.edited.\(betaCellID)"].waitForNonExistence(timeout: 5),
             "Restoring beta must remove its Edited marker"
         )
+        XCTAssertTrue(
+            betaReviewed.waitForNonExistence(timeout: 5),
+            "Use generated value must clear beta's prior Reviewed attestation"
+        )
+        XCTAssertTrue(
+            betaMark.waitForExistence(timeout: 5),
+            "Restoring beta must return only beta to the actionable needs-review state"
+        )
         XCTAssertEqual(alphaValue.label, Fixture.alphaGeneratedValue)
         XCTAssertEqual(alphaValue.value as? String, "Generated")
+        XCTAssertTrue(alphaMark.exists, "Restoring beta must leave alpha's review state untouched")
+        XCTAssertFalse(alphaReviewed.exists, "Restoring beta must not mark alpha Reviewed")
         XCTAssertFalse(
             alphaValue.label.contains(Fixture.editedBetaValue),
             "Restoring beta must leave alpha's exact value control untouched"
@@ -865,6 +889,8 @@ final class CaseFileReviewCompositionUITests: XCTestCase {
         // T-RP-UI-12 expected RED: CaseFileReviewView has no row-bound value
         // popover, edit-state/provenance accessibility contract, or explicit
         // Activity Log labels for the new audited edit and restore transitions.
+        // Audit-amendment expected RED: current copy mentions Save only and omits
+        // the immediate Use generated value reset that also clears Reviewed state.
         let review = try caseFileReviewSource()
         let workspace = try appSource(
             relativePath: "SupraAI/Matters/MatterWorkspaceView.swift"
@@ -916,8 +942,10 @@ final class CaseFileReviewCompositionUITests: XCTestCase {
             "the editor must not imply frozen proof validates the override"
         )
         XCTAssertTrue(
-            review.contains("Saving a change clears any prior Reviewed mark."),
-            "the editor must disclose the review-attestation reset before Save"
+            review.contains(
+                "Changing this value—including Use generated value—clears any prior Reviewed mark."
+            ),
+            "the editor must disclose the review-attestation reset before Save or Use generated value"
         )
         XCTAssertTrue(
             review.contains(
