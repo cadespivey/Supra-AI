@@ -290,6 +290,170 @@ final class CaseFileReviewControllerTests: XCTestCase {
         XCTAssertEqual(restoreAudit.timestamp, restoredAt)
     }
 
+    func testTRPSESS06DerivedProgressAndFiltersKeepReviewAxesIndependent() async throws {
+        // T-RP-SESS-06 expected RED: CaseFileReviewController has no typed support
+        // state, derived ReviewProgress, or typed row-filter projection. The UI
+        // therefore cannot report non-default progress or distinguish an edited
+        // row from the union of contrary and unsupported evidence attention.
+        let reviewedCellID = "reviewed-clean-cell-canary-6106"
+        let editedCellID = "edited-contrary-cell-canary-6206"
+        let unsupportedCellID = "unsupported-cell-canary-6306"
+        let rows = [
+            CaseFileReviewController.Row(
+                cellID: reviewedCellID,
+                finding: "Reviewed clean finding 6106",
+                generatedValues: ["generated-reviewed-canary-6106"],
+                attorneyValue: nil,
+                supportingSourceCount: 1,
+                contrarySourceCount: 0,
+                reviewState: .reviewed,
+                valueState: .generated,
+                supportState: .supported,
+                reviewedBy: "Synthetic Reviewer 6106",
+                reviewedAt: Date(timeIntervalSince1970: 2_031_106_106)
+            ),
+            CaseFileReviewController.Row(
+                cellID: editedCellID,
+                finding: "Edited contrary finding 6206",
+                generatedValues: ["generated-edited-canary-6206"],
+                attorneyValue: "attorney-override-canary-6206",
+                supportingSourceCount: 1,
+                contrarySourceCount: 2,
+                reviewState: .needsReview,
+                valueState: .edited,
+                supportState: .supported,
+                reviewedBy: nil,
+                reviewedAt: nil
+            ),
+            CaseFileReviewController.Row(
+                cellID: unsupportedCellID,
+                finding: "Unsupported finding 6306",
+                generatedValues: ["generated-unsupported-canary-6306"],
+                attorneyValue: nil,
+                supportingSourceCount: 0,
+                contrarySourceCount: 0,
+                reviewState: .needsReview,
+                valueState: .generated,
+                supportState: .unsupported,
+                reviewedBy: nil,
+                reviewedAt: nil
+            ),
+        ]
+
+        let progress = CaseFileReviewController.ReviewProgress(rows: rows)
+
+        XCTAssertEqual(progress.totalCount, 3)
+        XCTAssertEqual(progress.reviewedCount, 1)
+        XCTAssertEqual(progress.needsReviewCount, 2)
+        XCTAssertEqual(progress.editedCount, 1)
+        XCTAssertEqual(progress.evidenceAttentionCount, 2)
+        XCTAssertNotEqual(progress.reviewedCount, 0)
+        XCTAssertNotEqual(progress.evidenceAttentionCount, 0)
+
+        XCTAssertEqual(
+            CaseFileReviewController.RowFilter.all.apply(to: rows).map(\.cellID),
+            [reviewedCellID, editedCellID, unsupportedCellID]
+        )
+        let needsReviewIDs = CaseFileReviewController.RowFilter.needsReview
+            .apply(to: rows).map(\.cellID)
+        XCTAssertEqual(needsReviewIDs, [editedCellID, unsupportedCellID])
+        XCTAssertFalse(needsReviewIDs.contains(reviewedCellID))
+
+        let editedIDs = CaseFileReviewController.RowFilter.edited
+            .apply(to: rows).map(\.cellID)
+        XCTAssertEqual(editedIDs, [editedCellID])
+        XCTAssertFalse(editedIDs.contains(reviewedCellID))
+        XCTAssertFalse(editedIDs.contains(unsupportedCellID))
+
+        let evidenceAttentionIDs = CaseFileReviewController.RowFilter.evidenceAttention
+            .apply(to: rows).map(\.cellID)
+        XCTAssertEqual(evidenceAttentionIDs, [editedCellID, unsupportedCellID])
+        XCTAssertFalse(evidenceAttentionIDs.contains(reviewedCellID))
+
+        let fixture = try await makeExactReviewFixture()
+        let controller = CaseFileReviewController(
+            matterID: fixture.matterID,
+            store: fixture.store
+        )
+        controller.load()
+        try controller.openReview(
+            sourceRunID: fixture.result.run.id,
+            title: "Workflow delegate canary review"
+        )
+        let projectedRow = try XCTUnwrap(controller.rows.first)
+
+        XCTAssertEqual(controller.reviewProgress.totalCount, 1)
+        XCTAssertEqual(controller.reviewProgress.reviewedCount, 0)
+        XCTAssertEqual(controller.reviewProgress.needsReviewCount, 1)
+        XCTAssertEqual(controller.reviewProgress.editedCount, 0)
+        XCTAssertEqual(controller.reviewProgress.evidenceAttentionCount, 1)
+        XCTAssertEqual(controller.rows(matching: .all).map(\.cellID), [projectedRow.cellID])
+        XCTAssertEqual(
+            controller.rows(matching: .needsReview).map(\.cellID),
+            [projectedRow.cellID]
+        )
+        XCTAssertEqual(
+            controller.rows(matching: .evidenceAttention).map(\.cellID),
+            [projectedRow.cellID]
+        )
+        XCTAssertTrue(controller.rows(matching: .edited).isEmpty)
+
+        try controller.editValue(
+            cellID: projectedRow.cellID,
+            value: "delegate-attorney-override-canary-6406",
+            editedBy: "Synthetic Delegate Reviewer 6406",
+            at: Date(timeIntervalSince1970: 2_031_106_406)
+        )
+
+        XCTAssertEqual(controller.reviewProgress.totalCount, 1)
+        XCTAssertEqual(controller.reviewProgress.reviewedCount, 0)
+        XCTAssertEqual(controller.reviewProgress.needsReviewCount, 1)
+        XCTAssertEqual(controller.reviewProgress.editedCount, 1)
+        XCTAssertEqual(controller.reviewProgress.evidenceAttentionCount, 1)
+        XCTAssertEqual(
+            controller.rows(matching: .edited).map(\.cellID),
+            [projectedRow.cellID]
+        )
+    }
+
+    func testTRPSESS07FailedProjectSelectionPreservesTheLoadedProjection() async throws {
+        // T-RP-SESS-07 expected RED: selectProject currently clears the loaded
+        // rows, selected cell, and exact evidence when the requested project is
+        // unavailable. A failed switch must leave that current working projection
+        // intact and report the rejected non-default project ID instead.
+        let fixture = try await makeExactReviewFixture()
+        let controller = CaseFileReviewController(
+            matterID: fixture.matterID,
+            store: fixture.store
+        )
+        controller.load()
+        try controller.openReview(
+            sourceRunID: fixture.result.run.id,
+            title: "Switch-preservation review"
+        )
+        let row = try XCTUnwrap(controller.rows.first)
+        controller.selectCell(row.cellID)
+        let selectedProjectIDBefore = try XCTUnwrap(controller.selectedProjectID)
+        let rowsBefore = controller.rows
+        let selectedCellIDBefore = try XCTUnwrap(controller.selectedCellID)
+        let evidenceBefore = controller.selectedEvidence
+        XCTAssertFalse(evidenceBefore.isEmpty, "the selected exact row needs evidence to preserve")
+        let unavailableProjectID = "missing-review-project-canary-7307"
+
+        controller.selectProject(unavailableProjectID)
+
+        XCTAssertEqual(controller.selectedProjectID, selectedProjectIDBefore)
+        XCTAssertEqual(controller.rows, rowsBefore)
+        XCTAssertEqual(controller.selectedCellID, selectedCellIDBefore)
+        XCTAssertEqual(controller.selectedEvidence, evidenceBefore)
+        XCTAssertEqual(
+            controller.message,
+            CaseFileReviewControllerError.projectUnavailable(unavailableProjectID)
+                .localizedDescription
+        )
+        XCTAssertNotEqual(controller.selectedProjectID, unavailableProjectID)
+    }
+
     private func makeExactReviewFixture() async throws -> ReviewControllerFixture {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
             "CaseFileReviewController-\(UUID().uuidString)",

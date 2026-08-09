@@ -513,7 +513,472 @@ final class CaseFileReviewHostedUITests: XCTestCase {
         )
     }
 
-    private func launchReviewProject() -> XCUIApplication {
+    func testTRPUI14ProgressAndAttentionFiltersReconcileHiddenSourcesAndExplicitEmptyState() throws {
+        // T-RP-UI-14 expected RED: the Review workbench has no full-project
+        // progress summary or accessible All / Needs review / Edited / Evidence
+        // attention filter controls. Filtering also cannot close Sources when its
+        // selected row becomes hidden or distinguish a filtered-empty result from
+        // a genuinely empty persisted Review Project.
+        let app = launchReviewProject()
+        let matrix = app.descendants(matching: .any)["review.matrix"]
+        XCTAssertTrue(matrix.waitForExistence(timeout: 20), "Review matrix did not appear")
+
+        let controlStrip = app.descendants(matching: .any)["review.controlStrip"]
+        let progress = app.descendants(matching: .any)["review.progress"]
+        let filters = app.descendants(matching: .any)["review.filters"]
+        let filterMenu = app.descendants(matching: .any)["review.filter.menu"]
+        XCTAssertTrue(
+            controlStrip.waitForExistence(timeout: 10),
+            "Review needs one compact progress-and-filter control strip"
+        )
+        XCTAssertTrue(progress.exists, "The full-project progress summary is missing")
+        XCTAssertTrue(filters.exists, "The accessible filter group is missing")
+        XCTAssertTrue(
+            filterMenu.exists
+                || app.descendants(matching: .any)["review.filter.all"].exists,
+            "Review must render either its wide inline filters or compact filter menu"
+        )
+        XCTAssertTrue(
+            waitForAccessibleText(
+                "0 of 2 findings reviewed",
+                in: progress,
+                timeout: 5
+            ),
+            "Initial progress must use the full two-row project, not a filtered subset"
+        )
+        XCTAssertTrue(
+            waitForActiveReviewFilter(
+                identifier: "review.filter.all",
+                label: "All",
+                app: app,
+                timeout: 5
+            ),
+            "The initial filter must visibly and accessibly be All"
+        )
+
+        let alphaFinding = element(
+            in: matrix,
+            identifierPrefix: Fixture.findingIdentifierPrefix,
+            value: Fixture.alphaFinding
+        )
+        let betaFinding = element(
+            in: matrix,
+            identifierPrefix: Fixture.findingIdentifierPrefix,
+            value: Fixture.betaFinding
+        )
+        XCTAssertTrue(alphaFinding.exists, "The alpha filter canary row is missing")
+        XCTAssertTrue(betaFinding.exists, "The beta filter canary row is missing")
+        let alphaCellID = try cellID(
+            of: alphaFinding,
+            identifierPrefix: Fixture.findingIdentifierPrefix
+        )
+        let betaCellID = try cellID(
+            of: betaFinding,
+            identifierPrefix: Fixture.findingIdentifierPrefix
+        )
+
+        app.buttons["review.sources.\(alphaCellID)"].click()
+        let inspector = app.scrollViews["review.sourcesInspector"]
+        XCTAssertTrue(inspector.waitForExistence(timeout: 10), "Alpha Sources did not open")
+
+        selectReviewFilter(
+            identifier: "review.filter.evidenceAttention",
+            label: "Evidence attention",
+            app: app
+        )
+
+        XCTAssertTrue(
+            alphaFinding.waitForNonExistence(timeout: 5),
+            "Evidence attention must hide alpha's supporting-only row"
+        )
+        XCTAssertTrue(betaFinding.exists, "Beta's contrary evidence must keep it visible")
+        XCTAssertEqual(
+            elements(in: matrix, identifierPrefix: Fixture.findingIdentifierPrefix).count,
+            1,
+            "Evidence attention must render exactly the non-default beta canary"
+        )
+        XCTAssertTrue(
+            inspector.waitForNonExistence(timeout: 5),
+            "Filtering out the selected alpha row must close its Sources inspector"
+        )
+        XCTAssertFalse(
+            renderedElements(label: Fixture.alphaGeneratedValue, in: matrix).firstMatch.exists,
+            "A hidden row's generated value must not remain in the filtered matrix"
+        )
+        XCTAssertTrue(
+            waitForActiveReviewFilter(
+                identifier: "review.filter.evidenceAttention",
+                label: "Evidence attention",
+                app: app,
+                timeout: 5
+            ),
+            "The filter menu must expose its non-default active value"
+        )
+
+        selectReviewFilter(identifier: "review.filter.all", label: "All", app: app)
+        XCTAssertTrue(alphaFinding.waitForExistence(timeout: 5))
+        XCTAssertTrue(betaFinding.exists)
+
+        let betaMark = app.buttons["review.markReviewed.\(betaCellID)"]
+        let betaReviewed = app.descendants(matching: .any)["review.reviewed.\(betaCellID)"]
+        XCTAssertTrue(betaMark.exists, "Beta must begin actionable")
+        betaMark.click()
+        XCTAssertTrue(betaReviewed.waitForExistence(timeout: 10), "Beta did not become Reviewed")
+        XCTAssertTrue(
+            waitForAccessibleText(
+                "1 of 2 findings reviewed",
+                in: progress,
+                timeout: 10
+            ),
+            "Progress must advance after beta is reviewed"
+        )
+
+        selectReviewFilter(
+            identifier: "review.filter.needsReview",
+            label: "Needs review",
+            app: app
+        )
+        XCTAssertTrue(alphaFinding.exists, "Needs review must retain pending alpha")
+        XCTAssertTrue(
+            betaFinding.waitForNonExistence(timeout: 5),
+            "Needs review must exclude the reviewed beta absence canary"
+        )
+        XCTAssertEqual(
+            elements(in: matrix, identifierPrefix: Fixture.findingIdentifierPrefix).count,
+            1
+        )
+        XCTAssertTrue(
+            waitForAccessibleText(
+                "1 of 2 findings reviewed",
+                in: progress,
+                timeout: 5
+            ),
+            "Filtering to one row must not shrink the full-project progress denominator"
+        )
+
+        selectReviewFilter(identifier: "review.filter.all", label: "All", app: app)
+        let alphaValue = app.buttons["review.value.\(alphaCellID)"]
+        XCTAssertTrue(alphaValue.exists, "All must restore alpha's exact value control")
+        alphaValue.click()
+        let editor = app.descendants(matching: .any)["review.valueEditor"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 10), "Alpha's value editor did not open")
+        let field = editor.descendants(matching: .any)["review.valueEditor.field"]
+        XCTAssertTrue(field.exists)
+        replaceText(in: field, with: Fixture.editedAlphaValue)
+        app.buttons["review.valueEditor.save"].click()
+
+        let editedAlphaValue = valueButton(
+            in: app,
+            cellID: alphaCellID,
+            displayedValue: Fixture.editedAlphaValue
+        )
+        XCTAssertTrue(
+            editedAlphaValue.waitForExistence(timeout: 10),
+            "The non-default alpha override did not persist to its exact row"
+        )
+        XCTAssertFalse(
+            editedAlphaValue.label.contains(Fixture.alphaGeneratedValue),
+            "Edited alpha must not keep rendering its generated default"
+        )
+        let alphaMark = app.buttons["review.markReviewed.\(alphaCellID)"]
+        let alphaReviewed = app.descendants(matching: .any)["review.reviewed.\(alphaCellID)"]
+        XCTAssertTrue(alphaMark.exists, "Editing alpha must leave it ready for fresh review")
+        alphaMark.click()
+        XCTAssertTrue(alphaReviewed.waitForExistence(timeout: 10), "Alpha did not become Reviewed")
+        XCTAssertTrue(
+            waitForAccessibleText(
+                "2 of 2 findings reviewed",
+                in: progress,
+                timeout: 10
+            ),
+            "Progress must report the completed full project"
+        )
+
+        selectReviewFilter(identifier: "review.filter.edited", label: "Edited", app: app)
+        XCTAssertTrue(alphaFinding.exists, "Edited must retain attorney-edited alpha")
+        XCTAssertTrue(
+            betaFinding.waitForNonExistence(timeout: 5),
+            "Edited must exclude beta's generated-value absence canary"
+        )
+        XCTAssertTrue(editedAlphaValue.exists)
+        XCTAssertTrue(
+            waitForAccessibleText(
+                "2 of 2 findings reviewed",
+                in: progress,
+                timeout: 5
+            ),
+            "Edited filtering must not change completed-project progress"
+        )
+
+        selectReviewFilter(
+            identifier: "review.filter.evidenceAttention",
+            label: "Evidence attention",
+            app: app
+        )
+        XCTAssertTrue(betaFinding.exists, "Contrary beta must remain evidence attention")
+        XCTAssertTrue(
+            alphaFinding.waitForNonExistence(timeout: 5),
+            "Edited-but-supported alpha must not satisfy Evidence attention"
+        )
+        XCTAssertFalse(
+            renderedElements(label: Fixture.editedAlphaValue, in: matrix).firstMatch.exists,
+            "The hidden edited alpha value must not leak through the evidence predicate"
+        )
+
+        selectReviewFilter(
+            identifier: "review.filter.needsReview",
+            label: "Needs review",
+            app: app
+        )
+        let filteredEmpty = app.descendants(matching: .any)["review.filteredEmpty"]
+        let showAll = app.buttons["review.filter.showAll"]
+        XCTAssertTrue(
+            filteredEmpty.waitForExistence(timeout: 5),
+            "A zero-match filter needs an explicit filtered-empty state"
+        )
+        XCTAssertTrue(showAll.exists, "Filtered-empty state needs one accessible Show All escape")
+        XCTAssertEqual(showAll.label, "Show all findings")
+        XCTAssertEqual(
+            elements(in: matrix, identifierPrefix: Fixture.findingIdentifierPrefix).count,
+            0,
+            "Both reviewed rows must be absent from Needs review"
+        )
+        XCTAssertTrue(
+            waitForAccessibleText(
+                "2 of 2 findings reviewed",
+                in: progress,
+                timeout: 5
+            ),
+            "Filtered-empty is not an empty project and must retain full progress"
+        )
+
+        showAll.click()
+        XCTAssertTrue(alphaFinding.waitForExistence(timeout: 5), "Show All must restore alpha")
+        XCTAssertTrue(betaFinding.exists, "Show All must restore beta")
+        XCTAssertEqual(
+            elements(in: matrix, identifierPrefix: Fixture.findingIdentifierPrefix).count,
+            2
+        )
+        XCTAssertTrue(
+            waitForActiveReviewFilter(
+                identifier: "review.filter.all",
+                label: "All",
+                app: app,
+                timeout: 5
+            ),
+            "Show All must visibly reset the active filter"
+        )
+        XCTAssertTrue(editedAlphaValue.exists, "Filtering must not discard alpha's persisted edit")
+    }
+
+    func testTRPUI15DirtyDraftCancelKeepsProjectAndDiscardSwitchesWithoutCrossProjectLeak() throws {
+        // T-RP-UI-15 expected RED: `-uiTestReviewProjectSwitching` is unhandled,
+        // so no second synthetic Review Project or project Picker exists. The
+        // current direct Picker binding also has no dirty-draft Cancel / Discard
+        // boundary and clears the editor as soon as selectedProjectID changes.
+        let app = launchReviewProject(
+            additionalArguments: ["-uiTestReviewProjectSwitching"]
+        )
+        let matrix = app.descendants(matching: .any)["review.matrix"]
+        XCTAssertTrue(matrix.waitForExistence(timeout: 20), "Review matrix did not appear")
+
+        let projectPicker = app.descendants(matching: .any)["review.projectPicker"]
+        XCTAssertTrue(
+            projectPicker.waitForExistence(timeout: 10),
+            "The two-project fixture needs one accessible Review Project Picker"
+        )
+        XCTAssertTrue(
+            waitForAccessibleText(Fixture.projectATitle, in: projectPicker, timeout: 5),
+            "The newer fixed Project A must be selected deterministically"
+        )
+
+        let alphaFinding = element(
+            in: matrix,
+            identifierPrefix: Fixture.findingIdentifierPrefix,
+            value: Fixture.alphaFinding
+        )
+        let betaFinding = element(
+            in: matrix,
+            identifierPrefix: Fixture.findingIdentifierPrefix,
+            value: Fixture.betaFinding
+        )
+        XCTAssertTrue(alphaFinding.exists)
+        XCTAssertTrue(betaFinding.exists)
+        let alphaCellID = try cellID(
+            of: alphaFinding,
+            identifierPrefix: Fixture.findingIdentifierPrefix
+        )
+        let betaCellID = try cellID(
+            of: betaFinding,
+            identifierPrefix: Fixture.findingIdentifierPrefix
+        )
+        let betaValue = app.buttons["review.value.\(betaCellID)"]
+        XCTAssertTrue(betaValue.exists)
+        XCTAssertEqual(betaValue.label, Fixture.betaGeneratedValue)
+        betaValue.click()
+
+        let editor = app.descendants(matching: .any)["review.valueEditor"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 10), "Project A's beta editor did not open")
+        let field = editor.descendants(matching: .any)["review.valueEditor.field"]
+        XCTAssertTrue(field.exists)
+        clearText(in: field)
+        XCTAssertEqual(
+            field.value as? String,
+            "",
+            "Deleting Project A's value must produce one exact empty dirty draft"
+        )
+        XCTAssertFalse(
+            app.buttons["review.valueEditor.save"].isEnabled,
+            "An empty draft must remain unsaveable even though navigation treats it as dirty"
+        )
+
+        selectReviewProject(Fixture.projectBTitle, app: app)
+        let cancelSwitch = app.buttons["review.projectSwitch.cancel"]
+        let discardSwitch = app.buttons["review.projectSwitch.discard"]
+        XCTAssertTrue(
+            cancelSwitch.waitForExistence(timeout: 5),
+            "A dirty Project A draft must offer Cancel before selecting B"
+        )
+        XCTAssertTrue(discardSwitch.exists, "A dirty Project A draft must offer explicit Discard")
+        cancelSwitch.click()
+
+        XCTAssertTrue(
+            waitForAccessibleText(Fixture.projectATitle, in: projectPicker, timeout: 5),
+            "Cancel must keep Project A selected"
+        )
+        XCTAssertTrue(editor.waitForExistence(timeout: 5), "Cancel must retain the value editor")
+        let retainedField = editor.descendants(matching: .any)["review.valueEditor.field"]
+        XCTAssertEqual(
+            retainedField.value as? String,
+            "",
+            "Keep editing must retain Project A's exact empty unsaved draft"
+        )
+        XCTAssertFalse(app.buttons["review.valueEditor.save"].isEnabled)
+        XCTAssertTrue(alphaFinding.exists)
+        XCTAssertTrue(betaFinding.exists)
+        XCTAssertFalse(
+            element(
+                in: matrix,
+                identifierPrefix: Fixture.findingIdentifierPrefix,
+                value: Fixture.projectBFinding
+            ).exists,
+            "Cancelling the switch must not render Project B's canary row"
+        )
+        XCTAssertTrue(
+            valueButton(
+                in: app,
+                cellID: betaCellID,
+                displayedValue: Fixture.betaGeneratedValue
+            ).exists,
+            "An unsaved draft must not replace Project A's persisted beta value"
+        )
+
+        selectReviewProject(Fixture.projectBTitle, app: app)
+        XCTAssertTrue(discardSwitch.waitForExistence(timeout: 5))
+        discardSwitch.click()
+
+        XCTAssertTrue(editor.waitForNonExistence(timeout: 5), "Discard must close Project A's editor")
+        XCTAssertTrue(
+            waitForAccessibleText(Fixture.projectBTitle, in: projectPicker, timeout: 10),
+            "Discard must complete the pending switch to Project B"
+        )
+        let projectBFinding = element(
+            in: matrix,
+            identifierPrefix: Fixture.findingIdentifierPrefix,
+            value: Fixture.projectBFinding
+        )
+        XCTAssertTrue(projectBFinding.waitForExistence(timeout: 10), "Project B's row did not appear")
+        let projectBCellID = try cellID(
+            of: projectBFinding,
+            identifierPrefix: Fixture.findingIdentifierPrefix
+        )
+        XCTAssertEqual(
+            elements(in: matrix, identifierPrefix: Fixture.findingIdentifierPrefix).count,
+            1,
+            "The minimum Project B fixture must expose exactly its own one row"
+        )
+        XCTAssertTrue(alphaFinding.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(betaFinding.waitForNonExistence(timeout: 5))
+        XCTAssertFalse(
+            app.descendants(matching: .any)["review.row.\(alphaCellID)"].exists,
+            "Project A alpha identity must not cross into B"
+        )
+        XCTAssertFalse(
+            app.descendants(matching: .any)["review.row.\(betaCellID)"].exists,
+            "Project A beta identity must not cross into B"
+        )
+        XCTAssertFalse(
+            renderedElements(label: Fixture.alphaGeneratedValue, in: matrix).firstMatch.exists,
+            "Project A alpha value must be absent from B's exact matrix"
+        )
+        XCTAssertFalse(
+            renderedElements(label: Fixture.betaGeneratedValue, in: matrix).firstMatch.exists,
+            "Project A beta value must be absent from B's exact matrix"
+        )
+        let projectBValue = valueButton(
+            in: app,
+            cellID: projectBCellID,
+            displayedValue: Fixture.projectBGeneratedValue
+        )
+        XCTAssertTrue(projectBValue.exists, "Project B's exact generated value is missing")
+        XCTAssertEqual(projectBValue.value as? String, "Generated")
+        projectBValue.click()
+        XCTAssertTrue(editor.waitForExistence(timeout: 5), "Project B's editor did not open")
+        let projectBField = editor.descendants(matching: .any)["review.valueEditor.field"]
+        XCTAssertEqual(
+            projectBField.value as? String,
+            Fixture.projectBGeneratedValue,
+            "Project B's editor must begin from B's generated value, not A's draft"
+        )
+        XCTAssertNotEqual(
+            projectBField.value as? String,
+            "",
+            "Project A's discarded empty draft must not cross into Project B"
+        )
+        app.buttons["review.valueEditor.cancel"].click()
+        XCTAssertTrue(editor.waitForNonExistence(timeout: 5))
+
+        selectReviewProject(Fixture.projectATitle, app: app)
+        XCTAssertTrue(
+            waitForAccessibleText(Fixture.projectATitle, in: projectPicker, timeout: 10),
+            "A clean Project B must switch back to A without a discard prompt"
+        )
+        XCTAssertFalse(cancelSwitch.exists)
+        XCTAssertFalse(discardSwitch.exists)
+        XCTAssertTrue(alphaFinding.waitForExistence(timeout: 10))
+        XCTAssertTrue(betaFinding.exists)
+        XCTAssertTrue(projectBFinding.waitForNonExistence(timeout: 5))
+        XCTAssertFalse(
+            renderedElements(label: Fixture.projectBGeneratedValue, in: matrix).firstMatch.exists,
+            "Project B's value must not cross back into Project A"
+        )
+
+        let restoredBetaValue = valueButton(
+            in: app,
+            cellID: betaCellID,
+            displayedValue: Fixture.betaGeneratedValue
+        )
+        XCTAssertTrue(restoredBetaValue.exists)
+        XCTAssertEqual(restoredBetaValue.value as? String, "Generated")
+        XCTAssertFalse(app.descendants(matching: .any)["review.edited.\(betaCellID)"].exists)
+        restoredBetaValue.click()
+        XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        let reopenedAField = editor.descendants(matching: .any)["review.valueEditor.field"]
+        XCTAssertEqual(
+            reopenedAField.value as? String,
+            Fixture.betaGeneratedValue,
+            "Returning to A must rebuild the editor from its persisted generated value"
+        )
+        XCTAssertNotEqual(
+            reopenedAField.value as? String,
+            "",
+            "Project A's discarded empty draft must not survive project navigation"
+        )
+    }
+
+    private func launchReviewProject(
+        additionalArguments: [String] = []
+    ) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments += [
             "-ApplePersistenceIgnoreState", "YES",
@@ -523,6 +988,7 @@ final class CaseFileReviewHostedUITests: XCTestCase {
             "-uiTestSelectFirstMatter",
             "-uiTestInitialMatterTab", "Review",
         ]
+        app.launchArguments += additionalArguments
         app.launch()
         app.activate()
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 10), "Main window did not appear")
@@ -531,6 +997,71 @@ final class CaseFileReviewHostedUITests: XCTestCase {
             "The synthetic matter did not open"
         )
         return app
+    }
+
+    private func selectReviewFilter(
+        identifier: String,
+        label: String,
+        app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let inlineOption = app.descendants(matching: .any)[identifier]
+        if inlineOption.exists {
+            inlineOption.click()
+        } else {
+            let menu = app.descendants(matching: .any)["review.filter.menu"]
+            XCTAssertTrue(
+                menu.waitForExistence(timeout: 5),
+                "Neither wide nor compact Review filter controls are available",
+                file: file,
+                line: line
+            )
+            menu.click()
+            let compactOption = app.descendants(matching: .any)[identifier]
+            XCTAssertTrue(
+                compactOption.waitForExistence(timeout: 5),
+                "Review filter option \(label) is unavailable",
+                file: file,
+                line: line
+            )
+            compactOption.click()
+        }
+        XCTAssertTrue(
+            waitForActiveReviewFilter(
+                identifier: identifier,
+                label: label,
+                app: app,
+                timeout: 5
+            ),
+            "Review filters did not expose \(label) as active",
+            file: file,
+            line: line
+        )
+    }
+
+    private func selectReviewProject(
+        _ title: String,
+        app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let picker = app.descendants(matching: .any)["review.projectPicker"]
+        XCTAssertTrue(
+            picker.waitForExistence(timeout: 5),
+            "Review Project Picker is unavailable",
+            file: file,
+            line: line
+        )
+        picker.click()
+        let option = app.menuItems[title]
+        XCTAssertTrue(
+            option.waitForExistence(timeout: 5),
+            "Review Project option \(title) is unavailable",
+            file: file,
+            line: line
+        )
+        option.click()
     }
 
     private func elements(
@@ -587,11 +1118,54 @@ final class CaseFileReviewHostedUITests: XCTestCase {
         field.typeText(value)
     }
 
+    private func clearText(in field: XCUIElement) {
+        field.click()
+        field.typeKey("a", modifierFlags: .command)
+        field.typeKey(.delete, modifierFlags: [])
+    }
+
     private func accessibleText(of element: XCUIElement) -> String {
         if !element.label.isEmpty {
             return element.label
         }
         return element.value as? String ?? ""
+    }
+
+    private func waitForAccessibleText(
+        _ expected: String,
+        in element: XCUIElement,
+        timeout: TimeInterval
+    ) -> Bool {
+        let predicate = NSPredicate(
+            format: "label == %@ OR value == %@ OR title == %@",
+            expected,
+            expected,
+            expected
+        )
+        let expectation = XCTNSPredicateExpectation(predicate: predicate, object: element)
+        return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
+    }
+
+    private func waitForActiveReviewFilter(
+        identifier: String,
+        label: String,
+        app: XCUIApplication,
+        timeout: TimeInterval
+    ) -> Bool {
+        let menu = app.descendants(matching: .any)["review.filter.menu"]
+        if menu.exists {
+            return waitForAccessibleText(label, in: menu, timeout: timeout)
+        }
+        let inlineOption = app.descendants(matching: .any)[identifier]
+        let predicate = NSPredicate(
+            format: "isSelected == true OR value == %@ OR value == 'Selected'",
+            label
+        )
+        let expectation = XCTNSPredicateExpectation(
+            predicate: predicate,
+            object: inlineOption
+        )
+        return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
     }
 
     private func evidenceElements(
@@ -643,6 +1217,7 @@ final class CaseFileReviewHostedUITests: XCTestCase {
 
         static let alphaFinding = "synthetic payment deadline"
         static let alphaGeneratedValue = "March 18, 2031"
+        static let editedAlphaValue = "March 21, 2031 after verified delivery"
         static let alphaCitationLabel = "E1"
 
         static let betaFinding = "synthetic renewal notice period"
@@ -658,6 +1233,11 @@ final class CaseFileReviewHostedUITests: XCTestCase {
             "A fictional amendment states that either party may give renewal notice 90 calendar days before expiration."
         static let editedSourcesWarning =
             "Sources are frozen from the generated result. They do not validate the attorney-edited value."
+
+        static let projectATitle = "Atlas Supply Agreement review"
+        static let projectBTitle = "Atlas Amendment review"
+        static let projectBFinding = "synthetic amended renewal notice period"
+        static let projectBGeneratedValue = "90 calendar days"
 
         static let defaultSourceCountCanary = "0 supporting"
         static let emptySupportingCanary =
@@ -978,6 +1558,108 @@ final class CaseFileReviewCompositionUITests: XCTestCase {
                 "Activity Log needs the concise label \(item.label)"
             )
         }
+    }
+
+    func testTRPUI13WorkflowControlsPinAccessibleFiltersProgressAndGuardedNavigation() throws {
+        // T-RP-UI-13 expected RED: the Review surface has no progress/filter
+        // control strip, filtered-empty escape, or stable project-switch actions.
+        // Its Picker still calls selectProject directly, and Open Review uses a
+        // separate unguarded path, so one shared dirty-draft navigation boundary
+        // does not exist.
+        let review = try caseFileReviewSource()
+
+        let exactIdentifiers = [
+            "review.controlStrip",
+            "review.progress",
+            "review.filters",
+            "review.filter.menu",
+            "review.filter.all",
+            "review.filter.needsReview",
+            "review.filter.edited",
+            "review.filter.evidenceAttention",
+            "review.filteredEmpty",
+            "review.filter.showAll",
+            "review.projectPicker",
+            "review.projectSwitch.cancel",
+            "review.projectSwitch.discard",
+        ]
+        for identifier in exactIdentifiers {
+            XCTAssertTrue(
+                review.contains(".accessibilityIdentifier(\"\(identifier)\")"),
+                "missing exact Review workflow accessibility identifier \(identifier)"
+            )
+        }
+
+        for label in ["All", "Needs review", "Edited", "Evidence attention"] {
+            XCTAssertTrue(
+                review.contains("\"\(label)\""),
+                "the compact Review filter must expose the literal option \(label)"
+            )
+        }
+        XCTAssertTrue(
+            review.contains("findings reviewed"),
+            "progress accessibility must literally describe N of M findings reviewed"
+        )
+        XCTAssertTrue(
+            review.contains("Show all findings"),
+            "filtered-empty state needs one literal recovery action"
+        )
+        XCTAssertGreaterThanOrEqual(
+            try matchCount(
+                #"ViewThatFits\s*\(\s*in:\s*\.horizontal\s*\)"#,
+                in: review
+            ),
+            1,
+            "wide inline filters and the compact menu must share one horizontal ViewThatFits"
+        )
+        XCTAssertTrue(
+            review.contains("Discard value changes?"),
+            "dirty Review navigation needs literal confirmation copy"
+        )
+        XCTAssertTrue(
+            review.contains("Keep editing"),
+            "the confirmation must name its draft-preserving action"
+        )
+        XCTAssertTrue(
+            review.contains("Discard and switch"),
+            "the confirmation must name its destructive navigation action"
+        )
+        XCTAssertGreaterThanOrEqual(
+            occurrenceCount(of: "valueEditorIsDirty", in: review),
+            2,
+            "navigation dirtiness must be distinct and used, including empty drafts"
+        )
+        XCTAssertGreaterThanOrEqual(
+            occurrenceCount(of: "valueEditorCanSave", in: review),
+            2,
+            "Save enablement must remain a separate non-empty-draft predicate"
+        )
+
+        XCTAssertFalse(
+            review.contains("set: { controller.selectProject($0) }"),
+            "the Project Picker must not bypass dirty-draft navigation handling"
+        )
+        XCTAssertGreaterThanOrEqual(
+            try matchCount(
+                #"set:\s*\{[^}]{0,240}requestNavigation\s*\("#,
+                in: review
+            ),
+            1,
+            "the Project Picker setter must request guarded navigation"
+        )
+        XCTAssertGreaterThanOrEqual(
+            try matchCount(
+                #"private\s+func\s+open[^\{]{0,160}\{[\s\S]{0,400}requestNavigation\s*\("#,
+                in: review
+            ),
+            1,
+            "Open Review must enter the same guarded navigation path as the Picker"
+        )
+        XCTAssertGreaterThanOrEqual(
+            occurrenceCount(of: "requestNavigation(", in: review),
+            3,
+            "Review needs two callers plus one shared requestNavigation implementation"
+        )
     }
 
     private func caseFileReviewSource() throws -> String {
