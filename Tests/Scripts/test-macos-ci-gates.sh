@@ -685,8 +685,12 @@ else
   record_failure 'affected drafting surface lacks interrupted artifact filenames or explicit resolution'
 fi
 
-if grep -Eq 'guidedQAUITestAuthorized[[:space:]]*=[[:space:]]*Self\.isUITestMode[[:space:]]*&&' "$app_environment" \
-    && grep -Fq 'guidedQAUITestAuthorized ? GuidedQAUITestRuntimeClient() : runtimeClient' "$app_environment"; then
+guided_qa_runtime_composition="$(sed -n '/let guidedQAUITestAuthorized =/,/let guidedQAUITestModelRoot =/p' "$app_environment")"
+if grep -Eq 'guidedQAUITestAuthorized[[:space:]]*=[[:space:]]*Self\.isUITestMode[[:space:]]*&&' <<<"$guided_qa_runtime_composition" \
+    && grep -Fq 'let baseRuntimeClient: any RuntimeClientProtocol = guidedQAUITestAuthorized' <<<"$guided_qa_runtime_composition" \
+    && grep -Fq '? GuidedQAUITestRuntimeClient()' <<<"$guided_qa_runtime_composition" \
+    && grep -Fq ': RuntimeClient()' <<<"$guided_qa_runtime_composition" \
+    && grep -Fq 'let runtimeClient = ExclusiveRuntimeClient(base: baseRuntimeClient)' <<<"$guided_qa_runtime_composition"; then
   printf '%s\n' 'PASS: guided Q&A synthetic runtime requires hermetic UI-test authority'
 else
   record_failure 'guided Q&A synthetic runtime is not gated by hermetic UI-test authority'
