@@ -1008,6 +1008,65 @@ final class CaseFileReviewExportServiceTests: XCTestCase {
         XCTAssertEqual(try metadataObject(audit)["format"] as? String, "review_xlsx")
     }
 
+    func testTRPEXPORT11XLSXLimitViolationPrecedesPublicationAndCompletion() throws {
+        // T-RP-EXPORT-11 expected RED: XLSX validation counted raw graphemes
+        // before formula neutralization, so an expanding saved value could
+        // cross the spreadsheet limit and still reach file publication.
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let exportedAt = try instant("2026-08-09T18:45:00Z")
+        let dangerous = "=" + String(repeating: "h", count: 32_766)
+        XCTAssertEqual(dangerous.utf16.count, 32_767)
+        XCTAssertEqual(CSVCellSanitizer.neutralize(dangerous).utf16.count, 32_768)
+        _ = try fixture.store.caseFileReviews.editCellValue(
+            matterID: fixture.matterID,
+            projectID: fixture.primary.id,
+            cellID: "review-cell-atlas-1",
+            attorneyValue: dangerous,
+            editedBy: "XLSX limit actor 811",
+            editedAt: try instant("2026-08-09T18:44:00Z")
+        )
+        let exportsDirectory = fixture.storage.exportsDirectory
+        let matterExportsDirectory = fixture.storage.exportsDirectory(
+            forMatterID: fixture.matterID
+        )
+        XCTAssertFalse(FileManager.default.fileExists(atPath: exportsDirectory.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: matterExportsDirectory.path))
+        var completionCount = 0
+        let service = CaseFileReviewExportService(
+            store: fixture.store,
+            storage: fixture.storage,
+            completionRecorder: { _ in completionCount += 1 }
+        )
+
+        XCTAssertThrowsError(
+            try service.exportXLSX(
+                matterID: fixture.matterID,
+                projectID: fixture.primary.id,
+                actor: "XLSX limit actor 811",
+                at: exportedAt
+            )
+        ) { error in
+            guard let renderError = error as? TabularXLSXRenderer.RenderError,
+                  case let .invalidCellText(sheet, row, column) = renderError else {
+                return XCTFail("expected a Matrix cell-limit rejection, got \(error)")
+            }
+            XCTAssertEqual(sheet, "Matrix")
+            XCTAssertEqual(row, 3)
+            XCTAssertEqual(column, 4)
+        }
+
+        XCTAssertEqual(completionCount, 0)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: exportsDirectory.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: matterExportsDirectory.path))
+        XCTAssertTrue(try fixture.store.documentSources.fetchExports(matterID: fixture.matterID).isEmpty)
+        XCTAssertFalse(
+            try fixture.store.auditEvents.fetchEvents(matterID: fixture.matterID).contains {
+                $0.eventType == "case_file_review_snapshot_exported"
+            }
+        )
+    }
+
     private func assertXLSXOccupiedBaseCompletionFailurePreservesCanary() throws {
         let fixture = try makeFixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
