@@ -1051,7 +1051,10 @@ final class CaseFileReviewCreationControllerTests: XCTestCase {
                 revisions: [revision],
                 selections: [selection]
             )
-            XCTAssertEqual(persisted, [0])
+            XCTAssertTrue(
+                persisted.isEmpty,
+                "a newly inserted synthetic part has no pre-existing user edit to preserve"
+            )
         }
         return document
     }
