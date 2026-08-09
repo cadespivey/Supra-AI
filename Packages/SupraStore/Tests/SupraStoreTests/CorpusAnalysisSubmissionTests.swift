@@ -227,6 +227,44 @@ final class CorpusAnalysisSubmissionTests: XCTestCase {
         )
     }
 
+    func testTRPCREATESTORE03LegacySameRunEnvelopeCannotAcquireSecondQueueIdentity() throws {
+        // T-RP-CREATE-STORE-03 expected RED: duplicate detection currently
+        // requires a complete v2 envelope, so a durable legacy corpus job that
+        // exposes the same run_id is invisible and permits a second job identity.
+        let fixture = try makeFixture(marker: "legacy-duplicate-4273")
+        _ = try fixture.store.corpusAnalysis.createOrFetchPreparedRun(
+            run: fixture.run,
+            partitions: [fixture.partition],
+            slices: [fixture.slice]
+        )
+        let legacyJob = try fixture.store.documentJobs.enqueueJob(
+            matterID: fixture.matterID,
+            kind: DocumentProcessingJobKind.corpusAnalysis.rawValue,
+            payloadJSON: "{\"run_id\":\"\(fixture.run.id)\"}"
+        )
+        XCTAssertNotEqual(legacyJob.id, fixture.job.id)
+
+        do {
+            _ = try fixture.store.corpusAnalysis.submitPreparedCorpusAnalysis(
+                run: fixture.run,
+                partitions: [fixture.partition],
+                slices: [fixture.slice],
+                job: fixture.job
+            )
+            XCTFail(
+                "a frozen run named by any existing corpus job must reject a second queue identity"
+            )
+            return
+        } catch {
+            let corpusJobs = try fixture.store.documentJobs.fetchJobs(
+                matterID: fixture.matterID
+            ).filter {
+                $0.kind == DocumentProcessingJobKind.corpusAnalysis.rawValue
+            }
+            XCTAssertEqual(corpusJobs.map(\.id), [legacyJob.id])
+        }
+    }
+
     private func makeFixture(marker: String) throws -> SubmissionFixture {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
             "CorpusAnalysisSubmission-\(UUID().uuidString)",
