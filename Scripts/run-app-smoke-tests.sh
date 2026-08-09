@@ -77,7 +77,9 @@ if [[ ! -f "$review_test" ]] \
     || ! class_contains_test "$review_test" CaseFileReviewHostedUITests testTRPUI15DirtyDraftCancelKeepsProjectAndDiscardSwitchesWithoutCrossProjectLeak \
     || ! class_contains_test "$review_test" CaseFileReviewHostedUITests testTRPUI16FailedProjectSwitchRetainsExactDraftForResume \
     || ! class_contains_test "$review_test" CaseFileReviewHostedUITests testTRPUI17FailedOpenReviewRetainsExactDraftForResume \
-    || ! class_contains_test "$review_test" CaseFileReviewHostedUITests testTRPUI18MinimumWidthSourcesKeepsProgressAndCompactFilterUsable; then
+    || ! class_contains_test "$review_test" CaseFileReviewHostedUITests testTRPUI18MinimumWidthSourcesKeepsProgressAndCompactFilterUsable \
+    || ! class_contains_test "$review_test" CaseFileReviewHostedUITests testTRPUI19DirtyDraftAndFilteredMinimumWidthExportFullSavedSnapshot \
+    || ! class_contains_test "$review_test" CaseFileReviewCompositionUITests testTRPUI20FullSnapshotExportUsesPermanentLedgerStrip; then
   printf '%s\n' 'ERROR: claimed Review workflow smoke tests are missing' >&2
   exit 1
 fi
@@ -177,6 +179,8 @@ xcodebuild \
   -only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPUI16FailedProjectSwitchRetainsExactDraftForResume \
   -only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPUI17FailedOpenReviewRetainsExactDraftForResume \
   -only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPUI18MinimumWidthSourcesKeepsProgressAndCompactFilterUsable \
+  -only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPUI19DirtyDraftAndFilteredMinimumWidthExportFullSavedSnapshot \
+  -only-testing:SupraAIUITests/CaseFileReviewCompositionUITests/testTRPUI20FullSnapshotExportUsesPermanentLedgerStrip \
   -only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPCREATEUI01NewReviewSetupUsesExactSelectedScopeAndDurableSubmission \
   -only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPCREATEUI02PausedRunSurvivesRelaunchThenResumesAndCancels \
   -only-testing:SupraAIUITests/CaseFileReviewCompositionUITests/testTRPCREATEUI03ProductionCompositionUsesAtomicPinnedQueueAndExactHandoff \

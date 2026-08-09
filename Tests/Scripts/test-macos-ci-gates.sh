@@ -576,12 +576,13 @@ else
 fi
 
 # T-RP-CI-03 expected RED: `class_contains_test` currently accepts a commented
-# Swift method inside the correct class, so --check can pass after all six
+# Swift method inside the correct class, so --check can pass after all eight
 # claimed Review tests are disabled.
 commented_review_tests="${temporary_dir}/CommentedCaseFileReviewUITests.swift"
 printf '%s\n' \
   'final class CaseFileReviewCompositionUITests: XCTestCase {' \
   '  // func testTRPUI13WorkflowControlsPinAccessibleFiltersProgressAndGuardedNavigation() {}' \
+  '  // func testTRPUI20FullSnapshotExportUsesPermanentLedgerStrip() {}' \
   '}' \
   'final class CaseFileReviewHostedUITests: XCTestCase {' \
   '  // func testTRPUI14ProgressAndAttentionFiltersReconcileHiddenSourcesAndExplicitEmptyState() {}' \
@@ -589,6 +590,7 @@ printf '%s\n' \
   '  // func testTRPUI16FailedProjectSwitchRetainsExactDraftForResume() {}' \
   '  // func testTRPUI17FailedOpenReviewRetainsExactDraftForResume() {}' \
   '  // func testTRPUI18MinimumWidthSourcesKeepsProgressAndCompactFilterUsable() {}' \
+  '  // func testTRPUI19DirtyDraftAndFilteredMinimumWidthExportFullSavedSnapshot() {}' \
   '}' >"$commented_review_tests"
 run_case \
   "commented Review methods fail the app-smoke presence guard" \
@@ -604,6 +606,7 @@ commented_review_creation_tests="${temporary_dir}/CommentedReviewCreationUITests
 printf '%s\n' \
   'final class CaseFileReviewCompositionUITests: XCTestCase {' \
   '  func testTRPUI13WorkflowControlsPinAccessibleFiltersProgressAndGuardedNavigation() {}' \
+  '  func testTRPUI20FullSnapshotExportUsesPermanentLedgerStrip() {}' \
   '  // func testTRPCREATEUI03ProductionCompositionUsesAtomicPinnedQueueAndExactHandoff() {}' \
   '}' \
   'final class CaseFileReviewHostedUITests: XCTestCase {' \
@@ -612,6 +615,7 @@ printf '%s\n' \
   '  func testTRPUI16FailedProjectSwitchRetainsExactDraftForResume() {}' \
   '  func testTRPUI17FailedOpenReviewRetainsExactDraftForResume() {}' \
   '  func testTRPUI18MinimumWidthSourcesKeepsProgressAndCompactFilterUsable() {}' \
+  '  func testTRPUI19DirtyDraftAndFilteredMinimumWidthExportFullSavedSnapshot() {}' \
   '  // func testTRPCREATEUI01NewReviewSetupUsesExactSelectedScopeAndDurableSubmission() {}' \
   '  // func testTRPCREATEUI02PausedRunSurvivesRelaunchThenResumesAndCancels() {}' \
   '  // func testTRPCREATEUI04SelectedScopeRejectsEveryExcludedSource() {}' \
@@ -660,6 +664,8 @@ review_workflow_selectors=(
   '-only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPUI16FailedProjectSwitchRetainsExactDraftForResume'
   '-only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPUI17FailedOpenReviewRetainsExactDraftForResume'
   '-only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPUI18MinimumWidthSourcesKeepsProgressAndCompactFilterUsable'
+  '-only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPUI19DirtyDraftAndFilteredMinimumWidthExportFullSavedSnapshot'
+  '-only-testing:SupraAIUITests/CaseFileReviewCompositionUITests/testTRPUI20FullSnapshotExportUsesPermanentLedgerStrip'
 )
 review_workflow_missing=0
 for selector in "${review_workflow_selectors[@]}"; do

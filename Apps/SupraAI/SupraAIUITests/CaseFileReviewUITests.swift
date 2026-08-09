@@ -1283,6 +1283,178 @@ final class CaseFileReviewHostedUITests: XCTestCase {
         )
     }
 
+    func testTRPUI19DirtyDraftAndFilteredMinimumWidthExportFullSavedSnapshot() throws {
+        // T-RP-UI-19 expected RED: Review has no `review.export` control or
+        // selected-project CSV action. Consequently an empty or nonempty dirty
+        // value draft cannot explicitly block export, Sources can expose no
+        // minimum-width export geometry, and the exact non-default destination
+        // receives no full-project snapshot after a one-row filter is active.
+        let exportRoot = appSandboxWritableReviewExportRoot()
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: exportRoot.path),
+            "The unique Review export root must begin absent"
+        )
+        defer { try? FileManager.default.removeItem(at: exportRoot) }
+
+        let app = launchReviewProject(
+            additionalArguments: [
+                "-uiTestWindowWidth", "880",
+                "-uiTestReviewExport",
+            ],
+            additionalEnvironment: [
+                "SUPRA_UI_TEST_REVIEW_EXPORT_ROOT": exportRoot.path,
+            ]
+        )
+        let window = app.windows.firstMatch
+        let matrix = app.descendants(matching: .any)["review.matrix"]
+        XCTAssertTrue(matrix.waitForExistence(timeout: 20), "Review matrix did not appear")
+        XCTAssertLessThan(window.frame.width, 1_000)
+        XCTAssertGreaterThanOrEqual(window.frame.width, 879)
+
+        let alphaFinding = element(
+            in: matrix,
+            identifierPrefix: Fixture.findingIdentifierPrefix,
+            value: Fixture.alphaFinding
+        )
+        let betaFinding = element(
+            in: matrix,
+            identifierPrefix: Fixture.findingIdentifierPrefix,
+            value: Fixture.betaFinding
+        )
+        XCTAssertTrue(alphaFinding.exists)
+        XCTAssertTrue(betaFinding.exists)
+        let betaCellID = try cellID(
+            of: betaFinding,
+            identifierPrefix: Fixture.findingIdentifierPrefix
+        )
+
+        let export = app.descendants(matching: .any)["review.export"]
+        XCTAssertTrue(
+            export.waitForExistence(timeout: 5),
+            "The permanent Review ledger strip needs one discoverable Export control"
+        )
+        XCTAssertTrue(export.isEnabled, "A clean persisted Review Project must be exportable")
+        XCTAssertTrue(
+            waitForAccessibleText(Fixture.exportAvailableLabel, in: export, timeout: 5),
+            "Available Export must announce its exact Review-snapshot state"
+        )
+
+        let betaValue = valueButton(
+            in: app,
+            cellID: betaCellID,
+            displayedValue: Fixture.betaGeneratedValue
+        )
+        XCTAssertTrue(betaValue.exists)
+        betaValue.click()
+        let editor = app.descendants(matching: .any)["review.valueEditor"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 10), "Beta's value editor did not open")
+        let field = editor.descendants(matching: .any)["review.valueEditor.field"]
+        XCTAssertTrue(field.exists)
+        clearText(in: field)
+        XCTAssertEqual(field.value as? String, "")
+        XCTAssertFalse(
+            app.buttons["review.valueEditor.save"].isEnabled,
+            "The exact empty dirty draft must remain unsaveable"
+        )
+        XCTAssertFalse(
+            export.isEnabled,
+            "Export must not silently omit an empty unsaved value draft"
+        )
+        XCTAssertTrue(
+            waitForAccessibleText(Fixture.exportUnavailableLabel, in: export, timeout: 5),
+            "Disabled Export must explain the unsaved-value boundary"
+        )
+
+        field.typeText(Fixture.exportUnsavedCanary)
+        XCTAssertEqual(field.value as? String, Fixture.exportUnsavedCanary)
+        XCTAssertTrue(
+            app.buttons["review.valueEditor.save"].isEnabled,
+            "The nonempty canary must distinguish draft dirtiness from Save enablement"
+        )
+        XCTAssertFalse(
+            export.isEnabled,
+            "A saveable but unsaved value must still block the persisted snapshot"
+        )
+        XCTAssertTrue(
+            regularCSVFiles(beneath: exportRoot).isEmpty,
+            "No dirty-draft interaction may create an export artifact"
+        )
+
+        let discard = app.buttons["review.unsavedEdit.discard"]
+        XCTAssertTrue(
+            discard.waitForExistence(timeout: 5) && discard.isHittable,
+            "The blocking draft needs one visible Discard resolution"
+        )
+        discard.click()
+        XCTAssertTrue(editor.waitForNonExistence(timeout: 5), "Discard must close the value editor")
+        XCTAssertTrue(
+            waitForEnabled(export, timeout: 5),
+            "Resolving the dirty draft must re-enable the same Export control"
+        )
+        XCTAssertTrue(
+            waitForAccessibleText(Fixture.exportAvailableLabel, in: export, timeout: 5)
+        )
+
+        app.buttons["review.sources.\(betaCellID)"].click()
+        let inspector = app.scrollViews["review.sourcesInspector"]
+        XCTAssertTrue(inspector.waitForExistence(timeout: 10), "Beta Sources did not open")
+        let sourcesPanel = app.descendants(matching: .any)["review.sourcesPanel"]
+        XCTAssertTrue(sourcesPanel.waitForExistence(timeout: 5))
+        selectReviewFilter(
+            identifier: "review.filter.evidenceAttention",
+            label: "Evidence attention",
+            app: app
+        )
+        XCTAssertTrue(alphaFinding.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(betaFinding.exists)
+        XCTAssertEqual(
+            elements(in: matrix, identifierPrefix: Fixture.findingIdentifierPrefix).count,
+            1,
+            "The wire proof needs one visible filtered row before exporting both persisted rows"
+        )
+        XCTAssertTrue(
+            window.frame.contains(export.frame) && export.isHittable,
+            "Export must remain visible and pointer reachable at the supported minimum width"
+        )
+        XCTAssertFalse(
+            export.frame.intersects(sourcesPanel.frame),
+            "Sources must overlay Matrix results without covering the permanent Export control"
+        )
+
+        export.click()
+        let csvAction = app.descendants(matching: .any)["review.export.csv"]
+        XCTAssertTrue(
+            csvAction.waitForExistence(timeout: 5),
+            "Export needs one stable CSV — all saved findings menu action"
+        )
+        csvAction.click()
+
+        let csvFiles = waitForCSVFiles(count: 1, beneath: exportRoot, timeout: 10)
+        XCTAssertEqual(
+            csvFiles.count,
+            1,
+            "One Export action must durably publish exactly one CSV artifact"
+        )
+        let csvData = try Data(contentsOf: try XCTUnwrap(csvFiles.first))
+        let csv = try XCTUnwrap(String(data: csvData, encoding: .utf8))
+        for canary in [
+            Fixture.alphaFinding,
+            Fixture.betaFinding,
+            Fixture.exportAlphaSourceLabel,
+            Fixture.exportBetaSourceLabel,
+            Fixture.exportContrarySourceLabel,
+        ] {
+            XCTAssertTrue(
+                csv.contains(canary),
+                "The full persisted Review snapshot is missing exact canary \(canary)"
+            )
+        }
+        XCTAssertFalse(
+            csv.contains(Fixture.exportUnsavedCanary),
+            "The discarded attorney draft must never leak into the persisted CSV snapshot"
+        )
+    }
+
     func testTRPCREATEUI01NewReviewSetupUsesExactSelectedScopeAndDurableSubmission() throws {
         // T-RP-CREATE-UI-01 expected RED: `-uiTestReviewCreation` is unhandled,
         // so Review has no New Review action, exact scope preview, managed-model
@@ -1767,7 +1939,8 @@ final class CaseFileReviewHostedUITests: XCTestCase {
     }
 
     private func launchReviewProject(
-        additionalArguments: [String] = []
+        additionalArguments: [String] = [],
+        additionalEnvironment: [String: String] = [:]
     ) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments += [
@@ -1779,6 +1952,9 @@ final class CaseFileReviewHostedUITests: XCTestCase {
             "-uiTestInitialMatterTab", "Review",
         ]
         app.launchArguments += additionalArguments
+        for (key, value) in additionalEnvironment {
+            app.launchEnvironment[key] = value
+        }
         app.launch()
         app.activate()
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 10), "Main window did not appear")
@@ -1836,6 +2012,62 @@ final class CaseFileReviewHostedUITests: XCTestCase {
         return URL(fileURLWithPath: hostHome, isDirectory: true)
             .appendingPathComponent("Library/Containers/ai.supra.SupraAI/Data/tmp", isDirectory: true)
             .appendingPathComponent("ReviewCreationUITest-\(UUID().uuidString)", isDirectory: true)
+    }
+
+    /// Uses the app container's temporary directory so the hosted runner and
+    /// sandboxed app can observe the same unique, throwaway export destination.
+    private func appSandboxWritableReviewExportRoot() -> URL {
+        let runnerHome = FileManager.default.homeDirectoryForCurrentUser.path
+        let containerMarker = "/Library/Containers/"
+        let hostHome = runnerHome.range(of: containerMarker).map {
+            String(runnerHome[..<$0.lowerBound])
+        } ?? runnerHome
+        return URL(fileURLWithPath: hostHome, isDirectory: true)
+            .appendingPathComponent("Library/Containers/ai.supra.SupraAI/Data/tmp", isDirectory: true)
+            .appendingPathComponent("ReviewExportUITest-\(UUID().uuidString)", isDirectory: true)
+    }
+
+    private func regularCSVFiles(beneath root: URL) -> [URL] {
+        guard let enumerator = FileManager.default.enumerator(
+            at: root,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: []
+        ) else {
+            return []
+        }
+        var files: [URL] = []
+        for case let url as URL in enumerator where url.pathExtension.lowercased() == "csv" {
+            guard (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else {
+                continue
+            }
+            files.append(url)
+        }
+        return files.sorted { $0.path < $1.path }
+    }
+
+    private func waitForCSVFiles(
+        count: Int,
+        beneath root: URL,
+        timeout: TimeInterval
+    ) -> [URL] {
+        let deadline = Date().addingTimeInterval(timeout)
+        var files = regularCSVFiles(beneath: root)
+        while files.count != count, Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+            files = regularCSVFiles(beneath: root)
+        }
+        return files
+    }
+
+    private func waitForEnabled(
+        _ element: XCUIElement,
+        timeout: TimeInterval
+    ) -> Bool {
+        let expectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "enabled == true"),
+            object: element
+        )
+        return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
     }
 
     private func selectReviewFilter(
@@ -2104,6 +2336,14 @@ final class CaseFileReviewHostedUITests: XCTestCase {
         static let failedProjectSwitchDraft = "73 days — failed project switch draft"
         static let failedOpenReviewDraft = "81 days — failed open draft"
         static let corruptProjectMessage = "The persisted Review Project graph is incomplete."
+
+        static let exportUnsavedCanary = "=UNSAVED_EXPORT_CANARY()"
+        static let exportAlphaSourceLabel = "S431"
+        static let exportBetaSourceLabel = "S977"
+        static let exportContrarySourceLabel = "C983"
+        static let exportAvailableLabel = "Export Review snapshot, available"
+        static let exportUnavailableLabel =
+            "Export Review snapshot unavailable while a value edit is unsaved"
 
         static let creationTitle = "Atlas Amendment deadline review"
         static let creationInstruction =
@@ -2538,6 +2778,118 @@ final class CaseFileReviewCompositionUITests: XCTestCase {
         )
     }
 
+    func testTRPUI20FullSnapshotExportUsesPermanentLedgerStrip() throws {
+        // T-RP-UI-20 expected RED: the Review source has no control-strip Export
+        // menu, selected-project controller call, truthful all-saved-findings
+        // copy, dirty-state accessibility branch, or doubly authorized UI-test
+        // seams for the throwaway root and Finder suppression.
+        let review = try caseFileReviewSource()
+        let environment = try appSource(relativePath: "SupraAI/AppEnvironment.swift")
+        let reviewActions = try declarationSource(
+            startingWith: "private var reviewActions",
+            in: review
+        )
+        let controlStrip = try declarationSource(
+            startingWith: "private var reviewControlStrip",
+            in: review
+        )
+        let exportControl = try declarationSource(
+            startingWith: "private var reviewExportControl",
+            in: review
+        )
+        let exportAction = try declarationSource(
+            startingWith: "private func exportReviewSnapshot",
+            in: review
+        )
+        let exportRootAccess = try declarationSource(
+            startingWith: "private static func reviewExportUITestRoot",
+            in: environment
+        )
+
+        XCTAssertTrue(
+            controlStrip.contains("reviewExportControl"),
+            "Export belongs in the permanent progress/filter ledger strip above Sources"
+        )
+        XCTAssertFalse(
+            reviewActions.contains("reviewExportControl"),
+            "The creation/project-navigation header must not absorb another full-project action"
+        )
+        XCTAssertGreaterThanOrEqual(
+            try matchCount(
+                #"Label\s*\(\s*"Export"\s*,\s*systemImage:\s*"square\.and\.arrow\.up"\s*\)"#,
+                in: exportControl
+            ),
+            1,
+            "The native control must retain the literal Export label and standard macOS symbol"
+        )
+        XCTAssertTrue(exportControl.contains("Menu"), "CSV must enter an XLSX-extensible format menu")
+
+        for identifier in ["review.export", "review.export.csv"] {
+            XCTAssertTrue(
+                exportControl.contains(".accessibilityIdentifier(\"\(identifier)\")"),
+                "missing exact Review export accessibility identifier \(identifier)"
+            )
+        }
+        for literal in [
+            "CSV — all saved findings",
+            "Export all saved findings and recorded sources, regardless of the current filter.",
+            "Export Review snapshot, available",
+            "Export Review snapshot unavailable while a value edit is unsaved",
+            "Save or discard the unsaved value edit first",
+        ] {
+            XCTAssertTrue(
+                exportControl.contains(literal),
+                "Review export is missing exact user-facing copy: \(literal)"
+            )
+        }
+        XCTAssertTrue(
+            exportControl.contains("valueEditorIsDirty"),
+            "empty and nonempty dirty value drafts must share one Export-unavailable predicate"
+        )
+        XCTAssertTrue(
+            review.contains("Couldn’t export Review snapshot"),
+            "export failure needs one specific native alert title"
+        )
+
+        XCTAssertTrue(
+            exportAction.contains("try controller.exportSelectedProjectCSV()"),
+            "the view must delegate one zero-argument selected-project snapshot to its controller"
+        )
+        XCTAssertFalse(
+            exportAction.contains("filteredRows") || exportAction.contains("activeFilter"),
+            "the presentation filter must never serialize or scope a durable Review snapshot"
+        )
+        XCTAssertEqual(
+            occurrenceCount(
+                of: "NSWorkspace.shared.activateFileViewerSelecting([url])",
+                in: exportAction
+            ),
+            1,
+            "a completed managed export must reveal its exact artifact once"
+        )
+        XCTAssertEqual(
+            try matchCount(
+                #"if\s+!\(\s*AppEnvironment\.isUITestMode\s*&&\s*ProcessInfo\.processInfo\.arguments\.contains\(\s*"-uiTestReviewExport"\s*\)\s*\)\s*\{[\s\S]{0,320}NSWorkspace\.shared\.activateFileViewerSelecting\(\[url\]\)"#,
+                in: exportAction
+            ),
+            1,
+            "Finder reveal may be suppressed only when UI-test mode and the explicit Review-export flag agree"
+        )
+        XCTAssertGreaterThanOrEqual(
+            try matchCount(
+                #"guard\s+(?:Self\.)?isUITestMode\s*,[\s\S]{0,240}arguments\.contains\(\s*"-uiTestReviewExport"\s*\)\s*,[\s\S]{0,320}environment\[\s*"SUPRA_UI_TEST_REVIEW_EXPORT_ROOT"\s*\]"#,
+                in: exportRootAccess
+            ),
+            1,
+            "the throwaway export root must be unreadable unless both hosted-test authorizers are present"
+        )
+        XCTAssertEqual(
+            occurrenceCount(of: "SUPRA_UI_TEST_REVIEW_EXPORT_ROOT", in: environment),
+            occurrenceCount(of: "SUPRA_UI_TEST_REVIEW_EXPORT_ROOT", in: exportRootAccess),
+            "production composition must not read the hosted export root outside its doubly gated helper"
+        )
+    }
+
     func testTRPCREATEUI03ProductionCompositionUsesAtomicPinnedQueueAndExactHandoff() throws {
         // T-RP-CREATE-UI-03 expected RED: production has no separate Review
         // creation controller, ModelLibrary cannot derive a managed content pin,
@@ -2767,5 +3119,37 @@ final class CaseFileReviewCompositionUITests: XCTestCase {
 
     private func occurrenceCount(of needle: String, in source: String) -> Int {
         source.components(separatedBy: needle).count - 1
+    }
+
+    private func declarationSource(
+        startingWith marker: String,
+        in source: String
+    ) throws -> String {
+        let markerRange = try XCTUnwrap(
+            source.range(of: marker),
+            "required declaration marker is missing: \(marker)"
+        )
+        let openingBrace = try XCTUnwrap(
+            source[markerRange.lowerBound...].firstIndex(of: "{"),
+            "required declaration has no opening brace: \(marker)"
+        )
+        var depth = 0
+        var cursor = openingBrace
+        while cursor < source.endIndex {
+            switch source[cursor] {
+            case "{":
+                depth += 1
+            case "}":
+                depth -= 1
+                if depth == 0 {
+                    return String(source[markerRange.lowerBound...cursor])
+                }
+            default:
+                break
+            }
+            cursor = source.index(after: cursor)
+        }
+        XCTFail("required declaration has no balanced closing brace: \(marker)")
+        return ""
     }
 }

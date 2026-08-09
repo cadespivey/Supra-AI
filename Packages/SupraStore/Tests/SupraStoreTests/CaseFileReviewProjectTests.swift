@@ -1197,6 +1197,338 @@ final class CaseFileReviewProjectTests: XCTestCase {
         )
     }
 
+    func testTRPXSTORE01SnapshotIsOneLiveMatterScopedAllRowEvidenceRead() throws {
+        // T-RPX-STORE-01 expected RED: Review exposes a graph read and one
+        // evidence read per cell, but no one-transaction all-row snapshot that
+        // can bind exact mutable cell state to its ordered frozen evidence.
+        let store = try SupraStore.inMemory()
+        let fixture = try makeExactFixture(store: store, marker: "1701")
+        let graph = try store.caseFileReviews.createOrFetchProject(
+            matterID: fixture.matterID,
+            sourceRunID: fixture.runID,
+            title: "Snapshot Review 1701",
+            actor: "attorney:create-1701",
+            at: Date(timeIntervalSince1970: 1_799_001_701)
+        )
+        let alphaCellID = try valueCellID(
+            store,
+            projectID: graph.project.id,
+            rowKey: fixture.alphaKey
+        )
+        let betaCellID = try valueCellID(
+            store,
+            projectID: graph.project.id,
+            rowKey: fixture.betaKey
+        )
+        let reviewedAt = Date(timeIntervalSince1970: 1_799_001_709)
+        let editedAt = Date(timeIntervalSince1970: 1_799_001_719)
+        let attorneyValue = "ATTORNEY-EFFECTIVE-VALUE-1701-NONDEFAULT"
+        _ = try store.caseFileReviews.markCellReviewed(
+            matterID: fixture.matterID,
+            projectID: graph.project.id,
+            cellID: alphaCellID,
+            reviewedBy: "attorney:review-1701",
+            reviewedAt: reviewedAt
+        )
+        _ = try store.caseFileReviews.editCellValue(
+            matterID: fixture.matterID,
+            projectID: graph.project.id,
+            cellID: betaCellID,
+            attorneyValue: attorneyValue,
+            editedBy: "attorney:edit-1701",
+            editedAt: editedAt
+        )
+
+        let snapshot = try store.caseFileReviews.fetchSnapshot(
+            matterID: fixture.matterID,
+            projectID: graph.project.id
+        )
+
+        XCTAssertEqual(snapshot.project.id, graph.project.id)
+        XCTAssertEqual(snapshot.project.updatedAt, editedAt)
+        XCTAssertEqual(snapshot.table.id, graph.table.id)
+        XCTAssertEqual(
+            snapshot.columns.map(\.columnKey),
+            ["finding", "generated_value", "sources", "review"]
+        )
+        XCTAssertEqual(snapshot.rows.map { $0.row.rowKey }, [fixture.alphaKey, fixture.betaKey])
+        XCTAssertEqual(snapshot.rows.map { $0.row.ordinal }, [0, 1])
+
+        let alpha = try XCTUnwrap(snapshot.rows.first)
+        XCTAssertEqual(alpha.cell.id, alphaCellID)
+        XCTAssertEqual(alpha.cell.reviewState, "reviewed")
+        XCTAssertEqual(alpha.cell.valueState, "generated")
+        XCTAssertNil(alpha.cell.attorneyValue)
+        XCTAssertEqual(alpha.cell.reviewedBy, "attorney:review-1701")
+        XCTAssertEqual(alpha.cell.reviewedAt, reviewedAt)
+        XCTAssertEqual(alpha.generation.generatedValuesJSON, try json([fixture.alphaValue]))
+        XCTAssertEqual(alpha.evidence.map(\.kind), ["supporting"])
+        XCTAssertEqual(alpha.evidence.map(\.frozenOutputSourceID), [fixture.sourceIDs[0]])
+        XCTAssertEqual(alpha.evidence.map(\.excerpt), [fixture.excerpts[0]])
+        XCTAssertFalse(
+            alpha.evidence.map(\.frozenOutputSourceID).contains(fixture.sourceIDs[1]),
+            "the first snapshot row must not leak the neighboring row's source"
+        )
+
+        let beta = try XCTUnwrap(snapshot.rows.last)
+        XCTAssertEqual(beta.cell.id, betaCellID)
+        XCTAssertEqual(beta.cell.reviewState, "needs_review")
+        XCTAssertEqual(beta.cell.valueState, "edited")
+        XCTAssertEqual(beta.cell.attorneyValue, attorneyValue)
+        XCTAssertNil(beta.cell.reviewedBy)
+        XCTAssertNil(beta.cell.reviewedAt)
+        XCTAssertEqual(beta.generation.generatedValuesJSON, try json([fixture.betaValue]))
+        XCTAssertFalse(
+            beta.generation.generatedValuesJSON.contains(attorneyValue),
+            "the immutable generated value must remain distinct from the attorney value"
+        )
+        XCTAssertEqual(beta.evidence.map(\.kind), ["supporting", "contrary"])
+        XCTAssertEqual(beta.evidence.map(\.ordinal), [0, 0])
+        XCTAssertEqual(
+            beta.evidence.map(\.frozenOutputSourceID),
+            Array(fixture.sourceIDs.suffix(2))
+        )
+        XCTAssertEqual(beta.evidence.map(\.excerpt), Array(fixture.excerpts.suffix(2)))
+
+        let otherMatter = try store.matters.createMatter(name: "Snapshot scope canary 1701")
+        XCTAssertThrowsError(try store.caseFileReviews.fetchSnapshot(
+            matterID: otherMatter.id,
+            projectID: graph.project.id
+        )) { error in
+            XCTAssertEqual(
+                error as? CaseFileReviewRepositoryError,
+                .projectScopeMismatch(graph.project.id)
+            )
+        }
+
+        try store.matters.softDeleteMatter(
+            id: fixture.matterID,
+            deletedAt: Date(timeIntervalSince1970: 1_799_001_727)
+        )
+        XCTAssertThrowsError(try store.caseFileReviews.fetchSnapshot(
+            matterID: fixture.matterID,
+            projectID: graph.project.id
+        )) { error in
+            XCTAssertEqual(
+                error as? CaseFileReviewRepositoryError,
+                .matterUnavailable(fixture.matterID)
+            )
+        }
+    }
+
+    func testTRPXSTORE02ContraryReviewCompletionOwnsManagedRecordAndExactAudit() throws {
+        // T-RPX-STORE-02 expected RED: no Review-owned completion boundary can
+        // record a managed snapshot without either losing its project identity
+        // or incorrectly invoking Structured Output's stricter export contract.
+        let store = try SupraStore.inMemory()
+        let fixture = try makeExactFixture(
+            store: store,
+            marker: "1733",
+            assuranceState: .corpusIncomplete
+        )
+        XCTAssertNil(try store.corpusAnalysis.fetchExactExportRun(
+            matterID: fixture.matterID,
+            structuredOutputVersionID: fixture.versionID
+        ))
+        let graph = try store.caseFileReviews.createOrFetchProject(
+            matterID: fixture.matterID,
+            sourceRunID: fixture.runID,
+            title: "Contrary Snapshot Review 1733",
+            actor: "attorney:create-1733",
+            at: Date(timeIntervalSince1970: 1_799_001_733)
+        )
+        let snapshot = try store.caseFileReviews.fetchSnapshot(
+            matterID: fixture.matterID,
+            projectID: graph.project.id
+        )
+        let exportID = "review-export-1733-nondefault"
+        let relativePath = "exports/\(fixture.matterID)/Review-1733-\(graph.project.id).csv"
+        let artifactSHA256 = sha256("REVIEW-CSV-BYTES-1733-NONDEFAULT")
+        let exportedAt = Date(timeIntervalSince1970: 1_799_001_739)
+
+        let export = try store.caseFileReviews.recordSnapshotExportCompletion(
+            matterID: fixture.matterID,
+            projectID: graph.project.id,
+            exportID: exportID,
+            managedRelativePath: relativePath,
+            artifactSHA256: artifactSHA256,
+            snapshotUpdatedAt: snapshot.project.updatedAt,
+            rowCount: snapshot.rows.count,
+            actor: "attorney:export-1733",
+            at: exportedAt
+        )
+
+        XCTAssertEqual(export.id, exportID)
+        XCTAssertNil(export.structuredOutputID)
+        XCTAssertNil(export.structuredOutputVersionID)
+        XCTAssertEqual(export.matterID, fixture.matterID)
+        XCTAssertEqual(export.format, "review_csv")
+        XCTAssertNotEqual(export.format, "csv")
+        XCTAssertEqual(export.managedRelativePath, relativePath)
+        XCTAssertEqual(export.createdAt, exportedAt)
+        XCTAssertTrue(
+            try store.documentSources.fetchExports(structuredOutputID: fixture.outputID).isEmpty,
+            "a Review snapshot must not appear in Structured Output export history"
+        )
+        let matterExports = try store.documentSources.fetchExports(matterID: fixture.matterID)
+        XCTAssertEqual(matterExports.count, 1)
+        XCTAssertEqual(matterExports.first?.id, exportID)
+
+        let audits = try store.auditEvents.fetchEvents(
+            relatedTable: CaseFileReviewProjectRecord.databaseTableName,
+            relatedID: graph.project.id,
+            eventType: "case_file_review_snapshot_exported"
+        )
+        XCTAssertEqual(audits.count, 1)
+        let audit = try XCTUnwrap(audits.first)
+        XCTAssertEqual(audit.matterID, fixture.matterID)
+        XCTAssertEqual(audit.timestamp, exportedAt)
+        XCTAssertEqual(audit.actor, "attorney:export-1733")
+        XCTAssertEqual(audit.relatedTable, CaseFileReviewProjectRecord.databaseTableName)
+        XCTAssertEqual(audit.relatedID, graph.project.id)
+        let metadata = try jsonObject(try XCTUnwrap(audit.metadataJSON))
+        XCTAssertEqual(metadata["schema_version"] as? Int, 1)
+        XCTAssertEqual(metadata["export_id"] as? String, exportID)
+        XCTAssertEqual(metadata["project_id"] as? String, graph.project.id)
+        XCTAssertEqual(metadata["source_run_id"] as? String, fixture.runID)
+        XCTAssertEqual(metadata["source_output_id"] as? String, fixture.outputID)
+        XCTAssertEqual(metadata["source_output_version_id"] as? String, fixture.versionID)
+        XCTAssertEqual(metadata["format"] as? String, "review_csv")
+        XCTAssertEqual(metadata["managed_relative_path"] as? String, relativePath)
+        XCTAssertEqual(metadata["artifact_sha256"] as? String, artifactSHA256)
+        XCTAssertEqual(
+            metadata["snapshot_project_updated_at"] as? Double,
+            snapshot.project.updatedAt.timeIntervalSince1970
+        )
+        XCTAssertEqual(metadata["row_count"] as? Int, 2)
+    }
+
+    func testTRPXSTORE03CompletionValidationAndAuditFailureLeaveNoSuccessRows() throws {
+        // T-RPX-STORE-03 expected RED: no scoped Review completion transaction
+        // validates the exact project snapshot, managed path, and artifact
+        // digest or rolls its export row back when the success audit fails.
+        let store = try SupraStore.inMemory()
+        let fixture = try makeExactFixture(
+            store: store,
+            marker: "1753",
+            assuranceState: .corpusIncomplete
+        )
+        let graph = try store.caseFileReviews.createOrFetchProject(
+            matterID: fixture.matterID,
+            sourceRunID: fixture.runID,
+            title: "Atomic Snapshot Review 1753",
+            actor: "attorney:create-1753",
+            at: Date(timeIntervalSince1970: 1_799_001_753)
+        )
+        let snapshot = try store.caseFileReviews.fetchSnapshot(
+            matterID: fixture.matterID,
+            projectID: graph.project.id
+        )
+        let relativePath = "exports/\(fixture.matterID)/Review-1753-\(graph.project.id).csv"
+        let artifactSHA256 = sha256("REVIEW-CSV-BYTES-1753-NONDEFAULT")
+
+        try store.database.writer.write { db in
+            try db.execute(sql: """
+                CREATE TRIGGER fail_review_snapshot_export_audit
+                BEFORE INSERT ON audit_events
+                WHEN NEW.event_type = 'case_file_review_snapshot_exported'
+                BEGIN SELECT RAISE(ABORT, 'synthetic Review snapshot audit failure'); END
+                """)
+        }
+        XCTAssertThrowsError(try store.caseFileReviews.recordSnapshotExportCompletion(
+            matterID: fixture.matterID,
+            projectID: graph.project.id,
+            exportID: "review-export-1753-audit-failure",
+            managedRelativePath: relativePath,
+            artifactSHA256: artifactSHA256,
+            snapshotUpdatedAt: snapshot.project.updatedAt,
+            rowCount: snapshot.rows.count,
+            actor: "attorney:export-1753",
+            at: Date(timeIntervalSince1970: 1_799_001_757)
+        ))
+        try store.database.writer.write { db in
+            try db.execute(sql: "DROP TRIGGER fail_review_snapshot_export_audit")
+        }
+        XCTAssertTrue(try store.documentSources.fetchExports(matterID: fixture.matterID).isEmpty)
+        XCTAssertTrue(try store.auditEvents.fetchEvents(
+            relatedTable: CaseFileReviewProjectRecord.databaseTableName,
+            relatedID: graph.project.id,
+            eventType: "case_file_review_snapshot_exported"
+        ).isEmpty)
+
+        let otherMatter = try store.matters.createMatter(name: "Completion scope canary 1753")
+        XCTAssertThrowsError(try store.caseFileReviews.recordSnapshotExportCompletion(
+            matterID: otherMatter.id,
+            projectID: graph.project.id,
+            exportID: "review-export-1753-wrong-matter",
+            managedRelativePath: relativePath,
+            artifactSHA256: artifactSHA256,
+            snapshotUpdatedAt: snapshot.project.updatedAt,
+            rowCount: snapshot.rows.count,
+            actor: "attorney:wrong-matter-1753"
+        ))
+        XCTAssertThrowsError(try store.caseFileReviews.recordSnapshotExportCompletion(
+            matterID: fixture.matterID,
+            projectID: graph.project.id,
+            exportID: "review-export-1753-path-traversal",
+            managedRelativePath: "exports/\(fixture.matterID)/../escaped-1753.csv",
+            artifactSHA256: artifactSHA256,
+            snapshotUpdatedAt: snapshot.project.updatedAt,
+            rowCount: snapshot.rows.count,
+            actor: "attorney:path-1753"
+        ))
+        XCTAssertThrowsError(try store.caseFileReviews.recordSnapshotExportCompletion(
+            matterID: fixture.matterID,
+            projectID: graph.project.id,
+            exportID: "review-export-1753-invalid-digest",
+            managedRelativePath: relativePath,
+            artifactSHA256: String(repeating: "A", count: 64),
+            snapshotUpdatedAt: snapshot.project.updatedAt,
+            rowCount: snapshot.rows.count,
+            actor: "attorney:digest-1753"
+        ))
+        XCTAssertThrowsError(try store.caseFileReviews.recordSnapshotExportCompletion(
+            matterID: fixture.matterID,
+            projectID: graph.project.id,
+            exportID: "review-export-1753-wrong-row-count",
+            managedRelativePath: relativePath,
+            artifactSHA256: artifactSHA256,
+            snapshotUpdatedAt: snapshot.project.updatedAt,
+            rowCount: snapshot.rows.count + 1,
+            actor: "attorney:row-count-1753"
+        ))
+
+        let alphaCellID = try valueCellID(
+            store,
+            projectID: graph.project.id,
+            rowKey: fixture.alphaKey
+        )
+        _ = try store.caseFileReviews.markCellReviewed(
+            matterID: fixture.matterID,
+            projectID: graph.project.id,
+            cellID: alphaCellID,
+            reviewedBy: "attorney:late-review-1753",
+            reviewedAt: Date(timeIntervalSince1970: 1_799_001_761)
+        )
+        XCTAssertThrowsError(try store.caseFileReviews.recordSnapshotExportCompletion(
+            matterID: fixture.matterID,
+            projectID: graph.project.id,
+            exportID: "review-export-1753-stale-snapshot",
+            managedRelativePath: relativePath,
+            artifactSHA256: artifactSHA256,
+            snapshotUpdatedAt: snapshot.project.updatedAt,
+            rowCount: snapshot.rows.count,
+            actor: "attorney:stale-snapshot-1753"
+        ))
+
+        XCTAssertTrue(try store.documentSources.fetchExports(matterID: fixture.matterID).isEmpty)
+        XCTAssertTrue(try store.auditEvents.fetchEvents(
+            relatedTable: CaseFileReviewProjectRecord.databaseTableName,
+            relatedID: graph.project.id,
+            eventType: "case_file_review_snapshot_exported"
+        ).isEmpty)
+    }
+
     private let reviewTables = [
         "case_file_review_projects", "case_file_review_tables", "case_file_review_columns",
         "case_file_review_rows", "case_file_review_cells", "case_file_review_cell_generations",
