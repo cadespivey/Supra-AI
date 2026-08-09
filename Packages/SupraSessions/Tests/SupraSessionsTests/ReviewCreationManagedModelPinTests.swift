@@ -257,7 +257,7 @@ final class ReviewCreationManagedModelPinTests: XCTestCase {
         probe: PinInspectionProbe
     ) -> ManagedModelPinningExecutor {
         let expectedFingerprint = Self.selectedFingerprint
-        ManagedModelPinningExecutor(inspect: { modelDirectory, managedRoot in
+        return ManagedModelPinningExecutor(inspect: { modelDirectory, managedRoot in
             try probe.enter()
             return try SignedReleaseModelAuthorization.authorize(
                 modelDirectory: modelDirectory,
