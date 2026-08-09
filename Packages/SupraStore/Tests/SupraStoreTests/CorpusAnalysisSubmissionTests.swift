@@ -82,17 +82,43 @@ final class CorpusAnalysisSubmissionTests: XCTestCase {
         XCTAssertEqual(persistedJob.matterID, fixture.matterID)
         XCTAssertEqual(persistedJob.kind, DocumentProcessingJobKind.corpusAnalysis.rawValue)
         XCTAssertEqual(persistedJob.status, DocumentProcessingJobStatus.queued.rawValue)
+        XCTAssertEqual(
+            persistedJob.queuePosition,
+            1,
+            "the atomic submission must preserve the existing app-wide FIFO denominator"
+        )
         XCTAssertEqual(persistedJob.payloadJSON, fixture.payloadJSON)
         XCTAssertFalse(
             persistedJob.payloadJSON?.contains("DEFAULT-RUN-0000") ?? false,
             "the exact queue payload must not fall back to a default run identity"
         )
+
+        var duplicateJob = retryJob
+        duplicateJob.id = "guided-review-duplicate-job-4107"
+        XCTAssertThrowsError(
+            try fixture.store.corpusAnalysis.submitPreparedCorpusAnalysis(
+                run: fixture.run,
+                partitions: [fixture.partition],
+                slices: [fixture.slice],
+                job: duplicateJob
+            ),
+            "one frozen run must never acquire a second runnable queue identity"
+        )
+        try assertCounts(
+            fixture.store,
+            matterID: fixture.matterID,
+            runID: fixture.run.id,
+            runs: 1,
+            partitions: 1,
+            slices: 1,
+            corpusJobs: 1
+        )
     }
 
     func testTRPCREATESTORE02SubmissionRejectsMatterAndPayloadIdentityMismatchWithoutPartialRows() throws {
         // T-RP-CREATE-STORE-02 expected RED: no Store-owned submission boundary
-        // validates that the queue envelope names the same matter, run, digest,
-        // and exhaustive-list contract as the frozen ledger.
+        // validates the layer-owned queue identity: pristine corpus job state,
+        // matching matter, and a v2 envelope naming the frozen run and digest.
         let fixture = try makeFixture(marker: "scope-4199")
         let foreignMatter = try fixture.store.matters.createMatter(
             name: "Foreign submission matter 4199"
@@ -115,7 +141,9 @@ final class CorpusAnalysisSubmissionTests: XCTestCase {
         wrongRunJob.payloadJSON = payloadJSON(
             matterID: fixture.matterID,
             runID: "FOREIGN-RUN-4199",
-            requestDigest: fixture.run.requestDigest ?? ""
+            requestDigest: fixture.run.requestDigest ?? "",
+            runKey: fixture.run.runKey,
+            documentID: fixture.documentID
         )
         XCTAssertThrowsError(
             try fixture.store.corpusAnalysis.submitPreparedCorpusAnalysis(
@@ -131,7 +159,9 @@ final class CorpusAnalysisSubmissionTests: XCTestCase {
         wrongDigestJob.payloadJSON = payloadJSON(
             matterID: fixture.matterID,
             runID: fixture.run.id,
-            requestDigest: String(repeating: "f", count: 64)
+            requestDigest: String(repeating: "f", count: 64),
+            runKey: fixture.run.runKey,
+            documentID: fixture.documentID
         )
         XCTAssertThrowsError(
             try fixture.store.corpusAnalysis.submitPreparedCorpusAnalysis(
@@ -140,6 +170,34 @@ final class CorpusAnalysisSubmissionTests: XCTestCase {
                 slices: [fixture.slice],
                 job: wrongDigestJob
             )
+        )
+
+        var wrongKindJob = fixture.job
+        wrongKindJob.id = "guided-review-wrong-kind-job-4199"
+        wrongKindJob.kind = DocumentProcessingJobKind.process.rawValue
+        XCTAssertThrowsError(
+            try fixture.store.corpusAnalysis.submitPreparedCorpusAnalysis(
+                run: fixture.run,
+                partitions: [fixture.partition],
+                slices: [fixture.slice],
+                job: wrongKindJob
+            ),
+            "atomic corpus submission must reject a non-corpus queue kind"
+        )
+
+        var dirtyLifecycleJob = fixture.job
+        dirtyLifecycleJob.id = "guided-review-dirty-lifecycle-job-4199"
+        dirtyLifecycleJob.status = DocumentProcessingJobStatus.active.rawValue
+        dirtyLifecycleJob.phase = DocumentProcessingPhase.analyzingCorpus.rawValue
+        dirtyLifecycleJob.queuePosition = 99
+        XCTAssertThrowsError(
+            try fixture.store.corpusAnalysis.submitPreparedCorpusAnalysis(
+                run: fixture.run,
+                partitions: [fixture.partition],
+                slices: [fixture.slice],
+                job: dirtyLifecycleJob
+            ),
+            "atomic submission must begin with a pristine unpositioned queued job"
         )
 
         var malformedJob = fixture.job
@@ -285,7 +343,9 @@ final class CorpusAnalysisSubmissionTests: XCTestCase {
         let payload = payloadJSON(
             matterID: matter.id,
             runID: runID,
-            requestDigest: requestDigest
+            requestDigest: requestDigest,
+            runKey: run.runKey,
+            documentID: document.id
         )
         let job = DocumentProcessingJobRecord(
             id: "guided-review-job-\(marker)",
@@ -296,6 +356,7 @@ final class CorpusAnalysisSubmissionTests: XCTestCase {
         return SubmissionFixture(
             store: store,
             matterID: matter.id,
+            documentID: document.id,
             run: run,
             partition: partition,
             slice: slice,
@@ -307,10 +368,12 @@ final class CorpusAnalysisSubmissionTests: XCTestCase {
     private func payloadJSON(
         matterID: String,
         runID: String,
-        requestDigest: String
+        requestDigest: String,
+        runKey: String,
+        documentID: String
     ) -> String {
         """
-        {"pinned_model":{"artifact_fingerprint_sha256":"7777777777777777777777777777777777777777777777777777777777777777","content_binding_algorithm":"supra-release-model-sha256-v1","content_binding_schema_version":1,"model_repository":"synthetic/guided-review","model_revision":"0123456789abcdef0123456789abcdef01234567"},"request_digest":"\(requestDigest)","run_id":"\(runID)","schema_version":2,"task":{"kind":"exhaustive_list","request":{"character_budget":8192,"matter_id":"\(matterID)","maximum_retry_count":2,"prompt_builder_version":"exhaustive-list-v1","query":"Extract NONDEFAULT-RENEWAL-4199","run_key":"guided-review-key-4199","scope":{"document_ids":["NONDEFAULT-SOURCE-4199"],"schema_version":2},"task_schema_version":1,"title":"Guided Review 4199"}}}
+        {"pinned_model":{"artifact_fingerprint_sha256":"7777777777777777777777777777777777777777777777777777777777777777","content_binding_algorithm":"supra-release-model-sha256-v1","content_binding_schema_version":1,"model_repository":"synthetic/guided-review","model_revision":"0123456789abcdef0123456789abcdef01234567"},"request_digest":"\(requestDigest)","run_id":"\(runID)","schema_version":2,"task":{"kind":"exhaustive_list","request":{"character_budget":8192,"matter_id":"\(matterID)","maximum_retry_count":2,"prompt_builder_version":"exhaustive-list-v1","query":"Extract NONDEFAULT-RENEWAL-4199","run_key":"\(runKey)","scope":{"document_ids":["\(documentID)"],"schema_version":2},"task_schema_version":1,"title":"Guided Review 4199"}}}
         """
     }
 
@@ -367,6 +430,7 @@ final class CorpusAnalysisSubmissionTests: XCTestCase {
 private struct SubmissionFixture {
     var store: SupraStore
     var matterID: String
+    var documentID: String
     var run: CorpusAnalysisRunRecord
     var partition: CorpusAnalysisPartitionRecord
     var slice: CorpusAnalysisPartitionSliceRecord

@@ -50,7 +50,7 @@ final class CaseFileReviewCreationControllerTests: XCTestCase {
         )
 
         let selectedScope = CorpusAnalysisScope(
-            schemaVersion: 7,
+            schemaVersion: 1,
             documentIDs: [fixture.reviewRequiredID, fixture.selectedEligibleID]
         )
         let selected = try controller.inspectScope(scope: selectedScope)
@@ -85,7 +85,7 @@ final class CaseFileReviewCreationControllerTests: XCTestCase {
 
         XCTAssertThrowsError(
             try controller.inspectScope(scope: CorpusAnalysisScope(
-                schemaVersion: 7,
+                schemaVersion: 1,
                 documentIDs: [fixture.reviewRequiredID]
             ))
         ) { error in
@@ -99,7 +99,7 @@ final class CaseFileReviewCreationControllerTests: XCTestCase {
         let fixture = try makeScopeFixture(testName: "SESS02-success")
         let controller = makeController(matterID: fixture.matterID, store: fixture.store)
         let selectedScope = CorpusAnalysisScope(
-            schemaVersion: 7,
+            schemaVersion: 1,
             documentIDs: [fixture.selectedEligibleID]
         )
 
@@ -211,7 +211,7 @@ final class CaseFileReviewCreationControllerTests: XCTestCase {
                 projectName: "Foreign scope rejection 2302",
                 instruction: "Extract every cross-matter canary.",
                 scope: CorpusAnalysisScope(
-                    schemaVersion: 7,
+                    schemaVersion: 1,
                     documentIDs: [fixture.selectedEligibleID, foreignDocumentID]
                 ),
                 pinnedModel: Self.pinnedModel
@@ -253,14 +253,18 @@ final class CaseFileReviewCreationControllerTests: XCTestCase {
     }
 
     func testTRPCREATESESS03SubmissionFailureAtomicallyLeavesNoRunLedgerOrQueueJob() throws {
-        // T-RP-CREATE-SESS-03 expected RED: no creation service has an atomic
-        // run-ledger + queue-job submission boundary, so enqueue rejection can
-        // strand a prepared planning run even when no runnable job was created.
+        // T-RP-CREATE-SESS-03 expected RED: no creation controller delegates
+        // one fully normalized request to an atomic Store submitter and reports
+        // that submitter's rejection without independently pre-persisting work.
         let fixture = try makeScopeFixture(testName: "SESS03")
+        let submissionProbe = ReviewSubmissionProbe()
         let controller = makeController(
             matterID: fixture.matterID,
             store: fixture.store,
-            submitCorpusAnalysis: { _, _ in nil }
+            submitCorpusAnalysis: { request, pinnedModel in
+                submissionProbe.record(request: request, pinnedModel: pinnedModel)
+                return nil
+            }
         )
 
         XCTAssertThrowsError(
@@ -268,7 +272,7 @@ final class CaseFileReviewCreationControllerTests: XCTestCase {
                 projectName: "Inert enqueue failure 3103",
                 instruction: "Extract every inert-run canary and cite it.",
                 scope: CorpusAnalysisScope(
-                    schemaVersion: 7,
+                    schemaVersion: 1,
                     documentIDs: [fixture.selectedEligibleID]
                 ),
                 pinnedModel: Self.pinnedModel
@@ -277,6 +281,18 @@ final class CaseFileReviewCreationControllerTests: XCTestCase {
             XCTAssertEqual(error as? CaseFileReviewCreationError, .submissionFailed)
         }
 
+        XCTAssertEqual(submissionProbe.callCount, 1)
+        XCTAssertEqual(submissionProbe.request?.matterID, fixture.matterID)
+        XCTAssertEqual(submissionProbe.request?.title, "Inert enqueue failure 3103")
+        XCTAssertEqual(
+            submissionProbe.request?.query,
+            "Extract every inert-run canary and cite it."
+        )
+        XCTAssertEqual(
+            submissionProbe.request?.scope.documentIDs,
+            [fixture.selectedEligibleID]
+        )
+        XCTAssertEqual(submissionProbe.pinnedModel, Self.pinnedModel)
         XCTAssertEqual(try persistedCounts(store: fixture.store), .zero)
         let runs: [CorpusAnalysisRunRecord] = try fixture.store.database.writer.read { db in
             try CorpusAnalysisRunRecord.fetchAll(
@@ -286,6 +302,60 @@ final class CaseFileReviewCreationControllerTests: XCTestCase {
             )
         }
         XCTAssertTrue(runs.isEmpty, "an atomically rejected submission must leave no inert run")
+    }
+
+    func testTRPCREATESESS06TerminalReviewPermitsASecondDistinctSubmission() throws {
+        // T-RP-CREATE-SESS-06 expected RED: no creation controller generates a
+        // fresh immutable run identity after prior Review work is terminal. A
+        // title-derived or fixed run key would strand the matter after one run.
+        let fixture = try makeScopeFixture(testName: "SESS06-terminal-restart")
+        let controller = makeController(matterID: fixture.matterID, store: fixture.store)
+        let scope = CorpusAnalysisScope(
+            schemaVersion: 1,
+            documentIDs: [fixture.selectedEligibleID]
+        )
+        let first = try controller.startReview(
+            projectName: "Repeatable Atlas review 6106",
+            instruction: "Extract the same renewal deadline after each terminal run.",
+            scope: scope,
+            pinnedModel: Self.pinnedModel
+        )
+        let firstRun = try XCTUnwrap(
+            fixture.store.corpusAnalysis.fetchRun(
+                matterID: fixture.matterID,
+                id: first.runID
+            )
+        )
+        let cancelledRun = try fixture.store.corpusAnalysis.cancelRun(
+            matterID: fixture.matterID,
+            runID: first.runID
+        )
+        XCTAssertEqual(cancelledRun.status, CorpusAnalysisRunStatus.cancelled.rawValue)
+        try fixture.store.documentJobs.cancelJob(id: first.jobID)
+        XCTAssertEqual(
+            try fixture.store.documentJobs.fetchJob(id: first.jobID)?.status,
+            DocumentProcessingJobStatus.cancelled.rawValue
+        )
+
+        let second = try controller.startReview(
+            projectName: "Repeatable Atlas review 6106",
+            instruction: "Extract the same renewal deadline after each terminal run.",
+            scope: scope,
+            pinnedModel: Self.pinnedModel
+        )
+        let secondRun = try XCTUnwrap(
+            fixture.store.corpusAnalysis.fetchRun(
+                matterID: fixture.matterID,
+                id: second.runID
+            )
+        )
+
+        XCTAssertNotEqual(second.runID, first.runID)
+        XCTAssertNotEqual(second.jobID, first.jobID)
+        XCTAssertNotEqual(secondRun.runKey, firstRun.runKey)
+        XCTAssertEqual(secondRun.status, CorpusAnalysisRunStatus.planning.rawValue)
+        XCTAssertEqual(try persistedCounts(store: fixture.store).runCount, 2)
+        XCTAssertEqual(try persistedCounts(store: fixture.store).corpusJobCount, 2)
     }
 
     func testTRPCREATESESS04DurableLifecycleProjectionAndActionsRemainMatterAndJobScoped() async throws {
@@ -583,7 +653,7 @@ final class CaseFileReviewCreationControllerTests: XCTestCase {
             matterID: matter.id,
             title: "Lifecycle \(scenario.rawValue) Review 4404",
             query: "Extract every lifecycle \(scenario.rawValue) canary.",
-            scope: CorpusAnalysisScope(schemaVersion: 7, documentIDs: [document.id]),
+            scope: CorpusAnalysisScope(schemaVersion: 1, documentIDs: [document.id]),
             characterBudget: 100,
             maximumRetryCount: 3
         )
@@ -1101,6 +1171,22 @@ private final class ReviewActionRecorder {
 
     func record(_ kind: RecordedReviewActionKind, jobID: String) {
         actions.append(RecordedReviewAction(kind: kind, jobID: jobID))
+    }
+}
+
+@MainActor
+private final class ReviewSubmissionProbe {
+    private(set) var callCount = 0
+    private(set) var request: ExhaustiveListQueuedRequest?
+    private(set) var pinnedModel: CorpusAnalysisPinnedModel?
+
+    func record(
+        request: ExhaustiveListQueuedRequest,
+        pinnedModel: CorpusAnalysisPinnedModel
+    ) {
+        callCount += 1
+        self.request = request
+        self.pinnedModel = pinnedModel
     }
 }
 

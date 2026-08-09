@@ -454,6 +454,51 @@ final class CaseFileReviewControllerTests: XCTestCase {
         XCTAssertNotEqual(controller.selectedProjectID, unavailableProjectID)
     }
 
+    func testTRPCREATESESS05OpenReviewRefreshesEligibilityForAJustCompletedRun() async throws {
+        // T-RP-CREATE-SESS-05 expected RED: openReview trusts the workbench's
+        // cached eligibleOutputs. A controller loaded before a queued Review
+        // finishes therefore rejects the newly persisted exact run until some
+        // unrelated caller manually reloads the whole workbench.
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "CaseFileReviewFreshCompletion-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        let store = try SupraStore(url: directory.appendingPathComponent("test.sqlite"))
+        let matter = try store.matters.createMatter(name: "Fresh completion Review matter")
+        _ = try insertDocument(
+            store: store,
+            matterID: matter.id,
+            text: "Repair obligation: $4,219.00. Contrary schedule amount: $2,011.00."
+        )
+        let controller = CaseFileReviewController(matterID: matter.id, store: store)
+        controller.load()
+        XCTAssertTrue(controller.eligibleOutputs.isEmpty)
+        XCTAssertTrue(controller.projects.isEmpty)
+
+        let result = try await runExactReview(store: store, matterID: matter.id)
+
+        XCTAssertTrue(
+            controller.eligibleOutputs.isEmpty,
+            "precondition: the already-mounted workbench has not received an unrelated reload"
+        )
+        XCTAssertNoThrow(
+            try controller.openReview(
+                sourceRunID: result.run.id,
+                title: "Fresh completion 9405"
+            ),
+            "Open results must re-read exact Review eligibility at the handoff boundary"
+        )
+        XCTAssertEqual(controller.projects.count, 1)
+        XCTAssertEqual(controller.rows.count, 1)
+        let project = try XCTUnwrap(controller.projects.first)
+        let row = try XCTUnwrap(controller.rows.first)
+        XCTAssertEqual(controller.selectedProjectID, project.id)
+        XCTAssertEqual(project.sourceRunID, result.run.id)
+        XCTAssertEqual(row.finding, "repair-obligation-4219")
+    }
+
     private func makeExactReviewFixture() async throws -> ReviewControllerFixture {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
             "CaseFileReviewController-\(UUID().uuidString)",
@@ -467,10 +512,22 @@ final class CaseFileReviewControllerTests: XCTestCase {
             matterID: matter.id,
             text: "Repair obligation: $4,219.00. Contrary schedule amount: $2,011.00."
         )
-        let result = try await ExhaustiveListTask(store: store).run(
+        let result = try await runExactReview(store: store, matterID: matter.id)
+        return ReviewControllerFixture(
+            store: store,
+            matterID: matter.id,
+            result: result
+        )
+    }
+
+    private func runExactReview(
+        store: SupraStore,
+        matterID: String
+    ) async throws -> ExhaustiveListResult {
+        try await ExhaustiveListTask(store: store).run(
             request: ExhaustiveListRequest(
                 runKey: "review-controller-\(UUID().uuidString)",
-                matterID: matter.id,
+                matterID: matterID,
                 title: "Repair obligations",
                 query: "Extract the exact repair obligation and retain contrary amounts.",
                 characterBudget: 4_219,
@@ -510,11 +567,6 @@ final class CaseFileReviewControllerTests: XCTestCase {
             encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
             return String(decoding: try encoder.encode(payload), as: UTF8.self)
         }
-        return ReviewControllerFixture(
-            store: store,
-            matterID: matter.id,
-            result: result
-        )
     }
 
     private func insertDocument(

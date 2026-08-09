@@ -74,12 +74,54 @@ final class ReviewCreationManagedModelPinTests: XCTestCase {
                 try await library.makeCorpusAnalysisPinnedModel(modelID: selectedModelID)
             }
 
-            XCTAssertNotNil(error, "\(placement) must be unavailable for Review creation")
+            XCTAssertEqual(
+                error as? CorpusAnalysisModelPinError,
+                .modelNotManaged(Self.selectedModelIDString),
+                "\(placement) must fail at the managed-model boundary before bookmark resolution"
+            )
             XCTAssertTrue(
                 runtime.loadRequests.isEmpty,
                 "rejected \(placement) selection must not reach the runtime"
             )
         }
+    }
+
+    func testTRPCREATEMODEL01RepinningSameRegisteredIDRecomputesChangedVerifiedBytes() async throws {
+        // Expected RED: no Review pin API exists, and a future implementation
+        // must not cache a content fingerprint forever under the registered UUID.
+        let fixture = try makeFixture()
+        let runtime = StubRuntimeClient()
+        let library = try makeLibrary(fixture: fixture, runtime: runtime)
+        let selectedModelID = ModelID(
+            try XCTUnwrap(UUID(uuidString: Self.selectedModelIDString))
+        )
+        let first = try await library.makeCorpusAnalysisPinnedModel(modelID: selectedModelID)
+        let changedPayloads = [
+            "config.json": Data(#"{"model_type":"qwen2","revision_canary":911}"#.utf8),
+            "model.safetensors": Data("changed-protected-release-weight-canary-911".utf8),
+        ]
+        try writeModel(
+            to: fixture.selectedModelDirectory,
+            repository: Self.selectedRepository,
+            revision: Self.selectedRevision,
+            payloads: changedPayloads,
+            writeManifest: true
+        )
+
+        let second = try await library.makeCorpusAnalysisPinnedModel(modelID: selectedModelID)
+
+        XCTAssertEqual(first.modelRepository, second.modelRepository)
+        XCTAssertEqual(first.modelRevision, second.modelRevision)
+        XCTAssertEqual(first.contentBindingAlgorithm, second.contentBindingAlgorithm)
+        XCTAssertEqual(first.contentBindingSchemaVersion, second.contentBindingSchemaVersion)
+        XCTAssertEqual(first.artifactFingerprintSHA256.count, 64)
+        XCTAssertEqual(second.artifactFingerprintSHA256.count, 64)
+        XCTAssertNotEqual(
+            second.artifactFingerprintSHA256,
+            first.artifactFingerprintSHA256,
+            "the same registered UUID must be re-inspected after verified artifact bytes change"
+        )
+        XCTAssertTrue(runtime.loadRequests.isEmpty)
     }
 
     func testTRPCREATEMODEL01RejectsUnverifiedMutatedAndTreeExtraInstalls() async throws {

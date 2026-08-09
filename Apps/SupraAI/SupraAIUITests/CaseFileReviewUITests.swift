@@ -1283,6 +1283,193 @@ final class CaseFileReviewHostedUITests: XCTestCase {
         )
     }
 
+    func testTRPCREATEUI01NewReviewSetupUsesExactSelectedScopeAndDurableSubmission() throws {
+        // T-RP-CREATE-UI-01 expected RED: `-uiTestReviewCreation` is unhandled,
+        // so Review has no New Review action, exact scope preview, managed-model
+        // readiness, fixed-column disclosure, or durable queued handoff.
+        let app = launchReviewCreation(scenario: "setup")
+        let newReview = app.buttons["review.newReview"]
+        XCTAssertTrue(
+            newReview.waitForExistence(timeout: 10),
+            "Review needs one stable New Review action"
+        )
+        newReview.click()
+
+        let setup = app.descendants(matching: .any)["review.creation.sheet"]
+        XCTAssertTrue(
+            setup.waitForExistence(timeout: 10),
+            "New Review must open its native setup sheet"
+        )
+        let name = setup.descendants(matching: .any)["review.creation.name"]
+        let instruction = setup.descendants(matching: .any)["review.creation.instruction"]
+        let allScope = setup.descendants(matching: .any)["review.creation.scope.all"]
+        let selectedScope = setup.descendants(matching: .any)["review.creation.scope.selected"]
+        let model = setup.descendants(matching: .any)["review.creation.model"]
+        let denominator = setup.descendants(matching: .any)["review.creation.scopeSummary"]
+        let columnPreview = setup.descendants(matching: .any)["review.creation.columnPreview"]
+        let disclosure = setup.descendants(matching: .any)["review.creation.disclosure"]
+        let start = app.buttons["review.creation.start"]
+
+        for control in [name, instruction, allScope, selectedScope, model, denominator, columnPreview, disclosure] {
+            XCTAssertTrue(control.exists, "New Review is missing required setup control \(control.identifier)")
+        }
+        XCTAssertTrue(start.exists, "New Review needs one explicit Start Review action")
+        XCTAssertFalse(start.isEnabled, "Blank name and instruction must keep Start Review disabled")
+        XCTAssertTrue(
+            waitForAccessibleText(Fixture.creationWholeScopeSummary, in: denominator, timeout: 5),
+            "Whole-matter scope must expose the exact eligible and excluded denominator"
+        )
+        XCTAssertTrue(
+            waitForAccessibleText(Fixture.creationModelName, in: model, timeout: 5),
+            "Setup must name the exact verified app-managed local model"
+        )
+        XCTAssertTrue(
+            waitForAccessibleText(Fixture.creationDisclosure, in: disclosure, timeout: 5),
+            "Setup must disclose its frozen local execution boundary"
+        )
+        for column in ["Finding", "Generated value", "Sources", "Review"] {
+            XCTAssertEqual(
+                renderedElements(label: column, in: columnPreview).count,
+                1,
+                "The setup preview must expose one exact fixed \(column) column"
+            )
+        }
+
+        let excludedRows = [
+            "review.creation.excluded.reviewRequired": Fixture.creationReviewRequiredExclusion,
+            "review.creation.excluded.extractionFailed": Fixture.creationExtractionFailureExclusion,
+            "review.creation.excluded.importUnfinished": Fixture.creationImportUnfinishedExclusion,
+        ]
+        for (identifier, expected) in excludedRows {
+            let row = setup.descendants(matching: .any)[identifier]
+            XCTAssertTrue(row.exists, "Exact scope preview is missing excluded source \(expected)")
+            XCTAssertTrue(
+                waitForAccessibleText(expected, in: row, timeout: 5),
+                "Excluded sources must retain their literal planner reason"
+            )
+        }
+
+        selectedScope.click()
+        let selectedSummary = setup.descendants(matching: .any)["review.creation.selectedSummary"]
+        XCTAssertTrue(
+            selectedSummary.waitForExistence(timeout: 5),
+            "Selected documents needs an exact selected-source summary"
+        )
+        XCTAssertTrue(
+            waitForAccessibleText("0 eligible selected", in: selectedSummary, timeout: 5),
+            "Explicit scope must fail closed before a source is selected"
+        )
+        XCTAssertFalse(start.isEnabled, "Zero eligible selected sources must keep Start Review disabled")
+
+        let amendment = setup.descendants(matching: .any)[Fixture.creationSelectedDocumentIdentifier]
+        XCTAssertTrue(amendment.exists, "The non-default eligible source is missing")
+        amendment.click()
+        XCTAssertTrue(
+            waitForAccessibleText(Fixture.creationSelectedScopeSummary, in: selectedSummary, timeout: 5),
+            "Selected scope must retain the exact non-default source and count"
+        )
+        XCTAssertFalse(
+            accessibleText(of: selectedSummary).contains(Fixture.creationDefaultOnlyDocument),
+            "The selected-scope summary must not leak the unselected whole-matter canary"
+        )
+
+        replaceText(in: name, with: Fixture.creationTitle)
+        replaceText(in: instruction, with: Fixture.creationInstruction)
+        XCTAssertTrue(
+            start.isEnabled,
+            "A non-default name, instruction, exact eligible source, and managed model must enable Start Review"
+        )
+        start.click()
+
+        XCTAssertTrue(
+            setup.waitForNonExistence(timeout: 10),
+            "Setup may close only after its durable submission succeeds"
+        )
+        let status = app.descendants(matching: .any)["review.creation.status"]
+        XCTAssertTrue(status.waitForExistence(timeout: 10), "The durable queued run status is missing")
+        XCTAssertTrue(
+            waitForAccessibleText("Queued", in: status, timeout: 5),
+            "The setup fixture must remain deterministically queued after submission"
+        )
+        let runTitle = app.descendants(matching: .any)["review.creation.runTitle"]
+        let runInstruction = app.descendants(matching: .any)["review.creation.runInstruction"]
+        XCTAssertTrue(waitForAccessibleText(Fixture.creationTitle, in: runTitle, timeout: 5))
+        XCTAssertTrue(waitForAccessibleText(Fixture.creationInstruction, in: runInstruction, timeout: 5))
+        XCTAssertFalse(
+            accessibleText(of: runTitle).contains(Fixture.creationDefaultTitleCanary),
+            "The durable run-title element must not fall back to the default title canary"
+        )
+    }
+
+    func testTRPCREATEUI02PausedRunSurvivesRelaunchThenResumesAndCancels() throws {
+        // T-RP-CREATE-UI-02 expected RED: Review has no durable corpus-job status
+        // surface or dedicated persistent hosted fixture. A paused exact run
+        // therefore cannot survive a process boundary or route Resume/Cancel.
+        let storageRoot = appSandboxWritableReviewCreationRoot()
+        let app = XCUIApplication()
+        addTeardownBlock {
+            app.terminate()
+            _ = app.wait(for: .notRunning, timeout: 5)
+            try? FileManager.default.removeItem(at: storageRoot)
+        }
+        configureReviewCreation(
+            app,
+            scenario: "paused",
+            persistentRoot: storageRoot
+        )
+        launchConfiguredReviewCreation(app)
+
+        let status = app.descendants(matching: .any)["review.creation.status"]
+        let progress = app.descendants(matching: .any)["review.creation.progress"]
+        let resume = app.buttons["review.creation.resume"]
+        let pause = app.buttons["review.creation.pause"]
+        let cancel = app.buttons["review.creation.cancel"]
+        XCTAssertTrue(status.waitForExistence(timeout: 20), "Paused Review status did not appear")
+        XCTAssertTrue(waitForAccessibleText("Paused", in: status, timeout: 5))
+        XCTAssertTrue(
+            waitForAccessibleText(Fixture.creationPausedProgress, in: progress, timeout: 5),
+            "Progress must use terminal partitions against the frozen denominator"
+        )
+        XCTAssertFalse(
+            accessibleText(of: progress).contains("documents"),
+            "Corpus partition progress must not be relabeled as document progress"
+        )
+        XCTAssertTrue(resume.exists, "Paused work needs Resume")
+        XCTAssertTrue(cancel.exists, "Paused work needs Cancel")
+        XCTAssertFalse(pause.exists, "Paused work must not advertise a second Pause")
+
+        app.terminate()
+        XCTAssertTrue(app.wait(for: .notRunning, timeout: 5))
+        launchConfiguredReviewCreation(app)
+
+        XCTAssertTrue(status.waitForExistence(timeout: 20), "Relaunched Review status did not appear")
+        XCTAssertTrue(
+            waitForAccessibleText("Paused", in: status, timeout: 5),
+            "Paused state must reconstruct from the same file-backed Store"
+        )
+        XCTAssertTrue(waitForAccessibleText(Fixture.creationPausedProgress, in: progress, timeout: 5))
+        XCTAssertTrue(resume.exists, "Relaunched paused work must remain resumable")
+        XCTAssertTrue(cancel.exists, "Relaunched paused work must remain cancellable")
+
+        resume.click()
+        XCTAssertTrue(
+            waitForAccessibleText("Reviewing", in: status, timeout: 10),
+            "Resume must route the exact persisted Review job back to active work"
+        )
+        XCTAssertTrue(pause.waitForExistence(timeout: 5), "Active work needs Pause")
+        XCTAssertTrue(cancel.exists, "Active work needs Cancel")
+        XCTAssertTrue(resume.waitForNonExistence(timeout: 5), "Active work must not retain Resume")
+
+        cancel.click()
+        XCTAssertTrue(
+            waitForAccessibleText("Cancelled", in: status, timeout: 10),
+            "Cancel must terminalize the exact active Review job"
+        )
+        XCTAssertTrue(pause.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(cancel.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(resume.waitForNonExistence(timeout: 5))
+    }
+
     private func launchReviewProject(
         additionalArguments: [String] = []
     ) -> XCUIApplication {
@@ -1304,6 +1491,55 @@ final class CaseFileReviewHostedUITests: XCTestCase {
             "The synthetic matter did not open"
         )
         return app
+    }
+
+    private func launchReviewCreation(scenario: String) -> XCUIApplication {
+        let app = XCUIApplication()
+        configureReviewCreation(app, scenario: scenario)
+        launchConfiguredReviewCreation(app)
+        return app
+    }
+
+    private func configureReviewCreation(
+        _ app: XCUIApplication,
+        scenario: String,
+        persistentRoot: URL? = nil
+    ) {
+        app.launchArguments += [
+            "-ApplePersistenceIgnoreState", "YES",
+            "-uiTestMode",
+            "-uiTestEnsureFreshWindow",
+            "-uiTestReviewCreation",
+            "-uiTestReviewCreationScenario", scenario,
+            "-uiTestSelectFirstMatter",
+            "-uiTestInitialMatterTab", "Review",
+        ]
+        if let persistentRoot {
+            app.launchEnvironment["SUPRA_UI_TEST_REVIEW_CREATION_ROOT"] = persistentRoot.path
+        }
+    }
+
+    private func launchConfiguredReviewCreation(_ app: XCUIApplication) {
+        app.launch()
+        app.activate()
+        XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 10), "Main window did not appear")
+        XCTAssertTrue(
+            app.staticTexts["McKernon Motors v. Liberty Rail"].waitForExistence(timeout: 20),
+            "The synthetic matter did not open"
+        )
+    }
+
+    /// The app validates this root against its own sandbox temporary directory
+    /// before granting the one Review fixture cross-process Store persistence.
+    private func appSandboxWritableReviewCreationRoot() -> URL {
+        let runnerHome = FileManager.default.homeDirectoryForCurrentUser.path
+        let containerMarker = "/Library/Containers/"
+        let hostHome = runnerHome.range(of: containerMarker).map {
+            String(runnerHome[..<$0.lowerBound])
+        } ?? runnerHome
+        return URL(fileURLWithPath: hostHome, isDirectory: true)
+            .appendingPathComponent("Library/Containers/ai.supra.SupraAI/Data/tmp", isDirectory: true)
+            .appendingPathComponent("ReviewCreationUITest-\(UUID().uuidString)", isDirectory: true)
     }
 
     private func selectReviewFilter(
@@ -1573,6 +1809,26 @@ final class CaseFileReviewHostedUITests: XCTestCase {
         static let failedOpenReviewDraft = "81 days — failed open draft"
         static let corruptProjectMessage = "The persisted Review Project graph is incomplete."
 
+        static let creationTitle = "Atlas Amendment deadline review"
+        static let creationInstruction =
+            "Extract the amended renewal notice deadline and identify conflicting notice language."
+        static let creationDefaultTitleCanary = "New Review"
+        static let creationDefaultOnlyDocument = "Atlas Ready Agreement.txt"
+        static let creationSelectedDocumentIdentifier =
+            "review.creation.document.ui-review-create-amendment-document"
+        static let creationWholeScopeSummary = "2 eligible · 3 excluded"
+        static let creationSelectedScopeSummary = "1 eligible · Atlas Amendment.txt"
+        static let creationModelName = "Synthetic Review Model · Verified"
+        static let creationDisclosure =
+            "Exact frozen corpus · Local model · runs in background"
+        static let creationReviewRequiredExclusion =
+            "Beacon Review Draft.txt — Review required"
+        static let creationExtractionFailureExclusion =
+            "Atlas Extraction Failure.txt — Extraction failed"
+        static let creationImportUnfinishedExclusion =
+            "Atlas Import Pending.txt — Import unfinished"
+        static let creationPausedProgress = "1 of 3 partitions complete"
+
         static let defaultSourceCountCanary = "0 supporting"
         static let emptySupportingCanary =
             "No supporting evidence is recorded for this finding."
@@ -1704,20 +1960,10 @@ final class CaseFileReviewCompositionUITests: XCTestCase {
         }
     }
 
-    func testTRPUI04EvidenceRailUsesApprovedTokensAndStartReviewRemainsDeferred() throws {
+    func testTRPUI04EvidenceRailUsesApprovedTokens() throws {
         // T-RP-UI-04 expected RED: the selected-row-to-Sources evidence rail and
-        // its approved light/dark gold tokens do not exist. This first slice also
-        // must not advertise a Start/New Review button before that workflow works.
+        // its approved light/dark gold tokens do not exist.
         let review = try caseFileReviewSource()
-        let workspace = try appSource(
-            relativePath: "SupraAI/Matters/MatterWorkspaceView.swift"
-        )
-        let documents = try appSource(
-            relativePath: "SupraAI/Documents/MatterDocumentsView.swift"
-        )
-        let outputDetail = try appSource(
-            relativePath: "SupraAI/Outputs/OutputDetailView.swift"
-        )
 
         XCTAssertTrue(
             review.contains("A77920"),
@@ -1737,21 +1983,6 @@ final class CaseFileReviewCompositionUITests: XCTestCase {
             3,
             "the semantic rail width must be declared and used by both sides of the evidence connection"
         )
-
-        let deferredControlLiterals = [
-            #""Start Review""#,
-            #""Start new review""#,
-            #""Start a new review""#,
-            #""New Review""#,
-        ]
-        let visibleReviewComposition = [review, workspace, documents, outputDetail]
-            .joined(separator: "\n")
-        for literal in deferredControlLiterals {
-            XCTAssertFalse(
-                visibleReviewComposition.contains(literal),
-                "the visible first slice must not expose the deferred control titled \(literal)"
-            )
-        }
     }
 
     func testTRPUI05StaleProjectStateRemainsPersistentlyVisible() throws {
@@ -1996,8 +2227,185 @@ final class CaseFileReviewCompositionUITests: XCTestCase {
         )
     }
 
+    func testTRPCREATEUI03ProductionCompositionUsesAtomicPinnedQueueAndExactHandoff() throws {
+        // T-RP-CREATE-UI-03 expected RED: production has no separate Review
+        // creation controller, ModelLibrary cannot derive a managed content pin,
+        // corpus preparation and queue insertion are not atomic, and the native
+        // workbench has no exact ready-run handoff.
+        let review = try reviewAppSources()
+        let workspace = try appSource(
+            relativePath: "SupraAI/Matters/MatterWorkspaceView.swift"
+        )
+        let environment = try appSource(relativePath: "SupraAI/AppEnvironment.swift")
+        let matters = try packageSource(
+            relativePath: "Packages/SupraSessions/Sources/SupraSessions/MattersController.swift"
+        )
+        let modelLibrary = try packageSource(
+            relativePath: "Packages/SupraSessions/Sources/SupraSessions/ModelLibrary.swift"
+        )
+        let queue = try packageSource(
+            relativePath: "Packages/SupraSessions/Sources/SupraSessions/DocumentProcessingQueue.swift"
+        )
+        let preparer = try packageSource(
+            relativePath: "Packages/SupraSessions/Sources/SupraSessions/CorpusAnalysisQueuePreparer.swift"
+        )
+        let corpusRepository = try packageSource(
+            relativePath: "Packages/SupraStore/Sources/SupraStore/Repositories/CorpusAnalysisRepository.swift"
+        )
+
+        XCTAssertTrue(
+            matters.contains(
+                "@Published public private(set) var caseFileReviewCreationController: CaseFileReviewCreationController?"
+            ),
+            "MattersController must publish creation separately from the durable workbench controller"
+        )
+        XCTAssertTrue(
+            matters.contains("caseFileReviewCreationController = nil"),
+            "clearing a matter must clear its scoped creation controller"
+        )
+        XCTAssertTrue(
+            matters.contains("CaseFileReviewCreationController("),
+            "selecting a matter must compose one separate creation controller"
+        )
+        XCTAssertTrue(
+            workspace.contains("controller.caseFileReviewCreationController"),
+            "the Review destination must receive the selected matter's creation controller"
+        )
+        XCTAssertTrue(
+            review.contains("@ObservedObject var creationController: CaseFileReviewCreationController"),
+            "the native workbench must observe creation without merging controller authorities"
+        )
+
+        let creation = try packageSource(
+            relativePath: "Packages/SupraSessions/Sources/SupraSessions/CaseFileReviewCreationController.swift"
+        )
+        XCTAssertTrue(
+            creation.contains("submitCorpusAnalysis"),
+            "the creation controller must use its explicit generic submission boundary"
+        )
+        XCTAssertTrue(
+            creation.contains("CorpusAnalysisPinnedModel"),
+            "the creation boundary must require an exact pinned model, not a routed role default"
+        )
+        XCTAssertTrue(
+            [environment, preparer, queue].joined(separator: "\n")
+                .contains("CorpusAnalysisQueuePreparer("),
+            "production composition must build the existing exact v2 preparer"
+        )
+        XCTAssertTrue(
+            environment.contains("submitCorpusAnalysis:"),
+            "AppEnvironment must inject the production submission path explicitly"
+        )
+        XCTAssertTrue(
+            [environment, queue].joined(separator: "\n").contains("enqueueCorpusAnalysis("),
+            "production submission must enter the existing corpus queue as its sole executor"
+        )
+
+        XCTAssertTrue(
+            modelLibrary.contains("public func makeCorpusAnalysisPinnedModel("),
+            "ModelLibrary must expose one public managed-model pin projection"
+        )
+        XCTAssertTrue(
+            modelLibrary.contains("modelID: ModelID"),
+            "managed pinning must resolve one explicit registered model identity"
+        )
+        XCTAssertTrue(
+            environment.contains("makeCorpusAnalysisPinnedModel(modelID:"),
+            "production composition must call the verified managed-model pin provider"
+        )
+
+        XCTAssertTrue(
+            corpusRepository.contains("submitPreparedCorpusAnalysis("),
+            "Store must own the atomic prepared-run and corpus-job submission"
+        )
+        XCTAssertTrue(
+            queue.contains("store.corpusAnalysis.submitPreparedCorpusAnalysis("),
+            "the queue's corpus entry point must use the Store-owned atomic submission"
+        )
+        XCTAssertGreaterThanOrEqual(
+            try matchCount(
+                #"submitPreparedCorpusAnalysis\s*\([^\)]*run:\s*[^,]+,[^\)]*partitions:\s*[^,]+,[^\)]*slices:\s*[^,]+,[^\)]*job:"#,
+                in: corpusRepository
+            ),
+            1,
+            "the atomic Store boundary must commit run, partitions, slices, and queue job together"
+        )
+
+        XCTAssertTrue(
+            review.contains(
+                "case openCreatedReview(CaseFileReviewCreationController.Run)"
+            ),
+            "a completed created run must enter the existing dirty-navigation boundary"
+        )
+        XCTAssertTrue(
+            review.contains("requestNavigation(.openCreatedReview("),
+            "the creation status action must request guarded workbench navigation"
+        )
+        XCTAssertGreaterThanOrEqual(
+            try matchCount(
+                #"private\s+func\s+openCreatedReview[^\{]*\{[\s\S]{0,500}controller\.openReview\s*\([\s\S]{0,240}sourceRunID:\s*[^,]+,[\s\S]{0,160}title:"#,
+                in: review
+            ),
+            1,
+            "ready handoff must carry the exact persisted run identity and title into the workbench"
+        )
+
+        let exactIdentifiers = [
+            "review.newReview",
+            "review.creation.sheet",
+            "review.creation.name",
+            "review.creation.instruction",
+            "review.creation.scope.all",
+            "review.creation.scope.selected",
+            "review.creation.scopeSummary",
+            "review.creation.selectedSummary",
+            "review.creation.model",
+            "review.creation.columnPreview",
+            "review.creation.disclosure",
+            "review.creation.start",
+            "review.creation.status",
+            "review.creation.progress",
+            "review.creation.pause",
+            "review.creation.resume",
+            "review.creation.cancel",
+            "review.creation.openResults",
+        ]
+        for identifier in exactIdentifiers {
+            XCTAssertTrue(
+                review.contains(".accessibilityIdentifier(\"\(identifier)\")"),
+                "missing exact Review creation accessibility identifier \(identifier)"
+            )
+        }
+        XCTAssertTrue(
+            review.contains(#".accessibilityIdentifier("review.creation.document.\("#),
+            "eligible source choices need stable document-bound identities"
+        )
+        XCTAssertTrue(
+            review.contains("run.statusLabel"),
+            "the native surface must render the controller-owned durable status label"
+        )
+        XCTAssertTrue(
+            environment.contains("-uiTestReviewCreation")
+                && environment.contains("SUPRA_UI_TEST_REVIEW_CREATION_ROOT"),
+            "the single hosted creation fixture must be explicitly gated and use its throwaway root"
+        )
+    }
+
     private func caseFileReviewSource() throws -> String {
         try appSource(relativePath: "SupraAI/Review/CaseFileReviewView.swift")
+    }
+
+    private func reviewAppSources() throws -> String {
+        let reviewDirectory = appRootURL
+            .appendingPathComponent("SupraAI/Review", isDirectory: true)
+        let sourceURLs = try FileManager.default.contentsOfDirectory(
+            at: reviewDirectory,
+            includingPropertiesForKeys: nil
+        )
+        .filter { $0.pathExtension == "swift" }
+        .sorted { $0.lastPathComponent < $1.lastPathComponent }
+        XCTAssertFalse(sourceURLs.isEmpty, "the native Review source directory is empty")
+        return try sourceURLs.map { try source(at: $0) }.joined(separator: "\n")
     }
 
     private func appSource(relativePath: String) throws -> String {
