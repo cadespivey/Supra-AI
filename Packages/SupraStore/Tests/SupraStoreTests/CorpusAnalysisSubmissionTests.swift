@@ -265,7 +265,77 @@ final class CorpusAnalysisSubmissionTests: XCTestCase {
         }
     }
 
-    private func makeFixture(marker: String) throws -> SubmissionFixture {
+    func testTRPCREATESTORE04ApprovedWholeMatterReceiptIsRecheckedAgainstLiveScopeAtomically() throws {
+        // T-RP-CREATE-STORE-04 expected RED: atomic prepared submission has no
+        // user-approved receipt input and does not reconstruct the live scope
+        // inside its writer transaction. A prepared whole-matter ledger can be
+        // committed after its approved denominator has changed.
+        let fixture = try makeFixture(
+            marker: "approved-receipt-drift-4314",
+            wholeMatter: true
+        )
+        let lateDocumentID = "guided-review-late-document-4314"
+        let lateRevisionID = "guided-review-late-revision-4314"
+        let lateDocument = try insertEligibleDocument(
+            store: fixture.store,
+            matterID: fixture.matterID,
+            documentID: lateDocumentID,
+            revisionID: lateRevisionID,
+            marker: "LATE-LIVE-SCOPE-CANARY-4314"
+        )
+        XCTAssertFalse(
+            fixture.approvedScopeReceipt.members.contains { $0.documentID == lateDocument.id },
+            "the approved receipt must remain the pre-mutation one-member denominator"
+        )
+
+        XCTAssertThrowsError(
+            try fixture.store.corpusAnalysis.submitPreparedCorpusAnalysis(
+                run: fixture.run,
+                partitions: [fixture.partition],
+                slices: [fixture.slice],
+                job: fixture.job,
+                approvedScopeReceipt: fixture.approvedScopeReceipt
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? CorpusAnalysisRepositoryError,
+                .scopeReceiptChanged
+            )
+        }
+        try assertCounts(
+            fixture.store,
+            matterID: fixture.matterID,
+            runID: fixture.run.id,
+            runs: 0,
+            partitions: 0,
+            slices: 0,
+            corpusJobs: 0
+        )
+        XCTAssertEqual(
+            try fixture.store.documentLibrary.fetchDocument(id: lateDocumentID)?.displayName,
+            "Guided Review late source LATE-LIVE-SCOPE-CANARY-4314.txt",
+            "receipt rejection must not erase the independently committed late document"
+        )
+        XCTAssertEqual(
+            try fixture.store.documentIndex.fetchParts(documentID: lateDocumentID)
+                .map(\.currentRevisionID),
+            [lateRevisionID]
+        )
+        XCTAssertEqual(
+            try fixture.store.documentRevisions.fetchRevision(id: lateRevisionID)?.text,
+            "LATE-LIVE-SCOPE-CANARY-4314-NONDEFAULT-TEXT"
+        )
+        XCTAssertEqual(
+            try fixture.store.documentLibrary.fetchDocuments(matterID: fixture.matterID)
+                .map(\.id).sorted(),
+            [fixture.documentID, lateDocumentID].sorted()
+        )
+    }
+
+    private func makeFixture(
+        marker: String,
+        wholeMatter: Bool = false
+    ) throws -> SubmissionFixture {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
             "CorpusAnalysisSubmission-\(UUID().uuidString)",
             isDirectory: true
@@ -349,7 +419,9 @@ final class CorpusAnalysisSubmissionTests: XCTestCase {
             runKey: "guided-review-key-\(marker)",
             matterID: matter.id,
             taskKind: CorpusAnalysisTaskKind.exhaustiveList.rawValue,
-            scopeJSON: "{\"document_ids\":[\"\(document.id)\"],\"schema_version\":2}",
+            scopeJSON: wholeMatter
+                ? #"{"schema_version":1}"#
+                : "{\"document_ids\":[\"\(document.id)\"],\"schema_version\":2}",
             corpusSnapshotJSON: try canonicalJSON(snapshot),
             partitionStrategy: "exact_revision_slice:characters=8192",
             partitionStrategyVersion: 2,
@@ -386,7 +458,8 @@ final class CorpusAnalysisSubmissionTests: XCTestCase {
             runID: runID,
             requestDigest: requestDigest,
             runKey: run.runKey,
-            documentID: document.id
+            documentID: document.id,
+            wholeMatter: wholeMatter
         )
         let job = DocumentProcessingJobRecord(
             id: "guided-review-job-\(marker)",
@@ -401,9 +474,74 @@ final class CorpusAnalysisSubmissionTests: XCTestCase {
             run: run,
             partition: partition,
             slice: slice,
+            approvedScopeReceipt: snapshot,
             payloadJSON: payload,
             job: job
         )
+    }
+
+    private func insertEligibleDocument(
+        store: SupraStore,
+        matterID: String,
+        documentID: String,
+        revisionID: String,
+        marker: String
+    ) throws -> MatterDocumentRecord {
+        let text = "\(marker)-NONDEFAULT-TEXT"
+        let blob = try store.documentLibrary.upsertBlob(DocumentBlobRecord(
+            id: "guided-review-late-blob-\(marker)",
+            sha256: "guided-review-late-sha-\(marker)",
+            byteSize: text.utf8.count,
+            originalExtension: "txt",
+            managedRelativePath: "blobs/guided-review-late-\(marker).txt"
+        )).blob
+        let document = try store.documentLibrary.insertDocument(MatterDocumentRecord(
+            id: documentID,
+            matterID: matterID,
+            blobID: blob.id,
+            displayName: "Guided Review late source \(marker).txt",
+            status: MatterDocumentStatus.ready.rawValue,
+            extractionStatus: DocumentExtractionStatus.extracted.rawValue,
+            indexStatus: DocumentIndexStatus.textIndexed.rawValue
+        ))
+        let part = DocumentPagePartRecord(
+            id: "guided-review-late-part-\(marker)",
+            documentID: document.id,
+            partIndex: 0,
+            sourceKind: DocumentSourceKind.text.rawValue,
+            normalizedText: text,
+            charCount: text.count
+        )
+        let revision = DocumentPartRevisionRecord(
+            id: revisionID,
+            documentID: document.id,
+            partIndex: 0,
+            derivationKey: "guided-review-late-derivation-\(marker)",
+            origin: "synthetic_test",
+            method: "plain-text",
+            text: text,
+            charCount: text.count
+        )
+        let selection = DocumentPartSelectionRecord(
+            id: "guided-review-late-selection-\(marker)",
+            documentID: document.id,
+            partIndex: 0,
+            selectedRevisionID: revision.id,
+            selectionKey: "guided-review-late-selection-key-\(marker)",
+            selectedBy: "test",
+            decisionJSON: #"{"rule":"guided-review-live-scope-counterexample"}"#
+        )
+        let persistedParts = try store.documentRevisions.replacePartsAndPersistLineage(
+            documentID: document.id,
+            parts: [part],
+            revisions: [revision],
+            selections: [selection]
+        )
+        XCTAssertTrue(
+            persistedParts.isEmpty,
+            "a newly inserted late source has no earlier user edit to preserve"
+        )
+        return document
     }
 
     private func payloadJSON(
@@ -411,10 +549,14 @@ final class CorpusAnalysisSubmissionTests: XCTestCase {
         runID: String,
         requestDigest: String,
         runKey: String,
-        documentID: String
+        documentID: String,
+        wholeMatter: Bool = false
     ) -> String {
-        """
-        {"pinned_model":{"artifact_fingerprint_sha256":"7777777777777777777777777777777777777777777777777777777777777777","content_binding_algorithm":"supra-release-model-sha256-v1","content_binding_schema_version":1,"model_repository":"synthetic/guided-review","model_revision":"0123456789abcdef0123456789abcdef01234567"},"request_digest":"\(requestDigest)","run_id":"\(runID)","schema_version":2,"task":{"kind":"exhaustive_list","request":{"character_budget":8192,"matter_id":"\(matterID)","maximum_retry_count":2,"prompt_builder_version":"exhaustive-list-v1","query":"Extract NONDEFAULT-RENEWAL-4199","run_key":"\(runKey)","scope":{"document_ids":["\(documentID)"],"schema_version":2},"task_schema_version":1,"title":"Guided Review 4199"}}}
+        let scopeJSON = wholeMatter
+            ? #"{"schema_version":1}"#
+            : "{\"document_ids\":[\"\(documentID)\"],\"schema_version\":2}"
+        return """
+        {"pinned_model":{"artifact_fingerprint_sha256":"7777777777777777777777777777777777777777777777777777777777777777","content_binding_algorithm":"supra-release-model-sha256-v1","content_binding_schema_version":1,"model_repository":"synthetic/guided-review","model_revision":"0123456789abcdef0123456789abcdef01234567"},"request_digest":"\(requestDigest)","run_id":"\(runID)","schema_version":2,"task":{"kind":"exhaustive_list","request":{"character_budget":8192,"matter_id":"\(matterID)","maximum_retry_count":2,"prompt_builder_version":"exhaustive-list-v1","query":"Extract NONDEFAULT-RENEWAL-4199","run_key":"\(runKey)","scope":\(scopeJSON),"task_schema_version":1,"title":"Guided Review 4199"}}}
         """
     }
 
@@ -475,6 +617,7 @@ private struct SubmissionFixture {
     var run: CorpusAnalysisRunRecord
     var partition: CorpusAnalysisPartitionRecord
     var slice: CorpusAnalysisPartitionSliceRecord
+    var approvedScopeReceipt: CorpusAnalysisSnapshot
     var payloadJSON: String
     var job: DocumentProcessingJobRecord
 }

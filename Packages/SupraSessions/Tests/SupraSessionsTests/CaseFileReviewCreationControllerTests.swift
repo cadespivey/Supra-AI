@@ -261,7 +261,7 @@ final class CaseFileReviewCreationControllerTests: XCTestCase {
         let controller = makeController(
             matterID: fixture.matterID,
             store: fixture.store,
-            submitCorpusAnalysis: { request, pinnedModel in
+            submitCorpusAnalysis: { request, pinnedModel, _ in
                 submissionProbe.record(request: request, pinnedModel: pinnedModel)
                 return nil
             }
@@ -314,7 +314,7 @@ final class CaseFileReviewCreationControllerTests: XCTestCase {
         let controller = makeController(
             matterID: fixture.matterID,
             store: fixture.store,
-            submitCorpusAnalysis: { request, pinnedModel in
+            submitCorpusAnalysis: { request, pinnedModel, _ in
                 submissionProbe.record(request: request, pinnedModel: pinnedModel)
                 return (
                     runID: "forbidden-excluded-source-run-7107",
@@ -364,7 +364,7 @@ final class CaseFileReviewCreationControllerTests: XCTestCase {
         let controller = makeController(
             matterID: fixture.matterID,
             store: fixture.store,
-            submitCorpusAnalysis: { request, pinnedModel in
+            submitCorpusAnalysis: { request, pinnedModel, _ in
                 submissionProbe.record(request: request, pinnedModel: pinnedModel)
                 return (
                     runID: "scope-receipt-retry-run-8108",
@@ -455,7 +455,7 @@ final class CaseFileReviewCreationControllerTests: XCTestCase {
                 }
                 return Self.pinnedModel
             },
-            submitCorpusAnalysis: { request, pinnedModel in
+            submitCorpusAnalysis: { request, pinnedModel, _ in
                 submissionProbe.record(request: request, pinnedModel: pinnedModel)
                 return (
                     runID: "revision-receipt-retry-run-9409",
@@ -507,6 +507,102 @@ final class CaseFileReviewCreationControllerTests: XCTestCase {
         XCTAssertEqual(submissionProbe.callCount, 1)
         XCTAssertEqual(submissionProbe.request?.scope, scope)
         XCTAssertEqual(submissionProbe.pinnedModel, Self.pinnedModel)
+    }
+
+    func testTRPCREATESESS10LateWholeMatterSourceInsideSubmitRejectsApprovedReceiptAtomically() throws {
+        // T-RP-CREATE-SESS-10 expected RED: the controller's submit seam does
+        // not carry the user-approved canonical receipt to Store, and every
+        // submission error is flattened to submissionFailed. An eligible
+        // whole-matter document inserted after the controller comparison but
+        // before atomic submit can therefore enter an unapproved denominator.
+        let fixture = try makeScopeFixture(testName: "SESS10-atomic-receipt-drift")
+        let approvedPreview = try makeController(
+            matterID: fixture.matterID,
+            store: fixture.store
+        ).inspectScope(scope: .wholeMatter)
+        let approvedReceipt = CorpusAnalysisSnapshot(
+            schemaVersion: 2,
+            members: approvedPreview.members
+        )
+        let lateDocumentID = "whole-matter-submit-gap-document-1010"
+        var submitCallCount = 0
+        var receivedApprovedReceipt: CorpusAnalysisSnapshot?
+        let controller = makeController(
+            matterID: fixture.matterID,
+            store: fixture.store,
+            submitCorpusAnalysis: { request, pinnedModel, approvedScopeReceipt in
+                submitCallCount += 1
+                receivedApprovedReceipt = approvedScopeReceipt
+                let insertedLateDocument = try self.insertDocument(
+                    store: fixture.store,
+                    matterID: fixture.matterID,
+                    id: lateDocumentID,
+                    name: "Late Eligible Atomic Receipt 1010.txt",
+                    text: "LATE-ELIGIBLE-ATOMIC-RECEIPT-CANARY-1010",
+                    status: .ready,
+                    extractionStatus: .extracted,
+                    indexStatus: .textIndexed
+                )
+                XCTAssertEqual(insertedLateDocument.id, lateDocumentID)
+                let prepared = try CorpusAnalysisQueuePreparer(store: fixture.store)
+                    .prepareExhaustiveListSubmission(
+                        request: request,
+                        pinnedModel: pinnedModel
+                    )
+                let payloadJSON = String(
+                    decoding: try JSONEncoder().encode(prepared.payload),
+                    as: UTF8.self
+                )
+                let proposedJob = DocumentProcessingJobRecord(
+                    id: prepared.jobID,
+                    matterID: request.matterID,
+                    kind: DocumentProcessingJobKind.corpusAnalysis.rawValue,
+                    payloadJSON: payloadJSON
+                )
+                let job = try fixture.store.corpusAnalysis.submitPreparedCorpusAnalysis(
+                    run: prepared.run,
+                    partitions: prepared.partitions,
+                    slices: prepared.slices,
+                    job: proposedJob,
+                    approvedScopeReceipt: approvedScopeReceipt
+                )
+                return (runID: prepared.run.id, jobID: job.id)
+            }
+        )
+
+        XCTAssertThrowsError(
+            try controller.startReview(
+                projectName: "Atomic receipt boundary 1010",
+                instruction: "Extract every source from the approved receipt, never a late addition.",
+                scope: .wholeMatter,
+                expectedScopePreview: approvedPreview,
+                pinnedModel: Self.pinnedModel
+            )
+        ) { error in
+            XCTAssertEqual(error as? CaseFileReviewCreationError, .scopeChanged)
+        }
+        XCTAssertEqual(
+            submitCallCount,
+            1,
+            "the counterexample must enter the submit closure after the controller comparison"
+        )
+        XCTAssertEqual(receivedApprovedReceipt, approvedReceipt)
+        XCTAssertEqual(try persistedCounts(store: fixture.store), .zero)
+        XCTAssertEqual(
+            try fixture.store.documentLibrary.fetchDocument(id: lateDocumentID)?.displayName,
+            "Late Eligible Atomic Receipt 1010.txt",
+            "the rejected submission must not roll back the independently committed late source"
+        )
+        let refreshedPreview = try controller.inspectScope(scope: .wholeMatter)
+        XCTAssertEqual(refreshedPreview.eligibleCount, approvedPreview.eligibleCount + 1)
+        let refreshedLateMember: CorpusAnalysisSnapshotMember = try XCTUnwrap(
+            refreshedPreview.members.first { $0.documentID == lateDocumentID }
+        )
+        XCTAssertEqual(refreshedLateMember.revisionIDs, ["revision-\(lateDocumentID)"])
+        XCTAssertEqual(
+            refreshedLateMember.disposition,
+            CorpusAnalysisSnapshotDisposition.eligible
+        )
     }
 
     func testTRPCREATESESS06TerminalReviewPermitsASecondDistinctSubmission() throws {
@@ -1158,10 +1254,11 @@ final class CaseFileReviewCreationControllerTests: XCTestCase {
         makeCorpusAnalysisPinnedModel: CaseFileReviewCreationController.ManagedModelPinProvider? = nil,
         submitCorpusAnalysis: ((
             ExhaustiveListQueuedRequest,
-            CorpusAnalysisPinnedModel
+            CorpusAnalysisPinnedModel,
+            CorpusAnalysisSnapshot
         ) throws -> (runID: String, jobID: String)?)? = nil
     ) -> CaseFileReviewCreationController {
-        let submit = submitCorpusAnalysis ?? { request, pinnedModel in
+        let submit = submitCorpusAnalysis ?? { request, pinnedModel, _ in
             let payload = try CorpusAnalysisQueuePreparer(store: store).prepareExhaustiveList(
                 request: request,
                 pinnedModel: pinnedModel
