@@ -3,7 +3,7 @@ import SupraCore
 import SupraDocuments
 import SupraStore
 
-/// Produces an immutable, matter-scoped CSV snapshot of one Review Project.
+/// Produces immutable, matter-scoped CSV and XLSX snapshots of one Review Project.
 /// The Store owns the atomic snapshot and completion checks; this service owns
 /// deterministic serialization and durable file installation.
 public final class CaseFileReviewExportService: @unchecked Sendable {
@@ -11,6 +11,7 @@ public final class CaseFileReviewExportService: @unchecked Sendable {
         public let exportID: String
         public let matterID: String
         public let projectID: String
+        public let format: CaseFileReviewSnapshotExportFormat
         public let managedRelativePath: String
         public let artifactSHA256: String
         public let snapshotProjectUpdatedAt: Date
@@ -22,6 +23,7 @@ public final class CaseFileReviewExportService: @unchecked Sendable {
             exportID: String,
             matterID: String,
             projectID: String,
+            format: CaseFileReviewSnapshotExportFormat = .csv,
             managedRelativePath: String,
             artifactSHA256: String,
             snapshotProjectUpdatedAt: Date,
@@ -32,6 +34,7 @@ public final class CaseFileReviewExportService: @unchecked Sendable {
             self.exportID = exportID
             self.matterID = matterID
             self.projectID = projectID
+            self.format = format
             self.managedRelativePath = managedRelativePath
             self.artifactSHA256 = artifactSHA256
             self.snapshotProjectUpdatedAt = snapshotProjectUpdatedAt
@@ -68,6 +71,22 @@ public final class CaseFileReviewExportService: @unchecked Sendable {
         case installedArtifactNotRemoved
     }
 
+    private struct ReviewRowProjection {
+        let rowNumber: Int
+        let finding: String
+        let generatedValue: String
+        let attorneyValue: String
+        let currentValue: String
+        let valueState: String
+        let reviewState: String
+        let reviewedBy: String
+        let reviewedAt: Date?
+        let supportState: String
+        let supporting: [CaseFileReviewEvidenceEdgeRecord]
+        let contrary: [CaseFileReviewEvidenceEdgeRecord]
+        let cellID: String
+    }
+
     private static let header = [
         "Row",
         "Finding",
@@ -96,6 +115,44 @@ public final class CaseFileReviewExportService: @unchecked Sendable {
         "Exported at (UTC)",
     ]
 
+    private static let matrixColumns = [
+        TabularXLSXWorkbook.Column(header: "Row", width: 7),
+        TabularXLSXWorkbook.Column(header: "Finding", width: 34),
+        TabularXLSXWorkbook.Column(header: "Generated value", width: 38),
+        TabularXLSXWorkbook.Column(header: "Attorney value", width: 38),
+        TabularXLSXWorkbook.Column(header: "Current value", width: 42),
+        TabularXLSXWorkbook.Column(header: "Value state", width: 14),
+        TabularXLSXWorkbook.Column(header: "Review state", width: 16),
+        TabularXLSXWorkbook.Column(header: "Reviewed by", width: 22),
+        TabularXLSXWorkbook.Column(header: "Reviewed at (UTC)", width: 24),
+        TabularXLSXWorkbook.Column(header: "Support state", width: 16),
+        TabularXLSXWorkbook.Column(header: "Supporting source count", width: 22),
+        TabularXLSXWorkbook.Column(header: "Contrary source count", width: 20),
+        TabularXLSXWorkbook.Column(header: "Cell ID", width: 30),
+    ]
+
+    private static let sourceColumns = [
+        TabularXLSXWorkbook.Column(header: "Finding row", width: 11),
+        TabularXLSXWorkbook.Column(header: "Finding", width: 34),
+        TabularXLSXWorkbook.Column(header: "Relationship", width: 14),
+        TabularXLSXWorkbook.Column(header: "Source order", width: 13),
+        TabularXLSXWorkbook.Column(header: "Citation", width: 12),
+        TabularXLSXWorkbook.Column(header: "Document", width: 30),
+        TabularXLSXWorkbook.Column(header: "Locator", width: 18),
+        TabularXLSXWorkbook.Column(header: "Availability", width: 15),
+        TabularXLSXWorkbook.Column(header: "Unavailable reason", width: 28),
+        TabularXLSXWorkbook.Column(header: "Excerpt", width: 54),
+        TabularXLSXWorkbook.Column(header: "Frozen source ID", width: 32),
+        TabularXLSXWorkbook.Column(header: "Frozen document ID", width: 32),
+        TabularXLSXWorkbook.Column(header: "Frozen revision ID", width: 32),
+        TabularXLSXWorkbook.Column(header: "Cell ID", width: 30),
+    ]
+
+    private static let projectColumns = [
+        TabularXLSXWorkbook.Column(header: "Field", width: 34),
+        TabularXLSXWorkbook.Column(header: "Value", width: 76),
+    ]
+
     private let store: SupraStore
     private let storage: DocumentStorage
     private let fileWriter: DurableFileWriter
@@ -115,6 +172,7 @@ public final class CaseFileReviewExportService: @unchecked Sendable {
                 matterID: completion.matterID,
                 projectID: completion.projectID,
                 exportID: completion.exportID,
+                format: completion.format,
                 managedRelativePath: completion.managedRelativePath,
                 artifactSHA256: completion.artifactSHA256,
                 snapshotUpdatedAt: completion.snapshotProjectUpdatedAt,
@@ -132,15 +190,55 @@ public final class CaseFileReviewExportService: @unchecked Sendable {
         actor: String,
         at exportedAt: Date = Date()
     ) throws -> URL {
+        try export(
+            matterID: matterID,
+            projectID: projectID,
+            actor: actor,
+            format: .csv,
+            at: exportedAt
+        )
+    }
+
+    @discardableResult
+    public func exportXLSX(
+        matterID: String,
+        projectID: String,
+        actor: String,
+        at exportedAt: Date = Date()
+    ) throws -> URL {
+        try export(
+            matterID: matterID,
+            projectID: projectID,
+            actor: actor,
+            format: .xlsx,
+            at: exportedAt
+        )
+    }
+
+    private func export(
+        matterID: String,
+        projectID: String,
+        actor: String,
+        format: CaseFileReviewSnapshotExportFormat,
+        at exportedAt: Date
+    ) throws -> URL {
         let snapshot = try store.caseFileReviews.fetchSnapshot(
             matterID: matterID,
             projectID: projectID
         )
-        let data = try render(snapshot: snapshot, exportedAt: exportedAt)
-        let baseFileName = "\(Self.safeFileStem(snapshot.project.title))-snapshot-v\(snapshot.table.versionIndex)-\(Self.filenameStamp(exportedAt)).csv"
+        let data: Data
+        switch format {
+        case .csv:
+            data = try renderCSV(snapshot: snapshot, exportedAt: exportedAt)
+        case .xlsx:
+            data = try renderXLSX(snapshot: snapshot, exportedAt: exportedAt)
+        }
+        let baseStem = "\(Self.safeFileStem(snapshot.project.title))-snapshot-v\(snapshot.table.versionIndex)-\(Self.filenameStamp(exportedAt))"
+        let baseFileName = "\(baseStem).\(format.fileExtension)"
         let directory = storage.exportsDirectory(forMatterID: matterID)
         let exportID = UUID().uuidString
-        let collisionFileName = "\(String(baseFileName.dropLast(4)))-\(exportID.lowercased()).csv"
+        let collisionFileName = "\(baseStem)-\(exportID.lowercased()).\(format.fileExtension)"
+        let documentFormat = Self.documentExportFormat(format)
         var publication: (
             url: URL,
             fileName: String,
@@ -157,7 +255,7 @@ public final class CaseFileReviewExportService: @unchecked Sendable {
                     to: candidate,
                     containedIn: storage.root
                 ) { installedData in
-                    try DocumentExportValidator.validate(installedData, as: .csv)
+                    try DocumentExportValidator.validate(installedData, as: documentFormat)
                 }
                 publication = (candidate, candidateFileName, identity)
                 break
@@ -175,6 +273,7 @@ public final class CaseFileReviewExportService: @unchecked Sendable {
             exportID: exportID,
             matterID: matterID,
             projectID: projectID,
+            format: format,
             managedRelativePath: "exports/\(matterID)/\(publication.fileName)",
             artifactSHA256: DocumentStorage.sha256Hex(of: data),
             snapshotProjectUpdatedAt: snapshot.project.updatedAt,
@@ -203,7 +302,7 @@ public final class CaseFileReviewExportService: @unchecked Sendable {
         return publication.url
     }
 
-    private func render(
+    private func renderCSV(
         snapshot: CaseFileReviewSnapshot,
         exportedAt: Date
     ) throws -> Data {
@@ -293,6 +392,257 @@ public final class CaseFileReviewExportService: @unchecked Sendable {
         return data
     }
 
+    private func renderXLSX(
+        snapshot: CaseFileReviewSnapshot,
+        exportedAt: Date
+    ) throws -> Data {
+        let rows = try Self.reviewRows(snapshot)
+        let matrixRows: [[TabularXLSXWorkbook.Cell]] = rows.map { row in
+            let reviewedAt: TabularXLSXWorkbook.Cell = row.reviewedAt.map {
+                .dateTime($0)
+            } ?? .text("")
+            return [
+                .integer(row.rowNumber),
+                .text(row.finding),
+                .text(row.generatedValue),
+                .text(row.attorneyValue),
+                Self.currentValueCell(row.currentValue, valueState: row.valueState),
+                Self.valueStateCell(row.valueState),
+                Self.reviewStateCell(row.reviewState),
+                .text(row.reviewedBy),
+                reviewedAt,
+                Self.supportStateCell(row.supportState),
+                .integer(row.supporting.count),
+                .integer(row.contrary.count),
+                .text(row.cellID),
+            ]
+        }
+
+        var sourceRows: [[TabularXLSXWorkbook.Cell]] = []
+        for row in rows {
+            for evidence in row.supporting + row.contrary {
+                let locator = try Self.evidenceLocator(
+                    evidence,
+                    projectID: snapshot.project.id
+                )
+                sourceRows.append([
+                    .integer(row.rowNumber),
+                    .text(row.finding),
+                    Self.relationshipCell(evidence.kind),
+                    .integer(evidence.ordinal + 1),
+                    .text(evidence.citationLabel),
+                    .text(evidence.frozenDocumentName),
+                    .text(locator.displayString),
+                    Self.availabilityCell(evidence.availability),
+                    Self.unavailableReasonCell(evidence.unavailableReason),
+                    .text(Self.normalizeWorkbookLineEndings(evidence.excerpt)),
+                    .text(evidence.frozenOutputSourceID),
+                    .text(evidence.frozenDocumentID),
+                    .text(evidence.frozenRevisionID),
+                    .text(row.cellID),
+                ])
+            }
+        }
+
+        let reviewedCount = rows.count { $0.reviewState == "reviewed" }
+        let needsReviewCount = rows.count { $0.reviewState == "needs_review" }
+        let editedCount = rows.count { $0.valueState == "edited" }
+        let evidenceAttentionCount = rows.count {
+            !$0.contrary.isEmpty || $0.supportState != "supported"
+        }
+        let supportingSourceCount = rows.reduce(0) { $0 + $1.supporting.count }
+        let contrarySourceCount = rows.reduce(0) { $0 + $1.contrary.count }
+        let projectRows: [[TabularXLSXWorkbook.Cell]] = [
+            Self.projectRow("Snapshot schema version", value: .integer(1)),
+            Self.projectRow("Project", value: .text(snapshot.project.title)),
+            Self.projectRow(
+                "Project status",
+                value: Self.projectStatusCell(snapshot.project.status)
+            ),
+            Self.projectRow(
+                "Project stale reason",
+                value: Self.unavailableReasonCell(snapshot.project.staleReason)
+            ),
+            Self.projectRow("Matrix version", value: .integer(snapshot.table.versionIndex)),
+            Self.projectRow("Finding count", value: .integer(rows.count)),
+            Self.projectRow("Reviewed findings", value: .integer(reviewedCount)),
+            Self.projectRow("Needs-review findings", value: .integer(needsReviewCount)),
+            Self.projectRow("Edited findings", value: .integer(editedCount)),
+            Self.projectRow(
+                "Evidence-attention findings",
+                value: .integer(evidenceAttentionCount)
+            ),
+            Self.projectRow(
+                "Supporting source count",
+                value: .integer(supportingSourceCount)
+            ),
+            Self.projectRow("Contrary source count", value: .integer(contrarySourceCount)),
+            Self.projectRow(
+                "Scope",
+                value: .text("All saved findings (presentation filters ignored)")
+            ),
+            Self.projectRow("Project ID", value: .text(snapshot.project.id)),
+            Self.projectRow("Source run ID", value: .text(snapshot.project.sourceRunID)),
+            Self.projectRow("Source output ID", value: .text(snapshot.project.sourceOutputID)),
+            Self.projectRow(
+                "Source output version ID",
+                value: .text(snapshot.project.sourceOutputVersionID)
+            ),
+            Self.projectRow(
+                "Project updated at (UTC)",
+                value: .dateTime(snapshot.project.updatedAt)
+            ),
+            Self.projectRow("Exported at (UTC)", value: .dateTime(exportedAt)),
+        ]
+
+        return try TabularXLSXRenderer.render(TabularXLSXWorkbook(sheets: [
+            .init(
+                name: "Matrix",
+                tableName: "ReviewMatrix",
+                columns: Self.matrixColumns,
+                rows: matrixRows,
+                freezeRows: 1,
+                freezeColumns: 2,
+                showsGridLines: false,
+                hasAutoFilter: true
+            ),
+            .init(
+                name: "Sources",
+                tableName: "ReviewSources",
+                columns: Self.sourceColumns,
+                rows: sourceRows,
+                freezeRows: 1,
+                freezeColumns: 2,
+                showsGridLines: false,
+                hasAutoFilter: true
+            ),
+            .init(
+                name: "Project",
+                tableName: "ReviewProject",
+                columns: Self.projectColumns,
+                rows: projectRows,
+                freezeRows: 1,
+                freezeColumns: 0,
+                showsGridLines: false,
+                hasAutoFilter: true
+            ),
+        ]))
+    }
+
+    private static func reviewRows(
+        _ snapshot: CaseFileReviewSnapshot
+    ) throws -> [ReviewRowProjection] {
+        try snapshot.rows.sorted {
+            if $0.row.ordinal != $1.row.ordinal {
+                return $0.row.ordinal < $1.row.ordinal
+            }
+            return $0.row.id < $1.row.id
+        }.map { item in
+            guard item.row.ordinal >= 0,
+                  item.evidence.allSatisfy({
+                      $0.kind == "supporting" || $0.kind == "contrary"
+                  }) else {
+                throw ExportError.corruptSnapshot(snapshot.project.id)
+            }
+            let generatedValues: [String]
+            do {
+                generatedValues = try JSONDecoder().decode(
+                    [String].self,
+                    from: Data(item.generation.generatedValuesJSON.utf8)
+                )
+            } catch {
+                throw ExportError.invalidGeneratedValues(item.cell.id)
+            }
+            let generatedValue = generatedValues.joined(separator: " · ")
+            let attorneyValue = item.cell.attorneyValue ?? ""
+            let currentValue: String
+            switch item.cell.valueState {
+            case "generated":
+                guard item.cell.attorneyValue == nil else {
+                    throw ExportError.corruptSnapshot(snapshot.project.id)
+                }
+                currentValue = generatedValue
+            case "edited":
+                guard let storedValue = item.cell.attorneyValue else {
+                    throw ExportError.corruptSnapshot(snapshot.project.id)
+                }
+                currentValue = storedValue
+            default:
+                throw ExportError.corruptSnapshot(snapshot.project.id)
+            }
+            return ReviewRowProjection(
+                rowNumber: item.row.ordinal + 1,
+                finding: item.row.rowKey,
+                generatedValue: generatedValue,
+                attorneyValue: attorneyValue,
+                currentValue: currentValue,
+                valueState: item.cell.valueState,
+                reviewState: item.cell.reviewState,
+                reviewedBy: item.cell.reviewedBy ?? "",
+                reviewedAt: item.cell.reviewedAt,
+                supportState: item.cell.supportState,
+                supporting: orderedEvidence(item.evidence, kind: "supporting"),
+                contrary: orderedEvidence(item.evidence, kind: "contrary"),
+                cellID: item.cell.id
+            )
+        }
+    }
+
+    private static func currentValueCell(
+        _ value: String,
+        valueState: String
+    ) -> TabularXLSXWorkbook.Cell {
+        valueState == "edited" ? .text(value, style: .information) : .text(value)
+    }
+
+    private static func valueStateCell(_ value: String) -> TabularXLSXWorkbook.Cell {
+        value == "edited" ? .text(value, style: .information) : .text(value)
+    }
+
+    private static func reviewStateCell(_ value: String) -> TabularXLSXWorkbook.Cell {
+        value == "reviewed"
+            ? .text(value, style: .positive)
+            : .text(value, style: .attention)
+    }
+
+    private static func supportStateCell(_ value: String) -> TabularXLSXWorkbook.Cell {
+        value == "supported"
+            ? .text(value, style: .positive)
+            : .text(value, style: .attention)
+    }
+
+    private static func relationshipCell(_ value: String) -> TabularXLSXWorkbook.Cell {
+        value == "supporting"
+            ? .text(value, style: .positive)
+            : .text(value, style: .attention)
+    }
+
+    private static func availabilityCell(_ value: String) -> TabularXLSXWorkbook.Cell {
+        value == "available"
+            ? .text(value, style: .positive)
+            : .text(value, style: .attention)
+    }
+
+    private static func unavailableReasonCell(
+        _ value: String?
+    ) -> TabularXLSXWorkbook.Cell {
+        guard let value, !value.isEmpty else { return .text("") }
+        return .text(value, style: .attention)
+    }
+
+    private static func projectStatusCell(_ value: String) -> TabularXLSXWorkbook.Cell {
+        value == "active"
+            ? .text(value, style: .positive)
+            : .text(value, style: .attention)
+    }
+
+    private static func projectRow(
+        _ field: String,
+        value: TabularXLSXWorkbook.Cell
+    ) -> [TabularXLSXWorkbook.Cell] {
+        [.text(field, style: .muted), value]
+    }
+
     private static func orderedEvidence(
         _ evidence: [CaseFileReviewEvidenceEdgeRecord],
         kind: String
@@ -307,12 +657,7 @@ public final class CaseFileReviewExportService: @unchecked Sendable {
         _ evidence: CaseFileReviewEvidenceEdgeRecord,
         projectID: String
     ) throws -> String {
-        guard let locator = try? JSONDecoder().decode(
-            DocumentSourceLocator.self,
-            from: Data(evidence.locatorJSON.utf8)
-        ) else {
-            throw ExportError.corruptSnapshot(projectID)
-        }
+        let locator = try evidenceLocator(evidence, projectID: projectID)
         var status = evidence.availability
         if let reason = evidence.unavailableReason, !reason.isEmpty {
             status += " (\(reason))"
@@ -322,6 +667,19 @@ public final class CaseFileReviewExportService: @unchecked Sendable {
             value += "\r\n\(normalizeLineEndings(evidence.excerpt))"
         }
         return value
+    }
+
+    private static func evidenceLocator(
+        _ evidence: CaseFileReviewEvidenceEdgeRecord,
+        projectID: String
+    ) throws -> DocumentSourceLocator {
+        guard let locator = try? JSONDecoder().decode(
+            DocumentSourceLocator.self,
+            from: Data(evidence.locatorJSON.utf8)
+        ) else {
+            throw ExportError.corruptSnapshot(projectID)
+        }
+        return locator
     }
 
     private func compensateFile(
@@ -349,6 +707,21 @@ public final class CaseFileReviewExportService: @unchecked Sendable {
             .replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\r", with: "\n")
             .replacingOccurrences(of: "\n", with: "\r\n")
+    }
+
+    private static func normalizeWorkbookLineEndings(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+    }
+
+    private static func documentExportFormat(
+        _ format: CaseFileReviewSnapshotExportFormat
+    ) -> DocumentExportFormat {
+        switch format {
+        case .csv: .csv
+        case .xlsx: .xlsx
+        }
     }
 
     private static func csvField(_ value: String) -> String {

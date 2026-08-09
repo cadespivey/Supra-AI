@@ -93,7 +93,7 @@ claims:
 
   - id: "CASE-FILE-REVIEW-SNAPSHOT-EXPORT"
     topic: "case-file-review-snapshot-export"
-    wording: "The Review workbench exports one deterministic managed CSV snapshot of every saved finding, generated and local-user-authored value, review and support state, project staleness, and ordered frozen supporting and contrary sources from a single Store read transaction. Only after the validated file installs atomically does Store record a nil-Structured-Output Review export plus a project audit, so contrary-only Review work remains exportable without weakening Structured Output export eligibility."
+    wording: "The Review workbench exports a deterministic managed CSV snapshot of every saved finding, generated and local-user-authored value, review and support state, project staleness, and ordered frozen supporting and contrary sources from a single Store read transaction. When every dynamic cell fits spreadsheet limits after formula neutralization, it also exports a deterministic XLSX representation of that same immutable snapshot, separated into Matrix, Sources, and Project sheets; an XLSX limit violation fails closed before file publication or Store completion. Only after the validated file installs atomically does Store record a nil-Structured-Output Review export plus a project audit, so contrary-only Review work remains exportable without weakening Structured Output export eligibility."
     owner: "Session and persistence engineering"
     code_anchor: "Packages/SupraSessions/Sources/SupraSessions/CaseFileReviewExportService.swift"
     verification: "Packages/SupraSessions/Tests/SupraSessionsTests/CaseFileReviewExportServiceTests.swift"

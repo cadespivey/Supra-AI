@@ -309,6 +309,19 @@ public final class CaseFileReviewController: ObservableObject {
         )
     }
 
+    @discardableResult
+    public func exportSelectedProjectXLSX(at exportedAt: Date = Date()) throws -> URL {
+        guard let selectedProjectID else {
+            throw CaseFileReviewControllerError.noSelectedProject
+        }
+        return try exportService.exportXLSX(
+            matterID: matterID,
+            projectID: selectedProjectID,
+            actor: reviewActor(explicit: nil),
+            at: exportedAt
+        )
+    }
+
     public func markReviewed(
         cellID: String,
         reviewedBy: String? = nil,

@@ -308,11 +308,18 @@ struct CaseFileReviewView: View {
         } else {
             Menu {
                 Button {
-                    exportReviewSnapshot()
+                    exportReviewSnapshot(.csv)
                 } label: {
                     Text("CSV — all saved findings")
                 }
                 .accessibilityIdentifier("review.export.csv")
+
+                Button {
+                    exportReviewSnapshot(.xlsx)
+                } label: {
+                    Text("XLSX — Matrix, Sources, Project sheets")
+                }
+                .accessibilityIdentifier("review.export.xlsx")
             } label: {
                 Label("Export", systemImage: "square.and.arrow.up")
             }
@@ -320,7 +327,7 @@ struct CaseFileReviewView: View {
             .fixedSize()
             .accessibilityIdentifier("review.export")
             .accessibilityLabel("Export Review snapshot, available")
-            .accessibilityHint("Export all saved findings and recorded sources as CSV")
+            .accessibilityHint("Export all saved findings and recorded sources as CSV or XLSX")
             .help(
                 "Export all saved findings and recorded sources, regardless of the current filter."
             )
@@ -1005,9 +1012,20 @@ struct CaseFileReviewView: View {
         }
     }
 
-    private func exportReviewSnapshot() {
+    private enum ReviewSnapshotExportFormat {
+        case csv
+        case xlsx
+    }
+
+    private func exportReviewSnapshot(_ format: ReviewSnapshotExportFormat) {
         do {
-            let url = try controller.exportSelectedProjectCSV()
+            let url: URL
+            switch format {
+            case .csv:
+                url = try controller.exportSelectedProjectCSV()
+            case .xlsx:
+                url = try controller.exportSelectedProjectXLSX()
+            }
             if !(AppEnvironment.isUITestMode
                 && ProcessInfo.processInfo.arguments.contains("-uiTestReviewExport")) {
                 NSWorkspace.shared.activateFileViewerSelecting([url])

@@ -347,6 +347,7 @@ public final class CaseFileReviewRepository: @unchecked Sendable {
         matterID: String,
         projectID: String,
         exportID: String,
+        format: CaseFileReviewSnapshotExportFormat = .csv,
         managedRelativePath: String,
         artifactSHA256: String,
         snapshotUpdatedAt: Date,
@@ -357,9 +358,10 @@ public final class CaseFileReviewRepository: @unchecked Sendable {
         let normalizedMatterID = try Self.requireNonEmpty(matterID, field: "matterID")
         let normalizedProjectID = try Self.requireNonEmpty(projectID, field: "projectID")
         let normalizedExportID = try Self.requireNonEmpty(exportID, field: "exportID")
-        let normalizedPath = try Self.requireManagedReviewCSVPath(
+        let normalizedPath = try Self.requireManagedReviewSnapshotPath(
             managedRelativePath,
-            matterID: normalizedMatterID
+            matterID: normalizedMatterID,
+            format: format
         )
         let normalizedDigest = try Self.requireSHA256(
             artifactSHA256,
@@ -394,7 +396,7 @@ public final class CaseFileReviewRepository: @unchecked Sendable {
                 structuredOutputID: nil,
                 structuredOutputVersionID: nil,
                 matterID: normalizedMatterID,
-                format: "review_csv",
+                format: format.persistedToken,
                 managedRelativePath: normalizedPath,
                 createdAt: timestamp
             )
@@ -404,7 +406,7 @@ public final class CaseFileReviewRepository: @unchecked Sendable {
                 timestamp: timestamp,
                 eventType: "case_file_review_snapshot_exported",
                 actor: normalizedActor,
-                summary: "Exported a Case File Review snapshot as CSV.",
+                summary: "Exported a Case File Review snapshot as \(format.displayName).",
                 relatedTable: CaseFileReviewProjectRecord.databaseTableName,
                 relatedID: normalizedProjectID,
                 metadataJSON: try Self.auditMetadata([
@@ -1132,9 +1134,10 @@ public final class CaseFileReviewRepository: @unchecked Sendable {
         return normalized
     }
 
-    private static func requireManagedReviewCSVPath(
+    private static func requireManagedReviewSnapshotPath(
         _ value: String,
-        matterID: String
+        matterID: String,
+        format: CaseFileReviewSnapshotExportFormat
     ) throws -> String {
         let normalized = try requireNonEmpty(value, field: "managedRelativePath")
         let components = normalized.split(separator: "/", omittingEmptySubsequences: false)
@@ -1150,7 +1153,7 @@ public final class CaseFileReviewRepository: @unchecked Sendable {
               !components[2].isEmpty,
               components[2] != ".",
               components[2] != "..",
-              components[2].hasSuffix(".csv") else {
+              components[2].hasSuffix(".\(format.fileExtension)") else {
             throw CaseFileReviewRepositoryError.invalidField("managedRelativePath")
         }
         return normalized
