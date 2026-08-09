@@ -431,6 +431,25 @@ final class TabularXLSXRendererTests: XCTestCase {
         ])))
     }
 
+    func testTRPXLSXDOC05DisabledAutoFilterIsAbsentFromWorksheetAndTable() throws {
+        // T-RPXLSXDOC05 expected RED: the renderer omits a disabled worksheet
+        // filter but still writes an active filter into the related table part.
+        let data = try TabularXLSXRenderer.render(.init(sheets: [
+            contractSheet(
+                name: "No Filter",
+                tableName: "NoFilter",
+                hasAutoFilter: false
+            ),
+        ]))
+        let probe = try OOXMLWorkbookProbe(data: data)
+
+        XCTAssertNil(try probe.worksheet(at: "xl/worksheets/sheet1.xml").autoFilterReference)
+        XCTAssertFalse(
+            try probe.text(at: "xl/tables/table1.xml").contains("<autoFilter"),
+            "a disabled sheet filter must also be absent from the related table"
+        )
+    }
+
     private func assertSemanticStyle(
         _ style: OOXMLWorkbookProbe.ResolvedStyle,
         fillRGB: String,
@@ -450,7 +469,8 @@ final class TabularXLSXRendererTests: XCTestCase {
         tableName: String,
         width: Double = 20,
         columns: [TabularXLSXWorkbook.Column]? = nil,
-        rows: [[TabularXLSXWorkbook.Cell]] = [[.text("safe")]]
+        rows: [[TabularXLSXWorkbook.Cell]] = [[.text("safe")]],
+        hasAutoFilter: Bool = true
     ) -> TabularXLSXWorkbook.Sheet {
         .init(
             name: name,
@@ -460,7 +480,7 @@ final class TabularXLSXRendererTests: XCTestCase {
             freezeRows: 1,
             freezeColumns: 0,
             showsGridLines: false,
-            hasAutoFilter: true
+            hasAutoFilter: hasAutoFilter
         )
     }
 }
