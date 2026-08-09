@@ -396,6 +396,41 @@ final class TabularXLSXRendererTests: XCTestCase {
         }
     }
 
+    func testTRPXLSXDOC04ValidatesFinalNeutralizedUTF16CellLength() throws {
+        // T-RPXLSXDOC04 expected RED: renderer validation counts the original
+        // grapheme clusters before formula neutralization. A maximum-length
+        // dangerous header therefore grows past Excel's cell limit, while one
+        // grapheme containing too many combining scalars bypasses it entirely.
+        let maximumSafeText = String(repeating: "a", count: 32_767)
+        XCTAssertNoThrow(try TabularXLSXRenderer.render(.init(sheets: [
+            contractSheet(
+                name: "Maximum Safe",
+                tableName: "MaximumSafe",
+                rows: [[.text(maximumSafeText)]]
+            ),
+        ])))
+
+        let expandingHeader = "=" + String(repeating: "h", count: 32_766)
+        XCTAssertThrowsError(try TabularXLSXRenderer.render(.init(sheets: [
+            contractSheet(
+                name: "Expanded Header",
+                tableName: "ExpandedHeader",
+                columns: [.init(header: expandingHeader, width: 20)]
+            ),
+        ])))
+
+        let combiningOverflow = "a" + String(repeating: "\u{0301}", count: 32_767)
+        XCTAssertEqual(combiningOverflow.count, 1, "the canary must defeat grapheme counting")
+        XCTAssertGreaterThan(combiningOverflow.utf16.count, 32_767)
+        XCTAssertThrowsError(try TabularXLSXRenderer.render(.init(sheets: [
+            contractSheet(
+                name: "Combining Overflow",
+                tableName: "CombiningOverflow",
+                rows: [[.text(combiningOverflow)]]
+            ),
+        ])))
+    }
+
     private func assertSemanticStyle(
         _ style: OOXMLWorkbookProbe.ResolvedStyle,
         fillRGB: String,
