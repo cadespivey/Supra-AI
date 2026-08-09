@@ -1338,11 +1338,29 @@ final class CaseFileReviewHostedUITests: XCTestCase {
             waitForAccessibleText(Fixture.creationDisclosure, in: disclosure, timeout: 5),
             "Setup must disclose its frozen local execution boundary"
         )
-        for column in ["Finding", "Generated value", "Sources", "Review"] {
+        let fixedColumns = ["Finding", "Generated value", "Sources", "Review"]
+        for column in fixedColumns {
             XCTAssertEqual(
                 renderedElements(label: column, in: columnPreview).count,
                 1,
                 "The setup preview must expose one exact fixed \(column) column"
+            )
+        }
+        let columnFrames = fixedColumns.map {
+            renderedElements(label: $0, in: columnPreview).firstMatch.frame
+        }
+        for (column, frame) in zip(fixedColumns, columnFrames) {
+            XCTAssertGreaterThan(
+                frame.width,
+                48,
+                "The fixed \(column) column must remain visibly legible, not only mounted in accessibility"
+            )
+        }
+        for (left, right) in zip(columnFrames, columnFrames.dropFirst()) {
+            XCTAssertLessThanOrEqual(
+                left.maxX,
+                right.minX + 1,
+                "The fixed Review columns must retain their left-to-right visual order without overlap"
             )
         }
 
