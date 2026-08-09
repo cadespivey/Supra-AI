@@ -37,6 +37,64 @@ public enum ContentBoundModelLoadError: Error, LocalizedError, Equatable, Sendab
     }
 }
 
+public enum CorpusAnalysisModelPinError: Error, LocalizedError, Equatable, Sendable {
+    case cancelled
+    case modelRegistryUnavailable
+    case modelUnavailable(String)
+    case modelNotManaged(String)
+    case verificationFailed(String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .cancelled:
+            "Model verification was cancelled."
+        case .modelRegistryUnavailable:
+            "The registered model library could not be read."
+        case .modelUnavailable:
+            "The selected local model is no longer registered."
+        case .modelNotManaged:
+            "Review creation requires a model downloaded and managed by Supra AI."
+        case .verificationFailed:
+            "The selected app-managed model did not pass fresh content verification."
+        }
+    }
+}
+
+/// Executes the expensive exact-tree and byte inspection used to create a
+/// durable corpus-analysis pin. The executor is deliberately independent of
+/// runtime loading and runs outside the MainActor.
+struct ManagedModelPinningExecutor: Sendable {
+    typealias Inspect = @Sendable (URL, URL) throws -> RuntimeModelContentBinding
+
+    let inspect: Inspect
+
+    static let live = ManagedModelPinningExecutor { modelDirectory, managedRoot in
+        try SignedReleaseModelAuthorization.inspectContentBinding(
+            modelDirectory: modelDirectory,
+            managedRoot: managedRoot
+        )
+    }
+
+    func run(
+        modelDirectory: URL,
+        managedRoot: URL
+    ) async throws -> RuntimeModelContentBinding {
+        try Task.checkCancellation()
+        let inspect = inspect
+        let worker = Task.detached(priority: .userInitiated) {
+            try Task.checkCancellation()
+            let binding = try inspect(modelDirectory, managedRoot)
+            try Task.checkCancellation()
+            return binding
+        }
+        return try await withTaskCancellationHandler {
+            try await worker.value
+        } onCancel: {
+            worker.cancel()
+        }
+    }
+}
+
 struct ContentBoundAuthorizationExecutor: Sendable {
     struct PreparedLoad: @unchecked Sendable {
         var authorization: SignedReleaseModelAuthorization
@@ -119,6 +177,7 @@ public final class ModelLibrary: ObservableObject {
     private let runtimeClient: any RuntimeClientProtocol
     private let managedModelRoots: [URL]
     private let authorizationExecutor: ContentBoundAuthorizationExecutor
+    private let modelPinningExecutor: ManagedModelPinningExecutor
     private var hasPersistedRoleAssignments: Bool
     /// Whether the runtime is mid-generation. Speculative pre-warms consult this so
     /// they never evict the model out from under an in-flight generation; wired by the
@@ -146,12 +205,14 @@ public final class ModelLibrary: ObservableObject {
         store: SupraStore,
         runtimeClient: any RuntimeClientProtocol,
         managedModelRoots: [URL],
-        authorizationExecutor: ContentBoundAuthorizationExecutor
+        authorizationExecutor: ContentBoundAuthorizationExecutor,
+        modelPinningExecutor: ManagedModelPinningExecutor = .live
     ) {
         self.store = store
         self.runtimeClient = runtimeClient
         self.managedModelRoots = managedModelRoots
         self.authorizationExecutor = authorizationExecutor
+        self.modelPinningExecutor = modelPinningExecutor
         if let stored = try? store.appSettings.getSetting(
             ModelRoleAssignments.settingsKey,
             as: ModelRoleAssignments.self
@@ -572,6 +633,70 @@ public final class ModelLibrary: ObservableObject {
         // footer) stop reporting a model the runtime does not hold.
         if case .loaded = loadState { loadState = .idle }
         return false
+    }
+
+    /// Creates a fresh, durable pin for exactly the registered app-managed model
+    /// selected by the caller. This path never resolves a role, falls back to a
+    /// preferred model, or contacts the runtime. Every call re-inspects the
+    /// manifest, exclusive tree, and declared artifact bytes off the MainActor.
+    public func makeCorpusAnalysisPinnedModel(
+        modelID: ModelID
+    ) async throws -> CorpusAnalysisPinnedModel {
+        guard !Task.isCancelled else {
+            throw CorpusAnalysisModelPinError.cancelled
+        }
+
+        let registeredID = modelID.rawValue.uuidString
+        let record: ModelRecord
+        do {
+            guard let registered = try store.models.fetchModel(id: registeredID) else {
+                throw CorpusAnalysisModelPinError.modelUnavailable(registeredID)
+            }
+            record = registered
+        } catch let error as CorpusAnalysisModelPinError {
+            throw error
+        } catch {
+            throw CorpusAnalysisModelPinError.modelRegistryUnavailable
+        }
+
+        let modelDirectory = URL(
+            fileURLWithPath: record.path,
+            isDirectory: true
+        ).standardizedFileURL
+        guard record.bookmarkData == nil,
+              let managedRoot = managedModelRoots.first(where: { root in
+                  let standardizedRoot = root.standardizedFileURL
+                  return modelDirectory.path != standardizedRoot.path
+                      && ManagedModelStorage.isManaged(
+                          path: modelDirectory.path,
+                          roots: [standardizedRoot]
+                      )
+              }) else {
+            throw CorpusAnalysisModelPinError.modelNotManaged(registeredID)
+        }
+
+        do {
+            let binding = try await modelPinningExecutor.run(
+                modelDirectory: modelDirectory,
+                managedRoot: managedRoot.standardizedFileURL
+            )
+            try Task.checkCancellation()
+            let pinnedModel = CorpusAnalysisPinnedModel(
+                modelRepository: binding.repositoryID,
+                modelRevision: binding.revision,
+                contentBindingAlgorithm: binding.algorithm,
+                contentBindingSchemaVersion: binding.schemaVersion,
+                artifactFingerprintSHA256: binding.fingerprintSHA256
+            )
+            try pinnedModel.validate()
+            return pinnedModel
+        } catch is CancellationError {
+            throw CorpusAnalysisModelPinError.cancelled
+        } catch let error as CorpusAnalysisModelPinError {
+            throw error
+        } catch {
+            throw CorpusAnalysisModelPinError.verificationFailed(registeredID)
+        }
     }
 
     /// Loads the one app-managed model whose manifest identity and independently

@@ -81,6 +81,16 @@ if [[ ! -f "$review_test" ]] \
   printf '%s\n' 'ERROR: claimed Review workflow smoke tests are missing' >&2
   exit 1
 fi
+if [[ ! -f "$review_test" ]] \
+    || ! class_contains_test "$review_test" CaseFileReviewHostedUITests testTRPCREATEUI01NewReviewSetupUsesExactSelectedScopeAndDurableSubmission \
+    || ! class_contains_test "$review_test" CaseFileReviewHostedUITests testTRPCREATEUI02PausedRunSurvivesRelaunchThenResumesAndCancels \
+    || ! class_contains_test "$review_test" CaseFileReviewCompositionUITests testTRPCREATEUI03ProductionCompositionUsesAtomicPinnedQueueAndExactHandoff \
+    || ! class_contains_test "$review_test" CaseFileReviewHostedUITests testTRPCREATEUI04SelectedScopeRejectsEveryExcludedSource \
+    || ! class_contains_test "$review_test" CaseFileReviewHostedUITests testTRPCREATEUI05ClosingDuringModelVerificationCancelsWithoutCreatingAJob \
+    || ! class_contains_test "$review_test" CaseFileReviewHostedUITests testTRPCREATEUI06ScopeDriftRefreshesReceiptAndRequiresSecondStart; then
+  printf '%s\n' 'ERROR: claimed Guided New Review smoke tests are missing' >&2
+  exit 1
+fi
 if (( $# != 0 )); then
   printf 'Usage: %s [--check]\n' "$0" >&2
   exit 2
@@ -167,5 +177,11 @@ xcodebuild \
   -only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPUI16FailedProjectSwitchRetainsExactDraftForResume \
   -only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPUI17FailedOpenReviewRetainsExactDraftForResume \
   -only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPUI18MinimumWidthSourcesKeepsProgressAndCompactFilterUsable \
+  -only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPCREATEUI01NewReviewSetupUsesExactSelectedScopeAndDurableSubmission \
+  -only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPCREATEUI02PausedRunSurvivesRelaunchThenResumesAndCancels \
+  -only-testing:SupraAIUITests/CaseFileReviewCompositionUITests/testTRPCREATEUI03ProductionCompositionUsesAtomicPinnedQueueAndExactHandoff \
+  -only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPCREATEUI04SelectedScopeRejectsEveryExcludedSource \
+  -only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPCREATEUI05ClosingDuringModelVerificationCancelsWithoutCreatingAJob \
+  -only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPCREATEUI06ScopeDriftRefreshesReceiptAndRequiresSecondStart \
   -only-testing:SupraAIUITests/RuntimeXPCIntegrationTests \
   test

@@ -241,6 +241,12 @@ public final class CaseFileReviewController: ObservableObject {
         actor: String? = nil,
         at: Date = Date()
     ) throws {
+        // A Guided Review can finish after this workbench last loaded. Refresh
+        // only when the requested exact run is absent so the ready handoff does
+        // not fail merely because the eligible-output projection is stale.
+        if !eligibleOutputs.contains(where: { $0.sourceRunID == sourceRunID }) {
+            eligibleOutputs = try fetchEligibleOutputs()
+        }
         guard eligibleOutputs.contains(where: { $0.sourceRunID == sourceRunID }) else {
             throw CaseFileReviewControllerError.ineligibleSourceRun(sourceRunID)
         }

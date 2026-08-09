@@ -25,9 +25,32 @@ public enum CorpusAnalysisPreparationError: Error, LocalizedError, Equatable, Se
     }
 }
 
+/// One fully planned, but not yet persisted, corpus-analysis submission. Keeping
+/// the frozen ledger and its reconstructible queue payload together lets the
+/// queue hand both to the Store's single atomic submission transaction.
+public struct PreparedCorpusAnalysisSubmission: Sendable {
+    public let run: CorpusAnalysisRunRecord
+    public let partitions: [CorpusAnalysisPartitionRecord]
+    public let slices: [CorpusAnalysisPartitionSliceRecord]
+    public let payload: CorpusAnalysisJobPayload
+    public let jobID: String
+
+    public init(
+        run: CorpusAnalysisRunRecord,
+        partitions: [CorpusAnalysisPartitionRecord],
+        slices: [CorpusAnalysisPartitionSliceRecord],
+        payload: CorpusAnalysisJobPayload,
+        jobID: String = UUID().uuidString
+    ) {
+        self.run = run
+        self.partitions = partitions
+        self.slices = slices
+        self.payload = payload
+        self.jobID = jobID
+    }
+}
+
 /// Freezes all execution inputs before the queue job can become runnable.
-/// The Store repository commits the run, partitions, and exact slices in one
-/// transaction; the returned payload contains only reconstructible v2 work.
 public struct CorpusAnalysisQueuePreparer: Sendable {
     private let store: SupraStore
 
@@ -39,6 +62,43 @@ public struct CorpusAnalysisQueuePreparer: Sendable {
         request: ExhaustiveListQueuedRequest,
         pinnedModel: CorpusAnalysisPinnedModel
     ) throws -> CorpusAnalysisJobPayload {
+        let submission = try prepareExhaustiveListSubmission(
+            request: request,
+            pinnedModel: pinnedModel
+        )
+        let run: CorpusAnalysisRunRecord
+        do {
+            run = try store.corpusAnalysis.createOrFetchPreparedRun(
+                run: submission.run,
+                partitions: submission.partitions,
+                slices: submission.slices
+            )
+        } catch CorpusAnalysisRepositoryError.runKeyCollision {
+            throw CorpusAnalysisEngineError.runKeyCollision(submission.run.runKey)
+        }
+        try validatePersistedRun(
+            run,
+            against: submission.run,
+            pinnedModel: pinnedModel
+        )
+        return CorpusAnalysisJobPayload(
+            schemaVersion: submission.payload.schemaVersion,
+            runID: run.id,
+            requestDigest: submission.payload.requestDigest,
+            task: submission.payload.task,
+            pinnedModel: submission.payload.pinnedModel
+        )
+    }
+
+    /// Builds the immutable v2 run, exact partition/slice ledger, and queue
+    /// envelope without writing any of them. Production creation passes this
+    /// value to `DocumentProcessingQueue`, which submits the entire graph in one
+    /// Store transaction. The older `prepareExhaustiveList` API remains for
+    /// direct engine/test callers that intentionally persist only the ledger.
+    public func prepareExhaustiveListSubmission(
+        request: ExhaustiveListQueuedRequest,
+        pinnedModel: CorpusAnalysisPinnedModel
+    ) throws -> PreparedCorpusAnalysisSubmission {
         guard request.taskSchemaVersion == ExhaustiveListTask.schemaVersion else {
             throw CorpusAnalysisPreparationError.unsupportedTaskSchema(request.taskSchemaVersion)
         }
@@ -95,35 +155,39 @@ public struct CorpusAnalysisQueuePreparer: Sendable {
             requestSchemaVersion: 2,
             requestDigest: requestDigest
         )
-        let run: CorpusAnalysisRunRecord
-        do {
-            run = try store.corpusAnalysis.createOrFetchPreparedRun(
-                run: proposed,
-                partitions: plan.partitions,
-                slices: plan.slices
-            )
-        } catch CorpusAnalysisRepositoryError.runKeyCollision {
-            throw CorpusAnalysisEngineError.runKeyCollision(frozenRequest.runKey)
-        }
-        guard run.matterID == frozenRequest.matterID else {
+        let payload = CorpusAnalysisJobPayload(
+            schemaVersion: 2,
+            runID: proposed.id,
+            requestDigest: requestDigest,
+            task: .exhaustiveList(frozenRequest),
+            pinnedModel: pinnedModel
+        )
+        return PreparedCorpusAnalysisSubmission(
+            run: proposed,
+            partitions: plan.partitions,
+            slices: plan.slices,
+            payload: payload
+        )
+    }
+
+    private func validatePersistedRun(
+        _ run: CorpusAnalysisRunRecord,
+        against proposed: CorpusAnalysisRunRecord,
+        pinnedModel: CorpusAnalysisPinnedModel
+    ) throws {
+        guard run.matterID == proposed.matterID else {
             throw CorpusAnalysisPreparationError.preparedRunMismatch("matter identity")
         }
         guard run.taskKind == CorpusAnalysisTaskKind.exhaustiveList.rawValue else {
             throw CorpusAnalysisPreparationError.preparedRunMismatch("task kind")
         }
-        guard run.requestSchemaVersion == 2, run.requestDigest == requestDigest else {
+        guard run.requestSchemaVersion == 2,
+              run.requestDigest == proposed.requestDigest else {
             throw CorpusAnalysisPreparationError.preparedRunMismatch("request digest")
         }
-        guard run.modelLineageJSON == engineRequest.modelLineageJSON else {
+        guard run.modelLineageJSON == proposed.modelLineageJSON,
+              run.modelLineageJSON == (try CorpusAnalysisRequestDigest.canonicalJSON(pinnedModel)) else {
             throw CorpusAnalysisPreparationError.preparedRunMismatch("pinned model")
         }
-
-        return CorpusAnalysisJobPayload(
-            schemaVersion: 2,
-            runID: run.id,
-            requestDigest: requestDigest,
-            task: .exhaustiveList(frozenRequest),
-            pinnedModel: pinnedModel
-        )
     }
 }

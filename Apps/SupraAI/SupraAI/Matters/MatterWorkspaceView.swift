@@ -244,8 +244,13 @@ struct MatterWorkspaceView: View {
                 )
             }
         case .review:
-            if let review = controller.caseFileReviewController {
-                CaseFileReviewView(controller: review)
+            if let review = controller.caseFileReviewController,
+               let creation = controller.caseFileReviewCreationController {
+                CaseFileReviewView(
+                    controller: review,
+                    creationController: creation,
+                    library: library
+                )
             } else {
                 placeholder(
                     "Review unavailable",

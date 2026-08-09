@@ -301,8 +301,45 @@ public final class DocumentProcessingQueue: ObservableObject {
         }
     }
 
+    /// Atomically persists a newly planned exact corpus ledger and the one FIFO
+    /// job allowed to execute it. Reusing the same prepared value is idempotent:
+    /// its stable run and job identities let Store return the original job.
+    @discardableResult
+    public func enqueueCorpusAnalysis(
+        prepared submission: PreparedCorpusAnalysisSubmission,
+        approvedScopeReceipt: CorpusAnalysisSnapshot,
+        startImmediately: Bool = true
+    ) throws -> (runID: String, jobID: String)? {
+        do {
+            let payloadJSON = String(
+                decoding: try JSONEncoder().encode(submission.payload),
+                as: UTF8.self
+            )
+            let proposedJob = DocumentProcessingJobRecord(
+                id: submission.jobID,
+                matterID: submission.run.matterID,
+                kind: DocumentProcessingJobKind.corpusAnalysis.rawValue,
+                payloadJSON: payloadJSON
+            )
+            let job = try store.corpusAnalysis.submitPreparedCorpusAnalysis(
+                run: submission.run,
+                partitions: submission.partitions,
+                slices: submission.slices,
+                job: proposedJob,
+                approvedScopeReceipt: approvedScopeReceipt
+            )
+            refresh()
+            if startImmediately { pump() }
+            return (runID: submission.run.id, jobID: job.id)
+        } catch {
+            lastError = error.localizedDescription
+            throw error
+        }
+    }
+
     /// Enqueues a fully reconstructible corpus-analysis request whose exact inputs
-    /// were frozen before the durable job becomes runnable.
+    /// were already persisted. Retained for prepared-ledger resume/tests; new
+    /// Review creation must use the atomic prepared-submission overload above.
     @discardableResult
     public func enqueueCorpusAnalysis(
         matterID: String,
@@ -355,12 +392,26 @@ public final class DocumentProcessingQueue: ObservableObject {
     /// Cancels owned active corpus work without cancelling the FIFO pump. The row
     /// becomes cancelled only after the runner acknowledges cancellation and the
     /// corpus engine atomically balances its frozen partition ledger.
-    public func cancel(jobID: String) {
+    @discardableResult
+    public func cancel(jobID: String) -> Bool {
         if activeCorpusJobID == jobID, let activeCorpusTask {
             activeCorpusTask.cancel()
-            return
+            return true
         }
-        cancelQueuedJob(id: jobID)
+        do {
+            let cancelled = try store.corpusAnalysis.cancelQueuedOrPausedCorpusAnalysis(
+                jobID: jobID
+            )
+            if cancelled {
+                pendingSources[jobID] = nil
+            }
+            refresh()
+            return cancelled
+        } catch {
+            lastError = error.localizedDescription
+            refresh()
+            return false
+        }
     }
 
     /// Requests a cooperative Review pause. The active mapper is not cancelled:

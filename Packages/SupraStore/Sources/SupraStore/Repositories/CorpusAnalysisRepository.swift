@@ -21,6 +21,7 @@ public enum CorpusAnalysisRepositoryError: Error, LocalizedError, Equatable, Sen
     case corpusCompleteRequiresExactSliceCoverage
     case invalidStructuredOutputAttachment(String)
     case staleRunRequiresNewRun(String)
+    case scopeReceiptChanged
 
     public var errorDescription: String? {
         switch self {
@@ -47,6 +48,8 @@ public enum CorpusAnalysisRepositoryError: Error, LocalizedError, Equatable, Sen
             "Structured output version \(id) is not a compatible one-time attachment for this corpus run."
         case .staleRunRequiresNewRun(let id):
             "Corpus run \(id) was invalidated by a source change and cannot regain assurance; start a new run."
+        case .scopeReceiptChanged:
+            "The approved corpus scope changed before the frozen run could be submitted."
         }
     }
 }
@@ -58,6 +61,22 @@ public final class CorpusAnalysisRepository: @unchecked Sendable {
 
     public init(writer: any DatabaseWriter) {
         self.writer = writer
+    }
+
+    /// Reconstructs the current exact denominator and its eligible selected
+    /// revisions in one database snapshot. This is the shared authority for
+    /// preview/planning and the atomic submission receipt check.
+    public func inspectCurrentScope(
+        matterID: String,
+        documentIDs: [String]?
+    ) throws -> CorpusAnalysisScopeInspection {
+        try writer.read { db in
+            try Self.inspectCurrentScope(
+                matterID: matterID,
+                documentIDs: documentIDs,
+                db: db
+            )
+        }
     }
 
     @discardableResult
@@ -91,71 +110,217 @@ public final class CorpusAnalysisRepository: @unchecked Sendable {
         partitions: [CorpusAnalysisPartitionRecord],
         slices: [CorpusAnalysisPartitionSliceRecord]
     ) throws -> CorpusAnalysisRunRecord {
-        guard Self.isCleanPreparedRun(proposed),
-              partitions.allSatisfy(Self.isCleanPreparedPartition) else {
-            throw CorpusAnalysisRepositoryError.invalidPreparedRun(
-                "atomic preparation must begin from a clean planning run and pristine pending partitions"
-            )
-        }
         return try writer.write { db in
-            if let existing = try CorpusAnalysisRunRecord.fetchOne(
-                db,
-                sql: "SELECT * FROM corpus_analysis_runs WHERE matter_id = ? AND run_key = ?",
-                arguments: [proposed.matterID, proposed.runKey]
-            ) {
-                guard Self.sameImmutableRun(existing, proposed) else {
-                    throw CorpusAnalysisRepositoryError.runKeyCollision(proposed.runKey)
-                }
-                try Self.validatePreparedRun(
-                    proposed,
-                    partitions: partitions,
-                    slices: slices,
-                    db: db,
-                    requireLiveCurrentRevision: true
-                )
-                let existingPartitions = try CorpusAnalysisPartitionRecord.fetchAll(
-                    db,
-                    sql: "SELECT * FROM corpus_analysis_partitions WHERE run_id = ? ORDER BY partition_key, id",
-                    arguments: [existing.id]
-                )
-                let existingSlices = try CorpusAnalysisPartitionSliceRecord.fetchAll(
-                    db,
-                    sql: """
-                        SELECT * FROM corpus_analysis_partition_slices
-                        WHERE run_id = ?
-                        ORDER BY partition_id, ordinal, id
-                        """,
-                    arguments: [existing.id]
-                )
-                try Self.validatePreparedRun(
-                    existing,
-                    partitions: existingPartitions,
-                    slices: existingSlices,
-                    db: db,
-                    requireLiveCurrentRevision: existing.status == CorpusAnalysisRunStatus.planning.rawValue
-                )
-                guard try Self.samePreparedLedger(
-                    lhsPartitions: existingPartitions,
-                    lhsSlices: existingSlices,
-                    rhsPartitions: partitions,
-                    rhsSlices: slices
-                ) else {
-                    throw CorpusAnalysisRepositoryError.runKeyCollision(proposed.runKey)
-                }
-                return existing
-            }
-
-            try Self.validatePreparedRun(
-                proposed,
+            try Self.createOrFetchPreparedRun(
+                run: proposed,
                 partitions: partitions,
                 slices: slices,
-                db: db,
-                requireLiveCurrentRevision: true
+                db: db
             )
-            try proposed.insert(db)
-            for partition in partitions { try partition.insert(db) }
-            for slice in slices { try slice.insert(db) }
-            return proposed
+        }
+    }
+
+    /// Atomically publishes a frozen v2 corpus ledger and the one app-wide FIFO
+    /// job that can execute it. The queue payload remains owned by SupraSessions;
+    /// Store validates only its versioned outer identity before persisting it.
+    /// Exact retries return the existing job, while a second job identity for the
+    /// same run fails closed.
+    @discardableResult
+    public func submitPreparedCorpusAnalysis(
+        run: CorpusAnalysisRunRecord,
+        partitions: [CorpusAnalysisPartitionRecord],
+        slices: [CorpusAnalysisPartitionSliceRecord],
+        job: DocumentProcessingJobRecord
+    ) throws -> DocumentProcessingJobRecord {
+        guard let approvedScopeReceipt = Self.snapshot(from: run) else {
+            throw CorpusAnalysisRepositoryError.invalidSnapshot
+        }
+        return try submitPreparedCorpusAnalysis(
+            run: run,
+            partitions: partitions,
+            slices: slices,
+            job: job,
+            approvedScopeReceipt: approvedScopeReceipt
+        )
+    }
+
+    /// Publishes only when the proposed frozen snapshot and a fresh reconstruction
+    /// of the live scope both equal the exact receipt approved by the caller. The
+    /// live comparison shares the writer transaction with every inserted ledger
+    /// row and the FIFO job, closing the final compare-to-submit mutation window.
+    @discardableResult
+    public func submitPreparedCorpusAnalysis(
+        run: CorpusAnalysisRunRecord,
+        partitions: [CorpusAnalysisPartitionRecord],
+        slices: [CorpusAnalysisPartitionSliceRecord],
+        job: DocumentProcessingJobRecord,
+        approvedScopeReceipt: CorpusAnalysisSnapshot
+    ) throws -> DocumentProcessingJobRecord {
+        guard Self.isPristineCorpusAnalysisJob(job, for: run),
+              let proposedPayload = Self.corpusSubmissionEnvelope(job.payloadJSON),
+              proposedPayload.schemaVersion == 2,
+              proposedPayload.runID == run.id,
+              proposedPayload.requestDigest == run.requestDigest else {
+            throw CorpusAnalysisRepositoryError.invalidPreparedRun(
+                "the queue job is not a pristine v2 submission for the frozen run"
+            )
+        }
+
+        return try writer.write { db in
+            guard let proposedScopeReceipt = Self.snapshot(from: run),
+                  proposedScopeReceipt == approvedScopeReceipt else {
+                throw CorpusAnalysisRepositoryError.scopeReceiptChanged
+            }
+            guard let scope = Self.scope(from: run) else {
+                throw CorpusAnalysisRepositoryError.invalidPreparedRun(
+                    "the frozen scope is not a reconstructible document scope"
+                )
+            }
+            let liveScopeReceipt = try Self.inspectCurrentScope(
+                matterID: run.matterID,
+                documentIDs: scope.documentIDs,
+                db: db
+            ).snapshot
+            guard liveScopeReceipt == approvedScopeReceipt else {
+                throw CorpusAnalysisRepositoryError.scopeReceiptChanged
+            }
+
+            let runAlreadyExisted = try CorpusAnalysisRunRecord.fetchOne(
+                db,
+                sql: "SELECT * FROM corpus_analysis_runs WHERE matter_id = ? AND run_key = ?",
+                arguments: [run.matterID, run.runKey]
+            ) != nil
+            let persistedRun = try Self.createOrFetchPreparedRun(
+                run: run,
+                partitions: partitions,
+                slices: slices,
+                db: db
+            )
+            guard persistedRun.id == run.id else {
+                throw CorpusAnalysisRepositoryError.runKeyCollision(run.runKey)
+            }
+
+            let runJobs = try DocumentProcessingJobRecord.fetchAll(
+                db,
+                sql: "SELECT * FROM document_processing_jobs WHERE kind = ?",
+                arguments: [DocumentProcessingJobKind.corpusAnalysis.rawValue]
+            ).filter {
+                Self.corpusSubmissionRunID($0.payloadJSON) == persistedRun.id
+            }
+            guard runJobs.count <= 1 else {
+                throw CorpusAnalysisRepositoryError.invalidPreparedRun(
+                    "the frozen run has multiple queue job identities"
+                )
+            }
+
+            if let existingJob = try DocumentProcessingJobRecord.fetchOne(db, key: job.id) {
+                guard runAlreadyExisted,
+                      runJobs.first?.id == existingJob.id,
+                      Self.sameCorpusSubmission(existingJob, job) else {
+                    throw CorpusAnalysisRepositoryError.invalidPreparedRun(
+                        "the queue job identity is already owned by another submission"
+                    )
+                }
+                return existingJob
+            }
+
+            guard runJobs.isEmpty else {
+                throw CorpusAnalysisRepositoryError.invalidPreparedRun(
+                    "the frozen run already has a queue job identity"
+                )
+            }
+
+            let maxPosition = try Int.fetchOne(
+                db,
+                sql: """
+                    SELECT MAX(queue_position) FROM document_processing_jobs
+                    WHERE status IN (?, ?)
+                    """,
+                arguments: [
+                    DocumentProcessingJobStatus.queued.rawValue,
+                    DocumentProcessingJobStatus.active.rawValue
+                ]
+            ) ?? -1
+            var persistedJob = job
+            persistedJob.queuePosition = maxPosition + 1
+            try persistedJob.insert(db)
+            return persistedJob
+        }
+    }
+
+    /// Atomically cancels one queued or durably paused corpus-analysis job and
+    /// its exact frozen run. The job payload is the authority that joins the two
+    /// records; malformed, cross-matter, duplicate, and terminal identities fail
+    /// closed without changing either ledger.
+    @discardableResult
+    public func cancelQueuedOrPausedCorpusAnalysis(jobID: String) throws -> Bool {
+        try writer.write { db in
+            guard var job = try DocumentProcessingJobRecord.fetchOne(db, key: jobID),
+                  job.kind == DocumentProcessingJobKind.corpusAnalysis.rawValue,
+                  job.importBatchID == nil,
+                  job.status == DocumentProcessingJobStatus.queued.rawValue
+                    || job.status == DocumentProcessingJobStatus.paused.rawValue,
+                  let payload = Self.corpusSubmissionEnvelope(job.payloadJSON),
+                  payload.schemaVersion == 2,
+                  var run = try CorpusAnalysisRunRecord.fetchOne(db, key: payload.runID),
+                  run.matterID == job.matterID,
+                  run.taskKind == CorpusAnalysisTaskKind.exhaustiveList.rawValue,
+                  run.requestSchemaVersion == 2,
+                  run.requestDigest == payload.requestDigest,
+                  run.status != CorpusAnalysisRunStatus.persisted.rawValue,
+                  run.status != CorpusAnalysisRunStatus.failed.rawValue,
+                  run.status != CorpusAnalysisRunStatus.cancelled.rawValue else {
+                return false
+            }
+
+            let jobsForRun = try DocumentProcessingJobRecord.fetchAll(
+                db,
+                sql: "SELECT * FROM document_processing_jobs WHERE kind = ?",
+                arguments: [DocumentProcessingJobKind.corpusAnalysis.rawValue]
+            ).filter {
+                Self.corpusSubmissionRunID($0.payloadJSON) == run.id
+            }
+            guard jobsForRun.count == 1, jobsForRun[0].id == job.id else {
+                return false
+            }
+
+            let now = Date()
+            var partitions = try CorpusAnalysisPartitionRecord.fetchAll(
+                db,
+                sql: "SELECT * FROM corpus_analysis_partitions WHERE run_id = ?",
+                arguments: [run.id]
+            )
+            for index in partitions.indices
+                where partitions[index].disposition == CorpusAnalysisPartitionDisposition.pending.rawValue {
+                partitions[index].disposition = CorpusAnalysisPartitionDisposition.cancelled.rawValue
+                partitions[index].dispositionReason = partitions[index].dispositionReason ?? "run_cancelled"
+                partitions[index].errorSummary = partitions[index].errorSummary ?? "Corpus analysis cancelled."
+                partitions[index].completedAt = now
+                try partitions[index].update(db)
+            }
+
+            let preservesStaleAssurance =
+                run.assuranceState == OutputAssuranceState.stale.rawValue
+            run.status = CorpusAnalysisRunStatus.cancelled.rawValue
+            run.coverageJSON = try canonicalJSON(try calculateCoverage(
+                db,
+                run: run,
+                exclusionsDisclosed: true
+            ))
+            if !preservesStaleAssurance {
+                run.assuranceState = nil
+                run.assuranceReasonsJSON = nil
+            }
+            run.completedAt = now
+            try run.update(db)
+
+            job.status = DocumentProcessingJobStatus.cancelled.rawValue
+            job.phase = DocumentProcessingPhase.cancelled.rawValue
+            job.queuePosition = nil
+            job.completedAt = now
+            job.updatedAt = now
+            try job.update(db)
+            return true
         }
     }
 
@@ -1125,6 +1290,358 @@ public final class CorpusAnalysisRepository: @unchecked Sendable {
             }
         }
         return resolvedID
+    }
+
+    private struct StoredCorpusAnalysisScope: Decodable {
+        var schemaVersion: Int
+        var documentIDs: [String]?
+
+        private enum CodingKeys: String, CodingKey {
+            case schemaVersion = "schema_version"
+            case documentIDs = "document_ids"
+        }
+    }
+
+    private static func snapshot(
+        from run: CorpusAnalysisRunRecord
+    ) -> CorpusAnalysisSnapshot? {
+        try? JSONDecoder().decode(
+            CorpusAnalysisSnapshot.self,
+            from: Data(run.corpusSnapshotJSON.utf8)
+        )
+    }
+
+    private static func scope(
+        from run: CorpusAnalysisRunRecord
+    ) -> StoredCorpusAnalysisScope? {
+        try? JSONDecoder().decode(
+            StoredCorpusAnalysisScope.self,
+            from: Data(run.scopeJSON.utf8)
+        )
+    }
+
+    private static func inspectCurrentScope(
+        matterID: String,
+        documentIDs: [String]?,
+        db: Database
+    ) throws -> CorpusAnalysisScopeInspection {
+        let requestedIDs = documentIDs.map(Set.init)
+        let documents = try MatterDocumentRecord.fetchAll(
+            db,
+            sql: """
+                SELECT * FROM matter_documents
+                WHERE matter_id = ? AND deleted_at IS NULL
+                ORDER BY display_name COLLATE NOCASE ASC
+                """,
+            arguments: [matterID]
+        )
+        .filter { requestedIDs?.contains($0.id) ?? true }
+        .sorted {
+            $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending
+                || ($0.displayName == $1.displayName && $0.id < $1.id)
+        }
+
+        var members: [CorpusAnalysisSnapshotMember] = []
+        var sources: [CorpusAnalysisScopeSource] = []
+        for document in documents {
+            let parts = try DocumentPagePartRecord.fetchAll(
+                db,
+                sql: """
+                    SELECT * FROM document_pages_parts
+                    WHERE document_id = ?
+                    ORDER BY part_index ASC
+                    """,
+                arguments: [document.id]
+            )
+            let revisionIDs = parts.compactMap(\.currentRevisionID)
+            let memberKey = "document:\(document.id)"
+
+            if let reason = exclusionReason(for: document) {
+                members.append(CorpusAnalysisSnapshotMember(
+                    memberKey: memberKey,
+                    documentID: document.id,
+                    displayName: document.displayName,
+                    revisionIDs: revisionIDs,
+                    indexState: document.indexStatus,
+                    disposition: .excluded,
+                    reason: reason
+                ))
+                continue
+            }
+
+            guard !parts.isEmpty, revisionIDs.count == parts.count else {
+                members.append(CorpusAnalysisSnapshotMember(
+                    memberKey: memberKey,
+                    documentID: document.id,
+                    displayName: document.displayName,
+                    revisionIDs: revisionIDs,
+                    indexState: document.indexStatus,
+                    disposition: .excluded,
+                    reason: "no_selected_revision"
+                ))
+                continue
+            }
+
+            var selected: [(DocumentPagePartRecord, DocumentPartRevisionRecord)] = []
+            var selectedRevisionUnavailable = false
+            for (part, revisionID) in zip(parts, revisionIDs) {
+                guard let revision = try DocumentPartRevisionRecord.fetchOne(db, key: revisionID),
+                      revision.documentID == document.id,
+                      revision.partIndex == part.partIndex else {
+                    selectedRevisionUnavailable = true
+                    break
+                }
+                selected.append((part, revision))
+            }
+            guard !selectedRevisionUnavailable else {
+                members.append(CorpusAnalysisSnapshotMember(
+                    memberKey: memberKey,
+                    documentID: document.id,
+                    displayName: document.displayName,
+                    revisionIDs: revisionIDs,
+                    indexState: document.indexStatus,
+                    disposition: .excluded,
+                    reason: "selected_revision_unavailable"
+                ))
+                continue
+            }
+            guard selected.allSatisfy({ !$0.1.text.isEmpty }) else {
+                members.append(CorpusAnalysisSnapshotMember(
+                    memberKey: memberKey,
+                    documentID: document.id,
+                    displayName: document.displayName,
+                    revisionIDs: revisionIDs,
+                    indexState: document.indexStatus,
+                    disposition: .excluded,
+                    reason: "empty_selected_revision"
+                ))
+                continue
+            }
+
+            members.append(CorpusAnalysisSnapshotMember(
+                memberKey: memberKey,
+                documentID: document.id,
+                displayName: document.displayName,
+                revisionIDs: revisionIDs,
+                indexState: document.indexStatus,
+                disposition: .eligible
+            ))
+            sources.append(contentsOf: selected.map { part, revision in
+                CorpusAnalysisScopeSource(
+                    memberKey: memberKey,
+                    documentID: document.id,
+                    part: part,
+                    revision: revision,
+                    orderDate: document.metadataModifiedAt ?? document.metadataCreatedAt
+                )
+            })
+        }
+
+        if let requestedIDs {
+            let resolvedIDs = Set(documents.map(\.id))
+            for documentID in requestedIDs.subtracting(resolvedIDs).sorted() {
+                members.append(CorpusAnalysisSnapshotMember(
+                    memberKey: "document:\(documentID)",
+                    documentID: documentID,
+                    displayName: "Unavailable selected document \(documentID)",
+                    revisionIDs: [],
+                    indexState: "unavailable",
+                    disposition: .excluded,
+                    reason: "selected_document_unavailable"
+                ))
+            }
+        } else {
+            let importSources = try DocumentImportSourceRecord.fetchAll(
+                db,
+                sql: """
+                    SELECT * FROM document_import_sources
+                    WHERE matter_id = ?
+                    ORDER BY created_at, id
+                    """,
+                arguments: [matterID]
+            )
+            for source in importSources where source.documentID == nil {
+                members.append(CorpusAnalysisSnapshotMember(
+                    memberKey: "import-source:\(source.id)",
+                    displayName: source.sourceDisplayPath,
+                    revisionIDs: [],
+                    indexState: source.state,
+                    disposition: .excluded,
+                    reason: source.reason ?? source.state
+                ))
+            }
+        }
+
+        members.sort { $0.memberKey < $1.memberKey }
+        return CorpusAnalysisScopeInspection(
+            snapshot: CorpusAnalysisSnapshot(schemaVersion: 2, members: members),
+            sources: sources
+        )
+    }
+
+    private static func exclusionReason(
+        for document: MatterDocumentRecord
+    ) -> String? {
+        if document.status == MatterDocumentStatus.failed.rawValue
+            || document.extractionStatus == DocumentExtractionStatus.failed.rawValue {
+            return "extraction_failed"
+        }
+        if document.status == MatterDocumentStatus.needsReview.rawValue {
+            return "review_required"
+        }
+        let extractionComplete =
+            document.extractionStatus == DocumentExtractionStatus.extracted.rawValue
+            || document.extractionStatus == DocumentExtractionStatus.ocrComplete.rawValue
+            || document.extractionStatus == DocumentExtractionStatus.edited.rawValue
+        if !extractionComplete { return "extraction_not_ready" }
+        let indexReady = document.indexStatus == DocumentIndexStatus.textIndexed.rawValue
+            || document.indexStatus == DocumentIndexStatus.ready.rawValue
+        return indexReady ? nil : "index_not_ready"
+    }
+
+    private static func createOrFetchPreparedRun(
+        run proposed: CorpusAnalysisRunRecord,
+        partitions: [CorpusAnalysisPartitionRecord],
+        slices: [CorpusAnalysisPartitionSliceRecord],
+        db: Database
+    ) throws -> CorpusAnalysisRunRecord {
+        guard isCleanPreparedRun(proposed),
+              partitions.allSatisfy(isCleanPreparedPartition) else {
+            throw CorpusAnalysisRepositoryError.invalidPreparedRun(
+                "atomic preparation must begin from a clean planning run and pristine pending partitions"
+            )
+        }
+        if let existing = try CorpusAnalysisRunRecord.fetchOne(
+            db,
+            sql: "SELECT * FROM corpus_analysis_runs WHERE matter_id = ? AND run_key = ?",
+            arguments: [proposed.matterID, proposed.runKey]
+        ) {
+            guard sameImmutableRun(existing, proposed) else {
+                throw CorpusAnalysisRepositoryError.runKeyCollision(proposed.runKey)
+            }
+            try validatePreparedRun(
+                proposed,
+                partitions: partitions,
+                slices: slices,
+                db: db,
+                requireLiveCurrentRevision: true
+            )
+            let existingPartitions = try CorpusAnalysisPartitionRecord.fetchAll(
+                db,
+                sql: "SELECT * FROM corpus_analysis_partitions WHERE run_id = ? ORDER BY partition_key, id",
+                arguments: [existing.id]
+            )
+            let existingSlices = try CorpusAnalysisPartitionSliceRecord.fetchAll(
+                db,
+                sql: """
+                    SELECT * FROM corpus_analysis_partition_slices
+                    WHERE run_id = ?
+                    ORDER BY partition_id, ordinal, id
+                    """,
+                arguments: [existing.id]
+            )
+            try validatePreparedRun(
+                existing,
+                partitions: existingPartitions,
+                slices: existingSlices,
+                db: db,
+                requireLiveCurrentRevision: existing.status == CorpusAnalysisRunStatus.planning.rawValue
+            )
+            guard try samePreparedLedger(
+                lhsPartitions: existingPartitions,
+                lhsSlices: existingSlices,
+                rhsPartitions: partitions,
+                rhsSlices: slices
+            ) else {
+                throw CorpusAnalysisRepositoryError.runKeyCollision(proposed.runKey)
+            }
+            return existing
+        }
+
+        try validatePreparedRun(
+            proposed,
+            partitions: partitions,
+            slices: slices,
+            db: db,
+            requireLiveCurrentRevision: true
+        )
+        try proposed.insert(db)
+        for partition in partitions { try partition.insert(db) }
+        for slice in slices { try slice.insert(db) }
+        return proposed
+    }
+
+    private struct CorpusSubmissionEnvelope: Decodable {
+        var schemaVersion: Int
+        var runID: String
+        var requestDigest: String
+
+        private enum CodingKeys: String, CodingKey {
+            case schemaVersion = "schema_version"
+            case runID = "run_id"
+            case requestDigest = "request_digest"
+        }
+    }
+
+    private struct CorpusSubmissionRunIdentity: Decodable {
+        var runID: String
+
+        private enum CodingKeys: String, CodingKey {
+            case runID = "run_id"
+        }
+    }
+
+    private static func corpusSubmissionEnvelope(
+        _ payloadJSON: String?
+    ) -> CorpusSubmissionEnvelope? {
+        guard let payloadJSON,
+              let data = payloadJSON.data(using: .utf8) else {
+            return nil
+        }
+        return try? JSONDecoder().decode(CorpusSubmissionEnvelope.self, from: data)
+    }
+
+    private static func corpusSubmissionRunID(_ payloadJSON: String?) -> String? {
+        guard let payloadJSON,
+              let data = payloadJSON.data(using: .utf8) else {
+            return nil
+        }
+        return try? JSONDecoder().decode(
+            CorpusSubmissionRunIdentity.self,
+            from: data
+        ).runID
+    }
+
+    private static func isPristineCorpusAnalysisJob(
+        _ job: DocumentProcessingJobRecord,
+        for run: CorpusAnalysisRunRecord
+    ) -> Bool {
+        !job.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && job.matterID == run.matterID
+            && job.importBatchID == nil
+            && job.kind == DocumentProcessingJobKind.corpusAnalysis.rawValue
+            && job.status == DocumentProcessingJobStatus.queued.rawValue
+            && job.phase == DocumentProcessingPhase.discovering.rawValue
+            && job.queuePosition == nil
+            && job.totalUnits == 0
+            && job.completedUnits == 0
+            && job.phaseProgressJSON == nil
+            && job.resumeStateJSON == nil
+            && job.errorSummary == nil
+            && job.startedAt == nil
+            && job.pausedAt == nil
+            && job.completedAt == nil
+    }
+
+    private static func sameCorpusSubmission(
+        _ lhs: DocumentProcessingJobRecord,
+        _ rhs: DocumentProcessingJobRecord
+    ) -> Bool {
+        lhs.id == rhs.id
+            && lhs.matterID == rhs.matterID
+            && lhs.importBatchID == rhs.importBatchID
+            && lhs.kind == rhs.kind
+            && lhs.payloadJSON == rhs.payloadJSON
     }
 
     private static func sameImmutableRun(

@@ -7,6 +7,8 @@ import SwiftUI
 /// outputs and gives counsel one narrow, auditable review action.
 struct CaseFileReviewView: View {
     @ObservedObject var controller: CaseFileReviewController
+    @ObservedObject var creationController: CaseFileReviewCreationController
+    @ObservedObject var library: ModelLibrary
 
     @Environment(\.colorScheme) private var colorScheme
     @State private var sourcesWidth: CGFloat = 640
@@ -16,6 +18,7 @@ struct CaseFileReviewView: View {
     @State private var activeFilter: CaseFileReviewController.RowFilter = .all
     @State private var pendingNavigation: PendingReviewNavigation?
     @State private var discardNavigationPresented = false
+    @State private var showingNewReview = false
     @FocusState private var valueFieldFocused: Bool
 
     // Approved evidence rail: #A77920 in light appearance, #D2AC5C in dark.
@@ -63,7 +66,10 @@ struct CaseFileReviewView: View {
             }
 
         }
-        .onAppear { controller.load() }
+        .onAppear {
+            controller.load()
+            creationController.load()
+        }
         .onChange(of: controller.selectedCellID) { _, _ in
             previewModel = nil
             if controller.selectedCellID != nil {
@@ -89,11 +95,33 @@ struct CaseFileReviewView: View {
         } message: {
             Text(actionError ?? "The Review Project could not be updated.")
         }
+        .sheet(isPresented: $showingNewReview) {
+            CaseFileReviewCreationSheet(
+                controller: creationController,
+                models: reviewCreationModels,
+                isPresented: $showingNewReview
+            )
+        }
+        .task {
+            while !Task.isCancelled {
+                creationController.load()
+                try? await Task.sleep(for: .seconds(1.2))
+            }
+        }
     }
 
     @ViewBuilder
     private var reviewActions: some View {
         HStack(spacing: 10) {
+            Button {
+                showingNewReview = true
+            } label: {
+                Label("New Review", systemImage: "plus")
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(hasNonterminalCreatedReview)
+            .accessibilityIdentifier("review.newReview")
+
             if controller.projects.count > 1 {
                 Picker(
                     "Project",
@@ -145,6 +173,19 @@ struct CaseFileReviewView: View {
     @ViewBuilder
     private var reviewContent: some View {
         VStack(spacing: 0) {
+            if let run = creationController.runs.first {
+                CaseFileReviewCreationRunCard(
+                    run: run,
+                    onPause: { performCreationAction(.pause, run: run) },
+                    onResume: { performCreationAction(.resume, run: run) },
+                    onCancel: { performCreationAction(.cancel, run: run) },
+                    onOpenResults: {
+                        requestNavigation(.openCreatedReview(run))
+                    }
+                )
+                Divider()
+            }
+
             if let project = selectedProject, project.status == "stale" {
                 HStack(alignment: .top, spacing: 10) {
                     Image(systemName: "exclamationmark.triangle.fill")
@@ -684,6 +725,25 @@ struct CaseFileReviewView: View {
         controller.rows(matching: activeFilter)
     }
 
+    private var reviewCreationModels: [ModelSummary] {
+        library.models.filter { model in
+            model.modelID != nil
+                && model.validationStatus == "verified"
+                && library.isManagedDownload(model)
+        }
+    }
+
+    private var hasNonterminalCreatedReview: Bool {
+        creationController.runs.contains { run in
+            switch run.state {
+            case .queued, .reviewing, .pausing, .paused, .finalizing:
+                true
+            case .finished, .failed, .cancelled:
+                false
+            }
+        }
+    }
+
     private var discardNavigationMessage: String {
         let finding = valueEditor?.finding ?? "this finding"
         return "Switching Review Projects will discard the unsaved changes to “\(finding)”."
@@ -691,7 +751,7 @@ struct CaseFileReviewView: View {
 
     private var emptyDescription: String {
         if controller.projects.isEmpty, controller.eligibleOutputs.isEmpty {
-            return "Verified exhaustive outputs appear here when their exact source proof is ready."
+            return "Start a New Review to freeze an exact source set and build its finding matrix."
         }
         if controller.projects.isEmpty {
             return "Open an eligible exhaustive output to review its findings and recorded sources."
@@ -764,6 +824,46 @@ struct CaseFileReviewView: View {
                 actionError = error.localizedDescription
                 return false
             }
+        case let .openCreatedReview(run):
+            return openCreatedReview(run)
+        }
+    }
+
+    private func openCreatedReview(
+        _ run: CaseFileReviewCreationController.Run
+    ) -> Bool {
+        do {
+            try controller.openReview(
+                sourceRunID: run.runID,
+                title: run.title
+            )
+            creationController.load()
+            activeFilter = .all
+            previewModel = nil
+            return true
+        } catch {
+            actionError = error.localizedDescription
+            return false
+        }
+    }
+
+    private func performCreationAction(
+        _ action: CaseFileReviewCreationController.Action,
+        run: CaseFileReviewCreationController.Run
+    ) {
+        do {
+            switch action {
+            case .pause:
+                try creationController.pause(jobID: run.jobID)
+            case .resume:
+                try creationController.resume(jobID: run.jobID)
+            case .cancel:
+                try creationController.cancel(jobID: run.jobID)
+            case .openResults:
+                requestNavigation(.openCreatedReview(run))
+            }
+        } catch {
+            actionError = error.localizedDescription
         }
     }
 
@@ -1057,4 +1157,5 @@ private struct ValueEditorState {
 private enum PendingReviewNavigation {
     case selectProject(String)
     case openOutput(CaseFileReviewController.EligibleOutput)
+    case openCreatedReview(CaseFileReviewCreationController.Run)
 }
