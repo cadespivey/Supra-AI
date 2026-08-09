@@ -1287,6 +1287,8 @@ final class CaseFileReviewHostedUITests: XCTestCase {
         // T-RP-CREATE-UI-01 expected RED: `-uiTestReviewCreation` is unhandled,
         // so Review has no New Review action, exact scope preview, managed-model
         // readiness, fixed-column disclosure, or durable queued handoff.
+        // Hardening RED: the current pre-Start picker says `Verified`, even though
+        // fresh content verification begins only after Start Review is chosen.
         let app = launchReviewCreation(scenario: "setup")
         let newReview = app.buttons["review.newReview"]
         XCTAssertTrue(
@@ -1321,7 +1323,16 @@ final class CaseFileReviewHostedUITests: XCTestCase {
         )
         XCTAssertTrue(
             waitForAccessibleText(Fixture.creationModelName, in: model, timeout: 5),
-            "Setup must name the exact verified app-managed local model"
+            "Setup must name the exact app-managed local-model candidate"
+        )
+        XCTAssertEqual(
+            model.label,
+            Fixture.creationModelPickerLabel,
+            "The pre-Start picker must describe management, not claim fresh verification"
+        )
+        XCTAssertFalse(
+            accessibleText(of: model).contains("Verified"),
+            "Fresh model verification belongs to the Start action, not the picker receipt"
         )
         XCTAssertTrue(
             waitForAccessibleText(Fixture.creationDisclosure, in: disclosure, timeout: 5),
@@ -1468,6 +1479,209 @@ final class CaseFileReviewHostedUITests: XCTestCase {
         XCTAssertTrue(pause.waitForNonExistence(timeout: 5))
         XCTAssertTrue(cancel.waitForNonExistence(timeout: 5))
         XCTAssertTrue(resume.waitForNonExistence(timeout: 5))
+    }
+
+    func testTRPCREATEUI04SelectedScopeRejectsEveryExcludedSource() throws {
+        // T-RP-CREATE-UI-04 expected RED: excluded source rows currently retain
+        // document-bound Button actions in Selected documents, so review-required
+        // and extraction-failed rows advertise themselves as selectable.
+        let app = launchReviewCreation(scenario: "setup")
+        let newReview = app.buttons["review.newReview"]
+        XCTAssertTrue(newReview.waitForExistence(timeout: 10))
+        newReview.click()
+
+        let setup = app.descendants(matching: .any)["review.creation.sheet"]
+        XCTAssertTrue(setup.waitForExistence(timeout: 10))
+        let selectedScope = setup.descendants(matching: .any)["review.creation.scope.selected"]
+        XCTAssertTrue(selectedScope.exists)
+        selectedScope.click()
+
+        let selectedSummary = setup.descendants(matching: .any)["review.creation.selectedSummary"]
+        XCTAssertTrue(selectedSummary.waitForExistence(timeout: 5))
+        XCTAssertTrue(
+            waitForAccessibleText("0 eligible selected", in: selectedSummary, timeout: 5),
+            "Selected scope must begin with an empty, fail-closed receipt"
+        )
+
+        let excludedRows = [
+            ("review.creation.excluded.reviewRequired", Fixture.creationReviewRequiredDocument),
+            ("review.creation.excluded.extractionFailed", Fixture.creationExtractionFailureDocument),
+            ("review.creation.excluded.importUnfinished", Fixture.creationImportUnfinishedDocument),
+        ]
+        for (identifier, excludedName) in excludedRows {
+            let row = setup.descendants(matching: .any)[identifier]
+            XCTAssertTrue(row.exists, "Selected scope is missing excluded source \(excludedName)")
+            XCTAssertFalse(
+                row.isEnabled,
+                "Excluded source \(excludedName) must not advertise a selectable control"
+            )
+            row.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+            XCTAssertTrue(
+                waitForAccessibleText("0 eligible selected", in: selectedSummary, timeout: 2),
+                "Pointer input on excluded source \(excludedName) must leave the receipt empty"
+            )
+            XCTAssertFalse(
+                accessibleText(of: selectedSummary).contains(excludedName),
+                "Excluded source \(excludedName) must never enter the selected-source receipt"
+            )
+        }
+
+        let amendment = setup.descendants(matching: .any)[Fixture.creationSelectedDocumentIdentifier]
+        XCTAssertTrue(amendment.exists)
+        XCTAssertTrue(amendment.isEnabled, "An eligible source must remain selectable")
+        amendment.click()
+        XCTAssertTrue(
+            waitForAccessibleText(Fixture.creationSelectedScopeSummary, in: selectedSummary, timeout: 5)
+        )
+        for (_, excludedName) in excludedRows {
+            XCTAssertFalse(
+                accessibleText(of: selectedSummary).contains(excludedName),
+                "Selecting an eligible source must not leak excluded source \(excludedName) into the receipt"
+            )
+        }
+    }
+
+    func testTRPCREATEUI05ClosingDuringModelVerificationCancelsWithoutCreatingAJob() throws {
+        // T-RP-CREATE-UI-05 expected RED: the slow-verification DEBUG scenario is
+        // not implemented, setup does not expose a stable dismiss control, and its
+        // unowned Task can finish after dismissal and persist a Review run/job.
+        let storageRoot = appSandboxWritableReviewCreationRoot()
+        let app = XCUIApplication()
+        addTeardownBlock {
+            app.terminate()
+            _ = app.wait(for: .notRunning, timeout: 5)
+            try? FileManager.default.removeItem(at: storageRoot)
+        }
+        configureReviewCreation(
+            app,
+            scenario: "slowVerification",
+            persistentRoot: storageRoot
+        )
+        launchConfiguredReviewCreation(app)
+
+        let newReview = app.buttons["review.newReview"]
+        XCTAssertTrue(newReview.waitForExistence(timeout: 10))
+        newReview.click()
+        let setup = app.descendants(matching: .any)["review.creation.sheet"]
+        XCTAssertTrue(setup.waitForExistence(timeout: 10))
+
+        let name = setup.descendants(matching: .any)["review.creation.name"]
+        let instruction = setup.descendants(matching: .any)["review.creation.instruction"]
+        replaceText(in: name, with: Fixture.creationCancellationTitle)
+        replaceText(in: instruction, with: Fixture.creationInstruction)
+        let start = app.buttons["review.creation.start"]
+        XCTAssertTrue(start.isEnabled)
+        start.click()
+        XCTAssertTrue(
+            waitForAccessibleText("Verifying model…", in: start, timeout: 3),
+            "The slow fixture must hold setup in its cancellable verification phase"
+        )
+
+        let dismiss = app.buttons["review.creation.dismiss"]
+        XCTAssertTrue(
+            dismiss.waitForExistence(timeout: 2),
+            "Setup needs one stable Cancel control while verification is active"
+        )
+        XCTAssertEqual(dismiss.label, "Cancel")
+        XCTAssertTrue(dismiss.isEnabled, "Verification must remain explicitly cancellable")
+        dismiss.click()
+        XCTAssertTrue(
+            setup.waitForNonExistence(timeout: 5),
+            "Cancel must close setup without waiting for model verification"
+        )
+
+        let status = app.descendants(matching: .any)["review.creation.status"]
+        XCTAssertFalse(
+            status.waitForExistence(timeout: 5),
+            "A cancelled verification must not later surface a persisted Review status"
+        )
+        XCTAssertEqual(
+            elements(in: app, identifierPrefix: "review.creation.run").count,
+            0,
+            "A cancelled verification must leave zero projected creation runs"
+        )
+        XCTAssertTrue(
+            app.buttons["review.newReview"].isEnabled,
+            "Zero queued jobs must leave New Review available"
+        )
+
+        app.terminate()
+        XCTAssertTrue(app.wait(for: .notRunning, timeout: 5))
+        launchConfiguredReviewCreation(app)
+        XCTAssertFalse(
+            app.descendants(matching: .any)["review.creation.status"].waitForExistence(timeout: 3),
+            "The same throwaway Store must reconstruct zero jobs after cancelled verification"
+        )
+        XCTAssertEqual(
+            elements(in: app, identifierPrefix: "review.creation.run").count,
+            0,
+            "Cancelled verification must leave no durable run across relaunch"
+        )
+        XCTAssertTrue(app.buttons["review.newReview"].isEnabled)
+    }
+
+    func testTRPCREATEUI06ScopeDriftRefreshesReceiptAndRequiresSecondStart() throws {
+        // T-RP-CREATE-UI-06 expected RED: the scope-drift DEBUG scenario is not
+        // implemented and Start submits a freshly planned whole-matter scope
+        // immediately, so setup cannot stop on a changed receipt for reconfirmation.
+        let app = launchReviewCreation(scenario: "scopeDrift")
+        let newReview = app.buttons["review.newReview"]
+        XCTAssertTrue(newReview.waitForExistence(timeout: 10))
+        newReview.click()
+
+        let setup = app.descendants(matching: .any)["review.creation.sheet"]
+        XCTAssertTrue(setup.waitForExistence(timeout: 10))
+        let summary = setup.descendants(matching: .any)["review.creation.scopeSummary"]
+        XCTAssertTrue(
+            waitForAccessibleText(Fixture.creationWholeScopeSummary, in: summary, timeout: 5),
+            "The first receipt must freeze the original two-source eligible scope"
+        )
+        let name = setup.descendants(matching: .any)["review.creation.name"]
+        let instruction = setup.descendants(matching: .any)["review.creation.instruction"]
+        replaceText(in: name, with: Fixture.creationScopeDriftTitle)
+        replaceText(in: instruction, with: Fixture.creationInstruction)
+
+        let start = app.buttons["review.creation.start"]
+        XCTAssertTrue(start.isEnabled)
+        start.click()
+
+        XCTAssertTrue(
+            setup.waitForExistence(timeout: 5),
+            "A changed source set must keep setup open instead of silently queueing it"
+        )
+        let scopeChanged = setup.descendants(matching: .any)["review.creation.scopeChanged"]
+        XCTAssertTrue(
+            scopeChanged.waitForExistence(timeout: 5),
+            "Changed scope needs one stable reconfirmation notice"
+        )
+        XCTAssertTrue(
+            waitForAccessibleText(Fixture.creationScopeChangedNotice, in: scopeChanged, timeout: 5),
+            "The notice must explain that the refreshed receipt needs a second Start"
+        )
+        XCTAssertTrue(
+            waitForAccessibleText(Fixture.creationRefreshedScopeSummary, in: summary, timeout: 5),
+            "The receipt must refresh to the exact new eligible and excluded denominator"
+        )
+        let lateSource = setup.descendants(matching: .any)[Fixture.creationLateDocumentIdentifier]
+        XCTAssertTrue(lateSource.exists, "The refreshed receipt must name the newly ready source")
+        XCTAssertTrue(
+            waitForAccessibleText(Fixture.creationLateDocumentLabel, in: lateSource, timeout: 5)
+        )
+        XCTAssertFalse(
+            app.descendants(matching: .any)["review.creation.status"].waitForExistence(timeout: 2),
+            "Receipt drift must persist zero Review jobs before explicit reconfirmation"
+        )
+        XCTAssertTrue(start.isEnabled, "The refreshed receipt must offer an explicit second Start")
+        XCTAssertTrue(waitForAccessibleText("Start Review", in: start, timeout: 2))
+
+        start.click()
+        XCTAssertTrue(
+            setup.waitForNonExistence(timeout: 10),
+            "Only the second Start may accept the refreshed receipt and close setup"
+        )
+        let status = app.descendants(matching: .any)["review.creation.status"]
+        XCTAssertTrue(status.waitForExistence(timeout: 10))
+        XCTAssertTrue(waitForAccessibleText("Queued", in: status, timeout: 5))
     }
 
     private func launchReviewProject(
@@ -1816,17 +2030,29 @@ final class CaseFileReviewHostedUITests: XCTestCase {
         static let creationDefaultOnlyDocument = "Atlas Ready Agreement.txt"
         static let creationSelectedDocumentIdentifier =
             "review.creation.document.ui-review-create-amendment-document"
+        static let creationLateDocumentIdentifier =
+            "review.creation.document.ui-review-create-late-document"
         static let creationWholeScopeSummary = "2 eligible · 3 excluded"
+        static let creationRefreshedScopeSummary = "3 eligible · 3 excluded"
         static let creationSelectedScopeSummary = "1 eligible · Atlas Amendment.txt"
-        static let creationModelName = "Synthetic Review Model · Verified"
+        static let creationModelPickerLabel = "Managed local model"
+        static let creationModelName = "Synthetic Review Model · Managed"
         static let creationDisclosure =
             "Exact frozen corpus · Local model · runs in background"
+        static let creationReviewRequiredDocument = "Beacon Review Draft.txt"
+        static let creationExtractionFailureDocument = "Atlas Extraction Failure.txt"
+        static let creationImportUnfinishedDocument = "Atlas Import Pending.txt"
         static let creationReviewRequiredExclusion =
             "Beacon Review Draft.txt — Review required"
         static let creationExtractionFailureExclusion =
             "Atlas Extraction Failure.txt — Extraction failed"
         static let creationImportUnfinishedExclusion =
             "Atlas Import Pending.txt — Import unfinished"
+        static let creationCancellationTitle = "Cancelled Atlas verification"
+        static let creationScopeDriftTitle = "Atlas refreshed-scope review"
+        static let creationScopeChangedNotice =
+            "Source scope changed. Review the updated receipt, then start again."
+        static let creationLateDocumentLabel = "Atlas Late Addendum.txt — Ready"
         static let creationPausedProgress = "1 of 3 partitions complete"
 
         static let defaultSourceCountCanary = "0 supporting"
@@ -2363,6 +2589,8 @@ final class CaseFileReviewCompositionUITests: XCTestCase {
             "review.creation.columnPreview",
             "review.creation.disclosure",
             "review.creation.start",
+            "review.creation.dismiss",
+            "review.creation.scopeChanged",
             "review.creation.status",
             "review.creation.progress",
             "review.creation.pause",
@@ -2388,6 +2616,11 @@ final class CaseFileReviewCompositionUITests: XCTestCase {
             environment.contains("-uiTestReviewCreation")
                 && environment.contains("SUPRA_UI_TEST_REVIEW_CREATION_ROOT"),
             "the single hosted creation fixture must be explicitly gated and use its throwaway root"
+        )
+        XCTAssertTrue(
+            environment.contains(#""slowVerification""#)
+                && environment.contains(#""scopeDrift""#),
+            "the hosted fixture must deterministically exercise cancellable verification and receipt drift"
         )
     }
 

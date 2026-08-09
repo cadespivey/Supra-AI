@@ -596,6 +596,34 @@ run_case \
   "claimed Review workflow smoke tests are missing" \
   env SUPRA_CASE_FILE_REVIEW_UI_TEST_FILE="$commented_review_tests" \
     bash "${scripts}/run-app-smoke-tests.sh" --check
+
+# T-RP-CREATE-CI-02 expected RED: all standing Review workflow methods can be
+# present while the six Guided New Review methods are commented out. The
+# check-only hook must reject that file before CI can claim creation coverage.
+commented_review_creation_tests="${temporary_dir}/CommentedReviewCreationUITests.swift"
+printf '%s\n' \
+  'final class CaseFileReviewCompositionUITests: XCTestCase {' \
+  '  func testTRPUI13WorkflowControlsPinAccessibleFiltersProgressAndGuardedNavigation() {}' \
+  '  // func testTRPCREATEUI03ProductionCompositionUsesAtomicPinnedQueueAndExactHandoff() {}' \
+  '}' \
+  'final class CaseFileReviewHostedUITests: XCTestCase {' \
+  '  func testTRPUI14ProgressAndAttentionFiltersReconcileHiddenSourcesAndExplicitEmptyState() {}' \
+  '  func testTRPUI15DirtyDraftCancelKeepsProjectAndDiscardSwitchesWithoutCrossProjectLeak() {}' \
+  '  func testTRPUI16FailedProjectSwitchRetainsExactDraftForResume() {}' \
+  '  func testTRPUI17FailedOpenReviewRetainsExactDraftForResume() {}' \
+  '  func testTRPUI18MinimumWidthSourcesKeepsProgressAndCompactFilterUsable() {}' \
+  '  // func testTRPCREATEUI01NewReviewSetupUsesExactSelectedScopeAndDurableSubmission() {}' \
+  '  // func testTRPCREATEUI02PausedRunSurvivesRelaunchThenResumesAndCancels() {}' \
+  '  // func testTRPCREATEUI04SelectedScopeRejectsEveryExcludedSource() {}' \
+  '  // func testTRPCREATEUI05ClosingDuringModelVerificationCancelsWithoutCreatingAJob() {}' \
+  '  // func testTRPCREATEUI06ScopeDriftRefreshesReceiptAndRequiresSecondStart() {}' \
+  '}' >"$commented_review_creation_tests"
+run_case \
+  "commented Guided New Review methods fail the app-smoke presence guard" \
+  1 \
+  "claimed Guided New Review smoke tests are missing" \
+  env SUPRA_CASE_FILE_REVIEW_UI_TEST_FILE="$commented_review_creation_tests" \
+    bash "${scripts}/run-app-smoke-tests.sh" --check
 # Expected RED: the Diagnostics routing-availability test existed but the
 # protected smoke command did not select it, so deletion or wording drift would
 # still leave every executed CI test green.
@@ -643,6 +671,30 @@ if (( review_workflow_missing == 0 )); then
   printf '%s\n' 'PASS: app smoke executes the claimed Review workflow guards'
 else
   record_failure 'app smoke does not execute every claimed Review workflow guard'
+fi
+
+# T-RP-CREATE-CI-01 expected RED: Guided New Review has hosted setup and
+# lifecycle and trust-boundary tests plus one production-composition proof, but
+# the protected app-smoke command does not select any of them yet. A product
+# claim cannot name app-smoke until each exact method is present and executed.
+review_creation_selectors=(
+  '-only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPCREATEUI01NewReviewSetupUsesExactSelectedScopeAndDurableSubmission'
+  '-only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPCREATEUI02PausedRunSurvivesRelaunchThenResumesAndCancels'
+  '-only-testing:SupraAIUITests/CaseFileReviewCompositionUITests/testTRPCREATEUI03ProductionCompositionUsesAtomicPinnedQueueAndExactHandoff'
+  '-only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPCREATEUI04SelectedScopeRejectsEveryExcludedSource'
+  '-only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPCREATEUI05ClosingDuringModelVerificationCancelsWithoutCreatingAJob'
+  '-only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPCREATEUI06ScopeDriftRefreshesReceiptAndRequiresSecondStart'
+)
+review_creation_missing=0
+for selector in "${review_creation_selectors[@]}"; do
+  if ! app_smoke_selector_present "$app_smoke_script" "$selector"; then
+    review_creation_missing=1
+  fi
+done
+if (( review_creation_missing == 0 )); then
+  printf '%s\n' 'PASS: app smoke executes the claimed Guided New Review guards'
+else
+  record_failure 'app smoke does not execute every claimed Guided New Review guard'
 fi
 
 # The deterministic guided-Q&A runtime and model fixture are test authority, not

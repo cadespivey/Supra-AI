@@ -304,6 +304,211 @@ final class CaseFileReviewCreationControllerTests: XCTestCase {
         XCTAssertTrue(runs.isEmpty, "an atomically rejected submission must leave no inert run")
     }
 
+    func testTRPCREATESESS07SelectedScopeRejectsExcludedDocumentBeforeSubmission() throws {
+        // T-RP-CREATE-SESS-07 expected RED: startReview rejects only selected
+        // IDs missing from the matter. A mixed explicit scope containing one
+        // eligible source and one known-but-excluded source is silently narrowed
+        // and submitted instead of failing with the excluded document identity.
+        let fixture = try makeScopeFixture(testName: "SESS07-excluded-selected-source")
+        let submissionProbe = ReviewSubmissionProbe()
+        let controller = makeController(
+            matterID: fixture.matterID,
+            store: fixture.store,
+            submitCorpusAnalysis: { request, pinnedModel in
+                submissionProbe.record(request: request, pinnedModel: pinnedModel)
+                return (
+                    runID: "forbidden-excluded-source-run-7107",
+                    jobID: "forbidden-excluded-source-job-7207"
+                )
+            }
+        )
+        let scope = CorpusAnalysisScope(
+            schemaVersion: 1,
+            documentIDs: [fixture.selectedEligibleID, fixture.reviewRequiredID]
+        )
+        let preview = try controller.inspectScope(scope: scope)
+        XCTAssertEqual(preview.eligibleCount, 1)
+        XCTAssertEqual(preview.excludedCount, 1)
+        XCTAssertEqual(
+            preview.members.filter { $0.disposition == .excluded }.map(\.documentID),
+            [fixture.reviewRequiredID]
+        )
+
+        XCTAssertThrowsError(
+            try controller.startReview(
+                projectName: "Excluded source rejection 7107",
+                instruction: "Extract every synthetic excluded-source canary.",
+                scope: scope,
+                pinnedModel: Self.pinnedModel
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? CaseFileReviewCreationError,
+                .selectedDocumentsUnavailable([fixture.reviewRequiredID])
+            )
+        }
+        XCTAssertEqual(
+            submissionProbe.callCount,
+            0,
+            "an explicit scope containing an excluded document must fail before queue submission"
+        )
+        XCTAssertEqual(try persistedCounts(store: fixture.store), .zero)
+    }
+
+    func testTRPCREATESESS08WholeMatterStartRejectsStaleScopeReceiptAndRefreshedRetrySucceeds() throws {
+        // T-RP-CREATE-SESS-08 expected RED: startReview has no explicit expected
+        // ScopePreview receipt. Whole-matter membership can change after the UI
+        // discloses its denominator and before submission without failing closed.
+        let fixture = try makeScopeFixture(testName: "SESS08-whole-matter-drift")
+        let submissionProbe = ReviewSubmissionProbe()
+        let controller = makeController(
+            matterID: fixture.matterID,
+            store: fixture.store,
+            submitCorpusAnalysis: { request, pinnedModel in
+                submissionProbe.record(request: request, pinnedModel: pinnedModel)
+                return (
+                    runID: "scope-receipt-retry-run-8108",
+                    jobID: "scope-receipt-retry-job-8208"
+                )
+            }
+        )
+        let staleReceipt = try controller.inspectScope(scope: .wholeMatter)
+        XCTAssertEqual(staleReceipt.members.count, 5)
+        let addedDocument = try insertDocument(
+            store: fixture.store,
+            matterID: fixture.matterID,
+            id: "whole-matter-membership-drift-document-8308",
+            name: "Later Added Scope Member 8308.txt",
+            text: "LATER-ADDED-WHOLE-MATTER-CANARY-8308",
+            status: .ready,
+            extractionStatus: .extracted,
+            indexStatus: .textIndexed
+        )
+        let refreshedReceipt = try controller.inspectScope(scope: .wholeMatter)
+        XCTAssertNotEqual(refreshedReceipt, staleReceipt)
+        XCTAssertEqual(refreshedReceipt.members.count, 6)
+        XCTAssertTrue(refreshedReceipt.members.contains {
+            $0.documentID == addedDocument.id && $0.revisionIDs == ["revision-\(addedDocument.id)"]
+        })
+
+        XCTAssertThrowsError(
+            try controller.startReview(
+                projectName: "Whole-matter receipt rejection 8108",
+                instruction: "Extract every source disclosed in the exact scope receipt.",
+                scope: .wholeMatter,
+                expectedScopePreview: staleReceipt,
+                pinnedModel: Self.pinnedModel
+            )
+        ) { error in
+            XCTAssertEqual(error as? CaseFileReviewCreationError, .scopeChanged)
+        }
+        XCTAssertEqual(
+            submissionProbe.callCount,
+            0,
+            "membership drift must fail before the atomic submission boundary"
+        )
+        XCTAssertEqual(try persistedCounts(store: fixture.store), .zero)
+
+        let retry = try controller.startReview(
+            projectName: "Whole-matter receipt retry 8408",
+            instruction: "Extract every source disclosed in the refreshed exact scope receipt.",
+            scope: .wholeMatter,
+            expectedScopePreview: refreshedReceipt,
+            pinnedModel: Self.pinnedModel
+        )
+        XCTAssertEqual(retry.runID, "scope-receipt-retry-run-8108")
+        XCTAssertEqual(retry.jobID, "scope-receipt-retry-job-8208")
+        XCTAssertEqual(submissionProbe.callCount, 1)
+        XCTAssertEqual(submissionProbe.request?.scope, .wholeMatter)
+        XCTAssertEqual(submissionProbe.pinnedModel, Self.pinnedModel)
+    }
+
+    func testTRPCREATESESS09RevisionDriftDuringModelPinFailsBeforeSubmissionAndUnchangedRetrySucceeds() async throws {
+        // T-RP-CREATE-SESS-09 expected RED: the model-ID start contract neither
+        // accepts a scope receipt nor rechecks exact eligible revision identities
+        // after asynchronous pinning. A source edit during pinning can therefore
+        // submit a denominator the user never reviewed.
+        let fixture = try makeScopeFixture(testName: "SESS09-revision-drift")
+        let scope = CorpusAnalysisScope(
+            schemaVersion: 1,
+            documentIDs: [fixture.selectedEligibleID]
+        )
+        let submissionProbe = ReviewSubmissionProbe()
+        var pinCallCount = 0
+        let selectedModelID = ModelID(
+            UUID(uuidString: "99999999-0909-4909-8909-999999999999")!
+        )
+        let controller = makeController(
+            matterID: fixture.matterID,
+            store: fixture.store,
+            makeCorpusAnalysisPinnedModel: { receivedModelID in
+                XCTAssertEqual(receivedModelID, selectedModelID)
+                pinCallCount += 1
+                if pinCallCount == 1 {
+                    try self.replaceSelectedRevision(
+                        store: fixture.store,
+                        documentID: fixture.selectedEligibleID,
+                        revisionID: "scope-receipt-replacement-revision-9109",
+                        selectionID: "scope-receipt-replacement-selection-9209",
+                        text: "REPLACEMENT-ELIGIBLE-REVISION-CANARY-9309"
+                    )
+                }
+                return Self.pinnedModel
+            },
+            submitCorpusAnalysis: { request, pinnedModel in
+                submissionProbe.record(request: request, pinnedModel: pinnedModel)
+                return (
+                    runID: "revision-receipt-retry-run-9409",
+                    jobID: "revision-receipt-retry-job-9509"
+                )
+            }
+        )
+        let staleReceipt = try controller.inspectScope(scope: scope)
+        XCTAssertEqual(staleReceipt.members.single?.revisionIDs, [
+            "revision-\(fixture.selectedEligibleID)"
+        ])
+
+        do {
+            _ = try await controller.startReview(
+                projectName: "Revision receipt rejection 9109",
+                instruction: "Extract only the revision identity the user reviewed.",
+                scope: scope,
+                expectedScopePreview: staleReceipt,
+                modelID: selectedModelID
+            )
+            XCTFail("revision drift after model pinning must reject the stale scope receipt")
+        } catch {
+            XCTAssertEqual(error as? CaseFileReviewCreationError, .scopeChanged)
+        }
+        XCTAssertEqual(pinCallCount, 1, "the drift gate must run after the selected model is pinned")
+        XCTAssertEqual(
+            submissionProbe.callCount,
+            0,
+            "revision drift must fail before the atomic submission boundary"
+        )
+        XCTAssertEqual(try persistedCounts(store: fixture.store), .zero)
+        let refreshedReceipt = try controller.inspectScope(scope: scope)
+        XCTAssertEqual(
+            refreshedReceipt.members.single?.revisionIDs,
+            ["scope-receipt-replacement-revision-9109"]
+        )
+        XCTAssertNotEqual(refreshedReceipt, staleReceipt)
+
+        let retry = try await controller.startReview(
+            projectName: "Revision receipt retry 9609",
+            instruction: "Extract only the refreshed revision identity.",
+            scope: scope,
+            expectedScopePreview: refreshedReceipt,
+            modelID: selectedModelID
+        )
+        XCTAssertEqual(retry.runID, "revision-receipt-retry-run-9409")
+        XCTAssertEqual(retry.jobID, "revision-receipt-retry-job-9509")
+        XCTAssertEqual(pinCallCount, 2)
+        XCTAssertEqual(submissionProbe.callCount, 1)
+        XCTAssertEqual(submissionProbe.request?.scope, scope)
+        XCTAssertEqual(submissionProbe.pinnedModel, Self.pinnedModel)
+    }
+
     func testTRPCREATESESS06TerminalReviewPermitsASecondDistinctSubmission() throws {
         // T-RP-CREATE-SESS-06 expected RED: no creation controller generates a
         // fresh immutable run identity after prior Review work is terminal. A
@@ -950,6 +1155,7 @@ final class CaseFileReviewCreationControllerTests: XCTestCase {
         store: SupraStore,
         recorder: ReviewActionRecorder? = nil,
         pausingJobID: @escaping () -> String? = { nil },
+        makeCorpusAnalysisPinnedModel: CaseFileReviewCreationController.ManagedModelPinProvider? = nil,
         submitCorpusAnalysis: ((
             ExhaustiveListQueuedRequest,
             CorpusAnalysisPinnedModel
@@ -970,11 +1176,52 @@ final class CaseFileReviewCreationControllerTests: XCTestCase {
         return CaseFileReviewCreationController(
             matterID: matterID,
             store: store,
+            makeCorpusAnalysisPinnedModel: makeCorpusAnalysisPinnedModel,
             submitCorpusAnalysis: submit,
             pauseCorpusAnalysis: { recorder?.record(.pause, jobID: $0) },
             resumeCorpusAnalysis: { recorder?.record(.resume, jobID: $0) },
             cancelCorpusAnalysis: { recorder?.record(.cancel, jobID: $0) },
             pausingCorpusJobID: pausingJobID
+        )
+    }
+
+    private func replaceSelectedRevision(
+        store: SupraStore,
+        documentID: String,
+        revisionID: String,
+        selectionID: String,
+        text: String
+    ) throws {
+        let previousSelection = try XCTUnwrap(
+            store.documentRevisions.fetchSelections(
+                documentID: documentID,
+                partIndex: 0
+            ).last
+        )
+        let revision = try store.documentRevisions.appendRevision(DocumentPartRevisionRecord(
+            id: revisionID,
+            documentID: documentID,
+            partIndex: 0,
+            derivationKey: "guided-review-scope-receipt-replacement-\(revisionID)",
+            origin: "synthetic_test",
+            method: "user-corrected-text",
+            text: text,
+            charCount: text.count
+        ))
+        let selection = try store.documentRevisions.appendSelection(DocumentPartSelectionRecord(
+            id: selectionID,
+            documentID: documentID,
+            partIndex: 0,
+            selectedRevisionID: revision.id,
+            selectionKey: "guided-review-scope-receipt-selection-\(selectionID)",
+            selectedBy: "test",
+            decisionJSON: #"{"rule":"scope-receipt-revision-drift"}"#,
+            supersedesSelectionID: previousSelection.id
+        ))
+        XCTAssertEqual(selection.selectedRevisionID, revisionID)
+        XCTAssertEqual(
+            try store.documentIndex.fetchParts(documentID: documentID).single?.currentRevisionID,
+            revisionID
         )
     }
 

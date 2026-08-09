@@ -156,6 +156,161 @@ final class CorpusReviewQueueExecutionTests: XCTestCase {
         XCTAssertEqual(persistedFollowerRun.status, CorpusAnalysisRunStatus.persisted.rawValue)
     }
 
+    func testTRPCREATEQUEUE01QueuedCancelAtomicallyBalancesExactRunAndPreservesPausedCanary() throws {
+        // T-RP-CREATE-QUEUE-01 queued expected RED: cancel(jobID:) cancels only
+        // the queued job row. The exact prepared corpus run and its four frozen
+        // partitions remain planning/pending instead of becoming cancelled.
+        let store = try makeStore(testName: "TRPCREATEQUEUE01-queued")
+        let target = try prepareFixture(
+            store: store,
+            caseName: "guided-review-queued-cancel-target",
+            partCount: 4
+        )
+        let pausedCanary = try prepareFixture(
+            store: store,
+            caseName: "guided-review-paused-unrelated-canary",
+            partCount: 2
+        )
+        let targetJob = try enqueuePersistedJob(
+            store: store,
+            matterID: target.matterID,
+            payload: target.payload
+        )
+        let pausedCanaryJob = try enqueuePersistedJob(
+            store: store,
+            matterID: pausedCanary.matterID,
+            payload: pausedCanary.payload
+        )
+        try store.documentJobs.pauseJob(id: pausedCanaryJob.id)
+        let pausedCanaryBefore = try durableCorpusCanary(
+            store: store,
+            jobID: pausedCanaryJob.id,
+            fixture: pausedCanary
+        )
+        let queue = makeQueue(store: store) { _ in
+            throw QueueExecutionTestError.unexpectedCorpusDispatch
+        }
+        queue.refresh()
+        XCTAssertEqual(
+            try store.documentJobs.fetchJob(id: targetJob.id)?.status,
+            DocumentProcessingJobStatus.queued.rawValue
+        )
+        XCTAssertTrue(queue.resumableJobs.contains { $0.id == pausedCanaryJob.id })
+
+        XCTAssertTrue(
+            queue.cancel(jobID: targetJob.id),
+            "queued Review cancellation must report a durable state transition"
+        )
+
+        let cancelledJob = try XCTUnwrap(store.documentJobs.fetchJob(id: targetJob.id))
+        let cancelledRun = try XCTUnwrap(
+            store.corpusAnalysis.fetchRun(
+                matterID: target.matterID,
+                id: target.payload.runID
+            )
+        )
+        let cancelledCoverage = try store.corpusAnalysis.coverage(
+            matterID: target.matterID,
+            runID: target.payload.runID
+        )
+        XCTAssertEqual(cancelledJob.status, DocumentProcessingJobStatus.cancelled.rawValue)
+        XCTAssertEqual(cancelledJob.phase, DocumentProcessingPhase.cancelled.rawValue)
+        XCTAssertEqual(cancelledRun.status, CorpusAnalysisRunStatus.cancelled.rawValue)
+        XCTAssertEqual(cancelledCoverage.partitionCount, 4)
+        XCTAssertEqual(cancelledCoverage.pendingPartitionCount, 0)
+        XCTAssertEqual(cancelledCoverage.cancelledPartitionCount, 4)
+        XCTAssertEqual(cancelledCoverage.terminalPartitionCount, 4)
+        XCTAssertEqual(cancelledCoverage.balanceErrorCount, 0)
+        XCTAssertEqual(
+            try durableCorpusCanary(
+                store: store,
+                jobID: pausedCanaryJob.id,
+                fixture: pausedCanary
+            ),
+            pausedCanaryBefore,
+            "cancelling the queued target must not rewrite the unrelated paused job, run, or partition ledger"
+        )
+    }
+
+    func testTRPCREATEQUEUE02PausedCancelAtomicallyBalancesExactRunAndPreservesQueuedCanary() throws {
+        // T-RP-CREATE-QUEUE-02 paused expected RED: cancel(jobID:) delegates to
+        // the queued-only row helper when no Swift child task owns the job. A
+        // durably paused Review therefore remains paused and its exact run stays
+        // running, rather than cancelling only its three unfinished partitions.
+        let store = try makeStore(testName: "TRPCREATEQUEUE02-paused")
+        let target = try prepareFixture(
+            store: store,
+            caseName: "guided-review-paused-cancel-target",
+            partCount: 4
+        )
+        let queuedCanary = try prepareFixture(
+            store: store,
+            caseName: "guided-review-queued-unrelated-canary",
+            partCount: 2
+        )
+        let targetJob = try enqueuePersistedJob(
+            store: store,
+            matterID: target.matterID,
+            payload: target.payload
+        )
+        try checkpointFirstPartitionAndPause(
+            store: store,
+            jobID: targetJob.id,
+            fixture: target
+        )
+        let queuedCanaryJob = try enqueuePersistedJob(
+            store: store,
+            matterID: queuedCanary.matterID,
+            payload: queuedCanary.payload
+        )
+        let queuedCanaryBefore = try durableCorpusCanary(
+            store: store,
+            jobID: queuedCanaryJob.id,
+            fixture: queuedCanary
+        )
+        let queue = makeQueue(store: store) { _ in
+            throw QueueExecutionTestError.unexpectedCorpusDispatch
+        }
+        queue.refresh()
+        XCTAssertTrue(queue.resumableJobs.contains { $0.id == targetJob.id })
+        XCTAssertTrue(queue.queuedJobs.contains { $0.id == queuedCanaryJob.id })
+
+        XCTAssertTrue(
+            queue.cancel(jobID: targetJob.id),
+            "paused Review cancellation must report a durable state transition"
+        )
+
+        let cancelledJob = try XCTUnwrap(store.documentJobs.fetchJob(id: targetJob.id))
+        let cancelledRun = try XCTUnwrap(
+            store.corpusAnalysis.fetchRun(
+                matterID: target.matterID,
+                id: target.payload.runID
+            )
+        )
+        let cancelledCoverage = try store.corpusAnalysis.coverage(
+            matterID: target.matterID,
+            runID: target.payload.runID
+        )
+        XCTAssertEqual(cancelledJob.status, DocumentProcessingJobStatus.cancelled.rawValue)
+        XCTAssertEqual(cancelledJob.phase, DocumentProcessingPhase.cancelled.rawValue)
+        XCTAssertEqual(cancelledRun.status, CorpusAnalysisRunStatus.cancelled.rawValue)
+        XCTAssertEqual(cancelledCoverage.partitionCount, 4)
+        XCTAssertEqual(cancelledCoverage.succeededPartitionCount, 1)
+        XCTAssertEqual(cancelledCoverage.pendingPartitionCount, 0)
+        XCTAssertEqual(cancelledCoverage.cancelledPartitionCount, 3)
+        XCTAssertEqual(cancelledCoverage.terminalPartitionCount, 4)
+        XCTAssertEqual(cancelledCoverage.balanceErrorCount, 0)
+        XCTAssertEqual(
+            try durableCorpusCanary(
+                store: store,
+                jobID: queuedCanaryJob.id,
+                fixture: queuedCanary
+            ),
+            queuedCanaryBefore,
+            "cancelling the paused target must not rewrite the unrelated queued job, run, or partition ledger"
+        )
+    }
+
     func testTQUEUE04CancelDuringPinnedModelResolutionBalancesRunAndDrainsFollower() async throws {
         // T-QUEUE-04 expected RED: cancellation while the pinned-model resolver
         // is suspended cancels only the queue row. Because the engine has not
@@ -918,6 +1073,66 @@ final class CorpusReviewQueueExecutionTests: XCTestCase {
         )
     }
 
+    private func checkpointFirstPartitionAndPause(
+        store: SupraStore,
+        jobID: String,
+        fixture: QueueExecutionFixture
+    ) throws {
+        let partitions = try store.corpusAnalysis.fetchPartitions(
+            matterID: fixture.matterID,
+            runID: fixture.payload.runID
+        )
+        XCTAssertEqual(partitions.count, 4, "the paused cancellation fixture must freeze four partitions")
+        let running = try store.corpusAnalysis.updateStatus(
+            matterID: fixture.matterID,
+            runID: fixture.payload.runID,
+            to: .running
+        )
+        XCTAssertEqual(running.status, CorpusAnalysisRunStatus.running.rawValue)
+        let first = try XCTUnwrap(partitions.first)
+        _ = try store.corpusAnalysis.beginAttempt(
+            matterID: fixture.matterID,
+            runID: fixture.payload.runID,
+            partitionID: first.id
+        )
+        try store.corpusAnalysis.completeAttemptSucceeded(
+            matterID: fixture.matterID,
+            runID: fixture.payload.runID,
+            partitionID: first.id,
+            findingsJSON: "[]"
+        )
+        try store.documentJobs.pauseJob(id: jobID)
+        let coverage = try store.corpusAnalysis.coverage(
+            matterID: fixture.matterID,
+            runID: fixture.payload.runID
+        )
+        XCTAssertEqual(coverage.succeededPartitionCount, 1)
+        XCTAssertEqual(coverage.pendingPartitionCount, 3)
+    }
+
+    private func durableCorpusCanary(
+        store: SupraStore,
+        jobID: String,
+        fixture: QueueExecutionFixture
+    ) throws -> Data {
+        let snapshot = DurableCorpusCanary(
+            job: try XCTUnwrap(store.documentJobs.fetchJob(id: jobID)),
+            run: try XCTUnwrap(
+                store.corpusAnalysis.fetchRun(
+                    matterID: fixture.matterID,
+                    id: fixture.payload.runID
+                )
+            ),
+            partitions: try store.corpusAnalysis.fetchPartitions(
+                matterID: fixture.matterID,
+                runID: fixture.payload.runID
+            )
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        return try encoder.encode(snapshot)
+    }
+
     private func makeStore(testName: String) throws -> SupraStore {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
             "CorpusReviewQueueExecution-\(testName)-\(UUID().uuidString)",
@@ -1017,6 +1232,12 @@ final class CorpusReviewQueueExecutionTests: XCTestCase {
 private struct QueueExecutionFixture {
     var matterID: String
     var payload: CorpusAnalysisJobPayload
+}
+
+private struct DurableCorpusCanary: Encodable {
+    var job: DocumentProcessingJobRecord
+    var run: CorpusAnalysisRunRecord
+    var partitions: [CorpusAnalysisPartitionRecord]
 }
 
 private struct LiveContentBoundModelFixture {
