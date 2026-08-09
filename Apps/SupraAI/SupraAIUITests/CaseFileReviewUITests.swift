@@ -1289,6 +1289,9 @@ final class CaseFileReviewHostedUITests: XCTestCase {
         // readiness, fixed-column disclosure, or durable queued handoff.
         // Hardening RED: the current pre-Start picker says `Verified`, even though
         // fresh content verification begins only after Start Review is chosen.
+        // Native-AX RED: the visible `Name` caption is not programmatically
+        // associated with its field, so VoiceOver receives the placeholder example
+        // as the field label instead of keeping label and placeholder distinct.
         let app = launchReviewCreation(scenario: "setup")
         let newReview = app.buttons["review.newReview"]
         XCTAssertTrue(
@@ -1317,6 +1320,21 @@ final class CaseFileReviewHostedUITests: XCTestCase {
         }
         XCTAssertTrue(start.exists, "New Review needs one explicit Start Review action")
         XCTAssertFalse(start.isEnabled, "Blank name and instruction must keep Start Review disabled")
+        XCTAssertEqual(
+            name.label,
+            "Name",
+            "The Review Project name field must expose its visible purpose to native accessibility"
+        )
+        XCTAssertEqual(
+            name.placeholderValue,
+            Fixture.creationNamePlaceholder,
+            "The example project name must remain a placeholder rather than becoming the field label"
+        )
+        XCTAssertNotEqual(
+            name.label,
+            Fixture.creationNamePlaceholder,
+            "Native accessibility must not conflate the Name label with its example value"
+        )
         XCTAssertTrue(
             waitForAccessibleText(Fixture.creationWholeScopeSummary, in: denominator, timeout: 5),
             "Whole-matter scope must expose the exact eligible and excluded denominator"
@@ -1447,6 +1465,8 @@ final class CaseFileReviewHostedUITests: XCTestCase {
         // T-RP-CREATE-UI-02 expected RED: Review has no durable corpus-job status
         // surface or dedicated persistent hosted fixture. A paused exact run
         // therefore cannot survive a process boundary or route Resume/Cancel.
+        // Copy hardening RED: progress appends `complete` to a terminal-partition
+        // count that may include failed or cancelled work, overstating success.
         let storageRoot = appSandboxWritableReviewCreationRoot()
         let app = XCUIApplication()
         addTeardownBlock {
@@ -1475,6 +1495,10 @@ final class CaseFileReviewHostedUITests: XCTestCase {
         XCTAssertFalse(
             accessibleText(of: progress).contains("documents"),
             "Corpus partition progress must not be relabeled as document progress"
+        )
+        XCTAssertFalse(
+            accessibleText(of: progress).contains("complete"),
+            "Terminal partition progress needs a neutral state word that remains true for failure and cancellation"
         )
         XCTAssertTrue(resume.exists, "Paused work needs Resume")
         XCTAssertTrue(cancel.exists, "Paused work needs Cancel")
@@ -1516,6 +1540,9 @@ final class CaseFileReviewHostedUITests: XCTestCase {
         // T-RP-CREATE-UI-04 expected RED: excluded source rows currently retain
         // document-bound Button actions in Selected documents, so review-required
         // and extraction-failed rows advertise themselves as selectable.
+        // Native-AX hardening RED: All-mode receipt rows still surface as disabled
+        // buttons, while selected eligible rows expose no Selected/Not selected
+        // accessibility value when their checkbox state changes.
         let app = launchReviewCreation(scenario: "setup")
         let newReview = app.buttons["review.newReview"]
         XCTAssertTrue(newReview.waitForExistence(timeout: 10))
@@ -1525,6 +1552,15 @@ final class CaseFileReviewHostedUITests: XCTestCase {
         XCTAssertTrue(setup.waitForExistence(timeout: 10))
         let selectedScope = setup.descendants(matching: .any)["review.creation.scope.selected"]
         XCTAssertTrue(selectedScope.exists)
+        let allModeEligible = setup.descendants(matching: .any)[
+            Fixture.creationDefaultDocumentIdentifier
+        ]
+        XCTAssertTrue(allModeEligible.exists, "All ready documents is missing its eligible receipt row")
+        XCTAssertNotEqual(
+            allModeEligible.elementType,
+            .button,
+            "All-mode eligible sources are receipt rows, not selectable controls"
+        )
         selectedScope.click()
 
         let selectedSummary = setup.descendants(matching: .any)["review.creation.selectedSummary"]
@@ -1560,7 +1596,22 @@ final class CaseFileReviewHostedUITests: XCTestCase {
         let amendment = setup.descendants(matching: .any)[Fixture.creationSelectedDocumentIdentifier]
         XCTAssertTrue(amendment.exists)
         XCTAssertTrue(amendment.isEnabled, "An eligible source must remain selectable")
+        XCTAssertEqual(
+            amendment.value as? String,
+            "Not selected",
+            "An unselected eligible source must expose its state to native accessibility"
+        )
         amendment.click()
+        XCTAssertEqual(
+            amendment.value as? String,
+            "Selected",
+            "Toggling an eligible source must expose its new selected state"
+        )
+        XCTAssertNotEqual(
+            amendment.value as? String,
+            "Not selected",
+            "The selected source must not retain the default accessibility value"
+        )
         XCTAssertTrue(
             waitForAccessibleText(Fixture.creationSelectedScopeSummary, in: selectedSummary, timeout: 5)
         )
@@ -2061,6 +2112,8 @@ final class CaseFileReviewHostedUITests: XCTestCase {
         static let creationDefaultOnlyDocument = "Atlas Ready Agreement.txt"
         static let creationSelectedDocumentIdentifier =
             "review.creation.document.ui-review-create-amendment-document"
+        static let creationDefaultDocumentIdentifier =
+            "review.creation.document.ui-review-create-default-document"
         static let creationLateDocumentIdentifier =
             "review.creation.document.ui-review-create-late-document"
         static let creationWholeScopeSummary = "2 eligible · 3 excluded"
@@ -2084,7 +2137,8 @@ final class CaseFileReviewHostedUITests: XCTestCase {
         static let creationScopeChangedNotice =
             "Source scope changed. Review the updated receipt, then start again."
         static let creationLateDocumentLabel = "Atlas Late Addendum.txt — Ready"
-        static let creationPausedProgress = "1 of 3 partitions complete"
+        static let creationNamePlaceholder = "Lease renewal review"
+        static let creationPausedProgress = "1 of 3 partitions resolved"
 
         static let defaultSourceCountCanary = "0 supporting"
         static let emptySupportingCanary =
