@@ -6,6 +6,7 @@ xpc_test="${SUPRA_XPC_INTEGRATION_TEST_FILE:-${repo_root}/Apps/SupraAI/SupraAIUI
 accessibility_test="${SUPRA_ACCESSIBILITY_SMOKE_TEST_FILE:-${repo_root}/Apps/SupraAI/SupraAIUITests/ResearchAuthoritiesUITests.swift}"
 recovery_test="${SUPRA_DRAFT_RECOVERY_UI_TEST_FILE:-${accessibility_test}}"
 restore_test="${SUPRA_RESTORE_UI_TEST_FILE:-${repo_root}/Apps/SupraAI/SupraAIUITests/RestoreSettingsUITests.swift}"
+review_test="${SUPRA_CASE_FILE_REVIEW_UI_TEST_FILE:-${repo_root}/Apps/SupraAI/SupraAIUITests/CaseFileReviewUITests.swift}"
 check_only=0
 if [[ "${1:-}" == "--check" ]]; then
   check_only=1
@@ -28,7 +29,9 @@ class_contains_test() {
         in_class = 1
         class_depth = depth + 1
       }
-      if (in_class && index($0, "func " method_name "(") > 0) { found = 1 }
+      if (in_class && $0 ~ "^[[:space:]]*func[[:space:]]+" method_name "[[:space:]]*\\(") {
+        found = 1
+      }
       depth += opens - closes
       if (in_class && depth < class_depth) { in_class = 0 }
     }
@@ -66,6 +69,16 @@ if [[ ! -f "$restore_test" ]] \
     || ! class_contains_test "$restore_test" RestoreSettingsUITests testSuccessfulStageShowsTerminalSurfaceAndQuits \
     || ! class_contains_test "$restore_test" RestoreSettingsUITests testRecoveryRequiredShellProvidesPreservationAndQuitInstructions; then
   printf '%s\n' 'ERROR: restore Settings/recovery accessibility smoke tests are missing' >&2
+  exit 1
+fi
+if [[ ! -f "$review_test" ]] \
+    || ! class_contains_test "$review_test" CaseFileReviewCompositionUITests testTRPUI13WorkflowControlsPinAccessibleFiltersProgressAndGuardedNavigation \
+    || ! class_contains_test "$review_test" CaseFileReviewHostedUITests testTRPUI14ProgressAndAttentionFiltersReconcileHiddenSourcesAndExplicitEmptyState \
+    || ! class_contains_test "$review_test" CaseFileReviewHostedUITests testTRPUI15DirtyDraftCancelKeepsProjectAndDiscardSwitchesWithoutCrossProjectLeak \
+    || ! class_contains_test "$review_test" CaseFileReviewHostedUITests testTRPUI16FailedProjectSwitchRetainsExactDraftForResume \
+    || ! class_contains_test "$review_test" CaseFileReviewHostedUITests testTRPUI17FailedOpenReviewRetainsExactDraftForResume \
+    || ! class_contains_test "$review_test" CaseFileReviewHostedUITests testTRPUI18MinimumWidthSourcesKeepsProgressAndCompactFilterUsable; then
+  printf '%s\n' 'ERROR: claimed Review workflow smoke tests are missing' >&2
   exit 1
 fi
 if (( $# != 0 )); then
@@ -147,5 +160,11 @@ xcodebuild \
   -only-testing:SupraAIUITests/RestoreSettingsUITests \
   -only-testing:SupraAIUITests/InterruptedDraftRecoveryUITests \
   -only-testing:SupraAIUITests/MotionToDismissWorkspaceUITests \
+  -only-testing:SupraAIUITests/CaseFileReviewCompositionUITests/testTRPUI13WorkflowControlsPinAccessibleFiltersProgressAndGuardedNavigation \
+  -only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPUI14ProgressAndAttentionFiltersReconcileHiddenSourcesAndExplicitEmptyState \
+  -only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPUI15DirtyDraftCancelKeepsProjectAndDiscardSwitchesWithoutCrossProjectLeak \
+  -only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPUI16FailedProjectSwitchRetainsExactDraftForResume \
+  -only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPUI17FailedOpenReviewRetainsExactDraftForResume \
+  -only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPUI18MinimumWidthSourcesKeepsProgressAndCompactFilterUsable \
   -only-testing:SupraAIUITests/RuntimeXPCIntegrationTests \
   test

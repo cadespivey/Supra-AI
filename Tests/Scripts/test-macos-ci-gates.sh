@@ -35,7 +35,15 @@ run_case() {
 app_smoke_selector_present() {
   local file="$1"
   local selector="$2"
-  grep -Fq -- "$selector" "$file"
+  awk -v selector="$selector" '
+    {
+      line = $0
+      sub(/^[[:space:]]+/, "", line)
+      sub(/[[:space:]]+$/, "", line)
+      if (line == selector " \\") { found = 1 }
+    }
+    END { exit found ? 0 : 1 }
+  ' "$file"
 }
 
 package_fixture="${temporary_dir}/packages"
