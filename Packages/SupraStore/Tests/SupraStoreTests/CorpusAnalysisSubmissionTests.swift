@@ -284,7 +284,10 @@ final class CorpusAnalysisSubmissionTests: XCTestCase {
             revisions: [revision],
             selections: [selection]
         )
-        XCTAssertEqual(persistedParts, [0])
+        XCTAssertTrue(
+            persistedParts.isEmpty,
+            "a newly inserted synthetic part has no pre-existing user edit to preserve"
+        )
 
         let runID = "guided-review-run-\(marker)"
         let partitionID = "guided-review-partition-\(marker)"
