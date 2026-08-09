@@ -41,6 +41,61 @@ final class CaseFileReviewExportServiceTests: XCTestCase {
         "Exported at (UTC)",
     ]
 
+    private static let expectedMatrixHeader = [
+        "Row",
+        "Finding",
+        "Generated value",
+        "Attorney value",
+        "Current value",
+        "Value state",
+        "Review state",
+        "Reviewed by",
+        "Reviewed at (UTC)",
+        "Support state",
+        "Supporting source count",
+        "Contrary source count",
+        "Cell ID",
+    ]
+
+    private static let expectedSourcesHeader = [
+        "Finding row",
+        "Finding",
+        "Relationship",
+        "Source order",
+        "Citation",
+        "Document",
+        "Locator",
+        "Availability",
+        "Unavailable reason",
+        "Excerpt",
+        "Frozen source ID",
+        "Frozen document ID",
+        "Frozen revision ID",
+        "Cell ID",
+    ]
+
+    private static let expectedProjectFields = [
+        "Snapshot schema version",
+        "Project",
+        "Project status",
+        "Project stale reason",
+        "Matrix version",
+        "Finding count",
+        "Reviewed findings",
+        "Needs-review findings",
+        "Edited findings",
+        "Evidence-attention findings",
+        "Supporting source count",
+        "Contrary source count",
+        "Scope",
+        "Project ID",
+        "Source run ID",
+        "Source output ID",
+        "Source output version ID",
+        "Project updated at (UTC)",
+        "Exported at (UTC)",
+    ]
+
     func testTRPEXPORT01WritesDeterministicAllRowSnapshotWithHostileCellsAndContraryOnlyWork() throws {
         // T-RP-EXPORT-01 expected RED: no CaseFileReviewExportService or atomic
         // Store snapshot API exists, so Review cannot render the approved
@@ -549,6 +604,604 @@ final class CaseFileReviewExportServiceTests: XCTestCase {
         )
     }
 
+    func testTRPEXPORT08WritesDeterministicThreeSheetXLSXAndReopensExactSnapshot() async throws {
+        // T-RP-EXPORT-08 expected RED: Review export exposes CSV only, so no
+        // relationship-keyed Matrix / Sources / Project workbook can preserve
+        // the hostile, stale, contrary-only snapshot or record review_xlsx.
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let exportedAt = try instant("2026-08-09T18:45:00Z")
+        let exportActor = "Morgan Vale XLSX 742"
+        let snapshot = try fixture.store.caseFileReviews.fetchSnapshot(
+            matterID: fixture.matterID,
+            projectID: fixture.primary.id
+        )
+        let liveDocumentID = try XCTUnwrap(
+            snapshot.rows.first?.evidence.first?.frozenDocumentID
+        )
+        let service = CaseFileReviewExportService(
+            store: fixture.store,
+            storage: fixture.storage
+        )
+
+        let firstURL: URL = try service.exportXLSX(
+            matterID: fixture.matterID,
+            projectID: fixture.primary.id,
+            actor: exportActor,
+            at: exportedAt
+        )
+        // ZIPFoundation defaults entry timestamps to the wall clock. Crossing
+        // its timestamp granularity makes byte equality a real wire proof that
+        // the renderer pins canonical package metadata independently of wall clock.
+        try await Task.sleep(nanoseconds: 2_200_000_000)
+        let secondURL: URL = try service.exportXLSX(
+            matterID: fixture.matterID,
+            projectID: fixture.primary.id,
+            actor: exportActor,
+            at: exportedAt
+        )
+
+        XCTAssertEqual(
+            firstURL.lastPathComponent,
+            "Atlas-Amendment-Review-snapshot-v1-20260809T184500Z.xlsx"
+        )
+        XCTAssertNotEqual(firstURL.standardizedFileURL, secondURL.standardizedFileURL)
+        XCTAssertTrue(
+            secondURL.lastPathComponent.hasPrefix(
+                "Atlas-Amendment-Review-snapshot-v1-20260809T184500Z-"
+            )
+        )
+        XCTAssertTrue(secondURL.lastPathComponent.hasSuffix(".xlsx"))
+        let firstData = try Data(contentsOf: firstURL)
+        let secondData = try Data(contentsOf: secondURL)
+        XCTAssertEqual(
+            firstData,
+            secondData,
+            "one immutable snapshot and export instant must produce byte-identical XLSX packages"
+        )
+        try DocumentExportValidator.validate(firstData, as: .xlsx)
+        try DocumentExportValidator.validate(secondData, as: .xlsx)
+
+        let workbook = try await SpreadsheetExtractor().extract(fileURL: firstURL)
+        XCTAssertEqual(workbook.method, "xlsx")
+        XCTAssertEqual(workbook.parts.count, 3)
+        XCTAssertEqual(
+            workbook.parts.map { $0.sheetName ?? "<missing>" },
+            ["Matrix", "Sources", "Project"],
+            "sheet identity must reopen through workbook relationships in fixed presentation order"
+        )
+        XCTAssertEqual(
+            workbook.parts.map { $0.cellRange ?? "<missing>" },
+            ["A1:M4", "A1:N6", "A1:B20"]
+        )
+        try assertSpreadsheetHeader(Self.expectedMatrixHeader, sheet: "Matrix", in: workbook)
+        try assertSpreadsheetHeader(Self.expectedSourcesHeader, sheet: "Sources", in: workbook)
+        try assertSpreadsheetHeader(["Field", "Value"], sheet: "Project", in: workbook)
+
+        try assertSpreadsheetNumber(1, cell: "A2", sheet: "Matrix", in: workbook)
+        try assertSpreadsheetNumber(2, cell: "A3", sheet: "Matrix", in: workbook)
+        try assertSpreadsheetNumber(3, cell: "A4", sheet: "Matrix", in: workbook)
+        try assertSpreadsheetText(
+            "'=HYPERLINK(\"https://evil.invalid\",\"row\")",
+            cell: "B2",
+            sheet: "Matrix",
+            in: workbook
+        )
+        try assertSpreadsheetText(
+            "'+SUM(1,1) · Résumé — 安全",
+            cell: "C2",
+            sheet: "Matrix",
+            in: workbook
+        )
+        assertSpreadsheetBlank(cell: "D2", sheet: "Matrix", in: workbook)
+        try assertSpreadsheetText(
+            "'+SUM(1,1) · Résumé — 安全",
+            cell: "E2",
+            sheet: "Matrix",
+            in: workbook
+        )
+        try assertSpreadsheetText("generated", cell: "F2", sheet: "Matrix", in: workbook)
+        try assertSpreadsheetText("'@cmd", cell: "D3", sheet: "Matrix", in: workbook)
+        try assertSpreadsheetText("'@cmd", cell: "E3", sheet: "Matrix", in: workbook)
+        try assertSpreadsheetText("rent-escalation-cap", cell: "B3", sheet: "Matrix", in: workbook)
+        try assertSpreadsheetText("3%", cell: "C3", sheet: "Matrix", in: workbook)
+        try assertSpreadsheetText("edited", cell: "F3", sheet: "Matrix", in: workbook)
+        try assertSpreadsheetText("needs_review", cell: "G3", sheet: "Matrix", in: workbook)
+        assertSpreadsheetBlank(cell: "H3", sheet: "Matrix", in: workbook)
+        assertSpreadsheetBlank(cell: "I3", sheet: "Matrix", in: workbook)
+        try assertSpreadsheetText("supported", cell: "J3", sheet: "Matrix", in: workbook)
+        try assertSpreadsheetText("'-12 months", cell: "C4", sheet: "Matrix", in: workbook)
+        assertSpreadsheetBlank(cell: "D4", sheet: "Matrix", in: workbook)
+        try assertSpreadsheetText("'-12 months", cell: "E4", sheet: "Matrix", in: workbook)
+        try assertSpreadsheetText(
+            "contrary-only-deleted-source",
+            cell: "B4",
+            sheet: "Matrix",
+            in: workbook
+        )
+        try assertSpreadsheetText("generated", cell: "F4", sheet: "Matrix", in: workbook)
+        try assertSpreadsheetText("needs_review", cell: "G4", sheet: "Matrix", in: workbook)
+        assertSpreadsheetBlank(cell: "H4", sheet: "Matrix", in: workbook)
+        assertSpreadsheetBlank(cell: "I4", sheet: "Matrix", in: workbook)
+        try assertSpreadsheetText("stale", cell: "J4", sheet: "Matrix", in: workbook)
+        for (cell, unsafeDefault) in [
+            ("B2", "=HYPERLINK(\"https://evil.invalid\",\"row\")"),
+            ("C2", "+SUM(1,1) · Résumé — 安全"),
+            ("D3", "@cmd"),
+            ("C4", "-12 months"),
+        ] {
+            XCTAssertNotEqual(
+                try spreadsheetText(cell: cell, sheet: "Matrix", in: workbook),
+                unsafeDefault,
+                "formula-neutralized Matrix cell \(cell) must not retain the active default"
+            )
+        }
+        try assertSpreadsheetText("reviewed", cell: "G2", sheet: "Matrix", in: workbook)
+        try assertSpreadsheetText("Casey Finch", cell: "H2", sheet: "Matrix", in: workbook)
+        try assertSpreadsheetDate(
+            46_243.778_611_111_11,
+            cell: "I2",
+            sheet: "Matrix",
+            in: workbook
+        )
+        try assertSpreadsheetNumber(2, cell: "K2", sheet: "Matrix", in: workbook)
+        try assertSpreadsheetNumber(0, cell: "L2", sheet: "Matrix", in: workbook)
+        try assertSpreadsheetNumber(1, cell: "K3", sheet: "Matrix", in: workbook)
+        try assertSpreadsheetNumber(1, cell: "L3", sheet: "Matrix", in: workbook)
+        try assertSpreadsheetNumber(0, cell: "K4", sheet: "Matrix", in: workbook)
+        try assertSpreadsheetNumber(1, cell: "L4", sheet: "Matrix", in: workbook)
+        try assertSpreadsheetText(
+            "review-cell-atlas-0",
+            cell: "M2",
+            sheet: "Matrix",
+            in: workbook
+        )
+        try assertSpreadsheetText("review-cell-atlas-1", cell: "M3", sheet: "Matrix", in: workbook)
+        try assertSpreadsheetText("review-cell-atlas-2", cell: "M4", sheet: "Matrix", in: workbook)
+
+        let sourceRows: [[String]] = [
+            ["1", "'=HYPERLINK(\"https://evil.invalid\",\"row\")", "supporting", "1", "E1", "Résumé Lease.csv", "p. 1", "available", "", "ALPHA, \"quoted\"\nline\nend.", "review-export-source-e1", liveDocumentID, "review-export-revision", "review-cell-atlas-0"],
+            ["1", "'=HYPERLINK(\"https://evil.invalid\",\"row\")", "supporting", "2", "E2", "Résumé Lease.csv", "p. 2", "available", "", "BETA-SUPPORT-2", "review-export-source-e2", liveDocumentID, "review-export-revision", "review-cell-atlas-0"],
+            ["2", "rent-escalation-cap", "supporting", "1", "S977", "Résumé Lease.csv", "p. 3", "available", "", "SUPPORT-3%", "review-export-source-s977", liveDocumentID, "review-export-revision", "review-cell-atlas-1"],
+            ["2", "rent-escalation-cap", "contrary", "1", "C983", "Résumé Lease.csv", "p. 4", "available", "", "CONTRARY-2.5%", "review-export-source-c983", liveDocumentID, "review-export-revision", "review-cell-atlas-1"],
+            ["3", "contrary-only-deleted-source", "contrary", "1", "C999", "Deleted Schedule.pdf", "p. 9", "unavailable", "source_permanently_deleted", "FROZEN, \"contrary\"\nold\nline.", "deleted-output-source-atlas", "deleted-document-atlas", "deleted-revision-atlas", "review-cell-atlas-2"],
+        ]
+        for (rowOffset, values) in sourceRows.enumerated() {
+            let row = rowOffset + 2
+            XCTAssertEqual(values.count, Self.expectedSourcesHeader.count)
+            try assertSpreadsheetNumber(
+                Double(try XCTUnwrap(Int(values[0]))),
+                cell: "A\(row)",
+                sheet: "Sources",
+                in: workbook
+            )
+            try assertSpreadsheetNumber(
+                Double(try XCTUnwrap(Int(values[3]))),
+                cell: "D\(row)",
+                sheet: "Sources",
+                in: workbook
+            )
+            for columnIndex in values.indices where columnIndex != 0 && columnIndex != 3 {
+                let reference = "\(spreadsheetColumnName(columnIndex))\(row)"
+                if values[columnIndex].isEmpty {
+                    assertSpreadsheetBlank(cell: reference, sheet: "Sources", in: workbook)
+                    continue
+                }
+                let actual = try spreadsheetText(
+                    cell: reference,
+                    sheet: "Sources",
+                    in: workbook
+                )
+                XCTAssertEqual(
+                    normalizeWorkbookLineEndings(actual),
+                    normalizeWorkbookLineEndings(values[columnIndex]),
+                    "Sources row \(row) column \(Self.expectedSourcesHeader[columnIndex]) drifted"
+                )
+            }
+        }
+        let supportExcerpt = try spreadsheetText(cell: "J4", sheet: "Sources", in: workbook)
+        let contraryExcerpt = try spreadsheetText(cell: "J5", sheet: "Sources", in: workbook)
+        XCTAssertFalse(supportExcerpt.contains("CONTRARY-2.5%"))
+        XCTAssertFalse(contraryExcerpt.contains("SUPPORT-3%"))
+
+        for (offset, field) in Self.expectedProjectFields.enumerated() {
+            try assertSpreadsheetText(
+                field,
+                cell: "A\(offset + 2)",
+                sheet: "Project",
+                in: workbook
+            )
+        }
+        try assertSpreadsheetNumber(1, cell: "B2", sheet: "Project", in: workbook)
+        try assertSpreadsheetText(
+            "Atlas Amendment Review",
+            cell: "B3",
+            sheet: "Project",
+            in: workbook
+        )
+        try assertSpreadsheetText("stale", cell: "B4", sheet: "Project", in: workbook)
+        try assertSpreadsheetText(
+            "source_permanently_deleted",
+            cell: "B5",
+            sheet: "Project",
+            in: workbook
+        )
+        for (cell, value) in [
+            ("B6", 1.0),
+            ("B7", 3.0),
+            ("B8", 1.0),
+            ("B9", 2.0),
+            ("B10", 1.0),
+            ("B11", 2.0),
+            ("B12", 3.0),
+            ("B13", 2.0),
+        ] {
+            try assertSpreadsheetNumber(value, cell: cell, sheet: "Project", in: workbook)
+        }
+        try assertSpreadsheetText(
+            "All saved findings (presentation filters ignored)",
+            cell: "B14",
+            sheet: "Project",
+            in: workbook
+        )
+        try assertSpreadsheetText(fixture.primary.id, cell: "B15", sheet: "Project", in: workbook)
+        try assertSpreadsheetText(
+            fixture.primary.sourceRunID,
+            cell: "B16",
+            sheet: "Project",
+            in: workbook
+        )
+        try assertSpreadsheetText(
+            fixture.primary.sourceOutputID,
+            cell: "B17",
+            sheet: "Project",
+            in: workbook
+        )
+        try assertSpreadsheetText(
+            fixture.primary.sourceOutputVersionID,
+            cell: "B18",
+            sheet: "Project",
+            in: workbook
+        )
+        try assertSpreadsheetDate(
+            46_243.729_166_666_664,
+            cell: "B19",
+            sheet: "Project",
+            in: workbook
+        )
+        try assertSpreadsheetDate(
+            46_243.781_25,
+            cell: "B20",
+            sheet: "Project",
+            in: workbook
+        )
+
+        var formulaCells: [String] = []
+        for node in workbook.structure.nodes where node.kind == .cellRange {
+            let payload = try spreadsheetPayload(node)
+            guard payload["semanticKind"] as? String == "cell" else { continue }
+            if payload["formula"] as? String != nil {
+                formulaCells.append(payload["cellRef"] as? String ?? "<missing>")
+            }
+        }
+        XCTAssertTrue(formulaCells.isEmpty, "Review XLSX must contain no formulas: \(formulaCells)")
+        XCTAssertFalse(
+            workbook.combinedText.contains(exportActor),
+            "the completion actor is audit-only and must not become workbook content"
+        )
+
+        let exports = try fixture.store.documentSources.fetchExports(matterID: fixture.matterID)
+        XCTAssertEqual(exports.count, 2)
+        XCTAssertTrue(exports.allSatisfy { $0.format == "review_xlsx" })
+        XCTAssertFalse(exports.contains { $0.format == "review_csv" })
+        XCTAssertTrue(exports.allSatisfy { $0.structuredOutputID == nil })
+        XCTAssertTrue(exports.allSatisfy { $0.structuredOutputVersionID == nil })
+        XCTAssertEqual(
+            Set(exports.map(\.managedRelativePath)),
+            Set([firstURL, secondURL].map {
+                "exports/\(fixture.matterID)/\($0.lastPathComponent)"
+            })
+        )
+        XCTAssertTrue(
+            try fixture.store.documentSources.fetchExports(
+                structuredOutputID: fixture.primary.sourceOutputID
+            ).isEmpty,
+            "Review XLSX must not enter Structured Output export history"
+        )
+        let audits = try fixture.store.auditEvents.fetchEvents(matterID: fixture.matterID)
+            .filter { $0.eventType == "case_file_review_snapshot_exported" }
+        XCTAssertEqual(audits.count, 2)
+        XCTAssertTrue(audits.allSatisfy { $0.actor == exportActor })
+        XCTAssertTrue(audits.allSatisfy {
+            $0.relatedTable == CaseFileReviewProjectRecord.databaseTableName
+                && $0.relatedID == fixture.primary.id
+        })
+        var auditedPaths = Set<String>()
+        for audit in audits {
+            let metadata = try metadataObject(audit)
+            XCTAssertEqual(metadata["format"] as? String, "review_xlsx")
+            XCTAssertEqual(metadata["artifact_sha256"] as? String, sha256(firstData))
+            XCTAssertEqual(metadata["row_count"] as? Int, 3)
+            XCTAssertEqual(metadata["project_id"] as? String, fixture.primary.id)
+            XCTAssertEqual(
+                metadata["snapshot_project_updated_at"] as? Double,
+                fixture.primary.updatedAt.timeIntervalSince1970
+            )
+            XCTAssertEqual(metadata["source_run_id"] as? String, fixture.primary.sourceRunID)
+            XCTAssertEqual(metadata["source_output_id"] as? String, fixture.primary.sourceOutputID)
+            XCTAssertEqual(
+                metadata["source_output_version_id"] as? String,
+                fixture.primary.sourceOutputVersionID
+            )
+            auditedPaths.insert(try XCTUnwrap(metadata["managed_relative_path"] as? String))
+        }
+        XCTAssertEqual(auditedPaths, Set(exports.map(\.managedRelativePath)))
+    }
+
+    func testTRPEXPORT09XLSXReusesCreateOnlyContainedIdentitySafePublication() throws {
+        // T-RP-EXPORT-09 expected RED: there is no XLSX route through the
+        // create-only writer, typed completion format, contained-parent guard,
+        // or inode-and-byte-bound compensation already proven for CSV.
+        try assertXLSXOccupiedBaseCompletionFailurePreservesCanary()
+        try assertXLSXSymlinkedParentFailsClosed()
+        try assertXLSXCompensationPreservesConcurrentReplacement()
+    }
+
+    func testTRPEXPORT10ControllerDelegatesSelectedProjectXLSXWithLocalProfileIdentity() async throws {
+        // T-RP-EXPORT-10 expected RED: the controller exposes CSV only, so the
+        // selected nondefault project and trimmed local profile cannot reach a
+        // zero-argument XLSX snapshot without leaking the newer project.
+        let fixture = try makeFixture(includeNewerWrongProject: true)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let wrong = try XCTUnwrap(fixture.wrong)
+        let exportedAt = try instant("2026-08-09T18:45:00Z")
+        var profile = AssistantProfile()
+        profile.fullName = "  Avery Quinn  \n"
+        try fixture.store.appSettings.setSetting(AssistantProfile.profileKey, value: profile)
+        let controller = CaseFileReviewController(
+            matterID: fixture.matterID,
+            store: fixture.store,
+            previewStorage: fixture.storage,
+            exportService: CaseFileReviewExportService(
+                store: fixture.store,
+                storage: fixture.storage
+            )
+        )
+        controller.load()
+        XCTAssertEqual(controller.selectedProjectID, wrong.id)
+        controller.selectProject(fixture.primary.id)
+        XCTAssertEqual(controller.selectedProjectID, fixture.primary.id)
+
+        let url: URL = try controller.exportSelectedProjectXLSX(at: exportedAt)
+
+        XCTAssertEqual(
+            url.lastPathComponent,
+            "Atlas-Amendment-Review-snapshot-v1-20260809T184500Z.xlsx"
+        )
+        let workbook = try await SpreadsheetExtractor().extract(fileURL: url)
+        XCTAssertEqual(workbook.parts.map { $0.sheetName ?? "<missing>" }, ["Matrix", "Sources", "Project"])
+        try assertSpreadsheetText(fixture.primary.id, cell: "B15", sheet: "Project", in: workbook)
+        try assertSpreadsheetText(
+            fixture.primary.sourceRunID,
+            cell: "B16",
+            sheet: "Project",
+            in: workbook
+        )
+        XCTAssertFalse(workbook.combinedText.contains(wrong.id))
+        XCTAssertFalse(workbook.combinedText.contains(wrong.title))
+        for finding in wrong.findings {
+            XCTAssertFalse(
+                workbook.combinedText.contains(finding),
+                "selected-project XLSX leaked wrong-project finding \(finding)"
+            )
+        }
+        XCTAssertFalse(
+            workbook.combinedText.contains("Avery Quinn"),
+            "the trimmed local-profile actor is audit-only, not workbook content"
+        )
+        let audit = try XCTUnwrap(
+            fixture.store.auditEvents.fetchEvents(matterID: fixture.matterID)
+                .first { $0.eventType == "case_file_review_snapshot_exported" }
+        )
+        XCTAssertEqual(audit.actor, "Avery Quinn")
+        XCTAssertEqual(audit.relatedID, fixture.primary.id)
+        XCTAssertEqual(try metadataObject(audit)["format"] as? String, "review_xlsx")
+    }
+
+    private func assertXLSXOccupiedBaseCompletionFailurePreservesCanary() throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let exportedAt = try instant("2026-08-09T18:45:00Z")
+        let baseDestination = snapshotXLSXDestination(
+            fixture: fixture,
+            exportedAt: exportedAt
+        )
+        try FileManager.default.createDirectory(
+            at: baseDestination.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let canary = Data("PRIOR-REVIEW-XLSX-CANARY-427".utf8)
+        try canary.write(to: baseDestination)
+        var completionCount = 0
+        var installedData: Data?
+        var installedURL: URL?
+        var baseDataDuringCompletion: Data?
+        var capturedCompletion: CaseFileReviewExportService.Completion?
+        let service = CaseFileReviewExportService(
+            store: fixture.store,
+            storage: fixture.storage,
+            completionRecorder: { completion in
+                completionCount += 1
+                capturedCompletion = completion
+                let candidate = fixture.storage.url(
+                    forManagedRelativePath: completion.managedRelativePath
+                )
+                installedURL = candidate
+                let data = try Data(contentsOf: candidate)
+                installedData = data
+                try DocumentExportValidator.validate(data, as: .xlsx)
+                baseDataDuringCompletion = try Data(contentsOf: baseDestination)
+                throw InjectedFailure.stop
+            }
+        )
+
+        XCTAssertThrowsError(
+            try service.exportXLSX(
+                matterID: fixture.matterID,
+                projectID: fixture.primary.id,
+                actor: "XLSX completion failure actor",
+                at: exportedAt
+            )
+        ) { error in
+            guard case CaseFileReviewExportService.ExportError.completionRecordingFailed = error else {
+                return XCTFail("expected compensated XLSX completion failure, got \(error)")
+            }
+        }
+
+        XCTAssertEqual(completionCount, 1)
+        let uniqueDestination = try XCTUnwrap(installedURL)
+        XCTAssertNotEqual(uniqueDestination.standardizedFileURL, baseDestination.standardizedFileURL)
+        XCTAssertEqual(baseDataDuringCompletion, canary)
+        let installedBytes = try XCTUnwrap(installedData)
+        XCTAssertNotEqual(installedBytes, canary)
+        let completion = try XCTUnwrap(capturedCompletion)
+        XCTAssertEqual(completion.format, CaseFileReviewSnapshotExportFormat.xlsx)
+        XCTAssertEqual(completion.matterID, fixture.matterID)
+        XCTAssertEqual(completion.projectID, fixture.primary.id)
+        XCTAssertEqual(
+            completion.managedRelativePath,
+            "exports/\(fixture.matterID)/\(uniqueDestination.lastPathComponent)"
+        )
+        XCTAssertEqual(completion.artifactSHA256, sha256(installedBytes))
+        XCTAssertEqual(completion.snapshotProjectUpdatedAt, fixture.primary.updatedAt)
+        XCTAssertEqual(completion.rowCount, 3)
+        XCTAssertEqual(completion.actor, "XLSX completion failure actor")
+        XCTAssertEqual(completion.exportedAt, exportedAt)
+        XCTAssertEqual(try Data(contentsOf: baseDestination), canary)
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: uniqueDestination.path),
+            "failed XLSX completion must remove only its unique owned install"
+        )
+        XCTAssertTrue(try fixture.store.documentSources.fetchExports(matterID: fixture.matterID).isEmpty)
+        XCTAssertFalse(
+            try fixture.store.auditEvents.fetchEvents(matterID: fixture.matterID).contains {
+                $0.eventType == "case_file_review_snapshot_exported"
+            }
+        )
+    }
+
+    private func assertXLSXSymlinkedParentFailsClosed() throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let exportedAt = try instant("2026-08-09T18:45:00Z")
+        let outside = fixture.root.appendingPathComponent(
+            "outside-review-xlsx-target-619",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: fixture.storage.root,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createSymbolicLink(
+            at: fixture.storage.exportsDirectory,
+            withDestinationURL: outside
+        )
+        var completionCount = 0
+        let service = CaseFileReviewExportService(
+            store: fixture.store,
+            storage: fixture.storage,
+            completionRecorder: { _ in completionCount += 1 }
+        )
+
+        XCTAssertThrowsError(
+            try service.exportXLSX(
+                matterID: fixture.matterID,
+                projectID: fixture.primary.id,
+                actor: "XLSX symlink rejection actor",
+                at: exportedAt
+            )
+        )
+
+        XCTAssertEqual(completionCount, 0)
+        XCTAssertTrue(
+            try FileManager.default.contentsOfDirectory(
+                at: outside,
+                includingPropertiesForKeys: nil
+            ).isEmpty,
+            "a symlinked managed parent must receive no XLSX or temporary bytes"
+        )
+        XCTAssertTrue(try fixture.store.documentSources.fetchExports(matterID: fixture.matterID).isEmpty)
+        XCTAssertFalse(
+            try fixture.store.auditEvents.fetchEvents(matterID: fixture.matterID).contains {
+                $0.eventType == "case_file_review_snapshot_exported"
+            }
+        )
+    }
+
+    private func assertXLSXCompensationPreservesConcurrentReplacement() throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let exportedAt = try instant("2026-08-09T18:45:00Z")
+        let replacement = Data("CONCURRENT-REVIEW-XLSX-REPLACEMENT-883".utf8)
+        let identityProbe = DurableFileWriter()
+        var completionCount = 0
+        var replacementURL: URL?
+        var installedIdentity: DurableFileWriter.InstalledFileIdentity?
+        var replacementIdentity: DurableFileWriter.InstalledFileIdentity?
+        var capturedCompletion: CaseFileReviewExportService.Completion?
+        let service = CaseFileReviewExportService(
+            store: fixture.store,
+            storage: fixture.storage,
+            completionRecorder: { completion in
+                completionCount += 1
+                capturedCompletion = completion
+                let url = fixture.storage.url(
+                    forManagedRelativePath: completion.managedRelativePath
+                )
+                replacementURL = url
+                let installedData = try Data(contentsOf: url)
+                try DocumentExportValidator.validate(installedData, as: .xlsx)
+                installedIdentity = try identityProbe.installedFileIdentity(at: url)
+                try FileManager.default.removeItem(at: url)
+                try replacement.write(to: url)
+                replacementIdentity = try identityProbe.installedFileIdentity(at: url)
+                throw InjectedFailure.stop
+            }
+        )
+
+        XCTAssertThrowsError(
+            try service.exportXLSX(
+                matterID: fixture.matterID,
+                projectID: fixture.primary.id,
+                actor: "XLSX concurrent replacement actor",
+                at: exportedAt
+            )
+        ) { error in
+            guard case CaseFileReviewExportService.ExportError.partialFailure = error else {
+                return XCTFail("a changed XLSX destination must surface partial failure, got \(error)")
+            }
+        }
+
+        XCTAssertEqual(completionCount, 1)
+        XCTAssertEqual(
+            try XCTUnwrap(capturedCompletion).format,
+            CaseFileReviewSnapshotExportFormat.xlsx
+        )
+        let original = try XCTUnwrap(installedIdentity)
+        let concurrent = try XCTUnwrap(replacementIdentity)
+        XCTAssertNotEqual(original, concurrent)
+        let url = try XCTUnwrap(replacementURL)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
+        XCTAssertEqual(try Data(contentsOf: url), replacement)
+        XCTAssertTrue(try fixture.store.documentSources.fetchExports(matterID: fixture.matterID).isEmpty)
+        XCTAssertFalse(
+            try fixture.store.auditEvents.fetchEvents(matterID: fixture.matterID).contains {
+                $0.eventType == "case_file_review_snapshot_exported"
+            }
+        )
+    }
+
     // MARK: - Fixture
 
     private func makeFixture(includeNewerWrongProject: Bool = false) throws -> ExportFixture {
@@ -919,6 +1572,201 @@ final class CaseFileReviewExportServiceTests: XCTestCase {
             )
     }
 
+    private func snapshotXLSXDestination(fixture: ExportFixture, exportedAt: Date) -> URL {
+        fixture.storage.exportsDirectory(forMatterID: fixture.matterID)
+            .appendingPathComponent(
+                "Atlas-Amendment-Review-snapshot-v1-\(filenameStamp(exportedAt)).xlsx"
+            )
+    }
+
+    private func assertSpreadsheetHeader(
+        _ expected: [String],
+        sheet: String,
+        in workbook: ExtractionResult,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) throws {
+        for (index, value) in expected.enumerated() {
+            try assertSpreadsheetText(
+                value,
+                cell: "\(spreadsheetColumnName(index))1",
+                sheet: sheet,
+                in: workbook,
+                file: file,
+                line: line
+            )
+        }
+    }
+
+    private func assertSpreadsheetText(
+        _ expected: String,
+        cell reference: String,
+        sheet: String,
+        in workbook: ExtractionResult,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) throws {
+        let node = try spreadsheetCell(reference, sheet: sheet, in: workbook)
+        let payload = try spreadsheetPayload(node)
+        XCTAssertEqual(payload["cellType"] as? String, "string", file: file, line: line)
+        XCTAssertNil(payload["formula"] as? String, file: file, line: line)
+        XCTAssertEqual(
+            try resolvedSpreadsheetText(node, in: workbook),
+            expected,
+            "unexpected value at \(sheet)!\(reference)",
+            file: file,
+            line: line
+        )
+    }
+
+    private func spreadsheetText(
+        cell reference: String,
+        sheet: String,
+        in workbook: ExtractionResult
+    ) throws -> String {
+        let node = try spreadsheetCell(reference, sheet: sheet, in: workbook)
+        let payload = try spreadsheetPayload(node)
+        XCTAssertEqual(payload["cellType"] as? String, "string")
+        XCTAssertNil(payload["formula"] as? String)
+        return try resolvedSpreadsheetText(node, in: workbook)
+    }
+
+    private func assertSpreadsheetBlank(
+        cell reference: String,
+        sheet: String,
+        in workbook: ExtractionResult,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let hasExtractedValue = workbook.structure.nodes.contains { node in
+            guard node.kind == .cellRange,
+                  let payload = spreadsheetPayloadIfPresent(node) else { return false }
+            return payload["semanticKind"] as? String == "cell"
+                && payload["cellRef"] as? String == reference
+                && payload["sheetName"] as? String == sheet
+        }
+        XCTAssertFalse(
+            hasExtractedValue,
+            "expected blank cell at \(sheet)!\(reference)",
+            file: file,
+            line: line
+        )
+    }
+
+    private func assertSpreadsheetNumber(
+        _ expected: Double,
+        cell reference: String,
+        sheet: String,
+        in workbook: ExtractionResult,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) throws {
+        let node = try spreadsheetCell(reference, sheet: sheet, in: workbook)
+        let payload = try spreadsheetPayload(node)
+        XCTAssertEqual(payload["cellType"] as? String, "number", file: file, line: line)
+        XCTAssertNil(payload["formula"] as? String, file: file, line: line)
+        let raw = try XCTUnwrap(
+            (payload["rawValue"] as? String).flatMap(Double.init),
+            "missing numeric value at \(sheet)!\(reference)",
+            file: file,
+            line: line
+        )
+        XCTAssertEqual(raw, expected, accuracy: 0.000_000_001, file: file, line: line)
+    }
+
+    private func assertSpreadsheetDate(
+        _ expected: Double,
+        cell reference: String,
+        sheet: String,
+        in workbook: ExtractionResult,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) throws {
+        let node = try spreadsheetCell(reference, sheet: sheet, in: workbook)
+        let payload = try spreadsheetPayload(node)
+        XCTAssertEqual(payload["cellType"] as? String, "date_serial", file: file, line: line)
+        XCTAssertNil(payload["formula"] as? String, file: file, line: line)
+        XCTAssertGreaterThan(payload["numberFormatId"] as? Int ?? 0, 0, file: file, line: line)
+        let raw = try XCTUnwrap(
+            (payload["rawValue"] as? String).flatMap(Double.init),
+            "missing date serial at \(sheet)!\(reference)",
+            file: file,
+            line: line
+        )
+        XCTAssertEqual(raw, expected, accuracy: 0.000_000_001, file: file, line: line)
+    }
+
+    private func spreadsheetCell(
+        _ reference: String,
+        sheet: String,
+        in workbook: ExtractionResult,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) throws -> ExtractedStructureNode {
+        try XCTUnwrap(
+            workbook.structure.nodes.first { node in
+                guard node.kind == .cellRange,
+                      let payload = spreadsheetPayloadIfPresent(node) else { return false }
+                return payload["semanticKind"] as? String == "cell"
+                    && payload["cellRef"] as? String == reference
+                    && payload["sheetName"] as? String == sheet
+            },
+            "missing cell \(sheet)!\(reference)",
+            file: file,
+            line: line
+        )
+    }
+
+    private func spreadsheetPayload(_ node: ExtractedStructureNode) throws -> [String: Any] {
+        let json = try XCTUnwrap(node.payloadJSON, "spreadsheet node has no payload")
+        let object = try JSONSerialization.jsonObject(with: Data(json.utf8))
+        return try XCTUnwrap(object as? [String: Any], "spreadsheet payload is not an object")
+    }
+
+    private func spreadsheetPayloadIfPresent(_ node: ExtractedStructureNode) -> [String: Any]? {
+        guard let json = node.payloadJSON,
+              let object = try? JSONSerialization.jsonObject(with: Data(json.utf8)) else {
+            return nil
+        }
+        return object as? [String: Any]
+    }
+
+    private func resolvedSpreadsheetText(
+        _ node: ExtractedStructureNode,
+        in workbook: ExtractionResult
+    ) throws -> String {
+        if let textContent = node.textContent { return textContent }
+        let start = try XCTUnwrap(node.charStart)
+        let end = try XCTUnwrap(node.charEnd)
+        guard workbook.parts.indices.contains(node.partIndex),
+              start >= 0,
+              end >= start else {
+            throw WorkbookFixtureError.invalidCellTextRange
+        }
+        let text = workbook.parts[node.partIndex].text
+        guard end <= text.count else { throw WorkbookFixtureError.invalidCellTextRange }
+        let lower = text.index(text.startIndex, offsetBy: start)
+        let upper = text.index(text.startIndex, offsetBy: end)
+        return String(text[lower..<upper])
+    }
+
+    private func spreadsheetColumnName(_ index: Int) -> String {
+        var remaining = index
+        var result = ""
+        repeat {
+            let scalar = UnicodeScalar(UInt8(65 + remaining % 26))
+            result = String(Character(scalar)) + result
+            remaining = remaining / 26 - 1
+        } while remaining >= 0
+        return result
+    }
+
+    private func normalizeWorkbookLineEndings(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+    }
+
     private func assertProfessionalCSVBytes(
         _ data: Data,
         file: StaticString = #filePath,
@@ -1100,6 +1948,10 @@ private enum CSVFixtureError: Error {
     case strayQuote
     case bareNewline
     case unterminatedQuote
+}
+
+private enum WorkbookFixtureError: Error {
+    case invalidCellTextRange
 }
 
 private extension Collection {

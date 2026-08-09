@@ -1529,6 +1529,162 @@ final class CaseFileReviewProjectTests: XCTestCase {
         ).isEmpty)
     }
 
+    func testTRPXSTORE04ReviewXLSXCompletionRecordsExactFormatPathAndAudit() throws {
+        // T-RPX-STORE-04 expected RED: Review completion is hard-coded to
+        // `review_csv` and `.csv`, so the same project-owned transaction cannot
+        // truthfully record an XLSX snapshot without loosening its path boundary.
+        let store = try SupraStore.inMemory()
+        let fixture = try makeExactFixture(
+            store: store,
+            marker: "1783",
+            assuranceState: .corpusIncomplete
+        )
+        let graph = try store.caseFileReviews.createOrFetchProject(
+            matterID: fixture.matterID,
+            sourceRunID: fixture.runID,
+            title: "Workbook Snapshot Review 1783",
+            actor: "attorney:create-1783",
+            at: Date(timeIntervalSince1970: 1_799_001_783)
+        )
+        let snapshot = try store.caseFileReviews.fetchSnapshot(
+            matterID: fixture.matterID,
+            projectID: graph.project.id
+        )
+        let exportID = "review-export-xlsx-1783-nondefault"
+        let relativePath = "exports/\(fixture.matterID)/Review-1783-\(graph.project.id).xlsx"
+        let artifactSHA256 = sha256("REVIEW-XLSX-BYTES-1783-NONDEFAULT")
+        let exportedAt = Date(timeIntervalSince1970: 1_799_001_789)
+
+        let export = try store.caseFileReviews.recordSnapshotExportCompletion(
+            matterID: fixture.matterID,
+            projectID: graph.project.id,
+            exportID: exportID,
+            format: .xlsx,
+            managedRelativePath: relativePath,
+            artifactSHA256: artifactSHA256,
+            snapshotUpdatedAt: snapshot.project.updatedAt,
+            rowCount: snapshot.rows.count,
+            actor: "attorney:export-xlsx-1783",
+            at: exportedAt
+        )
+
+        XCTAssertEqual(export.id, exportID)
+        XCTAssertEqual(export.format, "review_xlsx")
+        XCTAssertNotEqual(export.format, "review_csv")
+        XCTAssertNil(export.structuredOutputID)
+        XCTAssertNil(export.structuredOutputVersionID)
+        XCTAssertEqual(export.managedRelativePath, relativePath)
+        XCTAssertEqual(export.createdAt, exportedAt)
+        XCTAssertTrue(
+            try store.documentSources.fetchExports(structuredOutputID: fixture.outputID).isEmpty,
+            "Review XLSX must remain outside Structured Output export history"
+        )
+
+        let audits = try store.auditEvents.fetchEvents(
+            relatedTable: CaseFileReviewProjectRecord.databaseTableName,
+            relatedID: graph.project.id,
+            eventType: "case_file_review_snapshot_exported"
+        )
+        XCTAssertEqual(audits.count, 1)
+        let audit = try XCTUnwrap(audits.first)
+        XCTAssertEqual(audit.actor, "attorney:export-xlsx-1783")
+        XCTAssertEqual(audit.summary, "Exported a Case File Review snapshot as XLSX.")
+        let metadata = try jsonObject(try XCTUnwrap(audit.metadataJSON))
+        XCTAssertEqual(metadata["format"] as? String, "review_xlsx")
+        XCTAssertEqual(metadata["managed_relative_path"] as? String, relativePath)
+        XCTAssertEqual(metadata["artifact_sha256"] as? String, artifactSHA256)
+        XCTAssertEqual(metadata["row_count"] as? Int, snapshot.rows.count)
+        XCTAssertEqual(metadata["source_run_id"] as? String, fixture.runID)
+        XCTAssertEqual(metadata["source_output_id"] as? String, fixture.outputID)
+        XCTAssertEqual(metadata["source_output_version_id"] as? String, fixture.versionID)
+    }
+
+    func testTRPXSTORE05ReviewSnapshotFormatExtensionMismatchAndAuditFailureRollback() throws {
+        // T-RPX-STORE-05 expected RED: there is no typed Review export-format
+        // allowlist, so Store cannot prove that `review_xlsx` is paired only
+        // with a lowercase `.xlsx` path or roll back its exact audit failure.
+        let store = try SupraStore.inMemory()
+        let fixture = try makeExactFixture(
+            store: store,
+            marker: "1793",
+            assuranceState: .corpusIncomplete
+        )
+        let graph = try store.caseFileReviews.createOrFetchProject(
+            matterID: fixture.matterID,
+            sourceRunID: fixture.runID,
+            title: "Format Pair Review 1793",
+            actor: "attorney:create-1793",
+            at: Date(timeIntervalSince1970: 1_799_001_793)
+        )
+        let snapshot = try store.caseFileReviews.fetchSnapshot(
+            matterID: fixture.matterID,
+            projectID: graph.project.id
+        )
+        let artifactSHA256 = sha256("REVIEW-XLSX-BYTES-1793-NONDEFAULT")
+        let prefix = "exports/\(fixture.matterID)/Review-1793-\(graph.project.id)"
+
+        XCTAssertThrowsError(try store.caseFileReviews.recordSnapshotExportCompletion(
+            matterID: fixture.matterID,
+            projectID: graph.project.id,
+            exportID: "review-export-1793-xlsx-as-csv",
+            format: .xlsx,
+            managedRelativePath: "\(prefix).csv",
+            artifactSHA256: artifactSHA256,
+            snapshotUpdatedAt: snapshot.project.updatedAt,
+            rowCount: snapshot.rows.count,
+            actor: "attorney:mismatch-xlsx-1793"
+        ))
+        XCTAssertThrowsError(try store.caseFileReviews.recordSnapshotExportCompletion(
+            matterID: fixture.matterID,
+            projectID: graph.project.id,
+            exportID: "review-export-1793-csv-as-xlsx",
+            format: .csv,
+            managedRelativePath: "\(prefix).xlsx",
+            artifactSHA256: artifactSHA256,
+            snapshotUpdatedAt: snapshot.project.updatedAt,
+            rowCount: snapshot.rows.count,
+            actor: "attorney:mismatch-csv-1793"
+        ))
+        XCTAssertThrowsError(try store.caseFileReviews.recordSnapshotExportCompletion(
+            matterID: fixture.matterID,
+            projectID: graph.project.id,
+            exportID: "review-export-1793-uppercase-extension",
+            format: .xlsx,
+            managedRelativePath: "\(prefix).XLSX",
+            artifactSHA256: artifactSHA256,
+            snapshotUpdatedAt: snapshot.project.updatedAt,
+            rowCount: snapshot.rows.count,
+            actor: "attorney:uppercase-1793"
+        ))
+
+        try store.database.writer.write { db in
+            try db.execute(sql: """
+                CREATE TRIGGER fail_review_xlsx_snapshot_audit
+                BEFORE INSERT ON audit_events
+                WHEN NEW.event_type = 'case_file_review_snapshot_exported'
+                BEGIN SELECT RAISE(ABORT, 'synthetic Review XLSX audit failure'); END
+                """)
+        }
+        XCTAssertThrowsError(try store.caseFileReviews.recordSnapshotExportCompletion(
+            matterID: fixture.matterID,
+            projectID: graph.project.id,
+            exportID: "review-export-1793-audit-failure",
+            format: .xlsx,
+            managedRelativePath: "\(prefix).xlsx",
+            artifactSHA256: artifactSHA256,
+            snapshotUpdatedAt: snapshot.project.updatedAt,
+            rowCount: snapshot.rows.count,
+            actor: "attorney:audit-failure-1793"
+        ))
+
+        XCTAssertTrue(try store.documentSources.fetchExports(matterID: fixture.matterID).isEmpty)
+        XCTAssertTrue(try store.auditEvents.fetchEvents(
+            relatedTable: CaseFileReviewProjectRecord.databaseTableName,
+            relatedID: graph.project.id,
+            eventType: "case_file_review_snapshot_exported"
+        ).isEmpty)
+    }
+
     private let reviewTables = [
         "case_file_review_projects", "case_file_review_tables", "case_file_review_columns",
         "case_file_review_rows", "case_file_review_cells", "case_file_review_cell_generations",

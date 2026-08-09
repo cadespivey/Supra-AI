@@ -1284,11 +1284,10 @@ final class CaseFileReviewHostedUITests: XCTestCase {
     }
 
     func testTRPUI19DirtyDraftAndFilteredMinimumWidthExportFullSavedSnapshot() throws {
-        // T-RP-UI-19 expected RED: Review has no `review.export` control or
-        // selected-project CSV action. Consequently an empty or nonempty dirty
-        // value draft cannot explicitly block export, Sources can expose no
-        // minimum-width export geometry, and the exact non-default destination
-        // receives no full-project snapshot after a one-row filter is active.
+        // T-RP-UI-19 expected RED: the existing Review Export menu publishes its
+        // full saved snapshot only as CSV. `review.export.xlsx` never appears, so
+        // the same filtered, Sources-open, minimum-width workflow cannot publish
+        // one XLSX workbook into the exact non-default managed destination.
         let exportRoot = appSandboxWritableReviewExportRoot()
         XCTAssertFalse(
             FileManager.default.fileExists(atPath: exportRoot.path),
@@ -1452,6 +1451,68 @@ final class CaseFileReviewHostedUITests: XCTestCase {
         XCTAssertFalse(
             csv.contains(Fixture.exportUnsavedCanary),
             "The discarded attorney draft must never leak into the persisted CSV snapshot"
+        )
+
+        export.click()
+        let xlsxAction = app.descendants(matching: .any)["review.export.xlsx"]
+        XCTAssertTrue(
+            xlsxAction.waitForExistence(timeout: 5),
+            "Export needs one stable XLSX — Matrix, Sources, Project sheets menu action"
+        )
+        xlsxAction.click()
+
+        let xlsxFiles = waitForXLSXFiles(count: 1, beneath: exportRoot, timeout: 10)
+        XCTAssertEqual(
+            xlsxFiles.count,
+            1,
+            "One XLSX action must durably publish exactly one regular workbook"
+        )
+        XCTAssertEqual(
+            regularCSVFiles(beneath: exportRoot).count,
+            1,
+            "XLSX export must not republish or replace the one prior CSV artifact"
+        )
+        let xlsxURL = try XCTUnwrap(xlsxFiles.first)
+        let xlsxData = try Data(contentsOf: xlsxURL)
+        XCTAssertEqual(
+            Array(xlsxData.prefix(4)),
+            [0x50, 0x4B, 0x03, 0x04],
+            "The managed XLSX artifact must begin with one ZIP local-file header"
+        )
+        for entryName in [
+            "[Content_Types].xml",
+            "_rels/.rels",
+            "xl/workbook.xml",
+            "xl/_rels/workbook.xml.rels",
+            "xl/worksheets/sheet1.xml",
+            "xl/worksheets/sheet2.xml",
+            "xl/worksheets/sheet3.xml",
+        ] {
+            XCTAssertNotNil(
+                xlsxData.range(of: Data(entryName.utf8)),
+                "The XLSX ZIP directory is missing core OOXML entry \(entryName)"
+            )
+        }
+        let decodedXML = try decodedWorkbookXMLBytes(at: xlsxURL)
+        XCTAssertFalse(
+            decodedXML.isEmpty,
+            "The XLSX artifact must contain decoded workbook XML"
+        )
+        for canary in [
+            Fixture.alphaFinding,
+            Fixture.betaFinding,
+            "Atlas Payment Schedule.txt",
+            "Atlas Renewal Clause.txt",
+            "Atlas Amendment.txt",
+        ] {
+            XCTAssertNotNil(
+                decodedXML.range(of: Data(canary.utf8)),
+                "The full persisted Review workbook is missing exact canary \(canary)"
+            )
+        }
+        XCTAssertNil(
+            decodedXML.range(of: Data(Fixture.exportUnsavedCanary.utf8)),
+            "The discarded attorney draft must never leak into decoded XLSX XML"
         )
     }
 
@@ -2057,6 +2118,93 @@ final class CaseFileReviewHostedUITests: XCTestCase {
             files = regularCSVFiles(beneath: root)
         }
         return files
+    }
+
+    private func regularXLSXFiles(beneath root: URL) -> [URL] {
+        guard let enumerator = FileManager.default.enumerator(
+            at: root,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: []
+        ) else {
+            return []
+        }
+        var files: [URL] = []
+        for case let url as URL in enumerator where url.pathExtension.lowercased() == "xlsx" {
+            guard (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else {
+                continue
+            }
+            files.append(url)
+        }
+        return files.sorted { $0.path < $1.path }
+    }
+
+    private func waitForXLSXFiles(
+        count: Int,
+        beneath root: URL,
+        timeout: TimeInterval
+    ) -> [URL] {
+        let deadline = Date().addingTimeInterval(timeout)
+        var files = regularXLSXFiles(beneath: root)
+        while files.count != count, Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+            files = regularXLSXFiles(beneath: root)
+        }
+        return files
+    }
+
+    private func decodedWorkbookXMLBytes(at workbookURL: URL) throws -> Data {
+        let listing = try unzip(arguments: ["-Z1", workbookURL.path])
+        let entries = String(decoding: listing, as: UTF8.self)
+            .split(whereSeparator: \.isNewline)
+            .map(String.init)
+            .filter { $0.hasSuffix(".xml") || $0.hasSuffix(".rels") }
+        if entries.isEmpty {
+            throw NSError(
+                domain: "CaseFileReviewUITests.XLSX",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "The workbook contains no XML entries."]
+            )
+        }
+
+        var decoded = Data()
+        for entry in entries {
+            let bytes = try unzip(arguments: ["-p", workbookURL.path, entry])
+            if bytes.isEmpty {
+                throw NSError(
+                    domain: "CaseFileReviewUITests.XLSX",
+                    code: 2,
+                    userInfo: [
+                        NSLocalizedDescriptionKey: "The workbook XML entry \(entry) is empty."
+                    ]
+                )
+            }
+            decoded.append(bytes)
+        }
+        return decoded
+    }
+
+    private func unzip(arguments: [String]) throws -> Data {
+        let process = Process()
+        let outputPipe = Pipe()
+        let errorPipe = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
+        process.arguments = arguments
+        process.standardOutput = outputPipe
+        process.standardError = errorPipe
+        try process.run()
+        let output = outputPipe.fileHandleForReading.readDataToEndOfFile()
+        let error = errorPipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        if process.terminationStatus != 0 {
+            throw NSError(
+                domain: "CaseFileReviewUITests.XLSX",
+                code: Int(process.terminationStatus),
+                userInfo: [
+                    NSLocalizedDescriptionKey: String(decoding: error, as: UTF8.self)
+                ]
+            )
+        }
+        return output
     }
 
     private func waitForEnabled(
@@ -2779,10 +2927,10 @@ final class CaseFileReviewCompositionUITests: XCTestCase {
     }
 
     func testTRPUI20FullSnapshotExportUsesPermanentLedgerStrip() throws {
-        // T-RP-UI-20 expected RED: the Review source has no control-strip Export
-        // menu, selected-project controller call, truthful all-saved-findings
-        // copy, dirty-state accessibility branch, or doubly authorized UI-test
-        // seams for the throwaway root and Finder suppression.
+        // T-RP-UI-20 expected RED: the existing permanent Export menu has only a
+        // CSV route. It lacks the XLSX copy and accessibility identity, the
+        // selected-project XLSX controller call, and one shared format handler
+        // that owns Finder reveal and the native error path for both formats.
         let review = try caseFileReviewSource()
         let environment = try appSource(relativePath: "SupraAI/AppEnvironment.swift")
         let reviewActions = try declarationSource(
@@ -2822,9 +2970,9 @@ final class CaseFileReviewCompositionUITests: XCTestCase {
             1,
             "The native control must retain the literal Export label and standard macOS symbol"
         )
-        XCTAssertTrue(exportControl.contains("Menu"), "CSV must enter an XLSX-extensible format menu")
+        XCTAssertTrue(exportControl.contains("Menu"), "Review formats belong in one native menu")
 
-        for identifier in ["review.export", "review.export.csv"] {
+        for identifier in ["review.export", "review.export.csv", "review.export.xlsx"] {
             XCTAssertTrue(
                 exportControl.contains(".accessibilityIdentifier(\"\(identifier)\")"),
                 "missing exact Review export accessibility identifier \(identifier)"
@@ -2832,6 +2980,8 @@ final class CaseFileReviewCompositionUITests: XCTestCase {
         }
         for literal in [
             "CSV — all saved findings",
+            "XLSX — Matrix, Sources, Project sheets",
+            "Export all saved findings and recorded sources as CSV or XLSX",
             "Export all saved findings and recorded sources, regardless of the current filter.",
             "Export Review snapshot, available",
             "Export Review snapshot unavailable while a value edit is unsaved",
@@ -2842,9 +2992,26 @@ final class CaseFileReviewCompositionUITests: XCTestCase {
                 "Review export is missing exact user-facing copy: \(literal)"
             )
         }
-        XCTAssertTrue(
-            exportControl.contains("valueEditorIsDirty"),
-            "empty and nonempty dirty value drafts must share one Export-unavailable predicate"
+        XCTAssertFalse(
+            exportControl.contains(
+                ".accessibilityHint(\"Export all saved findings and recorded sources as CSV\")"
+            ),
+            "The available Export hint must not continue announcing a CSV-only menu"
+        )
+        XCTAssertEqual(
+            occurrenceCount(of: "valueEditorIsDirty", in: exportControl),
+            1,
+            "one dirty-value predicate must gate the complete CSV and XLSX menu"
+        )
+        XCTAssertEqual(
+            occurrenceCount(of: "exportReviewSnapshot(", in: exportControl),
+            2,
+            "both format actions must enter the same Review export handler"
+        )
+        XCTAssertEqual(
+            occurrenceCount(of: "private func exportReviewSnapshot", in: review),
+            1,
+            "Review must keep one shared success and failure path for every format"
         )
         XCTAssertTrue(
             review.contains("Couldn’t export Review snapshot"),
@@ -2853,7 +3020,11 @@ final class CaseFileReviewCompositionUITests: XCTestCase {
 
         XCTAssertTrue(
             exportAction.contains("try controller.exportSelectedProjectCSV()"),
-            "the view must delegate one zero-argument selected-project snapshot to its controller"
+            "the shared handler must delegate the CSV selected-project snapshot"
+        )
+        XCTAssertTrue(
+            exportAction.contains("try controller.exportSelectedProjectXLSX()"),
+            "the shared handler must delegate the XLSX selected-project snapshot"
         )
         XCTAssertFalse(
             exportAction.contains("filteredRows") || exportAction.contains("activeFilter"),
@@ -2866,6 +3037,11 @@ final class CaseFileReviewCompositionUITests: XCTestCase {
             ),
             1,
             "a completed managed export must reveal its exact artifact once"
+        )
+        XCTAssertEqual(
+            occurrenceCount(of: "exportError = error.localizedDescription", in: exportAction),
+            1,
+            "CSV and XLSX failures must share one native Review export error path"
         )
         XCTAssertEqual(
             try matchCount(
