@@ -572,6 +572,29 @@ else
   record_failure 'app smoke does not execute the corpus review queue composition guard'
 fi
 
+# T-RP-CI-01 expected RED: the verified Review workflow claim names app-smoke,
+# but that protected command does not select the progress/filter, guarded
+# navigation, failed-navigation recovery, or minimum-width Sources gates.
+review_workflow_selectors=(
+  '-only-testing:SupraAIUITests/CaseFileReviewCompositionUITests/testTRPUI13WorkflowControlsPinAccessibleFiltersProgressAndGuardedNavigation'
+  '-only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPUI14ProgressAndAttentionFiltersReconcileHiddenSourcesAndExplicitEmptyState'
+  '-only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPUI15DirtyDraftCancelKeepsProjectAndDiscardSwitchesWithoutCrossProjectLeak'
+  '-only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPUI16FailedProjectSwitchRetainsExactDraftForResume'
+  '-only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPUI17FailedOpenReviewRetainsExactDraftForResume'
+  '-only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPUI18MinimumWidthSourcesKeepsProgressAndCompactFilterUsable'
+)
+review_workflow_missing=0
+for selector in "${review_workflow_selectors[@]}"; do
+  if ! grep -Fq -- "$selector" "$app_smoke_script"; then
+    review_workflow_missing=1
+  fi
+done
+if (( review_workflow_missing == 0 )); then
+  printf '%s\n' 'PASS: app smoke executes the claimed Review workflow guards'
+else
+  record_failure 'app smoke does not execute every claimed Review workflow guard'
+fi
+
 # The deterministic guided-Q&A runtime and model fixture are test authority, not
 # ordinary launch flags. They must require the hermetic XCUITest launch and keep
 # their artifacts out of the user's managed model directory.
