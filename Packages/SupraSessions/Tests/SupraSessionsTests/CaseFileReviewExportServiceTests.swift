@@ -235,22 +235,25 @@ final class CaseFileReviewExportServiceTests: XCTestCase {
         )
     }
 
-    func testTRPEXPORT03CompletionFailureRestoresCanaryAndExposesExactCompletionEnvelope() throws {
-        // T-RP-EXPORT-03 expected RED: there is no completion recorder carrying
-        // the installed artifact identity, and no compensation path can restore
-        // a prior managed CSV after completion recording fails.
+    func testTRPEXPORT03CompletionFailurePreservesBaseCanaryAndRemovesOnlyUniqueInstall() throws {
+        // T-RP-EXPORT-03 hardening RED: the replacement writer installs over
+        // the occupied base name before completion, then restores those bytes;
+        // a Review snapshot must instead publish create-only at a unique path
+        // and compensate only that newly installed artifact.
         let fixture = try makeFixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         let exportedAt = try instant("2026-08-09T18:45:00Z")
-        let destination = snapshotDestination(fixture: fixture, exportedAt: exportedAt)
+        let baseDestination = snapshotDestination(fixture: fixture, exportedAt: exportedAt)
         try FileManager.default.createDirectory(
-            at: destination.deletingLastPathComponent(),
+            at: baseDestination.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
         let canary = Data("PRIOR-REVIEW-SNAPSHOT-CANARY-947".utf8)
-        try canary.write(to: destination)
+        try canary.write(to: baseDestination)
         var completionCount = 0
         var installedData: Data?
+        var installedURL: URL?
+        var baseDataDuringCompletion: Data?
         var capturedCompletion: CaseFileReviewExportService.Completion?
         let service = CaseFileReviewExportService(
             store: fixture.store,
@@ -258,7 +261,12 @@ final class CaseFileReviewExportServiceTests: XCTestCase {
             completionRecorder: { completion in
                 completionCount += 1
                 capturedCompletion = completion
-                installedData = try Data(contentsOf: destination)
+                let candidate = fixture.storage.url(
+                    forManagedRelativePath: completion.managedRelativePath
+                )
+                installedURL = candidate
+                installedData = try Data(contentsOf: candidate)
+                baseDataDuringCompletion = try Data(contentsOf: baseDestination)
                 throw InjectedFailure.stop
             }
         )
@@ -273,6 +281,17 @@ final class CaseFileReviewExportServiceTests: XCTestCase {
         )
 
         XCTAssertEqual(completionCount, 1, "the throwing completion seam must be observed")
+        let uniqueDestination: URL = try XCTUnwrap(installedURL)
+        XCTAssertNotEqual(
+            uniqueDestination.standardizedFileURL,
+            baseDestination.standardizedFileURL,
+            "an occupied base name must never be replaced, even transiently"
+        )
+        XCTAssertEqual(
+            baseDataDuringCompletion,
+            canary,
+            "completion must observe the preexisting base artifact untouched"
+        )
         let installedBytes: Data = try XCTUnwrap(installedData)
         XCTAssertNotEqual(installedBytes, canary, "completion must observe the newly installed CSV")
         let completion: CaseFileReviewExportService.Completion = try XCTUnwrap(capturedCompletion)
@@ -281,14 +300,18 @@ final class CaseFileReviewExportServiceTests: XCTestCase {
         XCTAssertEqual(completion.projectID, fixture.primary.id)
         XCTAssertEqual(
             completion.managedRelativePath,
-            "exports/\(fixture.matterID)/\(destination.lastPathComponent)"
+            "exports/\(fixture.matterID)/\(uniqueDestination.lastPathComponent)"
         )
         XCTAssertEqual(completion.artifactSHA256, sha256(installedBytes))
         XCTAssertEqual(completion.snapshotProjectUpdatedAt, fixture.primary.updatedAt)
         XCTAssertEqual(completion.rowCount, 3)
         XCTAssertEqual(completion.actor, "Completion failure actor")
         XCTAssertEqual(completion.exportedAt, exportedAt)
-        XCTAssertEqual(try Data(contentsOf: destination), canary)
+        XCTAssertEqual(try Data(contentsOf: baseDestination), canary)
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: uniqueDestination.path),
+            "failed completion must remove only its unique create-only install"
+        )
         XCTAssertTrue(try fixture.store.documentSources.fetchExports(matterID: fixture.matterID).isEmpty)
         XCTAssertFalse(
             try fixture.store.auditEvents.fetchEvents(matterID: fixture.matterID).contains {
@@ -338,6 +361,192 @@ final class CaseFileReviewExportServiceTests: XCTestCase {
         )
         XCTAssertEqual(audit.actor, "Casey Finch")
         XCTAssertEqual(audit.relatedID, fixture.primary.id)
+    }
+
+    func testTRPEXPORT05SameSecondPublishesTwoCreateOnlyArtifactsWithValidReceipts() throws {
+        // T-RP-EXPORT-05 expected RED: the current deterministic destination is
+        // replacement-based, so a second export with the same project and
+        // second reuses one path instead of retaining two exact artifacts.
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let filenameSecond = try instant("2026-08-09T18:45:00Z")
+        let firstExportedAt = filenameSecond.addingTimeInterval(0.1)
+        let secondExportedAt = filenameSecond.addingTimeInterval(0.9)
+        let service = CaseFileReviewExportService(
+            store: fixture.store,
+            storage: fixture.storage
+        )
+
+        let firstURL = try service.exportCSV(
+            matterID: fixture.matterID,
+            projectID: fixture.primary.id,
+            actor: "First collision actor",
+            at: firstExportedAt
+        )
+        let firstBytes = try Data(contentsOf: firstURL)
+        let secondURL = try service.exportCSV(
+            matterID: fixture.matterID,
+            projectID: fixture.primary.id,
+            actor: "Second collision actor",
+            at: secondExportedAt
+        )
+        let secondBytes = try Data(contentsOf: secondURL)
+
+        XCTAssertNotEqual(
+            firstURL.standardizedFileURL,
+            secondURL.standardizedFileURL,
+            "same-second exports must resolve a collision without replacing the first artifact"
+        )
+        XCTAssertEqual(try Data(contentsOf: firstURL), firstBytes)
+        XCTAssertEqual(try Data(contentsOf: secondURL), secondBytes)
+        XCTAssertNotEqual(
+            firstBytes,
+            secondBytes,
+            "fractional export instants in the same filename second must retain distinct receipts"
+        )
+        try DocumentExportValidator.validate(firstBytes, as: .csv)
+        try DocumentExportValidator.validate(secondBytes, as: .csv)
+
+        let expectedPaths = [firstURL, secondURL].map {
+            "exports/\(fixture.matterID)/\($0.lastPathComponent)"
+        }
+        let exports = try fixture.store.documentSources.fetchExports(
+            matterID: fixture.matterID
+        ).filter { $0.format == "review_csv" }
+        XCTAssertEqual(exports.count, 2)
+        XCTAssertEqual(Set(exports.map(\.managedRelativePath)), Set(expectedPaths))
+
+        let receipts = try fixture.store.auditEvents.fetchEvents(matterID: fixture.matterID)
+            .filter { $0.eventType == "case_file_review_snapshot_exported" }
+            .map(metadataObject)
+        XCTAssertEqual(receipts.count, 2)
+        for (url, bytes) in [(firstURL, firstBytes), (secondURL, secondBytes)] {
+            let path = "exports/\(fixture.matterID)/\(url.lastPathComponent)"
+            let receipt = try XCTUnwrap(
+                receipts.filter { $0["managed_relative_path"] as? String == path }.single
+            )
+            XCTAssertEqual(receipt["artifact_sha256"] as? String, sha256(bytes))
+            XCTAssertEqual(receipt["row_count"] as? Int, 3)
+        }
+    }
+
+    func testTRPEXPORT06SymlinkedExportsParentFailsClosedBeforePublication() throws {
+        // T-RP-EXPORT-06 expected RED: the current pathname-based directory and
+        // replacement writer follow an `exports` symlink, allowing the CSV and
+        // its success callback to escape the configured managed-storage root.
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let exportedAt = try instant("2026-08-09T18:45:00Z")
+        let outside = fixture.root.appendingPathComponent(
+            "outside-review-export-target-631",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: fixture.storage.root,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createSymbolicLink(
+            at: fixture.storage.exportsDirectory,
+            withDestinationURL: outside
+        )
+        XCTAssertEqual(
+            try FileManager.default.destinationOfSymbolicLink(
+                atPath: fixture.storage.exportsDirectory.path
+            ),
+            outside.path
+        )
+        var completionCount = 0
+        let service = CaseFileReviewExportService(
+            store: fixture.store,
+            storage: fixture.storage,
+            completionRecorder: { _ in completionCount += 1 }
+        )
+
+        XCTAssertThrowsError(
+            try service.exportCSV(
+                matterID: fixture.matterID,
+                projectID: fixture.primary.id,
+                actor: "Symlink rejection actor",
+                at: exportedAt
+            )
+        )
+
+        XCTAssertEqual(completionCount, 0)
+        XCTAssertTrue(
+            try FileManager.default.contentsOfDirectory(
+                at: outside,
+                includingPropertiesForKeys: nil
+            ).isEmpty,
+            "a symlinked managed parent must not receive CSV or temporary bytes"
+        )
+        XCTAssertTrue(try fixture.store.documentSources.fetchExports(matterID: fixture.matterID).isEmpty)
+        XCTAssertFalse(
+            try fixture.store.auditEvents.fetchEvents(matterID: fixture.matterID).contains {
+                $0.eventType == "case_file_review_snapshot_exported"
+            }
+        )
+    }
+
+    func testTRPEXPORT07CompletionCompensationPreservesConcurrentPathReplacement() throws {
+        // T-RP-EXPORT-07 expected RED: compensation currently removes whatever
+        // occupies the destination pathname after completion fails, even when
+        // a concurrent writer has replaced the installed snapshot inode.
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let exportedAt = try instant("2026-08-09T18:45:00Z")
+        let replacement = Data("CONCURRENT-REVIEW-REPLACEMENT-719".utf8)
+        let identityProbe = DurableFileWriter()
+        var completionCount = 0
+        var replacementURL: URL?
+        var installedIdentity: DurableFileWriter.InstalledFileIdentity?
+        var replacementIdentity: DurableFileWriter.InstalledFileIdentity?
+        let service = CaseFileReviewExportService(
+            store: fixture.store,
+            storage: fixture.storage,
+            completionRecorder: { completion in
+                completionCount += 1
+                let url = fixture.storage.url(
+                    forManagedRelativePath: completion.managedRelativePath
+                )
+                replacementURL = url
+                installedIdentity = try identityProbe.installedFileIdentity(at: url)
+                try FileManager.default.removeItem(at: url)
+                try replacement.write(to: url)
+                replacementIdentity = try identityProbe.installedFileIdentity(at: url)
+                throw InjectedFailure.stop
+            }
+        )
+
+        XCTAssertThrowsError(
+            try service.exportCSV(
+                matterID: fixture.matterID,
+                projectID: fixture.primary.id,
+                actor: "Concurrent replacement actor",
+                at: exportedAt
+            )
+        ) { error in
+            guard case CaseFileReviewExportService.ExportError.partialFailure = error else {
+                return XCTFail("a changed destination must surface partial failure, got \(error)")
+            }
+        }
+
+        XCTAssertEqual(completionCount, 1, "the pathname replacement seam must execute")
+        let original: DurableFileWriter.InstalledFileIdentity = try XCTUnwrap(installedIdentity)
+        let concurrent: DurableFileWriter.InstalledFileIdentity = try XCTUnwrap(replacementIdentity)
+        XCTAssertNotEqual(original, concurrent, "the canary must occupy a distinct inode")
+        let url: URL = try XCTUnwrap(replacementURL)
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: url.path),
+            "compensation must not unlink a concurrent replacement"
+        )
+        XCTAssertEqual(try? Data(contentsOf: url), replacement)
+        XCTAssertTrue(try fixture.store.documentSources.fetchExports(matterID: fixture.matterID).isEmpty)
+        XCTAssertFalse(
+            try fixture.store.auditEvents.fetchEvents(matterID: fixture.matterID).contains {
+                $0.eventType == "case_file_review_snapshot_exported"
+            }
+        )
     }
 
     // MARK: - Fixture
