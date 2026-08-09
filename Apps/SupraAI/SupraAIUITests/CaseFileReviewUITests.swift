@@ -1346,14 +1346,27 @@ final class CaseFileReviewHostedUITests: XCTestCase {
                 "The setup preview must expose one exact fixed \(column) column"
             )
         }
+        // Visual-polish RED: the priority-only preview collapses Finding to 20 points,
+        // leaving the fixed Matrix promise mounted in AX but visibly illegible.
         let columnFrames = fixedColumns.map {
             renderedElements(label: $0, in: columnPreview).firstMatch.frame
         }
+        let minimumLegibleWidths: [CGFloat] = [30, 70, 38, 32]
         for (column, frame) in zip(fixedColumns, columnFrames) {
             XCTAssertGreaterThan(
                 frame.width,
-                48,
+                minimumLegibleWidths[fixedColumns.firstIndex(of: column)!],
                 "The fixed \(column) column must remain visibly legible, not only mounted in accessibility"
+            )
+            XCTAssertGreaterThanOrEqual(
+                frame.minX,
+                columnPreview.frame.minX - 1,
+                "The fixed \(column) column must remain inside the preview's leading edge"
+            )
+            XCTAssertLessThanOrEqual(
+                frame.maxX,
+                columnPreview.frame.maxX + 1,
+                "The fixed \(column) column must remain inside the preview's trailing edge"
             )
         }
         for (left, right) in zip(columnFrames, columnFrames.dropFirst()) {
