@@ -402,3 +402,46 @@ public struct CaseFileReviewProjectGraph: Sendable, Equatable {
         self.generations = generations
     }
 }
+
+/// One current Review row captured with the exact immutable generation and
+/// frozen evidence that support its mutable attorney-work state.
+public struct CaseFileReviewSnapshotRow: Sendable, Equatable {
+    public let row: CaseFileReviewRowRecord
+    public let cell: CaseFileReviewCellRecord
+    public let generation: CaseFileReviewCellGenerationRecord
+    public let evidence: [CaseFileReviewEvidenceEdgeRecord]
+
+    public init(
+        row: CaseFileReviewRowRecord,
+        cell: CaseFileReviewCellRecord,
+        generation: CaseFileReviewCellGenerationRecord,
+        evidence: [CaseFileReviewEvidenceEdgeRecord]
+    ) {
+        self.row = row
+        self.cell = cell
+        self.generation = generation
+        self.evidence = evidence
+    }
+}
+
+/// A format-neutral, point-in-time projection of every row in one active Review
+/// Matrix. Store captures all members in one database transaction so CSV and
+/// later spreadsheet renderers cannot mix project, cell, or evidence revisions.
+public struct CaseFileReviewSnapshot: Sendable, Equatable {
+    public let project: CaseFileReviewProjectRecord
+    public let table: CaseFileReviewTableRecord
+    public let columns: [CaseFileReviewColumnRecord]
+    public let rows: [CaseFileReviewSnapshotRow]
+
+    public init(
+        project: CaseFileReviewProjectRecord,
+        table: CaseFileReviewTableRecord,
+        columns: [CaseFileReviewColumnRecord],
+        rows: [CaseFileReviewSnapshotRow]
+    ) {
+        self.project = project
+        self.table = table
+        self.columns = columns
+        self.rows = rows
+    }
+}

@@ -350,6 +350,7 @@ struct MatterWorkspaceView: View {
         case "legal_model_route": "Model Route Used"
         case "case_file_review_cell_value_edited": "Review Value Edited"
         case "case_file_review_cell_value_restored": "Generated Review Value Restored"
+        case "case_file_review_snapshot_exported": "Review Snapshot Exported"
         default:
             eventType
                 .split(separator: "_")

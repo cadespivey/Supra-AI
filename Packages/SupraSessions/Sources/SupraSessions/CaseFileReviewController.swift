@@ -193,15 +193,21 @@ public final class CaseFileReviewController: ObservableObject {
 
     private let store: SupraStore
     private let previewLoader: DocumentPreviewLoader
+    private let exportService: CaseFileReviewExportService
 
     public init(
         matterID: String,
         store: SupraStore,
-        previewStorage: DocumentStorage = .makeDefault()
+        previewStorage: DocumentStorage = .makeDefault(),
+        exportService: CaseFileReviewExportService? = nil
     ) {
         self.matterID = matterID
         self.store = store
         self.previewLoader = DocumentPreviewLoader(store: store, storage: previewStorage)
+        self.exportService = exportService ?? CaseFileReviewExportService(
+            store: store,
+            storage: previewStorage
+        )
     }
 
     public func load() {
@@ -288,6 +294,19 @@ public final class CaseFileReviewController: ObservableObject {
     public func clearSelection() {
         selectedCellID = nil
         selectedEvidence = []
+    }
+
+    @discardableResult
+    public func exportSelectedProjectCSV(at exportedAt: Date = Date()) throws -> URL {
+        guard let selectedProjectID else {
+            throw CaseFileReviewControllerError.noSelectedProject
+        }
+        return try exportService.exportCSV(
+            matterID: matterID,
+            projectID: selectedProjectID,
+            actor: reviewActor(explicit: nil),
+            at: exportedAt
+        )
     }
 
     public func markReviewed(

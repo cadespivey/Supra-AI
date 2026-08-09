@@ -1,3 +1,4 @@
+import AppKit
 import SupraSessions
 import SwiftUI
 
@@ -14,6 +15,7 @@ struct CaseFileReviewView: View {
     @State private var sourcesWidth: CGFloat = 640
     @State private var previewModel: DocumentPreviewModel?
     @State private var actionError: String?
+    @State private var exportError: String?
     @State private var valueEditor: ValueEditorState?
     @State private var activeFilter: CaseFileReviewController.RowFilter = .all
     @State private var pendingNavigation: PendingReviewNavigation?
@@ -94,6 +96,17 @@ struct CaseFileReviewView: View {
             Button("OK") { actionError = nil }
         } message: {
             Text(actionError ?? "The Review Project could not be updated.")
+        }
+        .alert(
+            "Couldn’t export Review snapshot",
+            isPresented: Binding(
+                get: { exportError != nil },
+                set: { if !$0 { exportError = nil } }
+            )
+        ) {
+            Button("OK") { exportError = nil }
+        } message: {
+            Text(exportError ?? "The Review snapshot could not be exported.")
         }
         .sheet(isPresented: $showingNewReview) {
             CaseFileReviewCreationSheet(
@@ -265,11 +278,53 @@ struct CaseFileReviewView: View {
             } else {
                 reviewFilterControls
             }
+
+            Divider()
+                .frame(height: 18)
+
+            reviewExportControl
         }
         .padding(.horizontal, 14)
         .frame(minHeight: 38)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("review.controlStrip")
+    }
+
+    @ViewBuilder
+    private var reviewExportControl: some View {
+        if valueEditorIsDirty {
+            Button(action: {}) {
+                Label("Export", systemImage: "square.and.arrow.up")
+            }
+            .buttonStyle(.borderless)
+            .fixedSize()
+            .disabled(true)
+            .accessibilityIdentifier("review.export")
+            .accessibilityLabel(
+                "Export Review snapshot unavailable while a value edit is unsaved"
+            )
+            .accessibilityHint("Save or discard the unsaved value edit first")
+            .help("Save or discard the unsaved value edit first")
+        } else {
+            Menu {
+                Button {
+                    exportReviewSnapshot()
+                } label: {
+                    Text("CSV — all saved findings")
+                }
+                .accessibilityIdentifier("review.export.csv")
+            } label: {
+                Label("Export", systemImage: "square.and.arrow.up")
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .accessibilityIdentifier("review.export")
+            .accessibilityLabel("Export Review snapshot, available")
+            .accessibilityHint("Export all saved findings and recorded sources as CSV")
+            .help(
+                "Export all saved findings and recorded sources, regardless of the current filter."
+            )
+        }
     }
 
     private var reviewProgress: some View {
@@ -947,6 +1002,18 @@ struct CaseFileReviewView: View {
             try controller.markReviewed(cellID: row.cellID)
         } catch {
             actionError = error.localizedDescription
+        }
+    }
+
+    private func exportReviewSnapshot() {
+        do {
+            let url = try controller.exportSelectedProjectCSV()
+            if !(AppEnvironment.isUITestMode
+                && ProcessInfo.processInfo.arguments.contains("-uiTestReviewExport")) {
+                NSWorkspace.shared.activateFileViewerSelecting([url])
+            }
+        } catch {
+            exportError = error.localizedDescription
         }
     }
 

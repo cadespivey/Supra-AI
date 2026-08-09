@@ -208,6 +208,7 @@ public final class MattersController: ObservableObject {
     private let runtimeClient: any RuntimeClientProtocol
     private let defaultSystemPrompt: String?
     private let documentQueue: DocumentProcessingQueue?
+    private let caseFileReviewExportService: CaseFileReviewExportService?
     private let submitCorpusAnalysis: CaseFileReviewCreationController.SubmitCorpusAnalysis?
     private let makeCorpusAnalysisPinnedModel: CaseFileReviewCreationController.ManagedModelPinProvider?
     private let isImportReady: (@MainActor () -> Bool)?
@@ -222,6 +223,7 @@ public final class MattersController: ObservableObject {
         runtimeClient: any RuntimeClientProtocol,
         defaultSystemPrompt: String? = nil,
         documentQueue: DocumentProcessingQueue? = nil,
+        caseFileReviewExportService: CaseFileReviewExportService? = nil,
         submitCorpusAnalysis: CaseFileReviewCreationController.SubmitCorpusAnalysis? = nil,
         makeCorpusAnalysisPinnedModel: CaseFileReviewCreationController.ManagedModelPinProvider? = nil,
         isImportReady: (@MainActor () -> Bool)? = nil,
@@ -233,6 +235,7 @@ public final class MattersController: ObservableObject {
         self.runtimeClient = runtimeClient
         self.defaultSystemPrompt = defaultSystemPrompt
         self.documentQueue = documentQueue
+        self.caseFileReviewExportService = caseFileReviewExportService
         self.submitCorpusAnalysis = submitCorpusAnalysis
         self.makeCorpusAnalysisPinnedModel = makeCorpusAnalysisPinnedModel
         self.isImportReady = isImportReady
@@ -451,7 +454,8 @@ public final class MattersController: ObservableObject {
 
         let caseFileReview = CaseFileReviewController(
             matterID: matterID,
-            store: store
+            store: store,
+            exportService: caseFileReviewExportService
         )
         caseFileReview.load()
         caseFileReviewController = caseFileReview

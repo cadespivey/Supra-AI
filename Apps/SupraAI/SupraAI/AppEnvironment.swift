@@ -210,6 +210,13 @@ final class AppEnvironment: ObservableObject {
             tokenStore: tokenStore
         )
         let documentStorage = DocumentStorage.makeDefault()
+        let caseFileReviewExportStorage = Self.reviewExportUITestRoot()
+            .map { DocumentStorage(root: $0) }
+            ?? documentStorage
+        let caseFileReviewExportService = CaseFileReviewExportService(
+            store: store,
+            storage: caseFileReviewExportStorage
+        )
 #if DEBUG
         let restoreUITestFixture = AppEnvironment.makeRestoreUITestFixtureIfRequested()
 #else
@@ -383,6 +390,7 @@ final class AppEnvironment: ObservableObject {
             runtimeClient: runtimeClient,
             defaultSystemPrompt: systemPrompt,
             documentQueue: queue,
+            caseFileReviewExportService: caseFileReviewExportService,
             submitCorpusAnalysis: { request, pinnedModel, approvedScopeReceipt in
                 let prepared = try CorpusAnalysisQueuePreparer(store: store)
                     .prepareExhaustiveListSubmission(
@@ -2892,6 +2900,31 @@ final class AppEnvironment: ObservableObject {
         reviewCreationUITestRoot()?
             .appendingPathComponent(".supra-ui-test-store", isDirectory: true)
             .appendingPathComponent("SupraAI.sqlite", isDirectory: false)
+    }
+
+    /// Gives only the dedicated Review-export UI test a throwaway managed-file
+    /// root. Normal launches always use the app's standard managed storage.
+    private static func reviewExportUITestRoot() -> URL? {
+#if DEBUG
+        let arguments = ProcessInfo.processInfo.arguments
+        let environment = ProcessInfo.processInfo.environment
+        guard isUITestMode,
+              arguments.contains("-uiTestReviewExport"),
+              let rawRoot = environment["SUPRA_UI_TEST_REVIEW_EXPORT_ROOT"]?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+              !rawRoot.isEmpty else { return nil }
+
+        let temporaryRoot = FileManager.default.temporaryDirectory
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+        let candidate = URL(fileURLWithPath: rawRoot, isDirectory: true)
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+        guard candidate.path.hasPrefix("\(temporaryRoot.path)/") else { return nil }
+        return candidate
+#else
+        return nil
+#endif
     }
 
     /// Opens the on-disk store, falling back to a temporary store so the app still

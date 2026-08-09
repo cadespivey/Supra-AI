@@ -289,6 +289,24 @@ public final class CaseFileReviewRepository: @unchecked Sendable {
         }
     }
 
+    /// Captures every current row, generation, and evidence edge for one live
+    /// Review Project in a single read transaction. Export callers must use this
+    /// boundary rather than joining a cached UI projection to per-cell reads.
+    public func fetchSnapshot(
+        matterID: String,
+        projectID: String
+    ) throws -> CaseFileReviewSnapshot {
+        let normalizedMatterID = try Self.requireNonEmpty(matterID, field: "matterID")
+        let normalizedProjectID = try Self.requireNonEmpty(projectID, field: "projectID")
+        return try writer.read { db in
+            try Self.fetchSnapshot(
+                db,
+                matterID: normalizedMatterID,
+                projectID: normalizedProjectID
+            )
+        }
+    }
+
     public func fetchCurrentEvidence(
         matterID: String,
         projectID: String,
@@ -317,6 +335,93 @@ public final class CaseFileReviewRepository: @unchecked Sendable {
                     """,
                 arguments: [generationID]
             )
+        }
+    }
+
+    /// Records only a validated Review snapshot artifact. The managed export
+    /// remains deliberately unlinked from Structured Output IDs so a Review
+    /// Project that retains contrary evidence never enters or weakens the
+    /// stricter Structured Output export authorization path.
+    @discardableResult
+    public func recordSnapshotExportCompletion(
+        matterID: String,
+        projectID: String,
+        exportID: String,
+        managedRelativePath: String,
+        artifactSHA256: String,
+        snapshotUpdatedAt: Date,
+        rowCount: Int,
+        actor: String,
+        at timestamp: Date = Date()
+    ) throws -> DocumentExportRecord {
+        let normalizedMatterID = try Self.requireNonEmpty(matterID, field: "matterID")
+        let normalizedProjectID = try Self.requireNonEmpty(projectID, field: "projectID")
+        let normalizedExportID = try Self.requireNonEmpty(exportID, field: "exportID")
+        let normalizedPath = try Self.requireManagedReviewCSVPath(
+            managedRelativePath,
+            matterID: normalizedMatterID
+        )
+        let normalizedDigest = try Self.requireSHA256(
+            artifactSHA256,
+            field: "artifactSHA256"
+        )
+        let normalizedActor = try Self.requireNonEmpty(actor, field: "actor")
+        guard rowCount >= 0 else {
+            throw CaseFileReviewRepositoryError.invalidField("rowCount")
+        }
+        guard snapshotUpdatedAt.timeIntervalSinceReferenceDate.isFinite else {
+            throw CaseFileReviewRepositoryError.invalidField("snapshotUpdatedAt")
+        }
+        guard timestamp.timeIntervalSinceReferenceDate.isFinite else {
+            throw CaseFileReviewRepositoryError.invalidField("timestamp")
+        }
+
+        return try writer.write { db in
+            let snapshot = try Self.fetchSnapshot(
+                db,
+                matterID: normalizedMatterID,
+                projectID: normalizedProjectID
+            )
+            guard snapshot.project.updatedAt == snapshotUpdatedAt else {
+                throw CaseFileReviewRepositoryError.invalidField("snapshotUpdatedAt")
+            }
+            guard snapshot.rows.count == rowCount else {
+                throw CaseFileReviewRepositoryError.invalidField("rowCount")
+            }
+
+            let export = DocumentExportRecord(
+                id: normalizedExportID,
+                structuredOutputID: nil,
+                structuredOutputVersionID: nil,
+                matterID: normalizedMatterID,
+                format: "review_csv",
+                managedRelativePath: normalizedPath,
+                createdAt: timestamp
+            )
+            try export.insert(db)
+            try AuditEventRecord(
+                matterID: normalizedMatterID,
+                timestamp: timestamp,
+                eventType: "case_file_review_snapshot_exported",
+                actor: normalizedActor,
+                summary: "Exported a Case File Review snapshot as CSV.",
+                relatedTable: CaseFileReviewProjectRecord.databaseTableName,
+                relatedID: normalizedProjectID,
+                metadataJSON: try Self.auditMetadata([
+                    "schema_version": 1,
+                    "export_id": export.id,
+                    "project_id": snapshot.project.id,
+                    "source_run_id": snapshot.project.sourceRunID,
+                    "source_output_id": snapshot.project.sourceOutputID,
+                    "source_output_version_id": snapshot.project.sourceOutputVersionID,
+                    "format": export.format,
+                    "managed_relative_path": export.managedRelativePath,
+                    "artifact_sha256": normalizedDigest,
+                    "snapshot_project_updated_at": snapshotUpdatedAt.timeIntervalSince1970,
+                    "row_count": snapshot.rows.count,
+                ])
+            ).insert(db)
+            return export
         }
     }
 
@@ -842,6 +947,123 @@ public final class CaseFileReviewRepository: @unchecked Sendable {
         )
     }
 
+    private static func fetchSnapshot(
+        _ db: Database,
+        matterID: String,
+        projectID: String
+    ) throws -> CaseFileReviewSnapshot {
+        guard try Int.fetchOne(
+            db,
+            sql: "SELECT COUNT(*) FROM matters WHERE id = ? AND deleted_at IS NULL",
+            arguments: [matterID]
+        ) == 1 else {
+            throw CaseFileReviewRepositoryError.matterUnavailable(matterID)
+        }
+        guard let project = try CaseFileReviewProjectRecord.fetchOne(db, key: projectID),
+              project.matterID == matterID else {
+            throw CaseFileReviewRepositoryError.projectScopeMismatch(projectID)
+        }
+
+        let graph = try fetchGraph(db, project: project)
+        let evidence = try CaseFileReviewEvidenceEdgeRecord.fetchAll(
+            db,
+            sql: """
+                SELECT edge.*
+                FROM case_file_review_evidence_edges AS edge
+                JOIN case_file_review_cell_generations AS generation
+                  ON generation.id = edge.generation_id
+                JOIN case_file_review_cells AS cell
+                  ON cell.id = generation.cell_id
+                 AND cell.current_generation_id = generation.id
+                JOIN case_file_review_rows AS row
+                  ON row.id = cell.row_id AND row.table_id = cell.table_id
+                WHERE cell.table_id = ?
+                ORDER BY row.ordinal, row.id,
+                         CASE edge.kind WHEN 'supporting' THEN 0 ELSE 1 END,
+                         edge.ordinal, edge.id
+                """,
+            arguments: [graph.table.id]
+        )
+
+        var cellsByRowID: [String: CaseFileReviewCellRecord] = [:]
+        for cell in graph.cells {
+            guard cellsByRowID.updateValue(cell, forKey: cell.rowID) == nil else {
+                throw CaseFileReviewRepositoryError.corruptGraph(projectID)
+            }
+        }
+        var generationsByID: [String: CaseFileReviewCellGenerationRecord] = [:]
+        for generation in graph.generations {
+            guard generationsByID.updateValue(generation, forKey: generation.id) == nil else {
+                throw CaseFileReviewRepositoryError.corruptGraph(projectID)
+            }
+        }
+        var evidenceByGenerationID: [String: [CaseFileReviewEvidenceEdgeRecord]] = [:]
+        for edge in evidence {
+            evidenceByGenerationID[edge.generationID, default: []].append(edge)
+        }
+
+        var snapshotRows: [CaseFileReviewSnapshotRow] = []
+        snapshotRows.reserveCapacity(graph.rows.count)
+        var capturedEvidenceCount = 0
+        for row in graph.rows {
+            guard let cell = cellsByRowID.removeValue(forKey: row.id),
+                  cell.tableID == graph.table.id,
+                  let generationID = cell.currentGenerationID,
+                  let generation = generationsByID.removeValue(forKey: generationID),
+                  generation.cellID == cell.id,
+                  generation.sourceRunID == project.sourceRunID,
+                  let generatedValuesData = generation.generatedValuesJSON.data(using: .utf8),
+                  let generatedValues = try? JSONDecoder().decode(
+                      [String].self,
+                      from: generatedValuesData
+                  ),
+                  !generatedValues.isEmpty,
+                  generatedValues.allSatisfy({
+                      !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                  }) else {
+                throw CaseFileReviewRepositoryError.corruptGraph(projectID)
+            }
+
+            let rowEvidence = evidenceByGenerationID.removeValue(forKey: generationID) ?? []
+            guard rowEvidence.allSatisfy({ edge in
+                edge.generationID == generationID
+                    && edge.excerptSHA256 == sha256(edge.excerpt)
+            }) else {
+                throw CaseFileReviewRepositoryError.corruptGraph(projectID)
+            }
+            for kind in ["supporting", "contrary"] {
+                let kindEvidence = rowEvidence.filter { $0.kind == kind }
+                guard kindEvidence.map(\.ordinal) == Array(0..<kindEvidence.count) else {
+                    throw CaseFileReviewRepositoryError.corruptGraph(projectID)
+                }
+            }
+            guard rowEvidence.allSatisfy({ $0.kind == "supporting" || $0.kind == "contrary" }) else {
+                throw CaseFileReviewRepositoryError.corruptGraph(projectID)
+            }
+
+            capturedEvidenceCount += rowEvidence.count
+            snapshotRows.append(CaseFileReviewSnapshotRow(
+                row: row,
+                cell: cell,
+                generation: generation,
+                evidence: rowEvidence
+            ))
+        }
+        guard cellsByRowID.isEmpty,
+              generationsByID.isEmpty,
+              evidenceByGenerationID.isEmpty,
+              capturedEvidenceCount == evidence.count else {
+            throw CaseFileReviewRepositoryError.corruptGraph(projectID)
+        }
+
+        return CaseFileReviewSnapshot(
+            project: graph.project,
+            table: graph.table,
+            columns: graph.columns,
+            rows: snapshotRows
+        )
+    }
+
     private static func scopedCell(
         _ db: Database,
         matterID: String,
@@ -905,6 +1127,42 @@ public final class CaseFileReviewRepository: @unchecked Sendable {
     private static func requireNonEmpty(_ value: String, field: String) throws -> String {
         let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalized.isEmpty else {
+            throw CaseFileReviewRepositoryError.invalidField(field)
+        }
+        return normalized
+    }
+
+    private static func requireManagedReviewCSVPath(
+        _ value: String,
+        matterID: String
+    ) throws -> String {
+        let normalized = try requireNonEmpty(value, field: "managedRelativePath")
+        let components = normalized.split(separator: "/", omittingEmptySubsequences: false)
+        guard normalized == value,
+              !normalized.hasPrefix("/"),
+              !normalized.contains("\\"),
+              normalized.unicodeScalars.allSatisfy({
+                  !CharacterSet.controlCharacters.contains($0)
+              }),
+              components.count == 3,
+              components[0] == "exports",
+              components[1] == Substring(matterID),
+              !components[2].isEmpty,
+              components[2] != ".",
+              components[2] != "..",
+              components[2].hasSuffix(".csv") else {
+            throw CaseFileReviewRepositoryError.invalidField("managedRelativePath")
+        }
+        return normalized
+    }
+
+    private static func requireSHA256(_ value: String, field: String) throws -> String {
+        let normalized = try requireNonEmpty(value, field: field)
+        guard normalized == value,
+              normalized.utf8.count == 64,
+              normalized.utf8.allSatisfy({ byte in
+                  (48...57).contains(byte) || (97...102).contains(byte)
+              }) else {
             throw CaseFileReviewRepositoryError.invalidField(field)
         }
         return normalized
