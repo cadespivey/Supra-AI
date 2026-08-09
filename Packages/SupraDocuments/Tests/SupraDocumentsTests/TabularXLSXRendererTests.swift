@@ -267,7 +267,17 @@ final class TabularXLSXRendererTests: XCTestCase {
         let sheet = try probe.worksheet(at: "xl/worksheets/sheet1.xml")
         XCTAssertEqual(sheet.cells["A1"]?.value, "'=Header")
         XCTAssertEqual(sheet.cells["A2"]?.value, #"'=HYPERLINK("https://evil.invalid","open")"#)
-        XCTAssertEqual(sheet.cells["B2"]?.value, "'\u{FEFF}@document")
+        XCTAssertEqual(
+            sheet.cells["B2"]?.value,
+            "'@document",
+            "Foundation XMLParser omits U+FEFF from parsed element text"
+        )
+        XCTAssertTrue(
+            try probe.text(at: "xl/worksheets/sheet1.xml").contains(
+                #"<t xml:space="preserve">&apos;&#xFEFF;@document</t>"#
+            ),
+            "the raw worksheet must preserve the neutralized hidden-prefix canary"
+        )
         XCTAssertEqual(sheet.cells["C2"]?.value, "'  -2")
         XCTAssertEqual(sheet.cells["D2"]?.value, "'\t=cmd")
         XCTAssertEqual(sheet.cells["E2"]?.value, "'+SUM(1,1)")
