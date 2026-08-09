@@ -160,6 +160,7 @@ xcodebuild \
   -only-testing:SupraAIUITests/RestoreSettingsUITests \
   -only-testing:SupraAIUITests/InterruptedDraftRecoveryUITests \
   -only-testing:SupraAIUITests/MotionToDismissWorkspaceUITests \
+  -only-testing:SupraAIUITests/CorpusReviewQueueCompositionUITests \
   -only-testing:SupraAIUITests/CaseFileReviewCompositionUITests/testTRPUI13WorkflowControlsPinAccessibleFiltersProgressAndGuardedNavigation \
   -only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPUI14ProgressAndAttentionFiltersReconcileHiddenSourcesAndExplicitEmptyState \
   -only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPUI15DirtyDraftCancelKeepsProjectAndDiscardSwitchesWithoutCrossProjectLeak \
