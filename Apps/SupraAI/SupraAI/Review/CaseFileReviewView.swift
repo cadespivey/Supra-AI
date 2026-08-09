@@ -62,22 +62,6 @@ struct CaseFileReviewView: View {
                 Text(discardNavigationMessage)
             }
 
-            if controller.selectedCellID != nil {
-                SlideOverPanel(
-                    width: $sourcesWidth,
-                    minWidth: 560,
-                    maxWidth: 980,
-                    onClose: closeSources
-                ) {
-                    if let previewModel {
-                        DocumentPreviewView(model: previewModel) {
-                            self.previewModel = nil
-                        }
-                    } else {
-                        sourcesInspector
-                    }
-                }
-            }
         }
         .onAppear { controller.load() }
         .onChange(of: controller.selectedCellID) { _, _ in
@@ -142,6 +126,7 @@ struct CaseFileReviewView: View {
                     Label("Open Review", systemImage: "rectangle.and.text.magnifyingglass")
                 }
                 .buttonStyle(.ghost)
+                .accessibilityIdentifier("review.openReview")
             } else if !controller.eligibleOutputs.isEmpty {
                 Menu {
                     ForEach(controller.eligibleOutputs) { output in
@@ -152,6 +137,7 @@ struct CaseFileReviewView: View {
                 }
                 .menuStyle(.borderlessButton)
                 .fixedSize()
+                .accessibilityIdentifier("review.openReview")
             }
         }
     }
@@ -190,17 +176,26 @@ struct CaseFileReviewView: View {
             } else {
                 reviewControlStrip
                 Divider()
+                reviewResults
+            }
+        }
+    }
 
+    private var reviewResults: some View {
+        GeometryReader { geometry in
+            ZStack(alignment: .trailing) {
                 if filteredRows.isEmpty {
-                    VStack(spacing: 12) {
-                        ContentUnavailableView(
+                    ContentUnavailableView {
+                        Label(
                             "No findings match",
-                            systemImage: "line.3.horizontal.decrease.circle",
-                            description: Text(
-                                "Choose another filter to see the rest of this Review Project."
-                            )
+                            systemImage: "line.3.horizontal.decrease.circle"
                         )
                         .accessibilityIdentifier("review.filteredEmpty")
+                    } description: {
+                        Text(
+                            "Choose another filter to see the rest of this Review Project."
+                        )
+                    } actions: {
                         Button("Show all findings") {
                             setFilter(.all)
                         }
@@ -209,6 +204,10 @@ struct CaseFileReviewView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     reviewMatrix(rows: filteredRows)
+                }
+
+                if controller.selectedCellID != nil {
+                    reviewSourcesPanel(availableWidth: geometry.size.width)
                 }
             }
         }
@@ -227,7 +226,6 @@ struct CaseFileReviewView: View {
             }
         }
         .padding(.horizontal, 14)
-        .padding(.trailing, controller.selectedCellID == nil ? 0 : sourcesWidth)
         .frame(minHeight: 38)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("review.controlStrip")
@@ -257,41 +255,51 @@ struct CaseFileReviewView: View {
     }
 
     private var reviewFilterControls: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 4) {
-                ForEach(CaseFileReviewController.RowFilter.allCases, id: \.self) { filter in
-                    reviewFilterButton(filter)
-                }
-            }
-            .fixedSize(horizontal: true, vertical: false)
+        Group {
+            if controller.selectedCellID != nil {
+                reviewFilterMenu
+            } else {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 4) {
+                        ForEach(CaseFileReviewController.RowFilter.allCases, id: \.self) { filter in
+                            reviewFilterButton(filter)
+                        }
+                    }
+                    .fixedSize(horizontal: true, vertical: false)
 
-            Menu {
-                ForEach(CaseFileReviewController.RowFilter.allCases, id: \.self) { filter in
-                    identifiedFilterControl(
-                        Button {
-                            setFilter(filter)
-                        } label: {
-                            if activeFilter == filter {
-                                Label(filterTitle(filter), systemImage: "checkmark")
-                            } else {
-                                Text(filterTitle(filter))
-                            }
-                        },
-                        filter: filter
-                    )
+                    reviewFilterMenu
                 }
-            } label: {
-                Text("\(filterTitle(activeFilter)) · \(filterCount(activeFilter))")
-                    .lineLimit(1)
             }
-            .menuStyle(.borderlessButton)
-            .fixedSize()
-            .accessibilityLabel("Filter findings")
-            .accessibilityValue(filterTitle(activeFilter))
-            .accessibilityIdentifier("review.filter.menu")
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("review.filters")
+    }
+
+    private var reviewFilterMenu: some View {
+        Menu {
+            ForEach(CaseFileReviewController.RowFilter.allCases, id: \.self) { filter in
+                identifiedFilterControl(
+                    Button {
+                        setFilter(filter)
+                    } label: {
+                        if activeFilter == filter {
+                            Label(filterTitle(filter), systemImage: "checkmark")
+                        } else {
+                            Text(filterTitle(filter))
+                        }
+                    },
+                    filter: filter
+                )
+            }
+        } label: {
+            Text("\(filterTitle(activeFilter)) · \(filterCount(activeFilter))")
+                .lineLimit(1)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .accessibilityLabel("Filter findings")
+        .accessibilityValue(filterTitle(activeFilter))
+        .accessibilityIdentifier("review.filter.menu")
     }
 
     private func reviewFilterButton(
@@ -532,6 +540,49 @@ struct CaseFileReviewView: View {
         .accessibilityIdentifier("review.sourcesInspector")
     }
 
+    private func reviewSourcesPanel(availableWidth: CGFloat) -> some View {
+        let maximumWidth = sourcesPanelMaximumWidth(availableWidth: availableWidth)
+        let minimumWidth = min(560, maximumWidth)
+
+        return SlideOverPanel(
+            width: sourcesPanelWidth(availableWidth: availableWidth),
+            minWidth: minimumWidth,
+            maxWidth: maximumWidth,
+            onClose: closeSources
+        ) {
+            if let previewModel {
+                DocumentPreviewView(model: previewModel) {
+                    self.previewModel = nil
+                }
+            } else {
+                sourcesInspector
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("review.sourcesPanel")
+    }
+
+    private func sourcesPanelWidth(availableWidth: CGFloat) -> Binding<CGFloat> {
+        let maximumWidth = sourcesPanelMaximumWidth(availableWidth: availableWidth)
+        let minimumWidth = min(560, maximumWidth)
+
+        return Binding(
+            get: {
+                min(maximumWidth, max(minimumWidth, sourcesWidth))
+            },
+            set: { requestedWidth in
+                // Keep the user's preferred width independent of a temporary
+                // compact window; only the effective panel width is constrained.
+                sourcesWidth = min(980, max(560, requestedWidth))
+            }
+        )
+    }
+
+    private func sourcesPanelMaximumWidth(availableWidth: CGFloat) -> CGFloat {
+        // SlideOverPanel adds its eight-point resize handle outside `width`.
+        max(1, min(980, availableWidth - 8))
+    }
+
     private func editedSourcesNotice(_ row: CaseFileReviewController.Row) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Label("Attorney-edited value", systemImage: "pencil")
@@ -680,18 +731,26 @@ struct CaseFileReviewView: View {
             return
         }
 
-        clearValueEditor()
-        performNavigation(navigation)
+        let editorProjectID = valueEditor?.projectID
+        let didNavigate = performNavigation(navigation)
+        let editorProjectChanged = editorProjectID.map {
+            $0 != controller.selectedProjectID
+        } ?? false
+        if didNavigate || editorProjectChanged {
+            clearValueEditor()
+        }
     }
 
-    private func performNavigation(_ navigation: PendingReviewNavigation) {
+    private func performNavigation(_ navigation: PendingReviewNavigation) -> Bool {
         switch navigation {
         case let .selectProject(projectID):
             controller.selectProject(projectID)
             if controller.selectedProjectID == projectID {
                 activeFilter = .all
                 previewModel = nil
+                return true
             }
+            return false
         case let .openOutput(output):
             do {
                 try controller.openReview(
@@ -700,8 +759,10 @@ struct CaseFileReviewView: View {
                 )
                 activeFilter = .all
                 previewModel = nil
+                return true
             } catch {
                 actionError = error.localizedDescription
+                return false
             }
         }
     }
@@ -714,9 +775,16 @@ struct CaseFileReviewView: View {
     private func discardAndPerformPendingNavigation() {
         let navigation = pendingNavigation
         pendingNavigation = nil
-        clearValueEditor()
-        if let navigation {
-            performNavigation(navigation)
+        let editorProjectID = valueEditor?.projectID
+        valueEditor?.isPresented = false
+        valueFieldFocused = false
+        guard let navigation else { return }
+        let didNavigate = performNavigation(navigation)
+        let editorProjectChanged = editorProjectID.map {
+            $0 != controller.selectedProjectID
+        } ?? false
+        if didNavigate || editorProjectChanged {
+            clearValueEditor()
         }
     }
 
@@ -972,6 +1040,7 @@ struct CaseFileReviewView: View {
         previewModel = nil
         controller.clearSelection()
     }
+
 }
 
 private struct ValueEditorState {

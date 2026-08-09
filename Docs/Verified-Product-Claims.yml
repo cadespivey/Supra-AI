@@ -60,13 +60,13 @@ claims:
 
   - id: "CASE-FILE-REVIEW-WORKFLOW"
     topic: "case-file-review-workflow"
-    wording: "The Review workbench derives project progress and All / Needs review / Edited / Evidence attention filters from the selected project's current durable rows without changing stored review, value, support, or evidence state; selecting or opening another Review Project while a value edit is dirty requires the user to keep editing or explicitly discard that draft."
+    wording: "The Review workbench derives project progress and All / Needs review / Edited / Evidence attention filters from the selected project's current durable rows without changing stored review, value, support, or evidence state; selecting or opening another Review Project while a value edit is dirty requires the user to keep editing or explicitly discard that draft. If a requested switch or open fails after the user confirms discard, the same in-memory draft remains available to resume in the unchanged project. At the supported minimum window width, the Sources panel leaves project progress visible and the compact filter visible and usable."
     owner: "Application and session engineering"
     code_anchor: "Apps/SupraAI/SupraAI/Review/CaseFileReviewView.swift"
     verification: "Apps/SupraAI/SupraAIUITests/CaseFileReviewUITests.swift"
     ci_job: "macos-ci/app-smoke"
     applicable_version: "Next release after 2.3.4"
-    last_reviewed: "2026-08-08"
+    last_reviewed: "2026-08-09"
     publication_anchor: "ARCHITECTURE.md"
 
   - id: "CASE-FILE-REVIEW-DELETION-PRECISION"

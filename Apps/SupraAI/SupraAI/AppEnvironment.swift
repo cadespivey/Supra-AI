@@ -1206,13 +1206,34 @@ final class AppEnvironment: ObservableObject {
                     return String(decoding: try encoder.encode(response), as: UTF8.self)
                 }
 
-                _ = try store.caseFileReviews.createOrFetchProject(
+                let amendmentProject = try store.caseFileReviews.createOrFetchProject(
                     matterID: matterID,
                     sourceRunID: amendmentResult.run.id,
                     title: "Atlas Amendment review",
                     actor: "Synthetic UI reviewer",
                     at: Date(timeIntervalSince1970: 1_931_478_300)
                 )
+
+#if DEBUG
+                if Self.isUITestMode,
+                   ProcessInfo.processInfo.arguments.contains("-uiTestReviewNavigationFailure") {
+                    try await store.database.writer.write { db in
+                        try db.execute(
+                            sql: """
+                                UPDATE case_file_review_projects
+                                SET active_table_id = NULL
+                                WHERE id = ? AND active_table_id IS NOT NULL
+                                """,
+                            arguments: [amendmentProject.project.id]
+                        )
+                        guard db.changesCount == 1 else {
+                            throw CaseFileReviewRepositoryError.corruptGraph(
+                                amendmentProject.project.id
+                            )
+                        }
+                    }
+                }
+#endif
             }
             mattersController.caseFileReviewController?.load()
         } catch {
