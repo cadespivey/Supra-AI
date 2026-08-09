@@ -1440,9 +1440,9 @@ final class CaseFileReviewHostedUITests: XCTestCase {
         for canary in [
             Fixture.alphaFinding,
             Fixture.betaFinding,
-            Fixture.exportAlphaSourceLabel,
-            Fixture.exportBetaSourceLabel,
-            Fixture.exportContrarySourceLabel,
+            Fixture.exportAlphaSourceCanary,
+            Fixture.exportBetaSourceCanary,
+            Fixture.exportContrarySourceCanary,
         ] {
             XCTAssertTrue(
                 csv.contains(canary),
@@ -2338,9 +2338,9 @@ final class CaseFileReviewHostedUITests: XCTestCase {
         static let corruptProjectMessage = "The persisted Review Project graph is incomplete."
 
         static let exportUnsavedCanary = "=UNSAVED_EXPORT_CANARY()"
-        static let exportAlphaSourceLabel = "S431"
-        static let exportBetaSourceLabel = "S977"
-        static let exportContrarySourceLabel = "C983"
+        static let exportAlphaSourceCanary = "[E1] Atlas Payment Schedule.txt"
+        static let exportBetaSourceCanary = "[E2] Atlas Renewal Clause.txt"
+        static let exportContrarySourceCanary = "[E3] Atlas Amendment.txt"
         static let exportAvailableLabel = "Export Review snapshot, available"
         static let exportUnavailableLabel =
             "Export Review snapshot unavailable while a value edit is unsaved"
