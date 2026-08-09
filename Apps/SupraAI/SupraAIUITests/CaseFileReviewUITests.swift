@@ -976,6 +976,284 @@ final class CaseFileReviewHostedUITests: XCTestCase {
         )
     }
 
+    func testTRPUI16FailedProjectSwitchRetainsExactDraftForResume() throws {
+        // T-RP-UI-16 expected RED: the dedicated failure flag is unhandled and
+        // `discardAndPerformPendingNavigation` clears the editor before project
+        // selection can report success. A failed switch therefore cannot leave
+        // Project A's exact dirty draft available through Unsaved edit / Resume.
+        let app = launchReviewProject(additionalArguments: [
+            "-uiTestReviewProjectSwitching",
+            "-uiTestReviewNavigationFailure",
+        ])
+        let matrix = app.descendants(matching: .any)["review.matrix"]
+        XCTAssertTrue(matrix.waitForExistence(timeout: 20), "Review matrix did not appear")
+        let projectPicker = app.descendants(matching: .any)["review.projectPicker"]
+        XCTAssertTrue(projectPicker.waitForExistence(timeout: 10))
+        XCTAssertTrue(
+            waitForAccessibleText(Fixture.projectATitle, in: projectPicker, timeout: 5),
+            "Project A must be selected before the failure canary is exercised"
+        )
+
+        let betaFinding = element(
+            in: matrix,
+            identifierPrefix: Fixture.findingIdentifierPrefix,
+            value: Fixture.betaFinding
+        )
+        XCTAssertTrue(betaFinding.exists)
+        let betaCellID = try cellID(
+            of: betaFinding,
+            identifierPrefix: Fixture.findingIdentifierPrefix
+        )
+        let betaValue = valueButton(
+            in: app,
+            cellID: betaCellID,
+            displayedValue: Fixture.betaGeneratedValue
+        )
+        XCTAssertTrue(betaValue.exists)
+        betaValue.click()
+
+        let editor = app.descendants(matching: .any)["review.valueEditor"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 10))
+        let field = editor.descendants(matching: .any)["review.valueEditor.field"]
+        replaceText(in: field, with: Fixture.failedProjectSwitchDraft)
+        XCTAssertEqual(field.value as? String, Fixture.failedProjectSwitchDraft)
+
+        selectReviewProject(Fixture.projectBTitle, app: app)
+        let discard = app.buttons["review.projectSwitch.discard"]
+        XCTAssertTrue(
+            discard.waitForExistence(timeout: 5),
+            "The exact dirty draft must require confirmation before the failing switch"
+        )
+        discard.click()
+
+        XCTAssertTrue(
+            app.staticTexts[Fixture.corruptProjectMessage].waitForExistence(timeout: 10),
+            "The failed project selection must remain visibly explained"
+        )
+        XCTAssertTrue(
+            waitForAccessibleText(Fixture.projectATitle, in: projectPicker, timeout: 5),
+            "A failed switch must leave Project A selected"
+        )
+        XCTAssertTrue(betaFinding.exists, "Project A's beta row must remain rendered")
+        XCTAssertTrue(
+            valueButton(
+                in: app,
+                cellID: betaCellID,
+                displayedValue: Fixture.betaGeneratedValue
+            ).exists,
+            "The unsaved canary must not replace Project A's persisted generated value"
+        )
+        XCTAssertFalse(
+            element(
+                in: matrix,
+                identifierPrefix: Fixture.findingIdentifierPrefix,
+                value: Fixture.projectBFinding
+            ).exists,
+            "The failed destination's row must not cross into Project A"
+        )
+
+        let unsavedEdit = app.descendants(matching: .any)["review.unsavedEdit"]
+        let resume = app.buttons["review.unsavedEdit.resume"]
+        XCTAssertTrue(
+            unsavedEdit.waitForExistence(timeout: 5),
+            "Failed navigation must retain an explicit recoverable dirty-draft state"
+        )
+        XCTAssertTrue(resume.isHittable, "The retained draft must be resumable")
+        resume.click()
+        XCTAssertTrue(editor.waitForExistence(timeout: 5), "Resume must reopen the exact editor")
+        let resumedField = editor.descendants(matching: .any)["review.valueEditor.field"]
+        XCTAssertEqual(
+            resumedField.value as? String,
+            Fixture.failedProjectSwitchDraft,
+            "Failed navigation must preserve the exact non-default draft byte-for-byte"
+        )
+        XCTAssertNotEqual(resumedField.value as? String, Fixture.betaGeneratedValue)
+        XCTAssertTrue(app.buttons["review.valueEditor.save"].isEnabled)
+    }
+
+    func testTRPUI17FailedOpenReviewRetainsExactDraftForResume() throws {
+        // T-RP-UI-17 expected RED: Open Review lacks a stable accessibility seam
+        // and shares the same premature clear path as Picker navigation. The
+        // dedicated failure fixture is also missing, so a valid B would destroy
+        // A's dirty draft rather than retain it after a failed attempt.
+        let app = launchReviewProject(additionalArguments: [
+            "-uiTestReviewProjectSwitching",
+            "-uiTestReviewNavigationFailure",
+        ])
+        let matrix = app.descendants(matching: .any)["review.matrix"]
+        XCTAssertTrue(matrix.waitForExistence(timeout: 20), "Review matrix did not appear")
+        let projectPicker = app.descendants(matching: .any)["review.projectPicker"]
+        XCTAssertTrue(projectPicker.waitForExistence(timeout: 10))
+        XCTAssertTrue(waitForAccessibleText(Fixture.projectATitle, in: projectPicker, timeout: 5))
+
+        let betaFinding = element(
+            in: matrix,
+            identifierPrefix: Fixture.findingIdentifierPrefix,
+            value: Fixture.betaFinding
+        )
+        XCTAssertTrue(betaFinding.exists)
+        let betaCellID = try cellID(
+            of: betaFinding,
+            identifierPrefix: Fixture.findingIdentifierPrefix
+        )
+        let betaValue = valueButton(
+            in: app,
+            cellID: betaCellID,
+            displayedValue: Fixture.betaGeneratedValue
+        )
+        XCTAssertTrue(betaValue.exists)
+        betaValue.click()
+        let editor = app.descendants(matching: .any)["review.valueEditor"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 10))
+        let field = editor.descendants(matching: .any)["review.valueEditor.field"]
+        replaceText(in: field, with: Fixture.failedOpenReviewDraft)
+        XCTAssertEqual(field.value as? String, Fixture.failedOpenReviewDraft)
+
+        openReviewOutput(Fixture.projectBTitle, app: app)
+        let discard = app.buttons["review.projectSwitch.discard"]
+        XCTAssertTrue(
+            discard.waitForExistence(timeout: 5),
+            "Dirty Open Review navigation must use the shared discard boundary"
+        )
+        discard.click()
+
+        XCTAssertTrue(
+            app.staticTexts["Review action failed"].waitForExistence(timeout: 10),
+            "A failed Open Review action needs its explicit failure alert"
+        )
+        XCTAssertTrue(
+            app.staticTexts[Fixture.corruptProjectMessage].exists,
+            "The failure alert must report the real corrupt-project boundary"
+        )
+        app.buttons["OK"].click()
+
+        XCTAssertTrue(
+            waitForAccessibleText(Fixture.projectATitle, in: projectPicker, timeout: 5),
+            "Failed Open Review must retain Project A"
+        )
+        XCTAssertTrue(betaFinding.exists)
+        XCTAssertFalse(
+            element(
+                in: matrix,
+                identifierPrefix: Fixture.findingIdentifierPrefix,
+                value: Fixture.projectBFinding
+            ).exists,
+            "The failed Open Review destination must remain absent"
+        )
+        XCTAssertTrue(
+            valueButton(
+                in: app,
+                cellID: betaCellID,
+                displayedValue: Fixture.betaGeneratedValue
+            ).exists,
+            "The failed action must not persist the unsaved draft"
+        )
+
+        let resume = app.buttons["review.unsavedEdit.resume"]
+        XCTAssertTrue(
+            resume.waitForExistence(timeout: 5),
+            "The failed Open Review draft must remain available for Resume"
+        )
+        resume.click()
+        XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        let resumedField = editor.descendants(matching: .any)["review.valueEditor.field"]
+        XCTAssertEqual(resumedField.value as? String, Fixture.failedOpenReviewDraft)
+        XCTAssertNotEqual(resumedField.value as? String, Fixture.betaGeneratedValue)
+        XCTAssertTrue(app.buttons["review.valueEditor.save"].isEnabled)
+    }
+
+    func testTRPUI18MinimumWidthSourcesKeepsProgressAndCompactFilterUsable() throws {
+        // T-RP-UI-18 expected RED: Sources has no stable whole-panel geometry
+        // seam and overlays the entire workbench while the strip reserves raw
+        // `sourcesWidth`. At the supported minimum, progress/filter controls can
+        // therefore be covered or clipped even while AX descendants stay mounted.
+        let app = launchReviewProject(additionalArguments: [
+            "-uiTestWindowWidth", "880",
+            "-uiTestReviewSourcesWidth", "980",
+        ])
+        let window = app.windows.firstMatch
+        let matrix = app.descendants(matching: .any)["review.matrix"]
+        XCTAssertTrue(matrix.waitForExistence(timeout: 20), "Review matrix did not appear")
+        XCTAssertLessThanOrEqual(
+            window.frame.width,
+            900,
+            "The hosted gate must exercise the source-defined 880-point minimum, not the default window"
+        )
+        XCTAssertGreaterThanOrEqual(window.frame.width, 879)
+
+        let alphaFinding = element(
+            in: matrix,
+            identifierPrefix: Fixture.findingIdentifierPrefix,
+            value: Fixture.alphaFinding
+        )
+        let betaFinding = element(
+            in: matrix,
+            identifierPrefix: Fixture.findingIdentifierPrefix,
+            value: Fixture.betaFinding
+        )
+        XCTAssertTrue(alphaFinding.exists)
+        XCTAssertTrue(betaFinding.exists)
+        let betaCellID = try cellID(
+            of: betaFinding,
+            identifierPrefix: Fixture.findingIdentifierPrefix
+        )
+        app.buttons["review.sources.\(betaCellID)"].click()
+
+        let inspector = app.scrollViews["review.sourcesInspector"]
+        XCTAssertTrue(inspector.waitForExistence(timeout: 10), "Beta Sources did not open")
+        XCTAssertGreaterThan(
+            inspector.frame.width,
+            600,
+            "The wide-Sources canary must exercise the panel's effective maximum at minimum width"
+        )
+        let sourcesPanel = app.descendants(matching: .any)["review.sourcesPanel"]
+        XCTAssertTrue(
+            sourcesPanel.waitForExistence(timeout: 5),
+            "The whole Sources panel needs a stable geometry surface"
+        )
+
+        let progress = app.descendants(matching: .any)["review.progress"]
+        let filterMenu = app.descendants(matching: .any)["review.filter.menu"]
+        XCTAssertTrue(progress.exists, "Review progress must remain mounted above Sources")
+        XCTAssertTrue(
+            waitForAccessibleText("0 of 2 findings reviewed", in: progress, timeout: 5),
+            "Sources must not change or hide the full-project progress denominator"
+        )
+        XCTAssertTrue(
+            window.frame.contains(progress.frame) && !progress.frame.isEmpty,
+            "Progress must remain visibly inside the minimum-width window"
+        )
+        XCTAssertFalse(
+            progress.frame.intersects(sourcesPanel.frame),
+            "Sources must overlay only Matrix results, not the progress strip"
+        )
+        XCTAssertTrue(
+            filterMenu.waitForExistence(timeout: 5),
+            "Sources-open compact layout needs one visible filter menu"
+        )
+        XCTAssertTrue(
+            window.frame.contains(filterMenu.frame) && filterMenu.isHittable,
+            "The compact filter must remain inside the minimum-width window and pointer reachable"
+        )
+        XCTAssertFalse(
+            filterMenu.frame.intersects(sourcesPanel.frame),
+            "Sources must not cover the compact filter"
+        )
+
+        selectReviewFilter(
+            identifier: "review.filter.evidenceAttention",
+            label: "Evidence attention",
+            app: app
+        )
+        XCTAssertTrue(betaFinding.exists, "Beta's contrary evidence must remain visible")
+        XCTAssertTrue(alphaFinding.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(inspector.exists, "Filtering to selected beta must keep its Sources open")
+        XCTAssertTrue(
+            waitForAccessibleText("0 of 2 findings reviewed", in: progress, timeout: 5),
+            "Filtering under Sources must retain the full project denominator"
+        )
+    }
+
     private func launchReviewProject(
         additionalArguments: [String] = []
     ) -> XCUIApplication {
@@ -1058,6 +1336,30 @@ final class CaseFileReviewHostedUITests: XCTestCase {
         XCTAssertTrue(
             option.waitForExistence(timeout: 5),
             "Review Project option \(title) is unavailable",
+            file: file,
+            line: line
+        )
+        option.click()
+    }
+
+    private func openReviewOutput(
+        _ title: String,
+        app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let control = app.descendants(matching: .any)["review.openReview"]
+        XCTAssertTrue(
+            control.waitForExistence(timeout: 5),
+            "Open Review is unavailable",
+            file: file,
+            line: line
+        )
+        control.click()
+        let option = app.menuItems[title]
+        XCTAssertTrue(
+            option.waitForExistence(timeout: 5),
+            "Open Review output \(title) is unavailable",
             file: file,
             line: line
         )
@@ -1238,6 +1540,9 @@ final class CaseFileReviewHostedUITests: XCTestCase {
         static let projectBTitle = "Atlas Amendment review"
         static let projectBFinding = "synthetic amended renewal notice period"
         static let projectBGeneratedValue = "90 calendar days"
+        static let failedProjectSwitchDraft = "73 days — failed project switch draft"
+        static let failedOpenReviewDraft = "81 days — failed open draft"
+        static let corruptProjectMessage = "The persisted Review Project graph is incomplete."
 
         static let defaultSourceCountCanary = "0 supporting"
         static let emptySupportingCanary =
