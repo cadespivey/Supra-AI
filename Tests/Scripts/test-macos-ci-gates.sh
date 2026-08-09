@@ -32,6 +32,12 @@ run_case() {
   fi
 }
 
+app_smoke_selector_present() {
+  local file="$1"
+  local selector="$2"
+  grep -Fq -- "$selector" "$file"
+}
+
 package_fixture="${temporary_dir}/packages"
 mkdir -p "${package_fixture}/Packages"
 while IFS= read -r package; do
@@ -546,6 +552,42 @@ run_case \
 # disables signing even though Debug XPC authentication requires identifier-
 # bearing ad-hoc signatures on both the app and its embedded service.
 app_smoke_script="${scripts}/run-app-smoke-tests.sh"
+
+# T-RP-CI-02 expected RED: an unanchored selector presence check accepts a
+# commented command line even though xcodebuild will never execute it.
+commented_review_selector="${temporary_dir}/commented-review-selector.sh"
+printf '%s\n' \
+  '# -only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPUI18MinimumWidthSourcesKeepsProgressAndCompactFilterUsable \' \
+  >"$commented_review_selector"
+if app_smoke_selector_present \
+    "$commented_review_selector" \
+    '-only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPUI18MinimumWidthSourcesKeepsProgressAndCompactFilterUsable'; then
+  record_failure 'app smoke selector guard accepts a commented-out Review test'
+else
+  printf '%s\n' 'PASS: app smoke selector guard rejects commented-out Review tests'
+fi
+
+# T-RP-CI-03 expected RED: `class_contains_test` currently accepts a commented
+# Swift method inside the correct class, so --check can pass after all six
+# claimed Review tests are disabled.
+commented_review_tests="${temporary_dir}/CommentedCaseFileReviewUITests.swift"
+printf '%s\n' \
+  'final class CaseFileReviewCompositionUITests: XCTestCase {' \
+  '  // func testTRPUI13WorkflowControlsPinAccessibleFiltersProgressAndGuardedNavigation() {}' \
+  '}' \
+  'final class CaseFileReviewHostedUITests: XCTestCase {' \
+  '  // func testTRPUI14ProgressAndAttentionFiltersReconcileHiddenSourcesAndExplicitEmptyState() {}' \
+  '  // func testTRPUI15DirtyDraftCancelKeepsProjectAndDiscardSwitchesWithoutCrossProjectLeak() {}' \
+  '  // func testTRPUI16FailedProjectSwitchRetainsExactDraftForResume() {}' \
+  '  // func testTRPUI17FailedOpenReviewRetainsExactDraftForResume() {}' \
+  '  // func testTRPUI18MinimumWidthSourcesKeepsProgressAndCompactFilterUsable() {}' \
+  '}' >"$commented_review_tests"
+run_case \
+  "commented Review methods fail the app-smoke presence guard" \
+  1 \
+  "claimed Review workflow smoke tests are missing" \
+  env SUPRA_CASE_FILE_REVIEW_UI_TEST_FILE="$commented_review_tests" \
+    bash "${scripts}/run-app-smoke-tests.sh" --check
 # Expected RED: the Diagnostics routing-availability test existed but the
 # protected smoke command did not select it, so deletion or wording drift would
 # still leave every executed CI test green.
@@ -585,7 +627,7 @@ review_workflow_selectors=(
 )
 review_workflow_missing=0
 for selector in "${review_workflow_selectors[@]}"; do
-  if ! grep -Fq -- "$selector" "$app_smoke_script"; then
+  if ! app_smoke_selector_present "$app_smoke_script" "$selector"; then
     review_workflow_missing=1
   fi
 done
