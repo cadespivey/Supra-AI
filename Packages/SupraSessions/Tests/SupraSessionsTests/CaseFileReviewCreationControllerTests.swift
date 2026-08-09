@@ -83,14 +83,20 @@ final class CaseFileReviewCreationControllerTests: XCTestCase {
             "documentless whole-matter exclusions do not belong to an explicit document scope"
         )
 
-        XCTAssertThrowsError(
-            try controller.inspectScope(scope: CorpusAnalysisScope(
-                schemaVersion: 1,
-                documentIDs: [fixture.reviewRequiredID]
-            ))
-        ) { error in
-            XCTAssertEqual(error as? CaseFileReviewCreationError, .noEligibleSources)
-        }
+        // Receipt-polish RED: an all-excluded scope is still a valid source
+        // receipt. Hiding its member and reason behind `noEligibleSources`
+        // prevents the setup UI from explaining why Start is unavailable.
+        let allExcludedScope = CorpusAnalysisScope(
+            schemaVersion: 1,
+            documentIDs: [fixture.reviewRequiredID]
+        )
+        let allExcluded = try controller.inspectScope(scope: allExcludedScope)
+        XCTAssertEqual(allExcluded.scope, allExcludedScope)
+        XCTAssertEqual(allExcluded.eligibleCount, 0)
+        XCTAssertEqual(allExcluded.excludedCount, 1)
+        XCTAssertEqual(allExcluded.members.map(\.documentID), [fixture.reviewRequiredID])
+        XCTAssertEqual(allExcluded.members.map(\.displayName), ["Review Required Exhibit 1301.pdf"])
+        XCTAssertEqual(allExcluded.members.map(\.reason), ["review_required"])
     }
 
     func testTRPCREATESESS02SubmissionFreezesExactNondefaultPayloadAndRejectsInvalidInputBeforeWriting() throws {
