@@ -13,6 +13,9 @@ struct CaseFileReviewView: View {
     @State private var previewModel: DocumentPreviewModel?
     @State private var actionError: String?
     @State private var valueEditor: ValueEditorState?
+    @State private var activeFilter: CaseFileReviewController.RowFilter = .all
+    @State private var pendingNavigation: PendingReviewNavigation?
+    @State private var discardNavigationPresented = false
     @FocusState private var valueFieldFocused: Bool
 
     // Approved evidence rail: #A77920 in light appearance, #D2AC5C in dark.
@@ -43,6 +46,21 @@ struct CaseFileReviewView: View {
                     reviewContent
                 }
             }
+            .alert(
+                "Discard value changes?",
+                isPresented: $discardNavigationPresented
+            ) {
+                Button("Keep editing", role: .cancel) {
+                    keepEditingAfterNavigationRequest()
+                }
+                .accessibilityIdentifier("review.projectSwitch.cancel")
+                Button("Discard and switch", role: .destructive) {
+                    discardAndPerformPendingNavigation()
+                }
+                .accessibilityIdentifier("review.projectSwitch.discard")
+            } message: {
+                Text(discardNavigationMessage)
+            }
 
             if controller.selectedCellID != nil {
                 SlideOverPanel(
@@ -65,12 +83,16 @@ struct CaseFileReviewView: View {
         .onChange(of: controller.selectedCellID) { _, _ in
             previewModel = nil
             if controller.selectedCellID != nil {
-                valueEditor = nil
+                clearValueEditor()
             }
         }
         .onChange(of: controller.selectedProjectID) { _, _ in
-            valueEditor = nil
-            valueFieldFocused = false
+            activeFilter = .all
+            previewModel = nil
+            clearValueEditor()
+        }
+        .onChange(of: controller.rows) { _, _ in
+            reconcileVisibleSelection()
         }
         .alert(
             "Review action failed",
@@ -93,7 +115,7 @@ struct CaseFileReviewView: View {
                     "Project",
                     selection: Binding(
                         get: { controller.selectedProjectID ?? "" },
-                        set: { controller.selectProject($0) }
+                        set: { requestNavigation(.selectProject($0)) }
                     )
                 ) {
                     ForEach(controller.projects) { project in
@@ -103,6 +125,8 @@ struct CaseFileReviewView: View {
                 .labelsHidden()
                 .frame(width: 220)
                 .accessibilityLabel("Review Project")
+                .accessibilityValue(selectedProject?.title ?? "")
+                .accessibilityIdentifier("review.projectPicker")
             } else if let project = controller.projects.first {
                 Text(project.title)
                     .font(.supraSubheadline)
@@ -164,112 +188,297 @@ struct CaseFileReviewView: View {
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                Table(
-                    controller.rows,
-                    selection: Binding(
-                        get: { controller.selectedCellID },
-                        set: { cellID in
-                            if let cellID {
-                                controller.selectCell(cellID)
-                            } else {
-                                controller.clearSelection()
-                            }
-                        }
-                    )
-                ) {
-                    TableColumn("Finding") { row in
-                        Text(row.finding)
-                            .font(.supraBody)
-                            .lineLimit(2)
-                            .padding(.leading, 8)
-                            .overlay(alignment: .leading) {
-                                if controller.selectedCellID == row.cellID {
-                                    Rectangle()
-                                        .fill(evidenceRailColor)
-                                        .frame(width: evidenceRailWidth, height: 24)
-                                }
-                            }
-                            .accessibilityIdentifier("review.row.\(row.cellID)")
-                    }
-                    .width(min: 180, ideal: 240)
+                reviewControlStrip
+                Divider()
 
-                    TableColumn("Generated value") { row in
-                        HStack(spacing: 8) {
-                            Button {
-                                beginEditing(row)
-                            } label: {
-                                HStack(spacing: 6) {
-                                    Text(row.displayValue)
-                                        .font(.supraBody)
-                                        .lineLimit(2)
-                                        .multilineTextAlignment(.leading)
-                                    Image(systemName: "pencil")
-                                        .font(.caption)
-                                        .foregroundStyle(.tertiary)
-                                }
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel(row.displayValue)
-                            .accessibilityValue(
-                                row.valueState == .edited ? "Edited" : "Generated"
+                if filteredRows.isEmpty {
+                    VStack(spacing: 12) {
+                        ContentUnavailableView(
+                            "No findings match",
+                            systemImage: "line.3.horizontal.decrease.circle",
+                            description: Text(
+                                "Choose another filter to see the rest of this Review Project."
                             )
-                            .accessibilityIdentifier("review.value.\(row.cellID)")
-                            .accessibilityHint("Edit this Review value")
-                            .popover(
-                                isPresented: valueEditorPresented(for: row.cellID),
-                                arrowEdge: .bottom
-                            ) {
-                                valueEditorPopover
-                            }
-
-                            if row.valueState == .edited {
-                                Text("Edited")
-                                    .font(.supraCaption)
-                                    .foregroundStyle(.secondary)
-                                    .accessibilityIdentifier("review.edited.\(row.cellID)")
-                            }
+                        )
+                        .accessibilityIdentifier("review.filteredEmpty")
+                        Button("Show all findings") {
+                            setFilter(.all)
                         }
+                        .accessibilityIdentifier("review.filter.showAll")
                     }
-                    .width(min: 180, ideal: 300)
-
-                    TableColumn("Sources") { row in
-                        Button {
-                            valueEditor = nil
-                            controller.selectCell(row.cellID)
-                        } label: {
-                            Text(sourceSummary(row))
-                                .font(.supraSubheadline)
-                                .lineLimit(1)
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityIdentifier("review.sources.\(row.cellID)")
-                        .accessibilityHint("Open supporting and contrary evidence")
-                    }
-                    .width(min: 150, ideal: 190)
-
-                    TableColumn("Review") { row in
-                        if row.reviewState == .reviewed {
-                            Label("Reviewed", systemImage: "checkmark.circle.fill")
-                                .font(.supraSubheadline)
-                                .foregroundStyle(.secondary)
-                                .accessibilityIdentifier("review.reviewed.\(row.cellID)")
-                                .help(reviewedHelp(row))
-                        } else {
-                            Button("Mark Reviewed") {
-                                markReviewed(row)
-                            }
-                            .buttonStyle(.ghost)
-                            .accessibilityIdentifier("review.markReviewed.\(row.cellID)")
-                            .accessibilityHint("Record that this finding was reviewed at its current value")
-                        }
-                    }
-                    .width(min: 130, ideal: 150)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    reviewMatrix(rows: filteredRows)
                 }
-                .accessibilityIdentifier("review.matrix")
             }
         }
+    }
+
+    private var reviewControlStrip: some View {
+        HStack(spacing: 14) {
+            reviewProgress
+
+            Spacer(minLength: 12)
+
+            if valueEditorIsDirty {
+                unsavedEditControls
+            } else {
+                reviewFilterControls
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.trailing, controller.selectedCellID == nil ? 0 : sourcesWidth)
+        .frame(minHeight: 38)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("review.controlStrip")
+    }
+
+    private var reviewProgress: some View {
+        let progress = controller.reviewProgress
+        return VStack(alignment: .leading, spacing: 4) {
+            Text("\(progress.reviewedCount) of \(progress.totalCount) reviewed")
+                .font(.supraCaption)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+                .accessibilityLabel(
+                    "\(progress.reviewedCount) of \(progress.totalCount) findings reviewed"
+                )
+                .accessibilityHint("Review progress")
+                .accessibilityIdentifier("review.progress")
+            ProgressView(
+                value: Double(progress.reviewedCount),
+                total: Double(max(progress.totalCount, 1))
+            )
+            .progressViewStyle(.linear)
+            .tint(.accentColor)
+            .accessibilityHidden(true)
+        }
+        .frame(minWidth: 145, idealWidth: 180, maxWidth: 220, alignment: .leading)
+    }
+
+    private var reviewFilterControls: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 4) {
+                ForEach(CaseFileReviewController.RowFilter.allCases, id: \.self) { filter in
+                    reviewFilterButton(filter)
+                }
+            }
+            .fixedSize(horizontal: true, vertical: false)
+
+            Menu {
+                ForEach(CaseFileReviewController.RowFilter.allCases, id: \.self) { filter in
+                    identifiedFilterControl(
+                        Button {
+                            setFilter(filter)
+                        } label: {
+                            if activeFilter == filter {
+                                Label(filterTitle(filter), systemImage: "checkmark")
+                            } else {
+                                Text(filterTitle(filter))
+                            }
+                        },
+                        filter: filter
+                    )
+                }
+            } label: {
+                Text("\(filterTitle(activeFilter)) · \(filterCount(activeFilter))")
+                    .lineLimit(1)
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .accessibilityLabel("Filter findings")
+            .accessibilityValue(filterTitle(activeFilter))
+            .accessibilityIdentifier("review.filter.menu")
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("review.filters")
+    }
+
+    private func reviewFilterButton(
+        _ filter: CaseFileReviewController.RowFilter
+    ) -> some View {
+        identifiedFilterControl(
+            Button {
+                setFilter(filter)
+            } label: {
+                HStack(spacing: 5) {
+                    Text(filterTitle(filter))
+                    Text("\(filterCount(filter))")
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+                .font(.supraCaption)
+                .lineLimit(1)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(
+                    activeFilter == filter
+                        ? Color.accentColor.opacity(colorScheme == .dark ? 0.18 : 0.10)
+                        : Color.clear
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                .overlay(alignment: .leading) {
+                    if filter == .evidenceAttention {
+                        Rectangle()
+                            .fill(evidenceRailColor)
+                            .frame(width: evidenceRailWidth)
+                    }
+                }
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(filterTitle(filter))
+            .accessibilityValue(findingCount(filterCount(filter)))
+            .accessibilityAddTraits(activeFilter == filter ? .isSelected : []),
+            filter: filter
+        )
+    }
+
+    @ViewBuilder
+    private func identifiedFilterControl<Content: View>(
+        _ content: Content,
+        filter: CaseFileReviewController.RowFilter
+    ) -> some View {
+        switch filter {
+        case .all:
+            content.accessibilityIdentifier("review.filter.all")
+        case .needsReview:
+            content.accessibilityIdentifier("review.filter.needsReview")
+        case .edited:
+            content.accessibilityIdentifier("review.filter.edited")
+        case .evidenceAttention:
+            content.accessibilityIdentifier("review.filter.evidenceAttention")
+        }
+    }
+
+    private var unsavedEditControls: some View {
+        HStack(spacing: 8) {
+            Label("Unsaved edit", systemImage: "pencil")
+                .font(.supraCaption)
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier("review.unsavedEdit")
+            Button("Resume") {
+                resumeValueEditor()
+            }
+            .buttonStyle(.ghost)
+            .accessibilityIdentifier("review.unsavedEdit.resume")
+            Button("Discard") {
+                clearValueEditor()
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .accessibilityIdentifier("review.unsavedEdit.discard")
+        }
+    }
+
+    private func reviewMatrix(
+        rows: [CaseFileReviewController.Row]
+    ) -> some View {
+        Table(
+            rows,
+            selection: Binding(
+                get: { controller.selectedCellID },
+                set: { cellID in
+                    if valueEditorIsDirty {
+                        resumeValueEditor()
+                    } else if let cellID {
+                        clearValueEditor()
+                        controller.selectCell(cellID)
+                    } else {
+                        controller.clearSelection()
+                    }
+                }
+            )
+        ) {
+            TableColumn("Finding") { row in
+                Text(row.finding)
+                    .font(.supraBody)
+                    .lineLimit(2)
+                    .padding(.leading, 8)
+                    .overlay(alignment: .leading) {
+                        if controller.selectedCellID == row.cellID {
+                            Rectangle()
+                                .fill(evidenceRailColor)
+                                .frame(width: evidenceRailWidth, height: 24)
+                        }
+                    }
+                    .accessibilityIdentifier("review.row.\(row.cellID)")
+            }
+            .width(min: 180, ideal: 240)
+
+            TableColumn("Generated value") { row in
+                HStack(spacing: 8) {
+                    Button {
+                        beginEditing(row)
+                    } label: {
+                        HStack(spacing: 6) {
+                            Text(row.displayValue)
+                                .font(.supraBody)
+                                .lineLimit(2)
+                                .multilineTextAlignment(.leading)
+                            Image(systemName: "pencil")
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(row.displayValue)
+                    .accessibilityValue(
+                        row.valueState == .edited ? "Edited" : "Generated"
+                    )
+                    .accessibilityIdentifier("review.value.\(row.cellID)")
+                    .accessibilityHint("Edit this Review value")
+                    .popover(
+                        isPresented: valueEditorPresented(for: row.cellID),
+                        arrowEdge: .bottom
+                    ) {
+                        valueEditorPopover
+                    }
+
+                    if row.valueState == .edited {
+                        Text("Edited")
+                            .font(.supraCaption)
+                            .foregroundStyle(.secondary)
+                            .accessibilityIdentifier("review.edited.\(row.cellID)")
+                    }
+                }
+            }
+            .width(min: 180, ideal: 300)
+
+            TableColumn("Sources") { row in
+                Button {
+                    openSources(row)
+                } label: {
+                    Text(sourceSummary(row))
+                        .font(.supraSubheadline)
+                        .lineLimit(1)
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("review.sources.\(row.cellID)")
+                .accessibilityHint("Open supporting and contrary evidence")
+            }
+            .width(min: 150, ideal: 190)
+
+            TableColumn("Review") { row in
+                if row.reviewState == .reviewed {
+                    Label("Reviewed", systemImage: "checkmark.circle.fill")
+                        .font(.supraSubheadline)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("review.reviewed.\(row.cellID)")
+                        .help(reviewedHelp(row))
+                } else {
+                    Button("Mark Reviewed") {
+                        markReviewed(row)
+                    }
+                    .buttonStyle(.ghost)
+                    .accessibilityIdentifier("review.markReviewed.\(row.cellID)")
+                    .accessibilityHint("Record that this finding was reviewed at its current value")
+                }
+            }
+            .width(min: 130, ideal: 150)
+        }
+        .accessibilityIdentifier("review.matrix")
     }
 
     private var sourcesInspector: some View {
@@ -420,6 +629,15 @@ struct CaseFileReviewView: View {
         return controller.projects.first { $0.id == selectedProjectID }
     }
 
+    private var filteredRows: [CaseFileReviewController.Row] {
+        controller.rows(matching: activeFilter)
+    }
+
+    private var discardNavigationMessage: String {
+        let finding = valueEditor?.finding ?? "this finding"
+        return "Switching Review Projects will discard the unsaved changes to “\(finding)”."
+    }
+
     private var emptyDescription: String {
         if controller.projects.isEmpty, controller.eligibleOutputs.isEmpty {
             return "Verified exhaustive outputs appear here when their exact source proof is ready."
@@ -445,17 +663,118 @@ struct CaseFileReviewView: View {
     }
 
     private func open(_ output: CaseFileReviewController.EligibleOutput) {
-        do {
-            try controller.openReview(
-                sourceRunID: output.sourceRunID,
-                title: output.title
-            )
-        } catch {
-            actionError = error.localizedDescription
+        requestNavigation(.openOutput(output))
+    }
+
+    private func requestNavigation(_ navigation: PendingReviewNavigation) {
+        if case let .selectProject(projectID) = navigation,
+           projectID == controller.selectedProjectID {
+            return
+        }
+
+        if valueEditorIsDirty {
+            valueEditor?.isPresented = false
+            valueFieldFocused = false
+            pendingNavigation = navigation
+            discardNavigationPresented = true
+            return
+        }
+
+        clearValueEditor()
+        performNavigation(navigation)
+    }
+
+    private func performNavigation(_ navigation: PendingReviewNavigation) {
+        switch navigation {
+        case let .selectProject(projectID):
+            controller.selectProject(projectID)
+            if controller.selectedProjectID == projectID {
+                activeFilter = .all
+                previewModel = nil
+            }
+        case let .openOutput(output):
+            do {
+                try controller.openReview(
+                    sourceRunID: output.sourceRunID,
+                    title: output.title
+                )
+                activeFilter = .all
+                previewModel = nil
+            } catch {
+                actionError = error.localizedDescription
+            }
         }
     }
 
+    private func keepEditingAfterNavigationRequest() {
+        pendingNavigation = nil
+        resumeValueEditor()
+    }
+
+    private func discardAndPerformPendingNavigation() {
+        let navigation = pendingNavigation
+        pendingNavigation = nil
+        clearValueEditor()
+        if let navigation {
+            performNavigation(navigation)
+        }
+    }
+
+    private func setFilter(_ filter: CaseFileReviewController.RowFilter) {
+        guard filter != activeFilter else { return }
+        guard !valueEditorIsDirty else {
+            resumeValueEditor()
+            return
+        }
+
+        clearValueEditor()
+        let visibleCellIDs = Set(controller.rows(matching: filter).map(\.cellID))
+        if let selectedCellID = controller.selectedCellID,
+           !visibleCellIDs.contains(selectedCellID) {
+            closeSources()
+        }
+        activeFilter = filter
+    }
+
+    private func reconcileVisibleSelection() {
+        guard let selectedCellID = controller.selectedCellID else { return }
+        let visibleCellIDs = Set(filteredRows.map(\.cellID))
+        if !visibleCellIDs.contains(selectedCellID) {
+            closeSources()
+        }
+    }
+
+    private func filterTitle(_ filter: CaseFileReviewController.RowFilter) -> String {
+        switch filter {
+        case .all: "All"
+        case .needsReview: "Needs review"
+        case .edited: "Edited"
+        case .evidenceAttention: "Evidence attention"
+        }
+    }
+
+    private func filterCount(_ filter: CaseFileReviewController.RowFilter) -> Int {
+        controller.rows(matching: filter).count
+    }
+
+    private func findingCount(_ count: Int) -> String {
+        "\(count) \(count == 1 ? "finding" : "findings")"
+    }
+
+    private func openSources(_ row: CaseFileReviewController.Row) {
+        if valueEditorIsDirty {
+            resumeValueEditor()
+            return
+        }
+        clearValueEditor()
+        controller.selectCell(row.cellID)
+    }
+
     private func markReviewed(_ row: CaseFileReviewController.Row) {
+        if valueEditorIsDirty {
+            resumeValueEditor()
+            return
+        }
         do {
             try controller.markReviewed(cellID: row.cellID)
         } catch {
@@ -464,24 +783,38 @@ struct CaseFileReviewView: View {
     }
 
     private func beginEditing(_ row: CaseFileReviewController.Row) {
+        if valueEditorIsDirty {
+            resumeValueEditor()
+            return
+        }
+
+        guard let projectID = controller.selectedProjectID else { return }
         closeSources()
         valueEditor = ValueEditorState(
+            projectID: projectID,
             cellID: row.cellID,
             finding: row.finding,
             generatedValue: row.generatedValue,
             currentValue: row.displayValue,
             isEdited: row.valueState == .edited,
-            draft: row.displayValue
+            draft: row.displayValue,
+            isPresented: true
         )
     }
 
     private func valueEditorPresented(for cellID: String) -> Binding<Bool> {
         Binding(
-            get: { valueEditor?.cellID == cellID },
+            get: {
+                valueEditor?.cellID == cellID && valueEditor?.isPresented == true
+            },
             set: { isPresented in
-                if !isPresented, valueEditor?.cellID == cellID {
-                    valueEditor = nil
+                guard valueEditor?.cellID == cellID else { return }
+                valueEditor?.isPresented = isPresented
+                if !isPresented {
                     valueFieldFocused = false
+                    if !valueEditorIsDirty {
+                        valueEditor = nil
+                    }
                 }
             }
         )
@@ -559,8 +892,7 @@ struct CaseFileReviewView: View {
                     }
                     Spacer()
                     Button("Cancel") {
-                        valueEditor = nil
-                        valueFieldFocused = false
+                        clearValueEditor()
                     }
                     .buttonStyle(.ghost)
                     .keyboardShortcut(.cancelAction)
@@ -571,7 +903,7 @@ struct CaseFileReviewView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.return, modifiers: .command)
-                    .disabled(!valueEditorHasChanges)
+                    .disabled(!valueEditorCanSave)
                     .accessibilityIdentifier("review.valueEditor.save")
                 }
             }
@@ -582,30 +914,58 @@ struct CaseFileReviewView: View {
         .accessibilityIdentifier("review.valueEditor")
     }
 
-    private var valueEditorHasChanges: Bool {
+    private var valueEditorIsDirty: Bool {
+        guard let editor = valueEditor else { return false }
+        let normalized = editor.draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        return normalized != editor.currentValue
+    }
+
+    private var valueEditorCanSave: Bool {
         guard let editor = valueEditor else { return false }
         let normalized = editor.draft.trimmingCharacters(in: .whitespacesAndNewlines)
         return !normalized.isEmpty && normalized != editor.currentValue
     }
 
     private func saveValueEditor(_ editor: ValueEditorState) {
+        guard editor.projectID == controller.selectedProjectID else {
+            actionError = "The selected Review Project changed before this value could be saved."
+            return
+        }
         do {
             try controller.editValue(cellID: editor.cellID, value: editor.draft)
-            valueEditor = nil
-            valueFieldFocused = false
+            clearValueEditor()
         } catch {
             actionError = error.localizedDescription
         }
     }
 
     private func restoreGeneratedValue(_ editor: ValueEditorState) {
+        guard editor.projectID == controller.selectedProjectID else {
+            actionError = "The selected Review Project changed before this value could be restored."
+            return
+        }
         do {
             try controller.useGeneratedValue(cellID: editor.cellID)
-            valueEditor = nil
-            valueFieldFocused = false
+            clearValueEditor()
         } catch {
             actionError = error.localizedDescription
         }
+    }
+
+    private func resumeValueEditor() {
+        guard valueEditor?.projectID == controller.selectedProjectID else {
+            clearValueEditor()
+            return
+        }
+        valueEditor?.isPresented = true
+        DispatchQueue.main.async {
+            valueFieldFocused = true
+        }
+    }
+
+    private func clearValueEditor() {
+        valueEditor = nil
+        valueFieldFocused = false
     }
 
     private func closeSources() {
@@ -615,10 +975,17 @@ struct CaseFileReviewView: View {
 }
 
 private struct ValueEditorState {
+    let projectID: String
     let cellID: String
     let finding: String
     let generatedValue: String
     let currentValue: String
     let isEdited: Bool
     var draft: String
+    var isPresented: Bool
+}
+
+private enum PendingReviewNavigation {
+    case selectProject(String)
+    case openOutput(CaseFileReviewController.EligibleOutput)
 }

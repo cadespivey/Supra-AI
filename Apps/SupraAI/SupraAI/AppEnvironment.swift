@@ -980,8 +980,9 @@ final class AppEnvironment: ObservableObject {
 
     /// Builds one coverage-complete, exact-v2 exhaustive result whose contrary
     /// evidence intentionally leaves it review-required, then freezes it as a
-    /// Review Project only for the dedicated hosted Review tests. The base UI-test
-    /// launch remains small, and `-uiTestMode` keeps this synthetic graph in a
+    /// Review Project only for the dedicated hosted Review tests. An additional
+    /// switching flag adds one older, exact-run-backed project without enlarging
+    /// the ordinary Review fixture. `-uiTestMode` keeps both synthetic graphs in a
     /// fresh, throwaway store rather than the user's database.
     private func seedUITestReviewProjectIfNeeded() async {
         guard Self.isUITestMode,
@@ -1019,6 +1020,8 @@ final class AppEnvironment: ObservableObject {
                     text: betaContraryExcerpt
                 ),
             ]
+            let modelLineageJSON =
+                #"{"artifact_fingerprint_sha256":"7777777777777777777777777777777777777777777777777777777777777777","content_binding_algorithm":"supra-release-model-sha256-v1","content_binding_schema_version":1,"model_repository":"synthetic/review-uitest","model_revision":"0123456789abcdef0123456789abcdef01234567"}"#
 
             for spec in sourceSpecs where try store.documentLibrary.fetchDocument(
                 id: spec.documentID
@@ -1084,7 +1087,7 @@ final class AppEnvironment: ObservableObject {
                     query: "Extract the exact payment deadline and renewal notice period, retaining contrary terms.",
                     scope: CorpusAnalysisScope(documentIDs: sourceSpecs.map(\.documentID)),
                     characterBudget: 4_219,
-                    modelLineageJSON: #"{"artifact_fingerprint_sha256":"7777777777777777777777777777777777777777777777777777777777777777","content_binding_algorithm":"supra-release-model-sha256-v1","content_binding_schema_version":1,"model_repository":"synthetic/review-uitest","model_revision":"0123456789abcdef0123456789abcdef01234567"}"#
+                    modelLineageJSON: modelLineageJSON
                 )
             ) { input in
                 func reference(
@@ -1152,6 +1155,65 @@ final class AppEnvironment: ObservableObject {
                 actor: "Synthetic UI reviewer",
                 at: Date(timeIntervalSince1970: 1_931_478_400)
             )
+
+            if ProcessInfo.processInfo.arguments.contains("-uiTestReviewProjectSwitching") {
+                let amendmentSource = sourceSpecs[2]
+                let amendmentResult = try await ExhaustiveListTask(store: store).run(
+                    request: ExhaustiveListRequest(
+                        runKey: "ui-review-project-switching-run",
+                        matterID: matterID,
+                        title: "Atlas Amendment review",
+                        query: "Extract the exact amended renewal notice period.",
+                        scope: CorpusAnalysisScope(documentIDs: [amendmentSource.documentID]),
+                        characterBudget: 4_219,
+                        modelLineageJSON: modelLineageJSON
+                    )
+                ) { input in
+                    guard let source = input.partition.sources.first(where: {
+                        $0.documentID == amendmentSource.documentID
+                            && $0.revisionID == amendmentSource.revisionID
+                    }) else {
+                        throw CorpusAnalysisMapFailure.permanent(
+                            "Synthetic Review switching source was not presented to the mapper."
+                        )
+                    }
+                    guard let range = Self.reviewUITestCharacterRange(
+                        of: betaContraryExcerpt,
+                        in: source.text
+                    ) else {
+                        throw CorpusAnalysisMapFailure.permanent(
+                            "Synthetic Review switching excerpt was not present in its exact slice."
+                        )
+                    }
+                    let reference = CorpusAnalysisEvidenceReference(
+                        documentID: source.documentID,
+                        revisionID: source.revisionID,
+                        locatorJSON: source.locatorJSON,
+                        quote: betaContraryExcerpt,
+                        charStart: range.lowerBound,
+                        charEnd: range.upperBound
+                    )
+                    let response = ReviewUITestMapResponse(items: [
+                        ReviewUITestMapItem(
+                            itemKey: "Synthetic amended renewal notice period",
+                            value: "90 calendar days",
+                            evidence: [reference],
+                            contraryEvidence: []
+                        ),
+                    ])
+                    let encoder = JSONEncoder()
+                    encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+                    return String(decoding: try encoder.encode(response), as: UTF8.self)
+                }
+
+                _ = try store.caseFileReviews.createOrFetchProject(
+                    matterID: matterID,
+                    sourceRunID: amendmentResult.run.id,
+                    title: "Atlas Amendment review",
+                    actor: "Synthetic UI reviewer",
+                    at: Date(timeIntervalSince1970: 1_931_478_300)
+                )
+            }
             mattersController.caseFileReviewController?.load()
         } catch {
             assertionFailure("Could not seed Review Project accessibility fixture: \(error)")

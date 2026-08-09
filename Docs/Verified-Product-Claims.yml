@@ -58,6 +58,17 @@ claims:
     last_reviewed: "2026-08-08"
     publication_anchor: "ARCHITECTURE.md"
 
+  - id: "CASE-FILE-REVIEW-WORKFLOW"
+    topic: "case-file-review-workflow"
+    wording: "The Review workbench derives project progress and All / Needs review / Edited / Evidence attention filters from the selected project's current durable rows without changing stored review, value, support, or evidence state; selecting or opening another Review Project while a value edit is dirty requires the user to keep editing or explicitly discard that draft."
+    owner: "Application and session engineering"
+    code_anchor: "Apps/SupraAI/SupraAI/Review/CaseFileReviewView.swift"
+    verification: "Apps/SupraAI/SupraAIUITests/CaseFileReviewUITests.swift"
+    ci_job: "macos-ci/app-smoke"
+    applicable_version: "Next release after 2.3.4"
+    last_reviewed: "2026-08-08"
+    publication_anchor: "ARCHITECTURE.md"
+
   - id: "CASE-FILE-REVIEW-DELETION-PRECISION"
     topic: "case-file-review-deletion-precision"
     wording: "Permanent document deletion precision-degrades only affected Review evidence and projects: live proof pointers become unavailable and dependent support and project state become stale, while frozen source identity, citation label, locator, excerpt, generated value, review state, and reviewer metadata remain retained; unrelated Review work remains unchanged."

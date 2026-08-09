@@ -72,6 +72,13 @@ public final class CaseFileReviewController: ObservableObject {
         case edited
     }
 
+    public enum SupportState: String, Sendable, Equatable {
+        case supported
+        case unsupported
+        case failed
+        case stale
+    }
+
     public struct Row: Identifiable, Sendable, Equatable {
         public var id: String { cellID }
         public let cellID: String
@@ -82,7 +89,7 @@ public final class CaseFileReviewController: ObservableObject {
         public let contrarySourceCount: Int
         public let reviewState: ReviewState
         public let valueState: ValueState
-        public let supportState: String
+        public let supportState: SupportState
         public let reviewedBy: String?
         public let reviewedAt: Date?
 
@@ -101,6 +108,44 @@ public final class CaseFileReviewController: ObservableObject {
 
         public var sourceCount: Int {
             supportingSourceCount + contrarySourceCount
+        }
+    }
+
+    public struct ReviewProgress: Sendable, Equatable {
+        public let totalCount: Int
+        public let reviewedCount: Int
+        public let needsReviewCount: Int
+        public let editedCount: Int
+        public let evidenceAttentionCount: Int
+
+        public init(rows: [Row]) {
+            totalCount = rows.count
+            reviewedCount = rows.count { $0.reviewState == .reviewed }
+            needsReviewCount = rows.count { $0.reviewState == .needsReview }
+            editedCount = rows.count { $0.valueState == .edited }
+            evidenceAttentionCount = RowFilter.evidenceAttention.apply(to: rows).count
+        }
+    }
+
+    public enum RowFilter: String, CaseIterable, Sendable, Hashable {
+        case all
+        case needsReview
+        case edited
+        case evidenceAttention
+
+        public func apply(to rows: [Row]) -> [Row] {
+            switch self {
+            case .all:
+                rows
+            case .needsReview:
+                rows.filter { $0.reviewState == .needsReview }
+            case .edited:
+                rows.filter { $0.valueState == .edited }
+            case .evidenceAttention:
+                rows.filter {
+                    $0.contrarySourceCount > 0 || $0.supportState != .supported
+                }
+            }
         }
     }
 
@@ -137,6 +182,14 @@ public final class CaseFileReviewController: ObservableObject {
     @Published public private(set) var message: String?
 
     public let matterID: String
+
+    public var reviewProgress: ReviewProgress {
+        ReviewProgress(rows: rows)
+    }
+
+    public func rows(matching filter: RowFilter) -> [Row] {
+        filter.apply(to: rows)
+    }
 
     private let store: SupraStore
     private let previewLoader: DocumentPreviewLoader
@@ -178,9 +231,6 @@ public final class CaseFileReviewController: ObservableObject {
             try loadProject(projectID: projectID, preservingCellID: nil)
             message = nil
         } catch {
-            rows = []
-            selectedProjectID = nil
-            clearSelection()
             message = error.localizedDescription
         }
     }
@@ -405,7 +455,8 @@ public final class CaseFileReviewController: ObservableObject {
             } catch {
                 throw CaseFileReviewControllerError.invalidGeneratedValues(cell.id)
             }
-            guard let valueState = ValueState(rawValue: cell.valueState) else {
+            guard let valueState = ValueState(rawValue: cell.valueState),
+                  let supportState = SupportState(rawValue: cell.supportState) else {
                 throw CaseFileReviewControllerError.corruptProjectGraph(graph.project.id)
             }
             let attorneyValue: String?
@@ -439,7 +490,7 @@ public final class CaseFileReviewController: ObservableObject {
                 contrarySourceCount: edges.count { $0.kind == EvidenceKind.contrary.rawValue },
                 reviewState: ReviewState(rawValue: cell.reviewState) ?? .needsReview,
                 valueState: valueState,
-                supportState: cell.supportState,
+                supportState: supportState,
                 reviewedBy: cell.reviewedBy,
                 reviewedAt: cell.reviewedAt
             ))
