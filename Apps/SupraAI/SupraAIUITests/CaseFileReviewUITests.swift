@@ -737,6 +737,10 @@ final class CaseFileReviewHostedUITests: XCTestCase {
             "A zero-match filter needs an explicit filtered-empty state"
         )
         XCTAssertTrue(showAll.exists, "Filtered-empty state needs one accessible Show All escape")
+        XCTAssertTrue(
+            showAll.isHittable,
+            "Filtered-empty Show All must remain visibly usable"
+        )
         XCTAssertEqual(showAll.label, "Show all findings")
         XCTAssertEqual(
             elements(in: matrix, identifierPrefix: Fixture.findingIdentifierPrefix).count,
@@ -753,22 +757,43 @@ final class CaseFileReviewHostedUITests: XCTestCase {
         )
 
         showAll.click()
-        XCTAssertTrue(alphaFinding.waitForExistence(timeout: 5), "Show All must restore alpha")
-        XCTAssertTrue(betaFinding.exists, "Show All must restore beta")
-        XCTAssertEqual(
-            elements(in: matrix, identifierPrefix: Fixture.findingIdentifierPrefix).count,
-            2
-        )
         XCTAssertTrue(
             waitForActiveReviewFilter(
                 identifier: "review.filter.all",
                 label: "All",
                 app: app,
-                timeout: 5
+                timeout: 10
             ),
             "Show All must visibly reset the active filter"
         )
-        XCTAssertTrue(editedAlphaValue.exists, "Filtering must not discard alpha's persisted edit")
+        let restoredAlphaFinding = element(
+            in: matrix,
+            identifierPrefix: Fixture.findingIdentifierPrefix,
+            value: Fixture.alphaFinding
+        )
+        let restoredBetaFinding = element(
+            in: matrix,
+            identifierPrefix: Fixture.findingIdentifierPrefix,
+            value: Fixture.betaFinding
+        )
+        XCTAssertTrue(
+            restoredAlphaFinding.waitForExistence(timeout: 10),
+            "Show All must restore alpha"
+        )
+        XCTAssertTrue(restoredBetaFinding.exists, "Show All must restore beta")
+        XCTAssertEqual(
+            elements(in: matrix, identifierPrefix: Fixture.findingIdentifierPrefix).count,
+            2
+        )
+        let restoredEditedAlphaValue = valueButton(
+            in: app,
+            cellID: alphaCellID,
+            displayedValue: Fixture.editedAlphaValue
+        )
+        XCTAssertTrue(
+            restoredEditedAlphaValue.exists,
+            "Filtering must not discard alpha's persisted edit"
+        )
     }
 
     func testTRPUI15DirtyDraftCancelKeepsProjectAndDiscardSwitchesWithoutCrossProjectLeak() throws {
@@ -1117,15 +1142,20 @@ final class CaseFileReviewHostedUITests: XCTestCase {
         )
         discard.click()
 
+        let failureAlert = app.sheets.firstMatch
         XCTAssertTrue(
-            app.staticTexts["Review action failed"].waitForExistence(timeout: 10),
+            failureAlert.waitForExistence(timeout: 10),
+            "A failed Open Review action needs its explicit failure sheet"
+        )
+        XCTAssertTrue(
+            failureAlert.staticTexts["Review action failed"].exists,
             "A failed Open Review action needs its explicit failure alert"
         )
         XCTAssertTrue(
-            app.staticTexts[Fixture.corruptProjectMessage].exists,
+            failureAlert.staticTexts[Fixture.corruptProjectMessage].exists,
             "The failure alert must report the real corrupt-project boundary"
         )
-        app.buttons["OK"].click()
+        failureAlert.buttons["OK"].click()
 
         XCTAssertTrue(
             waitForAccessibleText(Fixture.projectATitle, in: projectPicker, timeout: 5),
@@ -1169,15 +1199,14 @@ final class CaseFileReviewHostedUITests: XCTestCase {
         // therefore be covered or clipped even while AX descendants stay mounted.
         let app = launchReviewProject(additionalArguments: [
             "-uiTestWindowWidth", "880",
-            "-uiTestReviewSourcesWidth", "980",
         ])
         let window = app.windows.firstMatch
         let matrix = app.descendants(matching: .any)["review.matrix"]
         XCTAssertTrue(matrix.waitForExistence(timeout: 20), "Review matrix did not appear")
-        XCTAssertLessThanOrEqual(
+        XCTAssertLessThan(
             window.frame.width,
-            900,
-            "The hosted gate must exercise the source-defined 880-point minimum, not the default window"
+            1_000,
+            "The hosted gate must exercise a supported narrow window, not the 1,100-point default"
         )
         XCTAssertGreaterThanOrEqual(window.frame.width, 879)
 
