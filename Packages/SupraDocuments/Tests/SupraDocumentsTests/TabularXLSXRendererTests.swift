@@ -450,6 +450,26 @@ final class TabularXLSXRendererTests: XCTestCase {
         )
     }
 
+    func testTRPXLSXDOC06UsesNumbersCompatibleArialForEveryDeclaredFont() throws {
+        // T-RPXLSXDOC06 expected RED: live Numbers Creator Studio QA reports a
+        // missing-font warning because every declared workbook font is Aptos.
+        let data = try TabularXLSXRenderer.render(.init(sheets: [
+            contractSheet(name: "Native Font", tableName: "NativeFont"),
+        ]))
+        let probe = try OOXMLWorkbookProbe(data: data)
+        let styles = try probe.styles()
+
+        XCTAssertEqual(
+            styles.fonts.map(\.name),
+            Array(repeating: "Arial", count: 7),
+            "all seven declared fonts must use the native-spreadsheet-safe Arial family"
+        )
+        XCTAssertFalse(
+            try probe.text(at: "xl/styles.xml").localizedCaseInsensitiveContains("Aptos"),
+            "the live Numbers warning's Aptos fallback must be absent from the style part"
+        )
+    }
+
     private func assertSemanticStyle(
         _ style: OOXMLWorkbookProbe.ResolvedStyle,
         fillRGB: String,
@@ -546,6 +566,7 @@ private struct OOXMLWorkbookProbe {
     }
 
     struct FontStyle: Equatable {
+        var name: String?
         var bold: Bool
         var rgb: String?
     }
@@ -899,7 +920,9 @@ private final class StylesCollector: NSObject, XMLParserDelegate {
                 numberFormats[id] = code
             }
         case "font" where section == .fonts:
-            currentFont = .init(bold: false, rgb: nil)
+            currentFont = .init(name: nil, bold: false, rgb: nil)
+        case "name" where currentFont != nil:
+            currentFont?.name = attributeDict["val"]
         case "b" where currentFont != nil:
             currentFont?.bold = true
         case "color" where currentFont != nil:

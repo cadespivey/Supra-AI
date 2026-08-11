@@ -1,3 +1,4 @@
+import Foundation
 import SupraCore
 @testable import SupraSessions
 import XCTest
@@ -40,7 +41,10 @@ final class LocalAIRecommendationPolicyTests: XCTestCase {
             (36, .gb32),
             (48, .gb32),
             (72, .gb64),
+            (95, .gb64),
             (96, .gb96),
+            (127, .gb96),
+            (128, .gb128),
             (192, .gb128)
         ]
 
@@ -51,6 +55,46 @@ final class LocalAIRecommendationPolicyTests: XCTestCase {
                 "unexpected tier for \(fixture.memoryGB) GB"
             )
         }
+    }
+
+    func testEveryApprovedBundleIsRecommendedForItsExactTier() throws {
+        // Expected RED: fit assessments do not distinguish the exact approved
+        // work/search bundle from another merely compatible catalog pairing.
+        for memoryGB in [16, 32, 64, 96, 128] {
+            let profile = profile(memoryGB: memoryGB)
+            let recommendation = try XCTUnwrap(
+                LocalAIRecommendationPolicy.recommendation(for: profile)
+            )
+
+            let assessment = LocalAIRecommendationPolicy.fitAssessment(
+                textRepoID: recommendation.workModel.repoID,
+                embeddingRepoID: recommendation.embeddingModel.repoID,
+                profile: profile
+            )
+
+            XCTAssertEqual(
+                assessment.level,
+                .recommended,
+                "the exact \(memoryGB) GB bundle must be identified as recommended"
+            )
+            XCTAssertNotEqual(
+                assessment.level,
+                .compatible,
+                "the recommended result must not collapse to the default compatible label"
+            )
+        }
+
+        let nonapprovedNinetySixGBBundle = LocalAIRecommendationPolicy.fitAssessment(
+            textRepoID: "mlx-community/Qwen3-14B-4bit",
+            embeddingRepoID: LocalAIRecommendationPolicy.embeddingRepoID,
+            profile: profile(memoryGB: 96)
+        )
+        XCTAssertEqual(nonapprovedNinetySixGBBundle.level, .compatible)
+        XCTAssertNotEqual(
+            nonapprovedNinetySixGBBundle.level,
+            .recommended,
+            "a known but non-policy bundle must not receive the exact recommendation label"
+        )
     }
 
     func testRecommendationUsesOneTextModelForEveryRole() throws {
@@ -85,7 +129,7 @@ final class LocalAIRecommendationPolicyTests: XCTestCase {
             profile: profile
         )
 
-        XCTAssertEqual(smallSearch.level, .compatible)
+        XCTAssertEqual(smallSearch.level, .recommended)
         XCTAssertEqual(largeSearch.level, .caution)
         XCTAssertEqual(
             try XCTUnwrap(largeSearch.estimatedResidentBytes),
@@ -105,6 +149,87 @@ final class LocalAIRecommendationPolicyTests: XCTestCase {
         XCTAssertEqual(assessment.level, .unknown)
         XCTAssertNil(assessment.estimatedResidentBytes)
         XCTAssertEqual(assessment.explanation, "Fit unknown — this model has no verified hardware metadata.")
+    }
+
+    func testReviewTextOnlyFitUsesOnlyTheSelectedTextArtifact() throws {
+        // Expected RED: Review has no text-only fit overload, so callers must
+        // currently invent an embedding model and overstate the selected model's footprint.
+        let profile = profile(memoryGB: 32)
+        let assessment = LocalAIRecommendationPolicy.fitAssessment(
+            textRepoID: "mlx-community/Qwen3-14B-4bit",
+            profile: profile
+        )
+
+        XCTAssertEqual(assessment.level, .recommended)
+        XCTAssertEqual(
+            try XCTUnwrap(assessment.estimatedResidentBytes),
+            UInt64(8_000_000_000)
+        )
+        XCTAssertNotEqual(
+            assessment.estimatedResidentBytes,
+            UInt64(8_400_000_000),
+            "Review must not silently add the default embedding model to its text-only estimate"
+        )
+    }
+
+    func testReviewTextOnlyFitCautionsForKnownThirtyFiveGBModelOnSixteenGBMac() throws {
+        // Expected RED: Review has no typed text-only fit path for a known
+        // catalog model whose footprint is materially larger than the machine budget.
+        let assessment = LocalAIRecommendationPolicy.fitAssessment(
+            textRepoID: "mlx-community/DeepSeek-R1-Distill-Qwen-32B-MLX-8Bit",
+            profile: profile(memoryGB: 16)
+        )
+
+        XCTAssertEqual(assessment.level, .caution)
+        XCTAssertEqual(
+            try XCTUnwrap(assessment.estimatedResidentBytes),
+            UInt64(35_000_000_000)
+        )
+        XCTAssertNotEqual(assessment.level, .unknown)
+    }
+
+    func testReviewTextOnlyFitKeepsUnknownCustomRepositoryUnknown() {
+        // Expected RED: the text-only Review overload and its fail-closed
+        // catalog lookup do not exist.
+        let assessment = LocalAIRecommendationPolicy.fitAssessment(
+            textRepoID: "fictional-firm/Unmeasured-Review-Model",
+            profile: profile(memoryGB: 128)
+        )
+
+        XCTAssertEqual(assessment.level, .unknown)
+        XCTAssertNil(assessment.estimatedResidentBytes)
+        XCTAssertEqual(
+            assessment.explanation,
+            "Fit unknown — this model has no verified hardware metadata."
+        )
+    }
+
+    func testInjectedHardwareProfileProbePreservesExactNondefaultMeasurements() {
+        // Expected RED: the live hardware probe has no value/closure-only
+        // injection seam, so exact physical, working-set, and disk inputs cannot be proven.
+        let modelsDirectory = URL(fileURLWithPath: "/tmp/hardware-profile-canary-911")
+        let physicalBytes = 101 * gibibyte + 911
+        let workingSetBytes = 73 * gibibyte + 313
+        let diskBytes = Int64(211 * gibibyte + 17)
+
+        let profile = MacHardwareProfileProbe.current(
+            modelsDirectory: modelsDirectory,
+            physicalMemoryBytes: { physicalBytes },
+            recommendedWorkingSetBytes: { workingSetBytes },
+            availableModelDiskBytes: { requestedDirectory in
+                XCTAssertEqual(requestedDirectory, modelsDirectory)
+                return diskBytes
+            }
+        )
+
+        XCTAssertEqual(profile.physicalMemoryBytes, physicalBytes)
+        XCTAssertEqual(profile.recommendedWorkingSetBytes, workingSetBytes)
+        XCTAssertEqual(profile.availableModelDiskBytes, diskBytes)
+        XCTAssertNotEqual(
+            profile.physicalMemoryBytes,
+            ProcessInfo.processInfo.physicalMemory,
+            "the injected non-default physical-memory canary must reach the exact profile output"
+        )
     }
 
     private func profile(memoryGB: Int) -> MacHardwareProfile {

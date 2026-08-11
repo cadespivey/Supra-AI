@@ -1999,6 +1999,144 @@ final class CaseFileReviewHostedUITests: XCTestCase {
         XCTAssertTrue(waitForAccessibleText("Queued", in: status, timeout: 5))
     }
 
+    func testTRPHWUI01NinetySixGBReviewShowsRecommendedQwen32BAdvisory() throws {
+        // T-RP-HW-UI-01 expected RED: Guided New Review does not project the
+        // injected 96 GB hardware profile or selected model's typed fit metadata,
+        // so neither stable advisory element exists and the synthetic fixture
+        // still identifies the uncatalogued default model.
+        let app = launchReviewCreation(scenario: "hardware96", memoryGB: 96)
+        let newReview = app.buttons["review.newReview"]
+        XCTAssertTrue(newReview.waitForExistence(timeout: 10))
+        newReview.click()
+
+        let setup = app.descendants(matching: .any)["review.creation.sheet"]
+        XCTAssertTrue(setup.waitForExistence(timeout: 10))
+        let hardware = setup.descendants(matching: .any)["review.creation.hardware"]
+        let modelFit = setup.descendants(matching: .any)["review.creation.modelFit"]
+        let model = setup.descendants(matching: .any)["review.creation.model"]
+        XCTAssertTrue(
+            hardware.waitForExistence(timeout: 5),
+            "Guided New Review needs one stable hardware-profile receipt"
+        )
+        XCTAssertTrue(
+            modelFit.waitForExistence(timeout: 5),
+            "Guided New Review needs one stable selected-model fit receipt"
+        )
+        XCTAssertTrue(
+            waitForAccessibleText(Fixture.creationHardware96, in: hardware, timeout: 5),
+            "The non-default 96 GB launch profile must reach the exact hardware element"
+        )
+        XCTAssertFalse(
+            accessibleText(of: hardware).contains(Fixture.creationHardware128),
+            "The 96 GB hardware element must not retain the independent 128 GB profile canary"
+        )
+        XCTAssertTrue(
+            waitForAccessibleText(Fixture.creationRecommendedModelName, in: model, timeout: 5),
+            "The 96 GB fixture must select and identify the curated Qwen3 32B 4-bit model"
+        )
+        XCTAssertFalse(
+            accessibleText(of: model).contains(Fixture.creationModelName),
+            "The exact model picker must not fall back to the uncatalogued synthetic model"
+        )
+        XCTAssertTrue(
+            waitForAccessibleText(Fixture.creationRecommendedFit, in: modelFit, timeout: 5),
+            "The selected 96 GB policy model must be described as a recommended estimated fit"
+        )
+        XCTAssertFalse(
+            accessibleText(of: modelFit).contains(Fixture.creationUnknownFit),
+            "The recommended fit element must not retain the unknown-metadata advisory"
+        )
+    }
+
+    func testTRPHWUI02OneHundredTwentyEightGBReviewShowsRecommendedQwen32BAdvisory() throws {
+        // T-RP-HW-UI-02 expected RED: the 128 GB tier has no independently
+        // injected hosted proof and Guided New Review renders no hardware or fit
+        // receipt for its selected Qwen3 32B 4-bit model.
+        let app = launchReviewCreation(scenario: "hardware128", memoryGB: 128)
+        let newReview = app.buttons["review.newReview"]
+        XCTAssertTrue(newReview.waitForExistence(timeout: 10))
+        newReview.click()
+
+        let setup = app.descendants(matching: .any)["review.creation.sheet"]
+        XCTAssertTrue(setup.waitForExistence(timeout: 10))
+        let hardware = setup.descendants(matching: .any)["review.creation.hardware"]
+        let modelFit = setup.descendants(matching: .any)["review.creation.modelFit"]
+        let model = setup.descendants(matching: .any)["review.creation.model"]
+        XCTAssertTrue(
+            hardware.waitForExistence(timeout: 5),
+            "Guided New Review needs one stable hardware-profile receipt"
+        )
+        XCTAssertTrue(
+            modelFit.waitForExistence(timeout: 5),
+            "Guided New Review needs one stable selected-model fit receipt"
+        )
+        XCTAssertTrue(
+            waitForAccessibleText(Fixture.creationHardware128, in: hardware, timeout: 5),
+            "The non-default 128 GB launch profile must reach the exact hardware element"
+        )
+        XCTAssertFalse(
+            accessibleText(of: hardware).contains(Fixture.creationHardware96),
+            "The 128 GB hardware element must not retain the independent 96 GB profile canary"
+        )
+        XCTAssertTrue(
+            waitForAccessibleText(Fixture.creationRecommendedModelName, in: model, timeout: 5),
+            "The 128 GB fixture must independently identify the curated Qwen3 32B 4-bit model"
+        )
+        XCTAssertFalse(
+            accessibleText(of: model).contains(Fixture.creationModelName),
+            "The exact model picker must not fall back to the uncatalogued synthetic model"
+        )
+        XCTAssertTrue(
+            waitForAccessibleText(Fixture.creationRecommendedFit, in: modelFit, timeout: 5),
+            "The selected 128 GB policy model must be described as a recommended estimated fit"
+        )
+        XCTAssertFalse(
+            accessibleText(of: modelFit).contains(Fixture.creationUnknownFit),
+            "The recommended fit element must not retain the unknown-metadata advisory"
+        )
+    }
+
+    func testTRPHWUI03UnknownManagedModelWarnsWithoutBlockingStart() throws {
+        // T-RP-HW-UI-03 expected RED: the existing uncatalogued managed fixture
+        // has no exact non-recommended advisory. Guided New Review must show that
+        // absence of verified fit metadata without turning advice into eligibility.
+        let app = launchReviewCreation(scenario: "hardwareUnknown", memoryGB: 96)
+        let newReview = app.buttons["review.newReview"]
+        XCTAssertTrue(newReview.waitForExistence(timeout: 10))
+        newReview.click()
+
+        let setup = app.descendants(matching: .any)["review.creation.sheet"]
+        XCTAssertTrue(setup.waitForExistence(timeout: 10))
+        let model = setup.descendants(matching: .any)["review.creation.model"]
+        let modelFit = setup.descendants(matching: .any)["review.creation.modelFit"]
+        XCTAssertTrue(
+            waitForAccessibleText(Fixture.creationModelName, in: model, timeout: 5),
+            "The unknown-fit fixture must remain a valid managed model choice"
+        )
+        XCTAssertTrue(
+            modelFit.waitForExistence(timeout: 5),
+            "An uncatalogued managed model still needs one stable fit advisory"
+        )
+        XCTAssertTrue(
+            waitForAccessibleText(Fixture.creationUnknownFit, in: modelFit, timeout: 5),
+            "Unknown typed metadata must produce the exact non-recommended advisory"
+        )
+        XCTAssertFalse(
+            accessibleText(of: modelFit).contains(Fixture.creationRecommendedFit),
+            "The exact unknown-fit element must not claim the recommended estimated fit"
+        )
+
+        let name = setup.descendants(matching: .any)["review.creation.name"]
+        let instruction = setup.descendants(matching: .any)["review.creation.instruction"]
+        let start = app.buttons["review.creation.start"]
+        replaceText(in: name, with: Fixture.creationUnknownFitTitle)
+        replaceText(in: instruction, with: Fixture.creationInstruction)
+        XCTAssertTrue(
+            start.isEnabled,
+            "A valid name, instruction, eligible scope, and managed model must remain startable when fit is unknown"
+        )
+    }
+
     private func launchReviewProject(
         additionalArguments: [String] = [],
         additionalEnvironment: [String: String] = [:]
@@ -2026,9 +2164,15 @@ final class CaseFileReviewHostedUITests: XCTestCase {
         return app
     }
 
-    private func launchReviewCreation(scenario: String) -> XCUIApplication {
+    private func launchReviewCreation(
+        scenario: String,
+        memoryGB: Int? = nil
+    ) -> XCUIApplication {
         let app = XCUIApplication()
         configureReviewCreation(app, scenario: scenario)
+        if let memoryGB {
+            app.launchArguments += ["-uiTestLocalAIMemoryGB", String(memoryGB)]
+        }
         launchConfiguredReviewCreation(app)
         return app
     }
@@ -2509,6 +2653,14 @@ final class CaseFileReviewHostedUITests: XCTestCase {
         static let creationSelectedScopeSummary = "1 eligible · Atlas Amendment.txt"
         static let creationModelPickerLabel = "Managed local model"
         static let creationModelName = "Synthetic Review Model · Managed"
+        static let creationRecommendedModelName = "Qwen3 32B (4-bit) · Managed"
+        static let creationHardware96 = "96 GB unified memory"
+        static let creationHardware128 = "128 GB unified memory"
+        static let creationRecommendedFit =
+            "Recommended for this Mac based on estimated model footprint."
+        static let creationUnknownFit =
+            "Fit unknown — this model has no verified hardware metadata."
+        static let creationUnknownFitTitle = "Atlas custom-model advisory review"
         static let creationDisclosure =
             "Exact frozen corpus · Local model · runs in background"
         static let creationReviewRequiredDocument = "Beacon Review Draft.txt"
@@ -3234,6 +3386,76 @@ final class CaseFileReviewCompositionUITests: XCTestCase {
             environment.contains(#""slowVerification""#)
                 && environment.contains(#""scopeDrift""#),
             "the hosted fixture must deterministically exercise cancellable verification and receipt drift"
+        )
+    }
+
+    func testTRPHWUI04ProductionCompositionGatesFixtureAndKeepsFitAdvisory() throws {
+        // T-RP-HW-UI-04 expected RED: production has no Review hardware-profile
+        // projection, no typed model-fit advisory, and no DEBUG-scoped injection
+        // path. This source gate also prevents fit advice from becoming a hidden
+        // model filter or a Start Review eligibility condition.
+        let environment = try appSource(relativePath: "SupraAI/AppEnvironment.swift")
+        let reviewView = try appSource(
+            relativePath: "SupraAI/Review/CaseFileReviewView.swift"
+        )
+        let creationView = try appSource(
+            relativePath: "SupraAI/Review/CaseFileReviewCreationView.swift"
+        )
+        let profileResolver = try declarationSource(
+            startingWith: "private static func reviewCreationHardwareProfile(",
+            in: environment
+        )
+
+        XCTAssertTrue(
+            profileResolver.contains("#if DEBUG")
+                && profileResolver.contains("#endif"),
+            "the injected Review hardware profile must compile only into DEBUG builds"
+        )
+        XCTAssertTrue(
+            profileResolver.contains("isUITestMode")
+                && profileResolver.contains("-uiTestReviewCreation")
+                && profileResolver.contains("-uiTestLocalAIMemoryGB"),
+            "hardware injection must require UI-test mode, the dedicated Review fixture, and its explicit value"
+        )
+        XCTAssertTrue(
+            profileResolver.contains(
+                "MacHardwareProfileProbe.current(modelsDirectory: modelsDirectory)"
+            ),
+            "every non-authorized launch must probe the live Mac hardware profile"
+        )
+
+        for identifier in ["review.creation.hardware", "review.creation.modelFit"] {
+            XCTAssertTrue(
+                creationView.contains(".accessibilityIdentifier(\"\(identifier)\")"),
+                "Guided New Review is missing stable advisory identifier \(identifier)"
+            )
+        }
+
+        let canStart = try declarationSource(
+            startingWith: "private var canStart: Bool",
+            in: creationView
+        )
+        XCTAssertFalse(
+            canStart.lowercased().contains("fit")
+                || canStart.lowercased().contains("recommend"),
+            "Start Review eligibility must not depend on advisory fit or recommendation state"
+        )
+        XCTAssertTrue(
+            creationView.contains(".disabled(!canStart)"),
+            "the Start Review control must remain governed by the auditable creation-input boundary"
+        )
+
+        let reviewCreationModels = try declarationSource(
+            startingWith: "private var reviewCreationModels:",
+            in: reviewView
+        )
+        XCTAssertGreaterThanOrEqual(
+            try matchCount(
+                #"library\.models\.filter\s*\{\s*model\s+in\s*model\.modelID\s*!=\s*nil\s*&&\s*model\.validationStatus\s*==\s*"verified"\s*&&\s*library\.isManagedDownload\(model\)\s*\}"#,
+                in: reviewCreationModels
+            ),
+            1,
+            "managed identity and verified install state must remain the complete Review model filter"
         )
     }
 

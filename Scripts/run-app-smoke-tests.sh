@@ -89,7 +89,11 @@ if [[ ! -f "$review_test" ]] \
     || ! class_contains_test "$review_test" CaseFileReviewCompositionUITests testTRPCREATEUI03ProductionCompositionUsesAtomicPinnedQueueAndExactHandoff \
     || ! class_contains_test "$review_test" CaseFileReviewHostedUITests testTRPCREATEUI04SelectedScopeRejectsEveryExcludedSource \
     || ! class_contains_test "$review_test" CaseFileReviewHostedUITests testTRPCREATEUI05ClosingDuringModelVerificationCancelsWithoutCreatingAJob \
-    || ! class_contains_test "$review_test" CaseFileReviewHostedUITests testTRPCREATEUI06ScopeDriftRefreshesReceiptAndRequiresSecondStart; then
+    || ! class_contains_test "$review_test" CaseFileReviewHostedUITests testTRPCREATEUI06ScopeDriftRefreshesReceiptAndRequiresSecondStart \
+    || ! class_contains_test "$review_test" CaseFileReviewHostedUITests testTRPHWUI01NinetySixGBReviewShowsRecommendedQwen32BAdvisory \
+    || ! class_contains_test "$review_test" CaseFileReviewHostedUITests testTRPHWUI02OneHundredTwentyEightGBReviewShowsRecommendedQwen32BAdvisory \
+    || ! class_contains_test "$review_test" CaseFileReviewHostedUITests testTRPHWUI03UnknownManagedModelWarnsWithoutBlockingStart \
+    || ! class_contains_test "$review_test" CaseFileReviewCompositionUITests testTRPHWUI04ProductionCompositionGatesFixtureAndKeepsFitAdvisory; then
   printf '%s\n' 'ERROR: claimed Guided New Review smoke tests are missing' >&2
   exit 1
 fi
@@ -187,5 +191,9 @@ xcodebuild \
   -only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPCREATEUI04SelectedScopeRejectsEveryExcludedSource \
   -only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPCREATEUI05ClosingDuringModelVerificationCancelsWithoutCreatingAJob \
   -only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPCREATEUI06ScopeDriftRefreshesReceiptAndRequiresSecondStart \
+  -only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPHWUI01NinetySixGBReviewShowsRecommendedQwen32BAdvisory \
+  -only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPHWUI02OneHundredTwentyEightGBReviewShowsRecommendedQwen32BAdvisory \
+  -only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPHWUI03UnknownManagedModelWarnsWithoutBlockingStart \
+  -only-testing:SupraAIUITests/CaseFileReviewCompositionUITests/testTRPHWUI04ProductionCompositionGatesFixtureAndKeepsFitAdvisory \
   -only-testing:SupraAIUITests/RuntimeXPCIntegrationTests \
   test
