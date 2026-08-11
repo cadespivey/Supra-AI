@@ -1284,21 +1284,21 @@ final class CaseFileReviewHostedUITests: XCTestCase {
     }
 
     func testTRPUI19DirtyDraftAndFilteredMinimumWidthExportFullSavedSnapshot() throws {
-        // T-RP-UI-19 expected RED: the existing Review Export menu publishes its
-        // full saved snapshot only as CSV. `review.export.xlsx` never appears, so
-        // the same filtered, Sources-open, minimum-width workflow cannot publish
-        // one XLSX workbook into the exact non-default managed destination.
+        // T-RP-UI-19 hardening expected RED: the sandboxed app successfully
+        // publishes both artifacts, but it does not emit the DEBUG-only
+        // `SupraReviewExportUITestReceipt` that lets the hosted runner verify the
+        // app-observed path, size, digest, and format prefix without enumerating
+        // another sandbox. Package service tests retain exact content ownership.
         let exportRoot = appSandboxWritableReviewExportRoot()
-        XCTAssertFalse(
-            FileManager.default.fileExists(atPath: exportRoot.path),
-            "The unique Review export root must begin absent"
-        )
-        defer { try? FileManager.default.removeItem(at: exportRoot) }
+        let receiptNonce = UUID().uuidString
+        let receiptObserver = observeReviewExportReceipts(nonce: receiptNonce)
+        defer { stopObservingReviewExportReceipts(receiptObserver) }
 
         let app = launchReviewProject(
             additionalArguments: [
                 "-uiTestWindowWidth", "880",
                 "-uiTestReviewExport",
+                "-uiTestReviewExportNonce", receiptNonce,
             ],
             additionalEnvironment: [
                 "SUPRA_UI_TEST_REVIEW_EXPORT_ROOT": exportRoot.path,
@@ -1374,10 +1374,6 @@ final class CaseFileReviewHostedUITests: XCTestCase {
             export.isEnabled,
             "A saveable but unsaved value must still block the persisted snapshot"
         )
-        XCTAssertTrue(
-            regularCSVFiles(beneath: exportRoot).isEmpty,
-            "No dirty-draft interaction may create an export artifact"
-        )
 
         let discard = app.buttons["review.unsavedEdit.discard"]
         XCTAssertTrue(
@@ -1419,6 +1415,11 @@ final class CaseFileReviewHostedUITests: XCTestCase {
             export.frame.intersects(sourcesPanel.frame),
             "Sources must overlay Matrix results without covering the permanent Export control"
         )
+        XCTAssertEqual(
+            receiptObserver.receiptCount(),
+            0,
+            "Launch, dirty-draft handling, and filtering must emit zero nonce-matching export receipts"
+        )
 
         export.click()
         let csvAction = app.descendants(matching: .any)["review.export.csv"]
@@ -1426,31 +1427,18 @@ final class CaseFileReviewHostedUITests: XCTestCase {
             csvAction.waitForExistence(timeout: 5),
             "Export needs one stable CSV — all saved findings menu action"
         )
-        csvAction.click()
-
-        let csvFiles = waitForCSVFiles(count: 1, beneath: exportRoot, timeout: 10)
-        XCTAssertEqual(
-            csvFiles.count,
-            1,
-            "One Export action must durably publish exactly one CSV artifact"
+        let csvObservation = expectNextReviewExportReceipt(
+            from: receiptObserver,
+            expectedFormat: "csv"
         )
-        let csvData = try Data(contentsOf: try XCTUnwrap(csvFiles.first))
-        let csv = try XCTUnwrap(String(data: csvData, encoding: .utf8))
-        for canary in [
-            Fixture.alphaFinding,
-            Fixture.betaFinding,
-            Fixture.exportAlphaSourceCanary,
-            Fixture.exportBetaSourceCanary,
-            Fixture.exportContrarySourceCanary,
-        ] {
-            XCTAssertTrue(
-                csv.contains(canary),
-                "The full persisted Review snapshot is missing exact canary \(canary)"
-            )
-        }
-        XCTAssertFalse(
-            csv.contains(Fixture.exportUnsavedCanary),
-            "The discarded attorney draft must never leak into the persisted CSV snapshot"
+        csvAction.click()
+        let csvReceipt = try receivedReviewExportReceipt(from: csvObservation)
+        assertReviewExportReceipt(
+            csvReceipt,
+            beneath: exportRoot,
+            expectedFormat: "csv",
+            expectedPathExtension: "csv",
+            expectedPrefixHex: "efbbbf"
         )
 
         export.click()
@@ -1459,60 +1447,34 @@ final class CaseFileReviewHostedUITests: XCTestCase {
             xlsxAction.waitForExistence(timeout: 5),
             "Export needs one stable XLSX — Matrix, Sources, Project sheets menu action"
         )
+        let xlsxObservation = expectNextReviewExportReceipt(
+            from: receiptObserver,
+            expectedFormat: "xlsx"
+        )
         xlsxAction.click()
+        let xlsxReceipt = try receivedReviewExportReceipt(from: xlsxObservation)
+        assertReviewExportReceipt(
+            xlsxReceipt,
+            beneath: exportRoot,
+            expectedFormat: "xlsx",
+            expectedPathExtension: "xlsx",
+            expectedPrefixHex: "504b0304"
+        )
 
-        let xlsxFiles = waitForXLSXFiles(count: 1, beneath: exportRoot, timeout: 10)
-        XCTAssertEqual(
-            xlsxFiles.count,
-            1,
-            "One XLSX action must durably publish exactly one regular workbook"
+        XCTAssertNotEqual(
+            csvReceipt.canonicalPath,
+            xlsxReceipt.canonicalPath,
+            "CSV and XLSX must publish to distinct managed artifact paths"
         )
-        XCTAssertEqual(
-            regularCSVFiles(beneath: exportRoot).count,
-            1,
-            "XLSX export must not republish or replace the one prior CSV artifact"
+        XCTAssertNotEqual(
+            csvReceipt.fileName,
+            xlsxReceipt.fileName,
+            "CSV and XLSX must retain distinct exact filenames"
         )
-        let xlsxURL = try XCTUnwrap(xlsxFiles.first)
-        let xlsxData = try Data(contentsOf: xlsxURL)
-        XCTAssertEqual(
-            Array(xlsxData.prefix(4)),
-            [0x50, 0x4B, 0x03, 0x04],
-            "The managed XLSX artifact must begin with one ZIP local-file header"
-        )
-        for entryName in [
-            "[Content_Types].xml",
-            "_rels/.rels",
-            "xl/workbook.xml",
-            "xl/_rels/workbook.xml.rels",
-            "xl/worksheets/sheet1.xml",
-            "xl/worksheets/sheet2.xml",
-            "xl/worksheets/sheet3.xml",
-        ] {
-            XCTAssertNotNil(
-                xlsxData.range(of: Data(entryName.utf8)),
-                "The XLSX ZIP directory is missing core OOXML entry \(entryName)"
-            )
-        }
-        let decodedXML = try decodedWorkbookXMLBytes(at: xlsxURL)
-        XCTAssertFalse(
-            decodedXML.isEmpty,
-            "The XLSX artifact must contain decoded workbook XML"
-        )
-        for canary in [
-            Fixture.alphaFinding,
-            Fixture.betaFinding,
-            "Atlas Payment Schedule.txt",
-            "Atlas Renewal Clause.txt",
-            "Atlas Amendment.txt",
-        ] {
-            XCTAssertNotNil(
-                decodedXML.range(of: Data(canary.utf8)),
-                "The full persisted Review workbook is missing exact canary \(canary)"
-            )
-        }
-        XCTAssertNil(
-            decodedXML.range(of: Data(Fixture.exportUnsavedCanary.utf8)),
-            "The discarded attorney draft must never leak into decoded XLSX XML"
+        XCTAssertNotEqual(
+            csvReceipt.sha256,
+            xlsxReceipt.sha256,
+            "CSV and XLSX must report distinct content digests"
         )
     }
 
@@ -2219,8 +2181,9 @@ final class CaseFileReviewHostedUITests: XCTestCase {
             .appendingPathComponent("ReviewCreationUITest-\(UUID().uuidString)", isDirectory: true)
     }
 
-    /// Uses the app container's temporary directory so the hosted runner and
-    /// sandboxed app can observe the same unique, throwaway export destination.
+    /// Supplies one unique throwaway destination inside the app container. The
+    /// runner verifies the app-observed artifact through a distributed receipt;
+    /// it must not enumerate or read across the app's sandbox boundary.
     private func appSandboxWritableReviewExportRoot() -> URL {
         let runnerHome = FileManager.default.homeDirectoryForCurrentUser.path
         let containerMarker = "/Library/Containers/"
@@ -2232,123 +2195,209 @@ final class CaseFileReviewHostedUITests: XCTestCase {
             .appendingPathComponent("ReviewExportUITest-\(UUID().uuidString)", isDirectory: true)
     }
 
-    private func regularCSVFiles(beneath root: URL) -> [URL] {
-        guard let enumerator = FileManager.default.enumerator(
-            at: root,
-            includingPropertiesForKeys: [.isRegularFileKey],
-            options: []
-        ) else {
-            return []
-        }
-        var files: [URL] = []
-        for case let url as URL in enumerator where url.pathExtension.lowercased() == "csv" {
-            guard (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else {
-                continue
-            }
-            files.append(url)
-        }
-        return files.sorted { $0.path < $1.path }
+    private struct ReviewExportUITestReceipt: Codable, Equatable, Sendable {
+        let schemaVersion: Int
+        let nonce: String
+        let format: String
+        let canonicalPath: String
+        let fileName: String
+        let byteCount: Int
+        let sha256: String
+        let prefixHex: String
     }
 
-    private func waitForCSVFiles(
-        count: Int,
-        beneath root: URL,
-        timeout: TimeInterval
-    ) -> [URL] {
-        let deadline = Date().addingTimeInterval(timeout)
-        var files = regularCSVFiles(beneath: root)
-        while files.count != count, Date() < deadline {
-            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
-            files = regularCSVFiles(beneath: root)
-        }
-        return files
+    private struct CapturedReviewExportReceipt: Sendable {
+        let receipt: ReviewExportUITestReceipt
+        let userInfoWasNil: Bool
     }
 
-    private func regularXLSXFiles(beneath root: URL) -> [URL] {
-        guard let enumerator = FileManager.default.enumerator(
-            at: root,
-            includingPropertiesForKeys: [.isRegularFileKey],
-            options: []
-        ) else {
-            return []
-        }
-        var files: [URL] = []
-        for case let url as URL in enumerator where url.pathExtension.lowercased() == "xlsx" {
-            guard (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else {
-                continue
-            }
-            files.append(url)
-        }
-        return files.sorted { $0.path < $1.path }
-    }
+    private final class ReviewExportReceiptObserver: NSObject, @unchecked Sendable {
+        let nonce: String
 
-    private func waitForXLSXFiles(
-        count: Int,
-        beneath root: URL,
-        timeout: TimeInterval
-    ) -> [URL] {
-        let deadline = Date().addingTimeInterval(timeout)
-        var files = regularXLSXFiles(beneath: root)
-        while files.count != count, Date() < deadline {
-            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
-            files = regularXLSXFiles(beneath: root)
-        }
-        return files
-    }
+        private let lock = NSLock()
+        private var receipts: [CapturedReviewExportReceipt] = []
+        private var pendingExpectation: (index: Int, expectation: XCTestExpectation)?
 
-    private func decodedWorkbookXMLBytes(at workbookURL: URL) throws -> Data {
-        let listing = try unzip(arguments: ["-Z1", workbookURL.path])
-        let entries = String(decoding: listing, as: UTF8.self)
-            .split(whereSeparator: \.isNewline)
-            .map(String.init)
-            .filter { $0.hasSuffix(".xml") || $0.hasSuffix(".rels") }
-        if entries.isEmpty {
-            throw NSError(
-                domain: "CaseFileReviewUITests.XLSX",
-                code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "The workbook contains no XML entries."]
-            )
+        init(nonce: String) {
+            self.nonce = nonce
         }
 
-        var decoded = Data()
-        for entry in entries {
-            let bytes = try unzip(arguments: ["-p", workbookURL.path, entry])
-            if bytes.isEmpty {
-                throw NSError(
-                    domain: "CaseFileReviewUITests.XLSX",
-                    code: 2,
-                    userInfo: [
-                        NSLocalizedDescriptionKey: "The workbook XML entry \(entry) is empty."
-                    ]
+        func arm(_ expectation: XCTestExpectation) -> Int {
+            lock.lock()
+            defer { lock.unlock() }
+            precondition(pendingExpectation == nil, "Only one Review export receipt may be awaited")
+            let index = receipts.count
+            pendingExpectation = (index, expectation)
+            return index
+        }
+
+        func receipt(at index: Int) -> CapturedReviewExportReceipt? {
+            lock.lock()
+            defer { lock.unlock() }
+            guard receipts.indices.contains(index) else { return nil }
+            return receipts[index]
+        }
+
+        func receiptCount() -> Int {
+            lock.lock()
+            defer { lock.unlock() }
+            return receipts.count
+        }
+
+        @objc func receive(_ notification: Notification) {
+            guard let json = notification.object as? String,
+                  let data = json.data(using: .utf8),
+                  let receipt = try? JSONDecoder().decode(
+                    ReviewExportUITestReceipt.self,
+                    from: data
+                  ),
+                  receipt.nonce == nonce else { return }
+
+            lock.lock()
+            receipts.append(
+                CapturedReviewExportReceipt(
+                    receipt: receipt,
+                    userInfoWasNil: notification.userInfo == nil
                 )
+            )
+            let expectation: XCTestExpectation?
+            if let pending = pendingExpectation,
+               receipts.count > pending.index {
+                expectation = pending.expectation
+                pendingExpectation = nil
+            } else {
+                expectation = nil
             }
-            decoded.append(bytes)
+            lock.unlock()
+
+            expectation?.fulfill()
         }
-        return decoded
     }
 
-    private func unzip(arguments: [String]) throws -> Data {
-        let process = Process()
-        let outputPipe = Pipe()
-        let errorPipe = Pipe()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
-        process.arguments = arguments
-        process.standardOutput = outputPipe
-        process.standardError = errorPipe
-        try process.run()
-        let output = outputPipe.fileHandleForReading.readDataToEndOfFile()
-        let error = errorPipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        if process.terminationStatus != 0 {
-            throw NSError(
-                domain: "CaseFileReviewUITests.XLSX",
-                code: Int(process.terminationStatus),
-                userInfo: [
-                    NSLocalizedDescriptionKey: String(decoding: error, as: UTF8.self)
-                ]
-            )
-        }
-        return output
+    private struct ReviewExportReceiptObservation {
+        let expectation: XCTestExpectation
+        let observer: ReviewExportReceiptObserver
+        let receiptIndex: Int
+        let expectedFormat: String
+    }
+
+    private func observeReviewExportReceipts(nonce: String) -> ReviewExportReceiptObserver {
+        let observer = ReviewExportReceiptObserver(nonce: nonce)
+        DistributedNotificationCenter.default().addObserver(
+            observer,
+            selector: #selector(ReviewExportReceiptObserver.receive(_:)),
+            name: Notification.Name("SupraReviewExportUITestReceipt"),
+            object: nil,
+            suspensionBehavior: .deliverImmediately
+        )
+        return observer
+    }
+
+    private func stopObservingReviewExportReceipts(_ observer: ReviewExportReceiptObserver) {
+        DistributedNotificationCenter.default().removeObserver(
+            observer,
+            name: Notification.Name("SupraReviewExportUITestReceipt"),
+            object: nil
+        )
+    }
+
+    private func expectNextReviewExportReceipt(
+        from observer: ReviewExportReceiptObserver,
+        expectedFormat: String
+    ) -> ReviewExportReceiptObservation {
+        let expectation = expectation(
+            description: "App-observed \(expectedFormat) Review export receipt"
+        )
+        let receiptIndex = observer.arm(expectation)
+        return ReviewExportReceiptObservation(
+            expectation: expectation,
+            observer: observer,
+            receiptIndex: receiptIndex,
+            expectedFormat: expectedFormat
+        )
+    }
+
+    private func receivedReviewExportReceipt(
+        from observation: ReviewExportReceiptObservation
+    ) throws -> ReviewExportUITestReceipt {
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [observation.expectation], timeout: 10),
+            .completed,
+            "The app did not publish its \(observation.expectedFormat) Review export receipt"
+        )
+        let captured = try XCTUnwrap(
+            observation.observer.receipt(at: observation.receiptIndex),
+            "The fulfilled \(observation.expectedFormat) observation captured no receipt"
+        )
+        XCTAssertTrue(
+            captured.userInfoWasNil,
+            "The Review export receipt must carry JSON only in notification.object"
+        )
+        XCTAssertEqual(
+            captured.receipt.nonce,
+            observation.observer.nonce,
+            "A receipt from another hosted launch must never satisfy this observation"
+        )
+        XCTAssertEqual(
+            captured.receipt.format,
+            observation.expectedFormat,
+            "The observed Review export receipt must identify the clicked format"
+        )
+        return captured.receipt
+    }
+
+    private func assertReviewExportReceipt(
+        _ receipt: ReviewExportUITestReceipt,
+        beneath exportRoot: URL,
+        expectedFormat: String,
+        expectedPathExtension: String,
+        expectedPrefixHex: String
+    ) {
+        XCTAssertEqual(receipt.schemaVersion, 1, "Review export receipt schema drifted")
+        XCTAssertEqual(receipt.format, expectedFormat)
+
+        let canonicalURL = URL(fileURLWithPath: receipt.canonicalPath, isDirectory: false)
+        XCTAssertEqual(
+            canonicalURL.standardizedFileURL.path,
+            receipt.canonicalPath,
+            "The app must report a standardized absolute artifact path"
+        )
+        XCTAssertTrue(
+            receipt.canonicalPath.hasPrefix("\(exportRoot.standardizedFileURL.path)/"),
+            "The app-observed artifact must remain beneath the exact requested export root"
+        )
+        XCTAssertFalse(receipt.fileName.isEmpty, "The receipt filename must not use its default")
+        XCTAssertEqual(
+            canonicalURL.lastPathComponent,
+            receipt.fileName,
+            "The receipt filename must match its canonical path"
+        )
+        XCTAssertEqual(
+            canonicalURL.pathExtension.lowercased(),
+            expectedPathExtension,
+            "The receipt must identify the exact exported file format"
+        )
+        XCTAssertEqual(
+            receipt.prefixHex,
+            expectedPrefixHex,
+            "The app must report the exact format-signature prefix"
+        )
+        XCTAssertGreaterThan(
+            receipt.byteCount,
+            expectedPrefixHex.count / 2,
+            "The exported artifact must contain more than its format signature"
+        )
+        XCTAssertEqual(receipt.sha256.count, 64, "The receipt needs one full SHA-256 digest")
+        let lowercaseHex = CharacterSet(charactersIn: "0123456789abcdef")
+        XCTAssertTrue(
+            receipt.sha256.unicodeScalars.allSatisfy(lowercaseHex.contains),
+            "The receipt SHA-256 must use exactly 64 lowercase hexadecimal characters"
+        )
+        XCTAssertNotEqual(
+            receipt.sha256,
+            String(repeating: "0", count: 64),
+            "The receipt must not use the all-zero digest default"
+        )
     }
 
     private func waitForEnabled(
@@ -3083,6 +3132,8 @@ final class CaseFileReviewCompositionUITests: XCTestCase {
         // CSV route. It lacks the XLSX copy and accessibility identity, the
         // selected-project XLSX controller call, and one shared format handler
         // that owns Finder reveal and the native error path for both formats.
+        // Hardening RED: a successful returned URL is not followed by one
+        // DEBUG-only, nonce-gated distributed artifact receipt for hosted UI19.
         let review = try caseFileReviewSource()
         let environment = try appSource(relativePath: "SupraAI/AppEnvironment.swift")
         let reviewActions = try declarationSource(
@@ -3215,6 +3266,22 @@ final class CaseFileReviewCompositionUITests: XCTestCase {
             occurrenceCount(of: "SUPRA_UI_TEST_REVIEW_EXPORT_ROOT", in: environment),
             occurrenceCount(of: "SUPRA_UI_TEST_REVIEW_EXPORT_ROOT", in: exportRootAccess),
             "production composition must not read the hosted export root outside its doubly gated helper"
+        )
+        XCTAssertEqual(
+            occurrenceCount(
+                of: "DistributedNotificationCenter.default().post(",
+                in: exportAction
+            ),
+            1,
+            "one successful Review export must post exactly one hosted artifact receipt"
+        )
+        XCTAssertEqual(
+            try matchCount(
+                #"let\s+url:\s*URL[\s\S]{0,1200}switch\s+format\s*\{[\s\S]{0,1200}\}\s*#if\s+DEBUG[\s\S]{0,1200}AppEnvironment\.isUITestMode[\s\S]{0,500}arguments\.contains\(\s*"-uiTestReviewExport"\s*\)[\s\S]{0,900}arguments\.firstIndex\(of:\s*"-uiTestReviewExportNonce"\s*\)[\s\S]{0,1800}JSONEncoder\(\)\.encode\([\s\S]{0,700}DistributedNotificationCenter\.default\(\)\.post\([\s\S]{0,400}"SupraReviewExportUITestReceipt"[\s\S]{0,400}object:\s*[^,]+,[\s\S]{0,240}userInfo:\s*nil[\s\S]{0,240}deliverImmediately:\s*true[\s\S]{0,240}#endif"#,
+                in: exportAction
+            ),
+            1,
+            "the returned artifact URL must feed one JSON-object receipt inside the DEBUG, UI-test-mode, explicit export-flag, exact nonce gate"
         )
     }
 
