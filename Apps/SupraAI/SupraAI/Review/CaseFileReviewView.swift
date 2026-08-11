@@ -112,6 +112,7 @@ struct CaseFileReviewView: View {
             CaseFileReviewCreationSheet(
                 controller: creationController,
                 models: reviewCreationModels,
+                hardwareProfile: library.hardwareProfile,
                 isPresented: $showingNewReview
             )
         }

@@ -13,6 +13,7 @@ struct CaseFileReviewCreationSheet: View {
 
     @ObservedObject var controller: CaseFileReviewCreationController
     let models: [ModelSummary]
+    let hardwareProfile: MacHardwareProfile
     @Binding var isPresented: Bool
 
     @Environment(\.colorScheme) private var colorScheme
@@ -140,25 +141,72 @@ struct CaseFileReviewCreationSheet: View {
                     .foregroundStyle(.secondary)
                     .frame(width: 92, alignment: .leading)
                 if models.isEmpty {
-                    Label("No managed local model", systemImage: "exclamationmark.triangle")
-                        .font(.supraSubheadline)
-                        .foregroundStyle(.orange)
-                        .accessibilityIdentifier("review.creation.model")
-                } else {
-                    Picker("", selection: $selectedModelID) {
-                        ForEach(models) { model in
-                            Text("\(model.displayName) · Managed")
-                                .tag(Optional(model.id))
-                        }
+                    VStack(alignment: .leading, spacing: 7) {
+                        Label("No managed local model", systemImage: "exclamationmark.triangle")
+                            .font(.supraSubheadline)
+                            .foregroundStyle(.orange)
+                            .accessibilityIdentifier("review.creation.model")
+                        modelHardwareAdvisory
                     }
-                    .labelsHidden()
-                    .frame(maxWidth: 360, alignment: .leading)
-                    .accessibilityLabel("Managed local model")
-                    .accessibilityValue(selectedModelLabel)
-                    .accessibilityIdentifier("review.creation.model")
+                } else {
+                    VStack(alignment: .leading, spacing: 7) {
+                        Picker("", selection: $selectedModelID) {
+                            ForEach(models) { model in
+                                Text("\(model.displayName) · Managed")
+                                    .tag(Optional(model.id))
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(maxWidth: 360, alignment: .leading)
+                        .accessibilityLabel("Managed local model")
+                        .accessibilityValue(selectedModelLabel)
+                        .accessibilityIdentifier("review.creation.model")
+
+                        modelHardwareAdvisory
+                    }
                 }
             }
         }
+    }
+
+    private var modelHardwareAdvisory: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(hardwareProfileText)
+                .font(.supraCaption)
+                .foregroundStyle(.secondary)
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("review.creation.hardware")
+            Text(selectedModelFitExplanation)
+                .font(.supraCaption)
+                .foregroundStyle(selectedModelFitIsCaution ? .orange : .secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("review.creation.modelFit")
+        }
+    }
+
+    private var hardwareProfileText: String {
+        let gibibytes = hardwareProfile.physicalMemoryBytes / 1_073_741_824
+        return "\(gibibytes) GB unified memory"
+    }
+
+    private var selectedModelFit: ModelFitAssessment? {
+        guard let selectedModelID,
+              let model = models.first(where: { $0.id == selectedModelID }),
+              let repositoryID = model.managedRepositoryID else { return nil }
+        return LocalAIRecommendationPolicy.fitAssessment(
+            textRepoID: repositoryID,
+            profile: hardwareProfile
+        )
+    }
+
+    private var selectedModelFitExplanation: String {
+        selectedModelFit?.explanation
+            ?? "Fit unknown — this model has no verified hardware metadata."
+    }
+
+    private var selectedModelFitIsCaution: Bool {
+        selectedModelFit?.level == .caution
     }
 
     private var scopeLedger: some View {

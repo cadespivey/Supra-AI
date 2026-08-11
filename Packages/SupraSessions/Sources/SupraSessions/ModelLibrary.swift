@@ -170,6 +170,9 @@ public final class ModelLibrary: ObservableObject {
     /// `nil` means Autoselect — resolve each request via the Models-tab role
     /// preference. App-wide and persisted across launches.
     @Published public private(set) var forcedModelID: ModelID?
+    /// Stable hardware snapshot used for fit presentation during this library's
+    /// lifetime. Tests and doubly gated app fixtures may inject an exact profile.
+    public let hardwareProfile: MacHardwareProfile
     static let forcedChatModelSettingsKey = "chat.forced_model_id"
     private static let runtimeReservedMessage = "Case File Review is using the local runtime. Try this model change after the Review pauses or finishes."
 
@@ -191,13 +194,15 @@ public final class ModelLibrary: ObservableObject {
     public convenience init(
         store: SupraStore,
         runtimeClient: any RuntimeClientProtocol,
-        managedModelRoots: [URL] = [ManagedModelStorage.modelsDirectory()]
+        managedModelRoots: [URL] = [ManagedModelStorage.modelsDirectory()],
+        hardwareProfile: MacHardwareProfile? = nil
     ) {
         self.init(
             store: store,
             runtimeClient: runtimeClient,
             managedModelRoots: managedModelRoots,
-            authorizationExecutor: .live
+            authorizationExecutor: .live,
+            hardwareProfile: hardwareProfile
         )
     }
 
@@ -206,13 +211,17 @@ public final class ModelLibrary: ObservableObject {
         runtimeClient: any RuntimeClientProtocol,
         managedModelRoots: [URL],
         authorizationExecutor: ContentBoundAuthorizationExecutor,
-        modelPinningExecutor: ManagedModelPinningExecutor = .live
+        modelPinningExecutor: ManagedModelPinningExecutor = .live,
+        hardwareProfile: MacHardwareProfile? = nil
     ) {
         self.store = store
         self.runtimeClient = runtimeClient
         self.managedModelRoots = managedModelRoots
         self.authorizationExecutor = authorizationExecutor
         self.modelPinningExecutor = modelPinningExecutor
+        self.hardwareProfile = hardwareProfile ?? MacHardwareProfileProbe.current(
+            modelsDirectory: managedModelRoots.first ?? ManagedModelStorage.modelsDirectory()
+        )
         if let stored = try? store.appSettings.getSetting(
             ModelRoleAssignments.settingsKey,
             as: ModelRoleAssignments.self
@@ -493,8 +502,35 @@ public final class ModelLibrary: ObservableObject {
 
     /// Reloads the registered models from the store.
     public func refresh() {
-        models = (try? store.models.fetchModels())?.map(ModelSummary.init) ?? []
+        models = (try? store.models.fetchModels())?.map { record in
+            ModelSummary(
+                record: record,
+                managedRepositoryID: managedRepositoryID(for: record)
+            )
+        } ?? []
         bootstrapRoleAssignmentsIfNeeded(configuration: .fromEnvironment())
+    }
+
+    /// Reads only validated manifest structure for managed-model fit metadata.
+    /// Exact tree and byte verification remains the later pinning/load boundary.
+    private func managedRepositoryID(for record: ModelRecord) -> String? {
+        guard record.bookmarkData == nil else { return nil }
+        let directory = URL(fileURLWithPath: record.path, isDirectory: true)
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+        guard managedModelRoots.contains(where: { root in
+            let standardizedRoot = root.standardizedFileURL.resolvingSymlinksInPath()
+            return directory.path != standardizedRoot.path
+                && ManagedModelStorage.isManaged(
+                    path: directory.path,
+                    roots: [standardizedRoot]
+                )
+        }) else {
+            return nil
+        }
+        return try? ManagedModelStorage.readManifest(
+            at: ManagedModelStorage.manifestURL(in: directory)
+        ).repositoryID
     }
 
     /// Reconciles the published load state with a model the runtime already holds

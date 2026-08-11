@@ -19,6 +19,16 @@ public struct CatalogEmbeddingModel: Identifiable, Sendable, Equatable {
     /// no re-indexing needed.
     public let queryInstruction: String?
 
+    public var approximateDownloadBytes: UInt64 {
+        UInt64(approxSizeMB) * 1_000_000
+    }
+
+    /// The embedding runtime may remain resident beside the text runtime, so a
+    /// combined recommendation reserves its model-weight footprint as well.
+    public var estimatedResidentBytes: UInt64 {
+        approximateDownloadBytes
+    }
+
     public init(
         repoID: String,
         displayName: String,

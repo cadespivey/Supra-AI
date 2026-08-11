@@ -33,6 +33,36 @@ path.
 The defaults assume an M4 Mac with 48 GB unified memory. Use 4-bit models by
 default. Do not make 8-bit or 70B-class models the default on this machine.
 
+### Guided New Review hardware advisory
+
+Guided New Review applies a narrower, advisory work-model policy to the selected
+managed text model. It reads the model repository identity only from the
+structured app-managed manifest and compares the curated model-weight estimate
+with detected unified memory. It does not infer fit from a display name, folder
+name, or catalog prose, and it does not silently add an embedding model that the
+Review flow did not select.
+
+| Detected unified-memory tier | Curated Review work model | Approximate model weight |
+| --- | --- | ---: |
+| 16 GB | Qwen3 8B (4-bit) | 4.7 GB |
+| 32 GB | Qwen3 14B (4-bit) | 8 GB |
+| 64 GB | Qwen3 32B (4-bit) | 18 GB |
+| 96 GB | Qwen3 32B (4-bit) | 18 GB |
+| 128 GB | Qwen3 32B (4-bit) | 18 GB |
+
+Intermediate capacities round down conservatively, capacities above 128 GB use
+the 128 GB policy, and machines below 16 GB receive no preset recommendation.
+The 96 GB and 128 GB tiers deliberately retain the 32B 4-bit ceiling to leave
+more headroom for context, macOS, and other apps. A caution or unknown result is
+shown before Start but does not block Review creation; Start still performs the
+fresh exact content verification and pin that authorizes execution. Fit is an
+estimated model-weight comparison, not a promise of speed, context capacity,
+successful loading, or available memory at execution time.
+
+This advisory does not replace the role-routing defaults above. In particular,
+a 48 GB Mac rounds down to the 32 GB Guided New Review policy tier even though a
+user may separately configure the larger role-specific defaults.
+
 ## Environment Variables
 
 See `.env.example` for the full list. The most important values are:

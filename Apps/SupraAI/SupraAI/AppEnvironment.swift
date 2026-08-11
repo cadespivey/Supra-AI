@@ -181,7 +181,10 @@ final class AppEnvironment: ObservableObject {
         let modelLibrary = ModelLibrary(
             store: store,
             runtimeClient: runtimeClient,
-            managedModelRoots: guidedQAUITestManagedRoots
+            managedModelRoots: guidedQAUITestManagedRoots,
+            hardwareProfile: Self.reviewCreationHardwareProfile(
+                modelsDirectory: ManagedModelStorage.modelsDirectory()
+            )
         )
         let tokenStore = APIKeyStoreComposition.live()
         self.store = store
@@ -987,6 +990,36 @@ final class AppEnvironment: ObservableObject {
         return arguments[marker + 1]
     }
 
+    /// Resolves the hardware profile projected into Guided New Review. Production
+    /// and every unauthorized fixture path use the live Mac probe; the exact Review
+    /// XCUITest launch may inject only physical memory so 96 GB and 128 GB policy
+    /// tiers remain independently observable without spoofing production state.
+    private static func reviewCreationHardwareProfile(
+        modelsDirectory: URL,
+        arguments: [String] = ProcessInfo.processInfo.arguments
+    ) -> MacHardwareProfile {
+#if DEBUG
+        if isUITestMode,
+           arguments.contains("-uiTestReviewCreation"),
+           let marker = arguments.firstIndex(of: "-uiTestLocalAIMemoryGB"),
+           arguments.indices.contains(marker + 1),
+           let memoryGB = UInt64(arguments[marker + 1]),
+           memoryGB > 0 {
+            let (physicalMemoryBytes, overflow) = memoryGB.multipliedReportingOverflow(
+                by: 1_073_741_824
+            )
+            if !overflow {
+                return MacHardwareProfile(
+                    physicalMemoryBytes: physicalMemoryBytes,
+                    recommendedWorkingSetBytes: (physicalMemoryBytes / 4) * 3,
+                    availableModelDiskBytes: nil
+                )
+            }
+        }
+#endif
+        return MacHardwareProfileProbe.current(modelsDirectory: modelsDirectory)
+    }
+
     /// True when launched with `-demoMode`: the same hermetic throwaway store as UI
     /// tests, seeded with entirely FICTITIOUS demo data (fictional parties, clients,
     /// and documents; only the case law is real) for marketing screenshots. Never
@@ -1349,6 +1382,15 @@ final class AppEnvironment: ObservableObject {
         in authorizedRoot: URL
     ) throws -> ModelID {
         let modelIDString = "88888888-8888-4888-8888-888888888888"
+        let scenario = Self.reviewCreationUITestScenario
+        let usesRecommendedHardwareModel = scenario == "hardware96"
+            || scenario == "hardware128"
+        let repositoryID = usesRecommendedHardwareModel
+            ? "mlx-community/Qwen3-32B-4bit"
+            : "supra-test/guided-review"
+        let displayName = usesRecommendedHardwareModel
+            ? "Qwen3 32B (4-bit)"
+            : "Synthetic Review Model"
         let modelDirectory = authorizedRoot
             .appendingPathComponent("guided-review-ui-model", isDirectory: true)
         try FileManager.default.createDirectory(
@@ -1366,7 +1408,7 @@ final class AppEnvironment: ObservableObject {
             )
         }
         let manifest = ModelArtifactManifest(
-            repositoryID: "supra-test/guided-review",
+            repositoryID: repositoryID,
             revision: String(repeating: "8", count: 40),
             files: artifacts.map { name, data in
                 ModelArtifactManifest.File(
@@ -1387,7 +1429,7 @@ final class AppEnvironment: ObservableObject {
         )
         try store.models.upsertModel(ModelRecord(
             id: modelIDString,
-            displayName: "Synthetic Review Model",
+            displayName: displayName,
             path: modelDirectory.path,
             isActive: true,
             validationStatus: "verified"
