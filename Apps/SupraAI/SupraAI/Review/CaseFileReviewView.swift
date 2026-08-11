@@ -1,6 +1,27 @@
 import AppKit
+#if DEBUG
+import CryptoKit
+#endif
 import SupraSessions
 import SwiftUI
+
+#if DEBUG
+private extension DistributedNotificationCenter {
+    func post(
+        name: Notification.Name,
+        object: String?,
+        userInfo: [AnyHashable: Any]?,
+        deliverImmediately: Bool
+    ) {
+        postNotificationName(
+            name,
+            object: object,
+            userInfo: userInfo,
+            deliverImmediately: deliverImmediately
+        )
+    }
+}
+#endif
 
 /// The first visible Review Project workbench: a native four-column finding
 /// matrix with a source-focused trailing inspector. Creation/configuration stays
@@ -1018,6 +1039,19 @@ struct CaseFileReviewView: View {
         case xlsx
     }
 
+#if DEBUG
+    private struct ReviewExportUITestReceipt: Encodable {
+        let schemaVersion: Int
+        let nonce: String
+        let format: String
+        let canonicalPath: String
+        let fileName: String
+        let byteCount: Int
+        let sha256: String
+        let prefixHex: String
+    }
+#endif
+
     private func exportReviewSnapshot(_ format: ReviewSnapshotExportFormat) {
         do {
             let url: URL
@@ -1027,6 +1061,50 @@ struct CaseFileReviewView: View {
             case .xlsx:
                 url = try controller.exportSelectedProjectXLSX()
             }
+#if DEBUG
+            let arguments = ProcessInfo.processInfo.arguments
+            if AppEnvironment.isUITestMode,
+               arguments.contains("-uiTestReviewExport"),
+               let nonceIndex = arguments.firstIndex(of: "-uiTestReviewExportNonce"),
+               arguments.indices.contains(arguments.index(after: nonceIndex)) {
+                let nonce = arguments[arguments.index(after: nonceIndex)]
+                if UUID(uuidString: nonce) != nil {
+                    let data = try Data(contentsOf: url)
+                    let receiptFormat: String
+                    let prefixByteCount: Int
+                    switch format {
+                    case .csv:
+                        receiptFormat = "csv"
+                        prefixByteCount = 3
+                    case .xlsx:
+                        receiptFormat = "xlsx"
+                        prefixByteCount = 4
+                    }
+                    let receipt = ReviewExportUITestReceipt(
+                        schemaVersion: 1,
+                        nonce: nonce,
+                        format: receiptFormat,
+                        canonicalPath: url.standardizedFileURL.path,
+                        fileName: url.lastPathComponent,
+                        byteCount: data.count,
+                        sha256: SHA256.hash(data: data)
+                            .map { String(format: "%02x", $0) }
+                            .joined(),
+                        prefixHex: data.prefix(prefixByteCount)
+                            .map { String(format: "%02x", $0) }
+                            .joined()
+                    )
+                    let receiptData = try JSONEncoder().encode(receipt)
+                    let receiptJSON = String(decoding: receiptData, as: UTF8.self)
+                    DistributedNotificationCenter.default().post(
+                        name: Notification.Name("SupraReviewExportUITestReceipt"),
+                        object: receiptJSON,
+                        userInfo: nil,
+                        deliverImmediately: true
+                    )
+                }
+            }
+#endif
             if !(AppEnvironment.isUITestMode
                 && ProcessInfo.processInfo.arguments.contains("-uiTestReviewExport")) {
                 NSWorkspace.shared.activateFileViewerSelecting([url])
