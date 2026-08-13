@@ -167,6 +167,7 @@ public struct JurisdictionCatalog: Sendable {
 
     public let options: [JurisdictionOption]
     private let optionByID: [String: JurisdictionOption]
+    private let canonicalJurisdictionOptionIDBySelectedOptionID: [String: String]
     private let persistedOptionIDByExactName: [String: String]
     private let persistedAliasTargetIDByExactKey: [String: String]
     private let persistedAliasKeys: [String]
@@ -226,6 +227,8 @@ public struct JurisdictionCatalog: Sendable {
         )
         self.options = parsed
         self.optionByID = Dictionary(uniqueKeysWithValues: parsed.map { ($0.id, $0) })
+        self.canonicalJurisdictionOptionIDBySelectedOptionID =
+            Self.canonicalJurisdictionOptionIDIndex(options: parsed)
 
         var optionIDsByExactName: [String: Set<String>] = [:]
         for option in parsed {
@@ -277,6 +280,17 @@ public struct JurisdictionCatalog: Sendable {
 
     public func option(id: String) -> JurisdictionOption? {
         optionByID[id]
+    }
+
+    /// Returns the one canonical jurisdiction related to an explicitly selected
+    /// catalog option ID. The relationship index is built from parsed catalog
+    /// members only; names, aliases, search results, and normalized text are not
+    /// accepted as selection identity.
+    public func canonicalJurisdictionOption(
+        forSelectedOptionID selectedOptionID: String
+    ) -> JurisdictionOption? {
+        canonicalJurisdictionOptionIDBySelectedOptionID[selectedOptionID]
+            .flatMap { optionByID[$0] }
     }
 
     /// The exact, reviewed legacy spellings admitted by the persisted-identity
@@ -584,6 +598,58 @@ private extension JurisdictionCatalog {
         case none
         case federal
         case state
+    }
+
+    static func canonicalJurisdictionOptionIDIndex(
+        options: [JurisdictionOption]
+    ) -> [String: String] {
+        var stateJurisdictionIDsByExactState: [String: Set<String>] = [:]
+        var federalAppellateIDsByExactName: [String: Set<String>] = [:]
+
+        for option in options {
+            if option.system == .state,
+               option.level == .jurisdiction,
+               let state = option.state {
+                stateJurisdictionIDsByExactState[state, default: []].insert(option.id)
+            }
+            if option.system == .federal, option.level == .federalAppellate {
+                federalAppellateIDsByExactName[option.displayName, default: []]
+                    .insert(option.id)
+            }
+        }
+
+        let stateJurisdictionIDByExactState =
+            stateJurisdictionIDsByExactState.compactMapValues { ids in
+                ids.count == 1 ? ids.first : nil
+            }
+        let federalAppellateIDByExactName =
+            federalAppellateIDsByExactName.compactMapValues { ids in
+                ids.count == 1 ? ids.first : nil
+            }
+        var relationships: [String: String] = [:]
+        for option in options {
+            if option.level == .jurisdiction {
+                relationships[option.id] = option.id
+                continue
+            }
+
+            switch option.system {
+            case .state:
+                guard let state = option.state,
+                      let jurisdictionID = stateJurisdictionIDByExactState[state]
+                else { continue }
+                relationships[option.id] = jurisdictionID
+
+            case .federal:
+                if option.level == .supreme || option.level == .federalAppellate {
+                    relationships[option.id] = option.id
+                } else if let appellateID =
+                    federalAppellateIDByExactName[option.jurisdictionName] {
+                    relationships[option.id] = appellateID
+                }
+            }
+        }
+        return relationships
     }
 
     static func loadBundledCourtList() -> String {
