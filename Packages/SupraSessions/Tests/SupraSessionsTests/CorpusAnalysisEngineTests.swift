@@ -6,6 +6,735 @@ import SupraStore
 import XCTest
 
 final class CorpusAnalysisEngineTests: XCTestCase {
+    func testTCORP01LongRevisionTailIsPackedAsExactPromptSlices() async throws {
+        // T-CORP-01 expected RED: a long revision is persisted as one revision-only
+        // partition, so the shared 3,000-character source packer omits the tail sentinel.
+        // Offsets in this contract count Swift extended grapheme clusters (Character),
+        // never UTF-8 bytes or UTF-16 code units.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic exact-slice corpus")
+        let characterBudget = 2_417
+        let headSentinel = "HEAD-RANGE-217-NONDEFAULT"
+        let middleSentinel = "MIDDLE-RANGE-431-NONDEFAULT"
+        let tailSentinel = "TAIL-RANGE-863-NONDEFAULT"
+        let unicodeCluster = "👩🏽‍⚖️|e\u{301}|🇺🇳"
+        XCTAssertNotEqual(unicodeCluster.count, unicodeCluster.utf8.count)
+        XCTAssertNotEqual(unicodeCluster.count, unicodeCluster.utf16.count)
+        let revisionText = headSentinel
+            + String(repeating: "A", count: 1_601)
+            + String(repeating: unicodeCluster, count: 179)
+            + middleSentinel
+            + String(repeating: "B", count: 1_613)
+            + String(repeating: unicodeCluster, count: 181)
+            + tailSentinel
+        let fixture = try insertDocument(
+            store: store,
+            matterID: matter.id,
+            name: "long-single-revision.txt",
+            status: .ready,
+            extractionStatus: .extracted,
+            indexStatus: .textIndexed,
+            partTexts: [revisionText]
+        )
+        let frozenRevisionID = try XCTUnwrap(fixture.revisionIDs.first)
+        let probe = EngineProbe()
+
+        let result = try await CorpusAnalysisEngine(store: store).run(
+            request: CorpusAnalysisRequest(
+                runKey: "exact-slice-long-tail-run",
+                matterID: matter.id,
+                taskKind: .customExtraction,
+                scope: CorpusAnalysisScope(documentIDs: [fixture.documentID]),
+                characterBudget: characterBudget
+            )
+        ) { input in
+            await probe.record(input)
+            return CorpusAnalysisMapOutput(findings: [])
+        }
+
+        let inputs = await probe.inputs
+        let observedSources = inputs.flatMap(\.sources)
+        let observedSlices = try observedSources.map { source -> ExactSliceProbe in
+            let locator = try JSONDecoder().decode(
+                DocumentSourceLocator.self,
+                from: Data(source.locatorJSON.utf8)
+            )
+            let start = try XCTUnwrap(locator.charStart)
+            let end = try XCTUnwrap(locator.charEnd)
+            XCTAssertEqual(source.revisionID, frozenRevisionID)
+            XCTAssertEqual(source.text.count, end - start)
+            XCTAssertEqual(source.text, Self.substring(revisionText, from: start, to: end))
+            return ExactSliceProbe(revisionID: source.revisionID, charStart: start, charEnd: end)
+        }.sorted { $0.charStart < $1.charStart }
+
+        XCTAssertGreaterThan(observedSlices.count, 1, "one long revision must become multiple prompt-safe slices")
+        XCTAssertTrue(observedSources.allSatisfy {
+            $0.text.count <= DocumentQAPromptBuilder.maxSourceTextChars
+        })
+        XCTAssertEqual(observedSlices.first?.charStart, 0)
+        XCTAssertEqual(observedSlices.last?.charEnd, revisionText.count)
+        for pair in zip(observedSlices, observedSlices.dropFirst()) {
+            XCTAssertEqual(pair.0.charEnd, pair.1.charStart, "exact slices must have neither a gap nor overlap")
+        }
+        XCTAssertEqual(Set(observedSlices).count, observedSlices.count, "no exact range may be presented twice")
+        XCTAssertEqual(
+            observedSlices.map { Self.substring(revisionText, from: $0.charStart, to: $0.charEnd) }.joined(),
+            revisionText
+        )
+
+        for input in inputs {
+            XCTAssertLessThanOrEqual(
+                input.sources.reduce(0) { $0 + $1.text.count },
+                characterBudget,
+                "the total Character count presented to one mapper partition must honor the requested budget"
+            )
+            for source in input.sources {
+                XCTAssertTrue(
+                    input.promptEnvelope.contains(source.text),
+                    "the exact source range recorded as covered must be present in that mapper prompt"
+                )
+            }
+        }
+        let allPrompts = inputs.map(\.promptEnvelope).joined(separator: "\n---exact-slice-boundary---\n")
+        XCTAssertEqual(Self.occurrenceCount(of: headSentinel, in: allPrompts), 1)
+        XCTAssertEqual(Self.occurrenceCount(of: middleSentinel, in: allPrompts), 1)
+        XCTAssertEqual(Self.occurrenceCount(of: tailSentinel, in: allPrompts), 1)
+        XCTAssertFalse(allPrompts.contains("…[source text truncated to fit the context window]"))
+
+        XCTAssertEqual(result.coverage.succeededPartitionCount, result.coverage.partitionCount)
+    }
+
+    func testTCORP02NormalizedSliceLedgerPersistsExactOnceOnlyRanges() async throws {
+        // T-CORP-02 expected RED: CorpusAnalysisRepository has no normalized
+        // fetchSlices contract and the store has no exact slice ledger; partition
+        // input_revision_ids_json must remain revision identity, not a second ledger.
+        // Persisted offsets and revision_char_count use Swift Character offsets.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic normalized slice ledger")
+        let characterBudget = 2_417
+        let unicodeCluster = "🧑🏿‍⚖️|o\u{308}|🇲🇦"
+        XCTAssertNotEqual(unicodeCluster.count, unicodeCluster.utf8.count)
+        XCTAssertNotEqual(unicodeCluster.count, unicodeCluster.utf16.count)
+        let revisionText = "SLICE-HEAD-211-NONDEFAULT"
+            + String(repeating: "L", count: 1_607)
+            + String(repeating: unicodeCluster, count: 173)
+            + "SLICE-MIDDLE-433-NONDEFAULT"
+            + String(repeating: "R", count: 1_619)
+            + String(repeating: unicodeCluster, count: 177)
+            + "SLICE-TAIL-877-NONDEFAULT"
+        let fixture = try insertDocument(
+            store: store,
+            matterID: matter.id,
+            name: "normalized-slice-ledger.txt",
+            status: .ready,
+            extractionStatus: .extracted,
+            indexStatus: .textIndexed,
+            partTexts: [revisionText]
+        )
+        let frozenRevisionID = try XCTUnwrap(fixture.revisionIDs.first)
+        let result = try await CorpusAnalysisEngine(store: store).run(
+            request: CorpusAnalysisRequest(
+                runKey: "normalized-slice-ledger-run",
+                matterID: matter.id,
+                taskKind: .customExtraction,
+                scope: CorpusAnalysisScope(documentIDs: [fixture.documentID]),
+                characterBudget: characterBudget
+            )
+        ) { _ in
+            CorpusAnalysisMapOutput(findings: [])
+        }
+
+        let slices = try store.corpusAnalysis.fetchSlices(
+            matterID: matter.id,
+            runID: result.run.id
+        )
+        XCTAssertGreaterThan(slices.count, 1, "one long revision must persist multiple exact ranges")
+        XCTAssertEqual(Set(slices.map(\.runID)), [result.run.id])
+        XCTAssertTrue(Set(slices.map(\.partitionID)).isSubset(of: Set(result.partitions.map(\.id))))
+        XCTAssertEqual(Set(slices.map(\.memberKey)), ["document:\(fixture.documentID)"])
+        XCTAssertEqual(Set(slices.map(\.documentID)), [fixture.documentID])
+        XCTAssertEqual(Set(slices.map(\.partIndex)), [0])
+        XCTAssertEqual(Set(slices.map(\.revisionID)), [frozenRevisionID])
+        XCTAssertEqual(Set(slices.map(\.revisionCharCount)), [revisionText.count])
+
+        for partitionSlices in Dictionary(grouping: slices, by: \.partitionID).values {
+            XCTAssertEqual(
+                partitionSlices.map(\.ordinal).sorted(),
+                Array(0..<partitionSlices.count),
+                "slice ordinals must be deterministic and gap-free within each partition"
+            )
+            XCTAssertLessThanOrEqual(
+                partitionSlices.reduce(0) { $0 + ($1.charEnd - $1.charStart) },
+                characterBudget,
+                "the normalized ledger must prove each partition stayed within the Character budget"
+            )
+        }
+
+        let ordered = slices.sorted { lhs, rhs in
+            if lhs.charStart == rhs.charStart { return lhs.charEnd < rhs.charEnd }
+            return lhs.charStart < rhs.charStart
+        }
+        let ranges = ordered.map {
+            ExactSliceProbe(
+                revisionID: $0.revisionID,
+                charStart: $0.charStart,
+                charEnd: $0.charEnd
+            )
+        }
+        XCTAssertEqual(ranges.first?.charStart, 0)
+        XCTAssertEqual(ranges.last?.charEnd, revisionText.count)
+        XCTAssertEqual(Set(ranges).count, ranges.count)
+        for pair in zip(ranges, ranges.dropFirst()) {
+            XCTAssertEqual(pair.0.charEnd, pair.1.charStart, "persisted ranges must neither gap nor overlap")
+        }
+        for slice in ordered {
+            let exactText = Self.substring(revisionText, from: slice.charStart, to: slice.charEnd)
+            XCTAssertLessThanOrEqual(exactText.count, DocumentQAPromptBuilder.maxSourceTextChars)
+            XCTAssertEqual(slice.textSHA256, DocumentStorage.sha256Hex(of: Data(exactText.utf8)))
+            let locator = try JSONDecoder().decode(
+                DocumentSourceLocator.self,
+                from: Data(slice.locatorJSON.utf8)
+            )
+            XCTAssertEqual(locator.charStart, slice.charStart)
+            XCTAssertEqual(locator.charEnd, slice.charEnd)
+        }
+        XCTAssertEqual(
+            ordered.map { Self.substring(revisionText, from: $0.charStart, to: $0.charEnd) }.joined(),
+            revisionText
+        )
+    }
+
+    func testTCORP03ZeroEligibleSelectedSourcesFailsBeforeRunCreation() async throws {
+        // T-CORP-03 expected RED: a selected scope containing zero eligible sources
+        // creates and persists an empty run that can finalize as corpus_complete.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic zero-eligible corpus")
+        let blocked = try insertDocument(
+            store: store,
+            matterID: matter.id,
+            name: "review-required-only-source.txt",
+            status: .needsReview,
+            extractionStatus: .extracted,
+            indexStatus: .textIndexed,
+            partTexts: ["BLOCKED-SOURCE-751-NONDEFAULT"]
+        )
+        let runKey = "zero-eligible-preflight-run"
+        let probe = EngineProbe()
+        var returnedResult: CorpusAnalysisRunResult?
+        var capturedErrorDescription: String?
+
+        do {
+            returnedResult = try await CorpusAnalysisEngine(store: store).run(
+                request: CorpusAnalysisRequest(
+                    runKey: runKey,
+                    matterID: matter.id,
+                    taskKind: .customExtraction,
+                    scope: CorpusAnalysisScope(documentIDs: [blocked.documentID]),
+                    characterBudget: 1_937
+                )
+            ) { input in
+                await probe.record(input)
+                return CorpusAnalysisMapOutput(findings: [])
+            }
+        } catch {
+            capturedErrorDescription = error.localizedDescription
+        }
+
+        XCTAssertNil(returnedResult, "zero eligible sources must not return a successful run result")
+        XCTAssertFalse(
+            returnedResult?.run.assuranceState == OutputAssuranceState.corpusComplete.rawValue,
+            "the old empty corpus_complete result must be absent"
+        )
+        XCTAssertTrue(capturedErrorDescription?.localizedCaseInsensitiveContains("eligible") == true)
+        XCTAssertTrue(capturedErrorDescription?.localizedCaseInsensitiveContains("source") == true)
+        let mapperCallCount = await probe.inputs.count
+        XCTAssertEqual(mapperCallCount, 0, "preflight must fail before the mapper is called")
+        XCTAssertNil(
+            try store.corpusAnalysis.fetchRun(matterID: matter.id, runKey: runKey),
+            "preflight failure must happen before corpus run persistence"
+        )
+    }
+
+    func testTCORP03MixedSelectedScopeDisclosesUnavailableRequestedDocument() async throws {
+        // T-CORP-03 expected RED: planning filters the live document list by a
+        // Set of requested IDs, so a missing selected ID vanishes instead of
+        // remaining a disclosed excluded member in the frozen scope.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic mixed selected scope")
+        let available = try insertDocument(
+            store: store,
+            matterID: matter.id,
+            name: "available-selected-source.txt",
+            status: .ready,
+            extractionStatus: .extracted,
+            indexStatus: .textIndexed,
+            partTexts: ["AVAILABLE-SELECTED-SOURCE-1973-NONDEFAULT"]
+        )
+        let unavailableID = "selected-document-unavailable-1973"
+
+        let result = try await CorpusAnalysisEngine(store: store).run(
+            request: CorpusAnalysisRequest(
+                runKey: "mixed-selected-scope-run-1973",
+                matterID: matter.id,
+                taskKind: .customExtraction,
+                scope: CorpusAnalysisScope(
+                    documentIDs: [available.documentID, unavailableID]
+                ),
+                characterBudget: 1_973
+            )
+        ) { _ in
+            CorpusAnalysisMapOutput(findings: [])
+        }
+
+        let unavailable = try XCTUnwrap(
+            result.snapshot.members.first { $0.memberKey == "document:\(unavailableID)" }
+        )
+        XCTAssertEqual(unavailable.documentID, unavailableID)
+        XCTAssertEqual(unavailable.displayName, "Unavailable selected document \(unavailableID)")
+        XCTAssertEqual(unavailable.disposition, .excluded)
+        XCTAssertEqual(unavailable.reason, "selected_document_unavailable")
+        XCTAssertTrue(
+            result.assuranceReasons.contains { $0.contains(unavailable.displayName) },
+            "the unavailable requested member must be disclosed in the result"
+        )
+    }
+
+    func testTCORP03WholeMatterPlanningDisclosesUnfinishedDocumentlessImportSource() async throws {
+        // T-CORP-03 expected RED: whole-matter exact planning inventories only
+        // terminal documentless import exclusions, so an unfinished copying
+        // source vanishes instead of remaining disclosed in the frozen scope.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic unfinished import disclosure")
+        let eligible = try insertDocument(
+            store: store,
+            matterID: matter.id,
+            name: "eligible-for-unfinished-inventory.txt",
+            status: .ready,
+            extractionStatus: .extracted,
+            indexStatus: .textIndexed,
+            partTexts: ["ELIGIBLE-UNFINISHED-INVENTORY-2011-NONDEFAULT"]
+        )
+        let batch = try store.documentJobs.createBatch(matterID: matter.id)
+        let unfinishedPath = "Copy Interrupted 2011.txt"
+        let unfinished = try store.documentJobs.recordDiscovered(
+            batchID: batch.id,
+            matterID: matter.id,
+            sourceKey: "selection:copying-2011-nondefault",
+            sourceDisplayPath: unfinishedPath,
+            sourceBookmark: Data("COPYING-BOOKMARK-2011-NONDEFAULT".utf8),
+            state: .selected
+        )
+        _ = try store.documentJobs.markState(sourceID: unfinished.id, state: .copying)
+        let pinnedModel = CorpusAnalysisPinnedModel(
+            modelRepository: "synthetic/unfinished-inventory-model",
+            modelRevision: "0123456789abcdef0123456789abcdef01234567",
+            contentBindingAlgorithm: "supra-release-model-sha256-v1",
+            contentBindingSchemaVersion: 1,
+            artifactFingerprintSHA256: String(repeating: "c", count: 64)
+        )
+        let queued = ExhaustiveListQueuedRequest(
+            taskSchemaVersion: ExhaustiveListTask.schemaVersion,
+            promptBuilderVersion: ExhaustiveListTask.promptBuilderVersion,
+            runKey: "unfinished-inventory-run-2011",
+            matterID: matter.id,
+            title: "Unfinished import inventory",
+            query: "List every unfinished inventory marker.",
+            scope: .wholeMatter,
+            characterBudget: 2_011,
+            maximumRetryCount: 3
+        )
+
+        let payload = try CorpusAnalysisQueuePreparer(store: store).prepareExhaustiveList(
+            request: queued,
+            pinnedModel: pinnedModel
+        )
+        let run = try XCTUnwrap(
+            store.corpusAnalysis.fetchRun(matterID: matter.id, id: payload.runID)
+        )
+        let snapshot = try JSONDecoder().decode(
+            CorpusAnalysisSnapshot.self,
+            from: Data(run.corpusSnapshotJSON.utf8)
+        )
+        let unfinishedMemberKey = "import-source:\(unfinished.id)"
+
+        XCTAssertFalse(
+            snapshot.members.allSatisfy { $0.memberKey != unfinishedMemberKey },
+            "unfinished whole-matter sources must not vanish from the frozen inventory"
+        )
+        let disclosed = try XCTUnwrap(
+            snapshot.members.first { $0.memberKey == unfinishedMemberKey }
+        )
+        XCTAssertNil(disclosed.documentID)
+        XCTAssertEqual(disclosed.displayName, unfinishedPath)
+        XCTAssertEqual(disclosed.disposition, .excluded)
+        XCTAssertNotEqual(disclosed.disposition, .eligible)
+        XCTAssertEqual(disclosed.reason, DocumentImportSourceState.copying.rawValue)
+        XCTAssertEqual(snapshot.members.count, 2)
+        XCTAssertEqual(
+            snapshot.members.filter { $0.disposition == .eligible }.map(\.documentID),
+            [eligible.documentID]
+        )
+
+        let result = try await CorpusAnalysisEngine(store: store).runPrepared(
+            request: CorpusAnalysisRequest(
+                runKey: queued.runKey,
+                matterID: queued.matterID,
+                taskKind: .exhaustiveList,
+                scope: queued.scope,
+                characterBudget: queued.characterBudget,
+                maximumRetryCount: queued.maximumRetryCount,
+                modelLineageJSON: try Self.canonicalJSON(pinnedModel)
+            ),
+            runID: payload.runID,
+            requestDigest: payload.requestDigest
+        ) { _ in
+            CorpusAnalysisMapOutput(findings: [])
+        }
+        XCTAssertEqual(
+            result.run.assuranceState,
+            OutputAssuranceState.corpusIncomplete.rawValue,
+            "unfinished selected/copying imports block corpus-complete assurance"
+        )
+        XCTAssertNotEqual(
+            result.run.assuranceState,
+            OutputAssuranceState.corpusComplete.rawValue
+        )
+        XCTAssertTrue(
+            result.assuranceReasons.contains { reason in
+                reason.contains(unfinishedPath) && reason.contains("copying")
+            }
+        )
+    }
+
+    func testTCORP02ExactRunWithMissingSlicesNeverFallsBackToWholeRevisionInput() async throws {
+        // T-CORP-02 expected RED: partitionInput treats an empty slice array as
+        // a legacy v1 signal even when the run declares the exact v2 strategy,
+        // allowing corrupted work to reach the mapper as a whole revision.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic missing exact slices")
+        let fixture = try insertDocument(
+            store: store,
+            matterID: matter.id,
+            name: "missing-exact-slices.txt",
+            status: .ready,
+            extractionStatus: .extracted,
+            indexStatus: .textIndexed,
+            partTexts: ["MISSING-EXACT-SLICE-1987-NONDEFAULT"]
+        )
+        let revisionID = try XCTUnwrap(fixture.revisionIDs.first)
+        let runID = "missing-exact-slices-run-1987"
+        let runKey = "missing-exact-slices-key-1987"
+        let digest = String(repeating: "b", count: 64)
+        let scope = CorpusAnalysisScope(documentIDs: [fixture.documentID])
+        let snapshot = CorpusAnalysisSnapshot(schemaVersion: 2, members: [
+            CorpusAnalysisSnapshotMember(
+                memberKey: "document:\(fixture.documentID)",
+                documentID: fixture.documentID,
+                displayName: "missing-exact-slices.txt",
+                revisionIDs: [revisionID],
+                indexState: DocumentIndexStatus.textIndexed.rawValue,
+                disposition: .eligible
+            ),
+        ])
+        try await store.database.writer.write { db in
+            try db.execute(
+                sql: """
+                    INSERT INTO corpus_analysis_runs (
+                        id, run_key, matter_id, task_kind, scope_json,
+                        corpus_snapshot_json, partition_strategy,
+                        partition_strategy_version, request_schema_version,
+                        request_digest, status, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 2, 2, ?, 'planning', ?)
+                    """,
+                arguments: [
+                    runID,
+                    runKey,
+                    matter.id,
+                    CorpusAnalysisTaskKind.customExtraction.rawValue,
+                    try Self.canonicalJSON(scope),
+                    try Self.canonicalJSON(snapshot),
+                    "exact_revision_slice:characters=1987",
+                    digest,
+                    Date(timeIntervalSince1970: 1_790_002_987),
+                ]
+            )
+            try db.execute(
+                sql: """
+                    INSERT INTO corpus_analysis_partitions (
+                        id, run_id, partition_key, input_revision_ids_json
+                    ) VALUES (?, ?, ?, ?)
+                    """,
+                arguments: [
+                    "missing-exact-slices-partition-1987",
+                    runID,
+                    "000000|document:\(fixture.documentID)#revision:\(revisionID)",
+                    try Self.canonicalJSON([revisionID]),
+                ]
+            )
+        }
+
+        let probe = EngineProbe()
+        var capturedError: Error?
+        do {
+            _ = try await CorpusAnalysisEngine(store: store).runPrepared(
+                request: CorpusAnalysisRequest(
+                    runKey: runKey,
+                    matterID: matter.id,
+                    taskKind: .customExtraction,
+                    scope: scope,
+                    characterBudget: 1_987
+                ),
+                runID: runID,
+                requestDigest: digest
+            ) { input in
+                await probe.record(input)
+                return CorpusAnalysisMapOutput(findings: [])
+            }
+        } catch {
+            capturedError = error
+        }
+
+        XCTAssertNotNil(capturedError)
+        XCTAssertTrue(
+            capturedError?.localizedDescription.localizedCaseInsensitiveContains("slice") == true
+        )
+        let mappedCorruptInputs = await probe.inputs
+        XCTAssertEqual(mappedCorruptInputs.count, 0, "corrupt exact work must fail before mapping")
+    }
+
+    func testTCORP05PreparedRunUsesFrozenDocumentNameInMapperPrompt() async throws {
+        // T-CORP-05 expected RED: preparation digests the frozen display name,
+        // but execution rebuilds document labels from the live library after
+        // preparation, allowing a rename to change the prompt bytes.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic frozen prompt name")
+        let frozenName = "frozen-prompt-name-1997.txt"
+        let liveRenamedName = "live-renamed-after-prepare-1999.txt"
+        let fixture = try insertDocument(
+            store: store,
+            matterID: matter.id,
+            name: frozenName,
+            status: .ready,
+            extractionStatus: .extracted,
+            indexStatus: .textIndexed,
+            partTexts: ["FROZEN-PROMPT-NAME-SOURCE-1997-NONDEFAULT"]
+        )
+        let pinnedModel = CorpusAnalysisPinnedModel(
+            modelRepository: "synthetic/frozen-prompt-model",
+            modelRevision: "0123456789abcdef0123456789abcdef01234567",
+            contentBindingAlgorithm: "supra-release-model-sha256-v1",
+            contentBindingSchemaVersion: 1,
+            artifactFingerprintSHA256: String(repeating: "7", count: 64)
+        )
+        let queued = ExhaustiveListQueuedRequest(
+            taskSchemaVersion: ExhaustiveListTask.schemaVersion,
+            promptBuilderVersion: ExhaustiveListTask.promptBuilderVersion,
+            runKey: "frozen-prompt-name-run-1997",
+            matterID: matter.id,
+            title: "Frozen prompt name",
+            query: "Extract the frozen prompt name source.",
+            scope: CorpusAnalysisScope(documentIDs: [fixture.documentID]),
+            characterBudget: 1_997,
+            maximumRetryCount: 2
+        )
+        let payload = try CorpusAnalysisQueuePreparer(store: store).prepareExhaustiveList(
+            request: queued,
+            pinnedModel: pinnedModel
+        )
+        try await store.database.writer.write { db in
+            try db.execute(
+                sql: "UPDATE matter_documents SET display_name = ?, updated_at = ? WHERE id = ?",
+                arguments: [liveRenamedName, Date(), fixture.documentID]
+            )
+        }
+        let probe = EngineProbe()
+
+        _ = try await CorpusAnalysisEngine(store: store).runPrepared(
+            request: CorpusAnalysisRequest(
+                runKey: queued.runKey,
+                matterID: queued.matterID,
+                taskKind: .exhaustiveList,
+                scope: queued.scope,
+                characterBudget: queued.characterBudget,
+                maximumRetryCount: queued.maximumRetryCount,
+                modelLineageJSON: try CorpusAnalysisRequestDigest.canonicalJSON(pinnedModel)
+            ),
+            runID: payload.runID,
+            requestDigest: payload.requestDigest
+        ) { input in
+            await probe.record(input)
+            return CorpusAnalysisMapOutput(findings: [])
+        }
+
+        let recordedInputs = await probe.inputs
+        let source = try XCTUnwrap(recordedInputs.first?.sources.first)
+        XCTAssertEqual(source.documentName, frozenName)
+        XCTAssertNotEqual(source.documentName, liveRenamedName)
+    }
+
+    func testTCORP05QueuePreparerCanonicalizesPubliclyMutatedNegativeBudgetsBeforeFreeze() throws {
+        // T-CORP-05 expected RED: public queued-request mutation bypasses the
+        // initializer clamps, so preparation emits negative payload/digest
+        // values and a negative persisted strategy while planning with 1/0.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic canonical queue budgets")
+        let fixture = try insertDocument(
+            store: store,
+            matterID: matter.id,
+            name: "canonical-negative-budget.txt",
+            status: .ready,
+            extractionStatus: .extracted,
+            indexStatus: .textIndexed,
+            partTexts: ["CANONICAL-BUDGET-2027-NONDEFAULT"]
+        )
+        let pinnedModel = CorpusAnalysisPinnedModel(
+            modelRepository: "synthetic/canonical-budget-model",
+            modelRevision: "89abcdef0123456789abcdef0123456789abcdef",
+            contentBindingAlgorithm: "supra-release-model-sha256-v1",
+            contentBindingSchemaVersion: 1,
+            artifactFingerprintSHA256: String(repeating: "d", count: 64)
+        )
+        let negativeCharacterBudget = -2_027
+        let negativeRetryCount = -7
+        var publiclyMutated = ExhaustiveListQueuedRequest(
+            taskSchemaVersion: ExhaustiveListTask.schemaVersion,
+            promptBuilderVersion: ExhaustiveListTask.promptBuilderVersion,
+            runKey: "canonical-negative-budget-run-2027",
+            matterID: matter.id,
+            title: "Canonical negative budget",
+            query: "  Extract   every canonical budget marker.  ",
+            scope: CorpusAnalysisScope(documentIDs: [fixture.documentID]),
+            characterBudget: 2_027,
+            maximumRetryCount: 7
+        )
+        publiclyMutated.characterBudget = negativeCharacterBudget
+        publiclyMutated.maximumRetryCount = negativeRetryCount
+
+        let payload = try CorpusAnalysisQueuePreparer(store: store).prepareExhaustiveList(
+            request: publiclyMutated,
+            pinnedModel: pinnedModel
+        )
+        guard case .exhaustiveList(let frozenRequest) = payload.task else {
+            return XCTFail("prepared v2 payload must retain its exhaustive-list task")
+        }
+        let run = try XCTUnwrap(
+            store.corpusAnalysis.fetchRun(matterID: matter.id, id: payload.runID)
+        )
+        let snapshot = try JSONDecoder().decode(
+            CorpusAnalysisSnapshot.self,
+            from: Data(run.corpusSnapshotJSON.utf8)
+        )
+        let partitions = try store.corpusAnalysis.fetchPartitions(
+            matterID: matter.id,
+            runID: payload.runID
+        )
+        let slices = try store.corpusAnalysis.fetchSlices(
+            matterID: matter.id,
+            runID: payload.runID
+        )
+        var canonicalRequest = publiclyMutated
+        canonicalRequest.query = CorpusAnalysisRequestDigest.normalizeQuery(publiclyMutated.query)
+        canonicalRequest.characterBudget = 1
+        canonicalRequest.maximumRetryCount = 0
+        let canonicalDigest = try CorpusAnalysisRequestDigest.exhaustiveList(
+            request: canonicalRequest,
+            snapshot: snapshot,
+            partitions: partitions,
+            slices: slices,
+            pinnedModel: pinnedModel
+        )
+        var negativeDigestRequest = publiclyMutated
+        negativeDigestRequest.query = CorpusAnalysisRequestDigest.normalizeQuery(publiclyMutated.query)
+        let negativeDigest = try CorpusAnalysisRequestDigest.exhaustiveList(
+            request: negativeDigestRequest,
+            snapshot: snapshot,
+            partitions: partitions,
+            slices: slices,
+            pinnedModel: pinnedModel
+        )
+        XCTAssertNotEqual(canonicalDigest, negativeDigest, "the negative sentinel must affect the digest")
+
+        XCTAssertEqual(frozenRequest.characterBudget, 1)
+        XCTAssertNotEqual(frozenRequest.characterBudget, negativeCharacterBudget)
+        XCTAssertEqual(frozenRequest.maximumRetryCount, 0)
+        XCTAssertNotEqual(frozenRequest.maximumRetryCount, negativeRetryCount)
+        XCTAssertEqual(run.partitionStrategy, "exact_revision_slice:characters=1")
+        XCTAssertNotEqual(
+            run.partitionStrategy,
+            "exact_revision_slice:characters=\(negativeCharacterBudget)"
+        )
+        XCTAssertEqual(payload.requestDigest, canonicalDigest)
+        XCTAssertEqual(run.requestDigest, canonicalDigest)
+        XCTAssertNotEqual(payload.requestDigest, negativeDigest)
+    }
+
+    func testTCORP05PublicUnpreparedRunCannotResumeV2Request() async throws {
+        // T-CORP-05 expected RED: the public unprepared path can find a v2 run
+        // by run key and resume it without proving the canonical request digest.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic unprepared v2 rejection")
+        let fixture = try insertDocument(
+            store: store,
+            matterID: matter.id,
+            name: "unprepared-v2-source.txt",
+            status: .ready,
+            extractionStatus: .extracted,
+            indexStatus: .textIndexed,
+            partTexts: ["UNPREPARED-V2-SOURCE-2003-NONDEFAULT"]
+        )
+        let pinnedModel = CorpusAnalysisPinnedModel(
+            modelRepository: "synthetic/unprepared-v2-model",
+            modelRevision: "0123456789abcdef0123456789abcdef01234567",
+            contentBindingAlgorithm: "supra-release-model-sha256-v1",
+            contentBindingSchemaVersion: 1,
+            artifactFingerprintSHA256: String(repeating: "8", count: 64)
+        )
+        let queued = ExhaustiveListQueuedRequest(
+            taskSchemaVersion: ExhaustiveListTask.schemaVersion,
+            promptBuilderVersion: ExhaustiveListTask.promptBuilderVersion,
+            runKey: "unprepared-v2-run-2003",
+            matterID: matter.id,
+            title: "Unprepared v2 rejection",
+            query: "Extract the unprepared v2 source.",
+            scope: CorpusAnalysisScope(documentIDs: [fixture.documentID]),
+            characterBudget: 2_003,
+            maximumRetryCount: 2
+        )
+        _ = try CorpusAnalysisQueuePreparer(store: store).prepareExhaustiveList(
+            request: queued,
+            pinnedModel: pinnedModel
+        )
+        let probe = EngineProbe()
+        var capturedError: Error?
+
+        do {
+            _ = try await CorpusAnalysisEngine(store: store).run(
+                request: CorpusAnalysisRequest(
+                    runKey: queued.runKey,
+                    matterID: queued.matterID,
+                    taskKind: .exhaustiveList,
+                    scope: queued.scope,
+                    characterBudget: queued.characterBudget,
+                    maximumRetryCount: queued.maximumRetryCount,
+                    modelLineageJSON: try CorpusAnalysisRequestDigest.canonicalJSON(pinnedModel)
+                )
+            ) { input in
+                await probe.record(input)
+                return CorpusAnalysisMapOutput(findings: [])
+            }
+        } catch {
+            capturedError = error
+        }
+
+        XCTAssertNotNil(capturedError)
+        XCTAssertTrue(
+            capturedError?.localizedDescription.localizedCaseInsensitiveContains("prepared") == true
+                || capturedError?.localizedDescription.localizedCaseInsensitiveContains("digest") == true
+        )
+        let unpreparedInputs = await probe.inputs
+        XCTAssertEqual(unpreparedInputs.count, 0)
+    }
+
     func testTENG01FrozenSnapshotIgnoresMidRunEditAndMarksResultStale() async throws {
         // T-ENG-01 expected RED: no frozen corpus snapshot or stale result contract exists.
         let store = try makeStore()
@@ -26,7 +755,7 @@ final class CorpusAnalysisEngineTests: XCTestCase {
                 matterID: matter.id,
                 taskKind: .customExtraction,
                 scope: CorpusAnalysisScope(documentIDs: [fixture.documentID]),
-                characterBudget: 1
+                characterBudget: 15
             )
         ) { input in
             await probe.record(input)
@@ -110,7 +839,7 @@ final class CorpusAnalysisEngineTests: XCTestCase {
                 matterID: matter.id,
                 taskKind: .customExtraction,
                 scope: .wholeMatter,
-                characterBudget: 1
+                characterBudget: 17
             )
         ) { input in
             CorpusAnalysisMapOutput(findings: input.sources.map { source in
@@ -177,7 +906,7 @@ final class CorpusAnalysisEngineTests: XCTestCase {
                 matterID: matter.id,
                 taskKind: .customExtraction,
                 scope: CorpusAnalysisScope(documentIDs: [fixture.documentID]),
-                characterBudget: 1
+                characterBudget: 32
             )
         ) { input in
             await probe.record(input)
@@ -231,7 +960,7 @@ final class CorpusAnalysisEngineTests: XCTestCase {
                     runKey: "cancelled-run",
                     matterID: matter.id,
                     taskKind: .customExtraction,
-                    characterBudget: 1
+                    characterBudget: 13
                 )
             ) { input in
                 let ordinal = await probe.recordAndReturnOrdinal(input)
@@ -297,7 +1026,7 @@ final class CorpusAnalysisEngineTests: XCTestCase {
             runKey: "resumed-run",
             matterID: matter.id,
             taskKind: .customExtraction,
-            characterBudget: 1
+            characterBudget: 13
         )
 
         do {
@@ -477,7 +1206,7 @@ final class CorpusAnalysisEngineTests: XCTestCase {
                 runKey: "retry-run",
                 matterID: matter.id,
                 taskKind: .customExtraction,
-                characterBudget: 1,
+                characterBudget: 12,
                 maximumRetryCount: 2
             )
         ) { input in
@@ -631,12 +1360,28 @@ final class CorpusAnalysisEngineTests: XCTestCase {
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         return String(decoding: try encoder.encode(value), as: UTF8.self)
     }
+
+    private static func substring(_ value: String, from start: Int, to end: Int) -> String {
+        let lower = value.index(value.startIndex, offsetBy: start)
+        let upper = value.index(value.startIndex, offsetBy: end)
+        return String(value[lower..<upper])
+    }
+
+    private static func occurrenceCount(of needle: String, in haystack: String) -> Int {
+        haystack.components(separatedBy: needle).count - 1
+    }
 }
 
 private struct CorpusFixtureDocument: Sendable {
     var documentID: String
     var partIDs: [String]
     var revisionIDs: [String]
+}
+
+private struct ExactSliceProbe: Equatable, Hashable {
+    var revisionID: String
+    var charStart: Int
+    var charEnd: Int
 }
 
 private struct SyntheticAttemptHistoryEntry: Decodable {

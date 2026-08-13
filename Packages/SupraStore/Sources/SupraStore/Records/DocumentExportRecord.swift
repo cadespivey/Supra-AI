@@ -2,7 +2,8 @@ import Foundation
 import GRDB
 import SupraCore
 
-/// An exported generated document output file (Milestone 3).
+/// An app-managed export artifact. Structured Output identifiers are nil for
+/// artifacts, such as Review snapshots, that own a separate eligibility path.
 public struct DocumentExportRecord: Codable, FetchableRecord, PersistableRecord, Sendable, Identifiable {
     public static let databaseTableName = "document_exports"
 

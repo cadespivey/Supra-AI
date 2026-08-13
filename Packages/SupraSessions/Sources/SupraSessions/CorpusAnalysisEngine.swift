@@ -52,17 +52,37 @@ public struct CorpusAnalysisEvidenceReference: Codable, Equatable, Hashable, Sen
     public var documentID: String
     public var revisionID: String
     public var locatorJSON: String
+    /// Exact evidence text returned by the mapper. The host resolves and
+    /// normalizes this against the presented slice before persistence.
+    public var quote: String?
+    /// Slice-relative Character offsets. These never describe UTF-8 or UTF-16
+    /// units and are converted to an absolute document locator by the host.
+    public var charStart: Int?
+    public var charEnd: Int?
 
-    public init(documentID: String, revisionID: String, locatorJSON: String) {
+    public init(
+        documentID: String,
+        revisionID: String,
+        locatorJSON: String,
+        quote: String? = nil,
+        charStart: Int? = nil,
+        charEnd: Int? = nil
+    ) {
         self.documentID = documentID
         self.revisionID = revisionID
         self.locatorJSON = locatorJSON
+        self.quote = quote
+        self.charStart = charStart
+        self.charEnd = charEnd
     }
 
     private enum CodingKeys: String, CodingKey {
         case documentID = "document_id"
         case revisionID = "revision_id"
         case locatorJSON = "locator_json"
+        case quote
+        case charStart = "char_start"
+        case charEnd = "char_end"
     }
 }
 
@@ -136,14 +156,6 @@ public struct CorpusAnalysisRunResult: Sendable {
     public var assuranceReasons: [String]
 }
 
-public struct CorpusAnalysisJobPayload: Codable, Equatable, Sendable {
-    public var runID: String
-
-    public init(runID: String) { self.runID = runID }
-
-    private enum CodingKeys: String, CodingKey { case runID = "run_id" }
-}
-
 public enum CorpusAnalysisEngineError: Error, LocalizedError, Equatable, Sendable {
     case runKeyCollision(String)
     case invalidPersistedJSON(String)
@@ -191,8 +203,14 @@ public enum CorpusAnalysisMapFailure: Error, LocalizedError, Equatable, Sendable
 /// maps every planned revision range and therefore has no top-k/per-document
 /// retrieval cap. Partition checkpoints support cancellation, relaunch resume,
 /// orphan-attempt recovery, and explicitly bounded transient retries.
+enum CorpusAnalysisExecutionInterruption: Error {
+    case pauseRequested
+}
+
 public final class CorpusAnalysisEngine: @unchecked Sendable {
     public typealias Mapper = @Sendable (CorpusAnalysisPartitionInput) async throws -> CorpusAnalysisMapOutput
+    typealias PartitionBoundaryHandler = @Sendable () async throws -> Void
+    typealias ModelPhaseCompletionHandler = @Sendable () async -> Void
 
     private let store: SupraStore
 
@@ -204,67 +222,216 @@ public final class CorpusAnalysisEngine: @unchecked Sendable {
         request: CorpusAnalysisRequest,
         mapper: @escaping Mapper
     ) async throws -> CorpusAnalysisRunResult {
+        guard request.taskKind != .exhaustiveList else {
+            throw CorpusAnalysisPreparationError.preparedRunMismatch(
+                "prepared exhaustive-list request"
+            )
+        }
+        return try await execute(
+            request: request,
+            preparedRunID: nil,
+            expectedRequestDigest: nil,
+            progressHandler: { _ in },
+            partitionBoundaryHandler: {},
+            modelPhaseDidComplete: {},
+            mapper: mapper
+        )
+    }
+
+    func runPrepared(
+        request: CorpusAnalysisRequest,
+        runID: String,
+        requestDigest: String,
+        progressHandler: @escaping @Sendable (CorpusAnalysisCoverage) async -> Void = { _ in },
+        partitionBoundaryHandler: @escaping PartitionBoundaryHandler = {},
+        modelPhaseDidComplete: @escaping ModelPhaseCompletionHandler = {},
+        mapper: @escaping Mapper
+    ) async throws -> CorpusAnalysisRunResult {
+        try await execute(
+            request: request,
+            preparedRunID: runID,
+            expectedRequestDigest: requestDigest,
+            progressHandler: progressHandler,
+            partitionBoundaryHandler: partitionBoundaryHandler,
+            modelPhaseDidComplete: modelPhaseDidComplete,
+            mapper: mapper
+        )
+    }
+
+    /// Reconstructs every frozen partition input in canonical ledger order,
+    /// including checkpoints completed by an earlier process. Task layers use
+    /// this for complete generation audit lineage after a resumed run.
+    func preparedPartitionInputs(
+        matterID: String,
+        runID: String
+    ) throws -> [CorpusAnalysisPartitionInput] {
+        guard let run = try store.corpusAnalysis.fetchRun(matterID: matterID, id: runID) else {
+            throw CorpusAnalysisPreparationError.preparedRunMismatch("run identity")
+        }
+        let snapshot = try decodeSnapshot(run)
+        let documentNames = try frozenDocumentNames(snapshot)
+        let partitions = try store.corpusAnalysis.fetchPartitions(
+            matterID: matterID,
+            runID: runID
+        )
+        let slicesByPartitionID = Dictionary(
+            grouping: try store.corpusAnalysis.fetchSlices(
+                matterID: matterID,
+                runID: runID
+            ),
+            by: \.partitionID
+        )
+        let requiresExactSlices = run.partitionStrategyVersion == 2
+            && run.partitionStrategy.hasPrefix("exact_revision_slice")
+        return try partitions.map { partition in
+            try partitionInput(
+                partition,
+                slices: slicesByPartitionID[partition.id] ?? [],
+                requiresExactSlices: requiresExactSlices,
+                documentNames: documentNames
+            )
+        }
+    }
+
+    private func execute(
+        request: CorpusAnalysisRequest,
+        preparedRunID: String?,
+        expectedRequestDigest: String?,
+        progressHandler: @escaping @Sendable (CorpusAnalysisCoverage) async -> Void,
+        partitionBoundaryHandler: @escaping PartitionBoundaryHandler,
+        modelPhaseDidComplete: @escaping ModelPhaseCompletionHandler,
+        mapper: @escaping Mapper
+    ) async throws -> CorpusAnalysisRunResult {
         let scopeJSON = try canonicalJSON(request.scope)
-        let strategy = "part_range:characters=\(request.characterBudget)"
-        let plan: CorpusAnalysisPlan
+        let exactStrategy = "exact_revision_slice:characters=\(request.characterBudget)"
+        let legacyStrategy = "part_range:characters=\(request.characterBudget)"
+        let snapshot: CorpusAnalysisSnapshot
         let run: CorpusAnalysisRunRecord
-        if let existing = try store.corpusAnalysis.fetchRun(
+        if let preparedRunID {
+            guard let existing = try store.corpusAnalysis.fetchRun(
+                matterID: request.matterID,
+                id: preparedRunID
+            ) else {
+                throw CorpusAnalysisPreparationError.preparedRunMismatch("run identity")
+            }
+            guard existing.runKey == request.runKey,
+                  existing.taskKind == request.taskKind.rawValue,
+                  existing.scopeJSON == scopeJSON,
+                  existing.partitionStrategy == exactStrategy,
+                  existing.partitionStrategyVersion == 2,
+                  existing.modelLineageJSON == request.modelLineageJSON,
+                  existing.requestSchemaVersion == 2,
+                  existing.requestDigest == expectedRequestDigest else {
+                throw CorpusAnalysisPreparationError.preparedRunMismatch("frozen request")
+            }
+            snapshot = try decodeSnapshot(existing)
+            if existing.status == CorpusAnalysisRunStatus.persisted.rawValue {
+                await modelPhaseDidComplete()
+                return try persistedResult(existing)
+            }
+            if existing.status == CorpusAnalysisRunStatus.planning.rawValue {
+                run = try store.corpusAnalysis.updateStatus(
+                    matterID: request.matterID,
+                    runID: existing.id,
+                    to: .running
+                )
+            } else {
+                run = try store.corpusAnalysis.prepareForResume(
+                    matterID: request.matterID,
+                    runID: existing.id,
+                    maximumRetryCount: request.maximumRetryCount
+                )
+            }
+        } else if let existing = try store.corpusAnalysis.fetchRun(
             matterID: request.matterID,
             runKey: request.runKey
         ) {
+            guard existing.requestSchemaVersion != 2 else {
+                throw CorpusAnalysisPreparationError.preparedRunMismatch(
+                    "version 2 request digest"
+                )
+            }
+            let exactStrategyMatches = existing.partitionStrategy == exactStrategy
+                && existing.partitionStrategyVersion == 2
+            let legacyStrategyMatches = existing.partitionStrategy == legacyStrategy
+                && existing.partitionStrategyVersion == 1
             guard existing.taskKind == request.taskKind.rawValue,
                   existing.scopeJSON == scopeJSON,
-                  existing.partitionStrategy == strategy,
-                  existing.partitionStrategyVersion == 1,
+                  (exactStrategyMatches || legacyStrategyMatches),
                   existing.modelLineageJSON == request.modelLineageJSON else {
                 throw CorpusAnalysisEngineError.runKeyCollision(request.runKey)
             }
             if existing.status == CorpusAnalysisRunStatus.persisted.rawValue {
+                await modelPhaseDidComplete()
                 return try persistedResult(existing)
             }
-            guard let snapshotData = existing.corpusSnapshotJSON.data(using: .utf8),
-                  let snapshot = try? JSONDecoder().decode(CorpusAnalysisSnapshot.self, from: snapshotData) else {
-                throw CorpusAnalysisEngineError.invalidPersistedJSON("snapshot")
-            }
-            plan = CorpusAnalysisPlan(snapshot: snapshot, partitions: [])
+            snapshot = try decodeSnapshot(existing)
             run = try store.corpusAnalysis.prepareForResume(
                 matterID: request.matterID,
                 runID: existing.id,
                 maximumRetryCount: request.maximumRetryCount
             )
         } else {
-            plan = try makePlan(request: request)
+            let runID = UUID().uuidString
+            let plan = try CorpusAnalysisExactPlanner(store: store).plan(
+                request: request,
+                runID: runID
+            )
             let proposed = CorpusAnalysisRunRecord(
+                id: runID,
                 runKey: request.runKey,
                 matterID: request.matterID,
                 taskKind: request.taskKind.rawValue,
                 scopeJSON: scopeJSON,
                 corpusSnapshotJSON: try canonicalJSON(plan.snapshot),
-                partitionStrategy: strategy,
-                partitionStrategyVersion: 1,
+                partitionStrategy: exactStrategy,
+                partitionStrategyVersion: 2,
                 modelLineageJSON: request.modelLineageJSON,
                 status: CorpusAnalysisRunStatus.planning.rawValue
             )
-            run = try store.corpusAnalysis.createOrFetchRun(proposed)
-            try store.corpusAnalysis.createPartitions(
-                matterID: request.matterID,
-                runID: run.id,
-                partitions: try plan.partitions.map { try $0.record(runID: run.id) }
+            let prepared = try store.corpusAnalysis.createOrFetchPreparedRun(
+                run: proposed,
+                partitions: plan.partitions,
+                slices: plan.slices
             )
-            _ = try store.corpusAnalysis.updateStatus(
+            snapshot = plan.snapshot
+            if prepared.status == CorpusAnalysisRunStatus.persisted.rawValue {
+                await modelPhaseDidComplete()
+                return try persistedResult(prepared)
+            }
+            run = try store.corpusAnalysis.updateStatus(
                 matterID: request.matterID,
-                runID: run.id,
+                runID: prepared.id,
                 to: .running
             )
         }
 
         do {
             let documents = try store.documentLibrary.fetchDocuments(matterID: request.matterID)
-            let nameByID = Dictionary(uniqueKeysWithValues: documents.map { ($0.id, $0.displayName) })
+            let nameByID = try frozenDocumentNames(snapshot)
             let partitions = try store.corpusAnalysis.fetchPartitions(
                 matterID: request.matterID,
                 runID: run.id
             )
+            let slicesByPartitionID = Dictionary(
+                grouping: try store.corpusAnalysis.fetchSlices(
+                    matterID: request.matterID,
+                    runID: run.id
+                ),
+                by: \.partitionID
+            )
+            let requiresExactSlices = run.partitionStrategyVersion == 2
+                && run.partitionStrategy.hasPrefix("exact_revision_slice")
+            if requiresExactSlices {
+                guard !partitions.isEmpty,
+                      partitions.allSatisfy({ !(slicesByPartitionID[$0.id] ?? []).isEmpty }) else {
+                    throw CorpusAnalysisEngineError.invalidPersistedJSON("exact slice ledger")
+                }
+            }
+            await progressHandler(try store.corpusAnalysis.coverage(
+                matterID: request.matterID,
+                runID: run.id
+            ))
             for partition in partitions where partition.disposition == CorpusAnalysisPartitionDisposition.pending.rawValue {
                 try Task.checkCancellation()
                 var partitionFinished = false
@@ -275,9 +442,15 @@ public final class CorpusAnalysisEngine: @unchecked Sendable {
                         partitionID: partition.id
                     )
                     do {
-                        let input = try partitionInput(attempt, documentNames: nameByID)
-                        let output = try await mapper(input)
-                        try validate(output, against: input)
+                        let input = try partitionInput(
+                            attempt,
+                            slices: slicesByPartitionID[attempt.id] ?? [],
+                            requiresExactSlices: requiresExactSlices,
+                            documentNames: nameByID
+                        )
+                        let mapped = try await mapper(input)
+                        try Task.checkCancellation()
+                        let output = try validated(mapped, against: input)
                         try store.corpusAnalysis.completeAttemptSucceeded(
                             matterID: request.matterID,
                             runID: run.id,
@@ -307,8 +480,15 @@ public final class CorpusAnalysisEngine: @unchecked Sendable {
                         if shouldRetry { try Task.checkCancellation() }
                     }
                 }
+                await progressHandler(try store.corpusAnalysis.coverage(
+                    matterID: request.matterID,
+                    runID: run.id
+                ))
+                try await partitionBoundaryHandler()
             }
 
+            await modelPhaseDidComplete()
+            try Task.checkCancellation()
             _ = try store.corpusAnalysis.updateStatus(
                 matterID: request.matterID,
                 runID: run.id,
@@ -319,10 +499,22 @@ public final class CorpusAnalysisEngine: @unchecked Sendable {
                 runID: run.id
             )
             let findings = try reconciledFindings(from: finishedPartitions)
-            let excludedNames = plan.snapshot.members
+            let excludedNames = snapshot.members
                 .filter { $0.disposition == .excluded }
                 .map(\.displayName)
                 .sorted()
+            let unfinishedImportStates: Set<String> = [
+                DocumentImportSourceState.selected.rawValue,
+                DocumentImportSourceState.discovered.rawValue,
+                DocumentImportSourceState.validated.rawValue,
+                DocumentImportSourceState.copying.rawValue,
+                DocumentImportSourceState.interrupted.rawValue,
+            ]
+            let unfinishedImportMembers = snapshot.members.filter { member in
+                member.disposition == .excluded
+                    && member.documentID == nil
+                    && member.indexState.map(unfinishedImportStates.contains) == true
+            }
             let reconciliation = CorpusAnalysisReconciliation(
                 findings: findings,
                 excludedMembers: excludedNames
@@ -349,10 +541,13 @@ public final class CorpusAnalysisEngine: @unchecked Sendable {
                 matterID: request.matterID,
                 runID: run.id
             )
-            let staleReasons = try stalenessReasons(snapshot: plan.snapshot)
+            let staleReasons = try stalenessReasons(
+                snapshot: snapshot,
+                request: request
+            )
             let versionRelationReasons: [String]
             if DocumentRelationDownstreamPolicy.requiresReviewedRelations(for: request.taskKind) {
-                let inScopeDocumentIDs = Set(plan.snapshot.members.compactMap(\.documentID))
+                let inScopeDocumentIDs = Set(snapshot.members.compactMap(\.documentID))
                 versionRelationReasons = DocumentRelationDownstreamPolicy.unreviewedReasons(
                     relations: try store.documentRelations.fetchAll(matterID: request.matterID),
                     documents: documents,
@@ -369,6 +564,15 @@ public final class CorpusAnalysisEngine: @unchecked Sendable {
             } else if !versionRelationReasons.isEmpty {
                 assurance = request.taskKind == .negativeCheck ? .negativeBlocked : .corpusIncomplete
                 reasons = versionRelationReasons
+            } else if !unfinishedImportMembers.isEmpty {
+                assurance = .corpusIncomplete
+                reasons = unfinishedImportMembers.map { member in
+                    let state = member.indexState ?? "not ready"
+                    let detail = member.reason.flatMap { reason in
+                        reason == state ? nil : " (\(reason))"
+                    } ?? ""
+                    return "Unfinished import \(member.displayName): \(state)\(detail)."
+                }.sorted()
             } else if coverage.pendingPartitionCount == 0,
                       coverage.failedPartitionCount == 0,
                       coverage.cancelledPartitionCount == 0,
@@ -383,6 +587,7 @@ public final class CorpusAnalysisEngine: @unchecked Sendable {
                 assurance = .corpusIncomplete
                 reasons = ["The corpus ledger contains failed, cancelled, pending, excluded, or unbalanced partitions."]
             }
+            try Task.checkCancellation()
             let finalized = try store.corpusAnalysis.finalizeRun(
                 matterID: request.matterID,
                 runID: run.id,
@@ -392,7 +597,7 @@ public final class CorpusAnalysisEngine: @unchecked Sendable {
             )
             return CorpusAnalysisRunResult(
                 run: finalized,
-                snapshot: plan.snapshot,
+                snapshot: snapshot,
                 coverage: try decodeCoverage(finalized),
                 partitions: try store.corpusAnalysis.fetchPartitions(
                     matterID: request.matterID,
@@ -401,6 +606,8 @@ public final class CorpusAnalysisEngine: @unchecked Sendable {
                 findings: findings,
                 assuranceReasons: reasons
             )
+        } catch let interruption as CorpusAnalysisExecutionInterruption {
+            throw interruption
         } catch is CancellationError {
             _ = try? store.corpusAnalysis.cancelRun(
                 matterID: request.matterID,
@@ -417,136 +624,103 @@ public final class CorpusAnalysisEngine: @unchecked Sendable {
         }
     }
 
-    private func makePlan(request: CorpusAnalysisRequest) throws -> CorpusAnalysisPlan {
-        let requestedIDs = request.scope.documentIDs.map(Set.init)
-        let documents = try store.documentLibrary.fetchDocuments(matterID: request.matterID)
-            .filter { requestedIDs?.contains($0.id) ?? true }
-            .sorted {
-                $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending
-                    || ($0.displayName == $1.displayName && $0.id < $1.id)
-            }
-        var members: [CorpusAnalysisSnapshotMember] = []
-        var sources: [PlannedSource] = []
-        for document in documents {
-            let exclusionReason = exclusionReason(for: document)
-            let parts = try store.documentIndex.fetchParts(documentID: document.id)
-            let revisionIDs = parts.compactMap(\.currentRevisionID)
-            if let exclusionReason {
-                members.append(.init(
-                    memberKey: "document:\(document.id)",
-                    documentID: document.id,
-                    displayName: document.displayName,
-                    revisionIDs: revisionIDs,
-                    indexState: document.indexStatus,
-                    disposition: .excluded,
-                    reason: exclusionReason
-                ))
-                continue
-            }
-            guard !parts.isEmpty, revisionIDs.count == parts.count else {
-                members.append(.init(
-                    memberKey: "document:\(document.id)",
-                    documentID: document.id,
-                    displayName: document.displayName,
-                    revisionIDs: revisionIDs,
-                    indexState: document.indexStatus,
-                    disposition: .excluded,
-                    reason: "no_selected_revision"
-                ))
-                continue
-            }
-            members.append(.init(
-                memberKey: "document:\(document.id)",
-                documentID: document.id,
-                displayName: document.displayName,
-                revisionIDs: revisionIDs,
-                indexState: document.indexStatus,
-                disposition: .eligible
-            ))
-            for (part, revisionID) in zip(parts, revisionIDs) {
-                guard let revision = try store.documentRevisions.fetchRevision(id: revisionID) else {
-                    throw CorpusAnalysisEngineError.revisionUnavailable(revisionID)
-                }
-                sources.append(PlannedSource(
-                    documentID: document.id,
-                    partIndex: part.partIndex,
-                    revisionID: revision.id,
-                    charCount: revision.charCount,
-                    orderDate: document.metadataModifiedAt ?? document.metadataCreatedAt
-                ))
-            }
-        }
-
-        if requestedIDs == nil {
-            let terminalExclusionStates: Set<DocumentImportSourceState> = [
-                .rejected, .unsupportedByPolicy, .failed, .cancelled,
-                .excludedHidden, .excludedByUser,
-            ]
-            for source in try store.documentJobs.fetchSources(matterID: request.matterID)
-                where source.documentID == nil
-                    && source.sourceState.map(terminalExclusionStates.contains) == true {
-                members.append(.init(
-                    memberKey: "import-source:\(source.id)",
-                    displayName: source.sourceDisplayPath,
-                    disposition: .excluded,
-                    reason: source.reason ?? source.state
-                ))
-            }
-        }
-        members.sort { $0.memberKey < $1.memberKey }
-
-        let items = sources.map {
-            ChronologyBatchPlanner.Item(
-                documentKey: $0.documentID,
-                charCount: $0.charCount,
-                orderDate: $0.orderDate
-            )
-        }
-        let batches = ChronologyBatchPlanner.plan(
-            items: items,
-            characterBudget: request.characterBudget
-        )
-        let partitions = batches.enumerated().map { ordinal, batch in
-            let batchSources = batch.sourceIndices.map { sources[$0] }
-            let key = batchSources.map {
-                "\($0.documentID)#part:\($0.partIndex)#revision:\($0.revisionID)"
-            }.joined(separator: "|")
-            return PlannedPartition(
-                id: UUID().uuidString,
-                key: String(format: "%06d|%@", ordinal, key),
-                revisionIDs: batchSources.map(\.revisionID)
-            )
-        }
-        return CorpusAnalysisPlan(
-            snapshot: CorpusAnalysisSnapshot(members: members),
-            partitions: partitions
-        )
-    }
-
-    private func exclusionReason(for document: MatterDocumentRecord) -> String? {
-        if document.status == MatterDocumentStatus.failed.rawValue
-            || document.extractionStatus == DocumentExtractionStatus.failed.rawValue {
-            return "extraction_failed"
-        }
-        if document.status == MatterDocumentStatus.needsReview.rawValue { return "review_required" }
-        let extractionComplete = document.extractionStatus == DocumentExtractionStatus.extracted.rawValue
-            || document.extractionStatus == DocumentExtractionStatus.ocrComplete.rawValue
-            || document.extractionStatus == DocumentExtractionStatus.edited.rawValue
-        if !extractionComplete { return "extraction_not_ready" }
-        let indexReady = document.indexStatus == DocumentIndexStatus.textIndexed.rawValue
-            || document.indexStatus == DocumentIndexStatus.ready.rawValue
-        return indexReady ? nil : "index_not_ready"
-    }
-
     private func partitionInput(
         _ partition: CorpusAnalysisPartitionRecord,
+        slices: [CorpusAnalysisPartitionSliceRecord],
+        requiresExactSlices: Bool,
         documentNames: [String: String]
     ) throws -> CorpusAnalysisPartitionInput {
+        let sources: [CorpusAnalysisPartitionSource]
+        if slices.isEmpty {
+            guard !requiresExactSlices else {
+                throw CorpusAnalysisEngineError.invalidPersistedJSON("exact slice ledger")
+            }
+            sources = try legacyPartitionSources(
+                partition,
+                documentNames: documentNames
+            )
+        } else {
+            sources = try slices.sorted {
+                if $0.ordinal != $1.ordinal { return $0.ordinal < $1.ordinal }
+                return $0.id < $1.id
+            }.map { slice in
+                guard let revision = try store.documentRevisions.fetchRevision(id: slice.revisionID),
+                      revision.documentID == slice.documentID,
+                      revision.partIndex == slice.partIndex,
+                      slice.charStart >= 0,
+                      slice.charEnd > slice.charStart,
+                      slice.charEnd <= revision.text.count,
+                      slice.revisionCharCount == revision.text.count else {
+                    throw CorpusAnalysisEngineError.revisionUnavailable(slice.revisionID)
+                }
+                let lower = revision.text.index(
+                    revision.text.startIndex,
+                    offsetBy: slice.charStart
+                )
+                let upper = revision.text.index(
+                    revision.text.startIndex,
+                    offsetBy: slice.charEnd
+                )
+                let text = String(revision.text[lower..<upper])
+                guard CorpusAnalysisRequestDigest.sha256(Data(text.utf8)) == slice.textSHA256 else {
+                    throw CorpusAnalysisEngineError.invalidPersistedJSON("slice text hash")
+                }
+                return CorpusAnalysisPartitionSource(
+                    documentID: slice.documentID,
+                    documentName: documentNames[slice.documentID] ?? "Document",
+                    partIndex: slice.partIndex,
+                    revisionID: slice.revisionID,
+                    text: text,
+                    locatorJSON: slice.locatorJSON
+                )
+            }
+        }
+        let groundingSources = sources.enumerated().map { index, source in
+            let locator = source.locatorJSON.data(using: .utf8).flatMap {
+                try? JSONDecoder().decode(DocumentSourceLocator.self, from: $0)
+            }
+            return GroundingSource(
+                sourceID: "\(source.revisionID)#slice:\(index)",
+                label: "E\(index + 1)",
+                documentName: source.documentName,
+                locatorDisplay: locator?.displayString ?? "source range",
+                text: source.text,
+                excerpt: DocumentChunker.excerpt(source.text)
+            )
+        }
+        return CorpusAnalysisPartitionInput(
+            partitionID: partition.id,
+            partitionKey: partition.partitionKey,
+            sources: sources,
+            promptEnvelope: DocumentQAPromptBuilder.buildSourceDataBlock(sources: groundingSources)
+        )
+    }
+
+    private func frozenDocumentNames(
+        _ snapshot: CorpusAnalysisSnapshot
+    ) throws -> [String: String] {
+        var names: [String: String] = [:]
+        for member in snapshot.members {
+            guard let documentID = member.documentID else { continue }
+            if let existing = names[documentID], existing != member.displayName {
+                throw CorpusAnalysisEngineError.invalidPersistedJSON(
+                    "snapshot document name identity"
+                )
+            }
+            names[documentID] = member.displayName
+        }
+        return names
+    }
+
+    private func legacyPartitionSources(
+        _ partition: CorpusAnalysisPartitionRecord,
+        documentNames: [String: String]
+    ) throws -> [CorpusAnalysisPartitionSource] {
         guard let data = partition.inputRevisionIDsJSON.data(using: .utf8),
               let revisionIDs = try? JSONDecoder().decode([String].self, from: data) else {
             throw CorpusAnalysisEngineError.invalidPersistedJSON("input revisions")
         }
-        let sources = try revisionIDs.map { revisionID -> CorpusAnalysisPartitionSource in
+        return try revisionIDs.map { revisionID in
             guard let revision = try store.documentRevisions.fetchRevision(id: revisionID) else {
                 throw CorpusAnalysisEngineError.revisionUnavailable(revisionID)
             }
@@ -564,42 +738,118 @@ public final class CorpusAnalysisEngine: @unchecked Sendable {
                 locatorJSON: locator.encodedJSON()
             )
         }
-        let groundingSources = sources.enumerated().map { index, source in
-            GroundingSource(
-                sourceID: source.revisionID,
-                label: "E\(index + 1)",
-                documentName: source.documentName,
-                locatorDisplay: "chars 0–\(source.text.count)",
-                text: source.text,
-                excerpt: DocumentChunker.excerpt(source.text)
+    }
+
+    private func validated(
+        _ output: CorpusAnalysisMapOutput,
+        against input: CorpusAnalysisPartitionInput
+    ) throws -> CorpusAnalysisMapOutput {
+        var findingIDs = Set<String>()
+        let findings = try output.findings.map { finding -> CorpusAnalysisFinding in
+            guard !finding.id.isEmpty,
+                  findingIDs.insert(finding.id).inserted,
+                  !(finding.evidence + finding.contraryEvidence).isEmpty else {
+                throw CorpusAnalysisEngineError.invalidFindingEvidence(finding.id)
+            }
+            return CorpusAnalysisFinding(
+                id: finding.id,
+                value: finding.value,
+                evidence: try finding.evidence.map {
+                    try normalizedEvidence($0, findingID: finding.id, input: input)
+                },
+                contraryEvidence: try finding.contraryEvidence.map {
+                    try normalizedEvidence($0, findingID: finding.id, input: input)
+                }
             )
         }
-        return CorpusAnalysisPartitionInput(
-            partitionID: partition.id,
-            partitionKey: partition.partitionKey,
-            sources: sources,
-            promptEnvelope: DocumentQAPromptBuilder.buildSourceDataBlock(sources: groundingSources)
+        return CorpusAnalysisMapOutput(findings: findings)
+    }
+
+    private func normalizedEvidence(
+        _ evidence: CorpusAnalysisEvidenceReference,
+        findingID: String,
+        input: CorpusAnalysisPartitionInput
+    ) throws -> CorpusAnalysisEvidenceReference {
+        let matchingSources = input.sources.filter { source in
+            source.revisionID == evidence.revisionID
+                && source.documentID == evidence.documentID
+                && source.locatorJSON == evidence.locatorJSON
+        }
+        guard matchingSources.count == 1, let source = matchingSources.first else {
+            throw CorpusAnalysisEngineError.invalidFindingEvidence(findingID)
+        }
+
+        let relativeRange: Range<Int>
+        let resolvedQuote: String
+        switch (evidence.charStart, evidence.charEnd, evidence.quote) {
+        case let (start?, end?, quote):
+            guard start >= 0, end > start, end <= source.text.count else {
+                throw CorpusAnalysisEngineError.invalidFindingEvidence(findingID)
+            }
+            relativeRange = start..<end
+            resolvedQuote = Self.substring(source.text, range: relativeRange)
+            if let quote {
+                guard !quote.isEmpty, quote == resolvedQuote else {
+                    throw CorpusAnalysisEngineError.invalidFindingEvidence(findingID)
+                }
+            }
+        case (nil, nil, let quote?):
+            guard !quote.isEmpty,
+                  let uniqueRange = Self.uniqueCharacterRange(of: quote, in: source.text) else {
+                throw CorpusAnalysisEngineError.invalidFindingEvidence(findingID)
+            }
+            relativeRange = uniqueRange
+            resolvedQuote = quote
+        case (nil, nil, nil):
+            // Compatibility for the original exact-slice schema: identifying a
+            // single presented slice implies its full text. New prompts ask for
+            // an exact quote or span, and the normalized checkpoint always stores
+            // both after this boundary.
+            relativeRange = 0..<source.text.count
+            resolvedQuote = source.text
+        default:
+            throw CorpusAnalysisEngineError.invalidFindingEvidence(findingID)
+        }
+
+        return CorpusAnalysisEvidenceReference(
+            documentID: evidence.documentID,
+            revisionID: evidence.revisionID,
+            locatorJSON: evidence.locatorJSON,
+            quote: resolvedQuote,
+            charStart: relativeRange.lowerBound,
+            charEnd: relativeRange.upperBound
         )
     }
 
-    private func validate(
-        _ output: CorpusAnalysisMapOutput,
-        against input: CorpusAnalysisPartitionInput
-    ) throws {
-        let sourceByRevision = Dictionary(uniqueKeysWithValues: input.sources.map { ($0.revisionID, $0) })
-        var findingIDs = Set<String>()
-        for finding in output.findings {
-            guard !finding.id.isEmpty,
-                  findingIDs.insert(finding.id).inserted,
-                  !(finding.evidence + finding.contraryEvidence).isEmpty,
-                  (finding.evidence + finding.contraryEvidence).allSatisfy({ evidence in
-                      guard let source = sourceByRevision[evidence.revisionID] else { return false }
-                      return source.documentID == evidence.documentID
-                          && source.locatorJSON == evidence.locatorJSON
-                  }) else {
-                throw CorpusAnalysisEngineError.invalidFindingEvidence(finding.id)
-            }
+    private static func uniqueCharacterRange(
+        of needle: String,
+        in haystack: String
+    ) -> Range<Int>? {
+        var match: Range<String.Index>?
+        var searchStart = haystack.startIndex
+        while searchStart <= haystack.endIndex,
+              let found = haystack.range(
+                  of: needle,
+                  range: searchStart..<haystack.endIndex
+              ) {
+            if match != nil { return nil }
+            match = found
+            guard found.lowerBound < haystack.endIndex else { break }
+            searchStart = haystack.index(after: found.lowerBound)
         }
+        guard let match else { return nil }
+        return Range(
+            uncheckedBounds: (
+                lower: haystack.distance(from: haystack.startIndex, to: match.lowerBound),
+                upper: haystack.distance(from: haystack.startIndex, to: match.upperBound)
+            )
+        )
+    }
+
+    private static func substring(_ value: String, range: Range<Int>) -> String {
+        let lower = value.index(value.startIndex, offsetBy: range.lowerBound)
+        let upper = value.index(value.startIndex, offsetBy: range.upperBound)
+        return String(value[lower..<upper])
     }
 
     private func reconciledFindings(
@@ -623,24 +873,51 @@ public final class CorpusAnalysisEngine: @unchecked Sendable {
         }
     }
 
-    private func stalenessReasons(snapshot: CorpusAnalysisSnapshot) throws -> [String] {
+    private func stalenessReasons(
+        snapshot: CorpusAnalysisSnapshot,
+        request: CorpusAnalysisRequest
+    ) throws -> [String] {
         var reasons: [String] = []
-        for member in snapshot.members where member.disposition == .eligible {
-            guard let documentID = member.documentID else { continue }
-            let currentRevisionIDs = try store.documentIndex.fetchParts(documentID: documentID)
-                .compactMap(\.currentRevisionID)
-            if currentRevisionIDs != member.revisionIDs {
-                reasons.append("Document \(documentID) changed after the corpus snapshot was frozen.")
+        let currentSnapshot = try CorpusAnalysisExactPlanner(store: store)
+            .currentSnapshot(request: request)
+        let frozenByKey = try snapshotMembersByKey(snapshot.members)
+        let currentByKey = try snapshotMembersByKey(currentSnapshot.members)
+
+        for memberKey in Set(frozenByKey.keys).subtracting(currentByKey.keys).sorted() {
+            reasons.append("Snapshot member \(memberKey) is no longer in the analyzed scope.")
+        }
+        for memberKey in Set(currentByKey.keys).subtracting(frozenByKey.keys).sorted() {
+            reasons.append("Snapshot member \(memberKey) entered the analyzed scope after it was frozen.")
+        }
+        for memberKey in Set(frozenByKey.keys).intersection(currentByKey.keys).sorted() {
+            guard let frozen = frozenByKey[memberKey], let current = currentByKey[memberKey] else {
+                continue
+            }
+            if frozen.documentID != current.documentID
+                || frozen.revisionIDs != current.revisionIDs
+                || frozen.indexState != current.indexState
+                || frozen.disposition != current.disposition
+                || frozen.reason != current.reason {
+                reasons.append("Snapshot member \(memberKey) changed eligibility or revision lineage after it was frozen.")
             }
         }
-        return reasons.sorted()
+        return reasons
+    }
+
+    private func snapshotMembersByKey(
+        _ members: [CorpusAnalysisSnapshotMember]
+    ) throws -> [String: CorpusAnalysisSnapshotMember] {
+        var result: [String: CorpusAnalysisSnapshotMember] = [:]
+        for member in members {
+            guard result.updateValue(member, forKey: member.memberKey) == nil else {
+                throw CorpusAnalysisEngineError.invalidPersistedJSON("snapshot member identity")
+            }
+        }
+        return result
     }
 
     private func persistedResult(_ run: CorpusAnalysisRunRecord) throws -> CorpusAnalysisRunResult {
-        guard let snapshotData = run.corpusSnapshotJSON.data(using: .utf8),
-              let snapshot = try? JSONDecoder().decode(CorpusAnalysisSnapshot.self, from: snapshotData) else {
-            throw CorpusAnalysisEngineError.invalidPersistedJSON("snapshot")
-        }
+        let snapshot = try decodeSnapshot(run)
         let partitions = try store.corpusAnalysis.fetchPartitions(matterID: run.matterID, runID: run.id)
         let findings = try reconciledFindings(from: partitions)
         let reasons: [String]
@@ -670,41 +947,19 @@ public final class CorpusAnalysisEngine: @unchecked Sendable {
         return coverage
     }
 
+    private func decodeSnapshot(_ run: CorpusAnalysisRunRecord) throws -> CorpusAnalysisSnapshot {
+        guard let data = run.corpusSnapshotJSON.data(using: .utf8),
+              let snapshot = try? JSONDecoder().decode(CorpusAnalysisSnapshot.self, from: data) else {
+            throw CorpusAnalysisEngineError.invalidPersistedJSON("snapshot")
+        }
+        return snapshot
+    }
+
     private func canonicalJSON<T: Encodable>(_ value: T) throws -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         return String(decoding: try encoder.encode(value), as: UTF8.self)
     }
-}
-
-private struct PlannedSource {
-    var documentID: String
-    var partIndex: Int
-    var revisionID: String
-    var charCount: Int
-    var orderDate: Date?
-}
-
-private struct PlannedPartition {
-    var id: String
-    var key: String
-    var revisionIDs: [String]
-
-    func record(runID: String) throws -> CorpusAnalysisPartitionRecord {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        return CorpusAnalysisPartitionRecord(
-            id: id,
-            runID: runID,
-            partitionKey: key,
-            inputRevisionIDsJSON: String(decoding: try encoder.encode(revisionIDs), as: UTF8.self)
-        )
-    }
-}
-
-private struct CorpusAnalysisPlan {
-    var snapshot: CorpusAnalysisSnapshot
-    var partitions: [PlannedPartition]
 }
 
 private struct CorpusAnalysisReconciliation: Codable {

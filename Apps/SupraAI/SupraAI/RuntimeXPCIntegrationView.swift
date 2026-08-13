@@ -138,6 +138,7 @@ private struct RuntimeXPCIntegrationRunner {
         "samePathReplacementRejected",
         "managedRootEscapeRejected",
         "contentBindingVerified",
+        "generationFingerprintMismatchRejected",
         "controlledModelLoaded",
         "streamCompletedOnce",
         "cancelExactlyOnce",
@@ -311,6 +312,41 @@ private struct RuntimeXPCIntegrationRunner {
             "hosted XPC did not attest the exact content-bound model snapshot"
         )
 
+        let mismatchedGenerationID = GenerationID()
+        let wrongExpectedSHA256 = String(repeating: "f", count: 64)
+        try require(
+            wrongExpectedSHA256 != fixture.contentBinding.fingerprintSHA256,
+            "generation fingerprint mismatch probe must use a non-default wrong digest"
+        )
+        var fingerprintMismatchRejected = false
+        do {
+            _ = try await collect(
+                client.generate(
+                    GenerateRequest(
+                        generationID: mismatchedGenerationID,
+                        modelID: modelID,
+                        expectedModelSHA256: wrongExpectedSHA256,
+                        prompt: Self.completionPrompt,
+                        systemPrompt: nil,
+                        options: GenerationOptions(maxOutputTokens: 17)
+                    )
+                )
+            )
+        } catch let RuntimeClientError.generationRejected(response) {
+            fingerprintMismatchRejected = response.status == .invalidRequest
+                && response.generationID == mismatchedGenerationID
+                && response.error?.category == "invalidRequest"
+        }
+        try require(
+            fingerprintMismatchRejected,
+            "generation admission accepted a model whose verified fingerprint did not match the request"
+        )
+        let mismatchStatus = try await client.runtimeStatus()
+        try require(
+            mismatchStatus.loadedModelID == modelID && mismatchStatus.activeGenerationID == nil,
+            "rejected fingerprint mismatch changed loaded-model or generation state"
+        )
+
         let failedReplacement = try await client.loadModel(
             request(
                 id: ModelID(),
@@ -333,6 +369,7 @@ private struct RuntimeXPCIntegrationRunner {
                 GenerateRequest(
                     generationID: completionID,
                     modelID: modelID,
+                    expectedModelSHA256: fixture.contentBinding.fingerprintSHA256,
                     prompt: Self.completionPrompt,
                     systemPrompt: nil,
                     options: GenerationOptions(maxOutputTokens: 8)
@@ -690,6 +727,7 @@ private struct RuntimeXPCIntegrationRunner {
             "samePathReplacementRejected": true,
             "managedRootEscapeRejected": true,
             "contentBindingVerified": true,
+            "generationFingerprintMismatchRejected": true,
             "controlledModelLoaded": true,
             "streamCompletedOnce": true,
             "cancelExactlyOnce": true,

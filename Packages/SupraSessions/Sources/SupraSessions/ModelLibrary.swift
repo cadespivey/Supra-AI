@@ -5,6 +5,149 @@ import SupraRuntimeClient
 import SupraRuntimeInterface
 import SupraStore
 
+public enum ContentBoundModelLoadError: Error, LocalizedError, Equatable, Sendable {
+    case cancelled
+    case modelRegistryUnavailable(String)
+    case exactManagedModelUnavailable(repository: String, revision: String)
+    case authorizationFailed(repository: String, revision: String, reason: String)
+    case invalidRegisteredModelID(String)
+    case runtimeRejected(String)
+    case runtimeModelIdentityMismatch
+    case runtimeFingerprintMismatch
+
+    public var errorDescription: String? {
+        switch self {
+        case .cancelled:
+            "The content-bound model load was cancelled."
+        case let .modelRegistryUnavailable(reason):
+            "The registered model library could not be read: \(reason)"
+        case let .exactManagedModelUnavailable(repository, revision):
+            "No app-managed model matches the pinned artifact \(repository) at revision \(revision)."
+        case let .authorizationFailed(repository, revision, reason):
+            "The pinned model \(repository) at revision \(revision) could not be content-authorized: \(reason)"
+        case let .invalidRegisteredModelID(modelID):
+            "The pinned model has an invalid registered model identifier: \(modelID)."
+        case let .runtimeRejected(reason):
+            "The runtime rejected the content-bound model load: \(reason)"
+        case .runtimeModelIdentityMismatch:
+            "The runtime loaded a different model identity than the content-bound request."
+        case .runtimeFingerprintMismatch:
+            "The runtime model fingerprint is missing or does not match the pinned artifact."
+        }
+    }
+}
+
+public enum CorpusAnalysisModelPinError: Error, LocalizedError, Equatable, Sendable {
+    case cancelled
+    case modelRegistryUnavailable
+    case modelUnavailable(String)
+    case modelNotManaged(String)
+    case verificationFailed(String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .cancelled:
+            "Model verification was cancelled."
+        case .modelRegistryUnavailable:
+            "The registered model library could not be read."
+        case .modelUnavailable:
+            "The selected local model is no longer registered."
+        case .modelNotManaged:
+            "Review creation requires a model downloaded and managed by Supra AI."
+        case .verificationFailed:
+            "The selected app-managed model did not pass fresh content verification."
+        }
+    }
+}
+
+/// Executes the expensive exact-tree and byte inspection used to create a
+/// durable corpus-analysis pin. The executor is deliberately independent of
+/// runtime loading and runs outside the MainActor.
+struct ManagedModelPinningExecutor: Sendable {
+    typealias Inspect = @Sendable (URL, URL) throws -> RuntimeModelContentBinding
+
+    let inspect: Inspect
+
+    static let live = ManagedModelPinningExecutor { modelDirectory, managedRoot in
+        try SignedReleaseModelAuthorization.inspectContentBinding(
+            modelDirectory: modelDirectory,
+            managedRoot: managedRoot
+        )
+    }
+
+    func run(
+        modelDirectory: URL,
+        managedRoot: URL
+    ) async throws -> RuntimeModelContentBinding {
+        try Task.checkCancellation()
+        let inspect = inspect
+        let worker = Task.detached(priority: .userInitiated) {
+            try Task.checkCancellation()
+            let binding = try inspect(modelDirectory, managedRoot)
+            try Task.checkCancellation()
+            return binding
+        }
+        return try await withTaskCancellationHandler {
+            try await worker.value
+        } onCancel: {
+            worker.cancel()
+        }
+    }
+}
+
+struct ContentBoundAuthorizationExecutor: Sendable {
+    struct PreparedLoad: @unchecked Sendable {
+        var authorization: SignedReleaseModelAuthorization
+        var request: LoadModelRequest
+    }
+
+    typealias Authorize = @Sendable (URL, URL, String) throws -> SignedReleaseModelAuthorization
+    typealias MakeLoadRequest = @Sendable (
+        SignedReleaseModelAuthorization,
+        ModelID,
+        String
+    ) throws -> LoadModelRequest
+
+    let authorize: Authorize
+    let makeLoadRequest: MakeLoadRequest
+
+    static let live = ContentBoundAuthorizationExecutor(
+        authorize: { modelDirectory, managedRoot, expectedSHA256 in
+            try SignedReleaseModelAuthorization.authorize(
+                modelDirectory: modelDirectory,
+                managedRoot: managedRoot,
+                expectedSHA256: expectedSHA256
+            )
+        },
+        makeLoadRequest: { authorization, modelID, displayName in
+            try authorization.makeLoadRequest(modelID: modelID, displayName: displayName)
+        }
+    )
+
+    func prepare(
+        modelDirectory: URL,
+        managedRoot: URL,
+        expectedSHA256: String,
+        modelID: ModelID,
+        displayName: String
+    ) async throws -> PreparedLoad {
+        let authorize = authorize
+        let makeLoadRequest = makeLoadRequest
+        let worker = Task.detached(priority: .userInitiated) {
+            let authorization = try authorize(modelDirectory, managedRoot, expectedSHA256)
+            try Task.checkCancellation()
+            let request = try makeLoadRequest(authorization, modelID, displayName)
+            try Task.checkCancellation()
+            return PreparedLoad(authorization: authorization, request: request)
+        }
+        return try await withTaskCancellationHandler {
+            try await worker.value
+        } onCancel: {
+            worker.cancel()
+        }
+    }
+}
+
 /// Manages registered local model folders, task-route assignments, and runtime
 /// model loading.
 ///
@@ -27,25 +170,58 @@ public final class ModelLibrary: ObservableObject {
     /// `nil` means Autoselect — resolve each request via the Models-tab role
     /// preference. App-wide and persisted across launches.
     @Published public private(set) var forcedModelID: ModelID?
+    /// Stable hardware snapshot used for fit presentation during this library's
+    /// lifetime. Tests and doubly gated app fixtures may inject an exact profile.
+    public let hardwareProfile: MacHardwareProfile
     static let forcedChatModelSettingsKey = "chat.forced_model_id"
+    private static let runtimeReservedMessage = "Case File Review is using the local runtime. Try this model change after the Review pauses or finishes."
 
     private let store: SupraStore
     private let runtimeClient: any RuntimeClientProtocol
     private let managedModelRoots: [URL]
+    private let authorizationExecutor: ContentBoundAuthorizationExecutor
+    private let modelPinningExecutor: ManagedModelPinningExecutor
     private var hasPersistedRoleAssignments: Bool
     /// Whether the runtime is mid-generation. Speculative pre-warms consult this so
     /// they never evict the model out from under an in-flight generation; wired by the
     /// app to the runtime status (defaults to "not generating" for tests/headless).
     public var isRuntimeGenerating: () -> Bool = { false }
+    /// True while process-wide admission is waiting for, owned by, or recovering
+    /// from exclusive Review work. Speculative and manual model mutation must not
+    /// race that owner even when the XPC service is idle between partitions.
+    public var isRuntimeReserved: () -> Bool = { false }
 
-    public init(
+    public convenience init(
         store: SupraStore,
         runtimeClient: any RuntimeClientProtocol,
-        managedModelRoots: [URL] = [ManagedModelStorage.modelsDirectory()]
+        managedModelRoots: [URL] = [ManagedModelStorage.modelsDirectory()],
+        hardwareProfile: MacHardwareProfile? = nil
+    ) {
+        self.init(
+            store: store,
+            runtimeClient: runtimeClient,
+            managedModelRoots: managedModelRoots,
+            authorizationExecutor: .live,
+            hardwareProfile: hardwareProfile
+        )
+    }
+
+    init(
+        store: SupraStore,
+        runtimeClient: any RuntimeClientProtocol,
+        managedModelRoots: [URL],
+        authorizationExecutor: ContentBoundAuthorizationExecutor,
+        modelPinningExecutor: ManagedModelPinningExecutor = .live,
+        hardwareProfile: MacHardwareProfile? = nil
     ) {
         self.store = store
         self.runtimeClient = runtimeClient
         self.managedModelRoots = managedModelRoots
+        self.authorizationExecutor = authorizationExecutor
+        self.modelPinningExecutor = modelPinningExecutor
+        self.hardwareProfile = hardwareProfile ?? MacHardwareProfileProbe.current(
+            modelsDirectory: managedModelRoots.first ?? ManagedModelStorage.modelsDirectory()
+        )
         if let stored = try? store.appSettings.getSetting(
             ModelRoleAssignments.settingsKey,
             as: ModelRoleAssignments.self
@@ -193,6 +369,7 @@ public final class ModelLibrary: ObservableObject {
     public func prewarmChatModel(configuration: LegalModelConfiguration = .fromEnvironment()) {
         if case .loading = loadState { return }
         if isRuntimeGenerating() { return }
+        if isRuntimeReserved() { return }
         Task { _ = await ensureLoadedChatModelID(for: .legalReasoning, configuration: configuration) }
     }
 
@@ -203,6 +380,7 @@ public final class ModelLibrary: ObservableObject {
     public func prewarm(role: ModelRole, configuration: LegalModelConfiguration = .fromEnvironment()) {
         if case .loading = loadState { return }
         if isRuntimeGenerating() { return }
+        if isRuntimeReserved() { return }
         Task { _ = await ensureLoadedRoutedModelID(for: role, configuration: configuration) }
     }
 
@@ -324,8 +502,35 @@ public final class ModelLibrary: ObservableObject {
 
     /// Reloads the registered models from the store.
     public func refresh() {
-        models = (try? store.models.fetchModels())?.map(ModelSummary.init) ?? []
+        models = (try? store.models.fetchModels())?.map { record in
+            ModelSummary(
+                record: record,
+                managedRepositoryID: managedRepositoryID(for: record)
+            )
+        } ?? []
         bootstrapRoleAssignmentsIfNeeded(configuration: .fromEnvironment())
+    }
+
+    /// Reads only validated manifest structure for managed-model fit metadata.
+    /// Exact tree and byte verification remains the later pinning/load boundary.
+    private func managedRepositoryID(for record: ModelRecord) -> String? {
+        guard record.bookmarkData == nil else { return nil }
+        let directory = URL(fileURLWithPath: record.path, isDirectory: true)
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+        guard managedModelRoots.contains(where: { root in
+            let standardizedRoot = root.standardizedFileURL.resolvingSymlinksInPath()
+            return directory.path != standardizedRoot.path
+                && ManagedModelStorage.isManaged(
+                    path: directory.path,
+                    roots: [standardizedRoot]
+                )
+        }) else {
+            return nil
+        }
+        return try? ManagedModelStorage.readManifest(
+            at: ManagedModelStorage.manifestURL(in: directory)
+        ).repositoryID
     }
 
     /// Reconciles the published load state with a model the runtime already holds
@@ -369,6 +574,9 @@ public final class ModelLibrary: ObservableObject {
     /// assignments pointing at it are cleared so no "Missing model" ghost remains.
     @discardableResult
     public func deleteModel(modelID: String) async -> DeleteModelResult {
+        guard !isRuntimeReserved() else {
+            return .blocked(message: Self.runtimeReservedMessage)
+        }
         if case let .loading(id) = loadState, id == modelID {
             return .blocked(message: "This model is still loading. Wait for it to finish before deleting it.")
         }
@@ -378,7 +586,11 @@ public final class ModelLibrary: ObservableObject {
 
         // Evict it from the runtime first if it's the one currently loaded.
         if loadedModelID?.rawValue.uuidString == modelID {
-            _ = try? await runtimeClient.unloadModel()
+            do {
+                _ = try await runtimeClient.unloadModel()
+            } catch {
+                return .blocked(message: error.localizedDescription)
+            }
             loadState = .idle
         }
 
@@ -459,9 +671,234 @@ public final class ModelLibrary: ObservableObject {
         return false
     }
 
+    /// Creates a fresh, durable pin for exactly the registered app-managed model
+    /// selected by the caller. This path never resolves a role, falls back to a
+    /// preferred model, or contacts the runtime. Every call re-inspects the
+    /// manifest, exclusive tree, and declared artifact bytes off the MainActor.
+    public func makeCorpusAnalysisPinnedModel(
+        modelID: ModelID
+    ) async throws -> CorpusAnalysisPinnedModel {
+        guard !Task.isCancelled else {
+            throw CorpusAnalysisModelPinError.cancelled
+        }
+
+        let registeredID = modelID.rawValue.uuidString
+        let record: ModelRecord
+        do {
+            guard let registered = try store.models.fetchModel(id: registeredID) else {
+                throw CorpusAnalysisModelPinError.modelUnavailable(registeredID)
+            }
+            record = registered
+        } catch let error as CorpusAnalysisModelPinError {
+            throw error
+        } catch {
+            throw CorpusAnalysisModelPinError.modelRegistryUnavailable
+        }
+
+        let modelDirectory = URL(
+            fileURLWithPath: record.path,
+            isDirectory: true
+        ).standardizedFileURL
+        guard record.bookmarkData == nil,
+              let managedRoot = managedModelRoots.first(where: { root in
+                  let standardizedRoot = root.standardizedFileURL
+                  return modelDirectory.path != standardizedRoot.path
+                      && ManagedModelStorage.isManaged(
+                          path: modelDirectory.path,
+                          roots: [standardizedRoot]
+                      )
+              }) else {
+            throw CorpusAnalysisModelPinError.modelNotManaged(registeredID)
+        }
+
+        do {
+            let binding = try await modelPinningExecutor.run(
+                modelDirectory: modelDirectory,
+                managedRoot: managedRoot.standardizedFileURL
+            )
+            try Task.checkCancellation()
+            let pinnedModel = CorpusAnalysisPinnedModel(
+                modelRepository: binding.repositoryID,
+                modelRevision: binding.revision,
+                contentBindingAlgorithm: binding.algorithm,
+                contentBindingSchemaVersion: binding.schemaVersion,
+                artifactFingerprintSHA256: binding.fingerprintSHA256
+            )
+            try pinnedModel.validate()
+            return pinnedModel
+        } catch is CancellationError {
+            throw CorpusAnalysisModelPinError.cancelled
+        } catch let error as CorpusAnalysisModelPinError {
+            throw error
+        } catch {
+            throw CorpusAnalysisModelPinError.verificationFailed(registeredID)
+        }
+    }
+
+    /// Loads the one app-managed model whose manifest identity and independently
+    /// verified bytes match a durable corpus-analysis request.
+    ///
+    /// This is deliberately separate from routed model resolution: it never uses
+    /// role assignments, recommendations, the active-model preference, or a user-
+    /// selected folder as a fallback. It also never trusts the UUID-only app cache;
+    /// every invocation sends a fresh content-bound request and requires the XPC
+    /// runtime to return the exact verified artifact fingerprint.
+    public func loadContentBoundModel(
+        matching pinnedModel: CorpusAnalysisPinnedModel
+    ) async throws -> ModelID {
+        var ownedLoadingModelID: String?
+        do {
+            try pinnedModel.validate()
+            guard !Task.isCancelled else {
+                throw ContentBoundModelLoadError.cancelled
+            }
+            guard await settleInFlightLoad(), !Task.isCancelled else {
+                throw ContentBoundModelLoadError.cancelled
+            }
+
+            let registeredModels: [ModelRecord]
+            do {
+                registeredModels = try store.models.fetchModels()
+            } catch {
+                throw ContentBoundModelLoadError.modelRegistryUnavailable(
+                    error.localizedDescription
+                )
+            }
+
+            let candidates = registeredModels.compactMap { record -> ContentBoundModelCandidate? in
+                guard record.bookmarkData == nil,
+                      let managedRoot = managedModelRoots.first(where: {
+                          ManagedModelStorage.isManaged(path: record.path, roots: [$0])
+                      }) else {
+                    return nil
+                }
+                let directory = URL(fileURLWithPath: record.path, isDirectory: true)
+                guard let manifest = try? ManagedModelStorage.readManifest(
+                    at: ManagedModelStorage.manifestURL(in: directory)
+                ), manifest.repositoryID == pinnedModel.modelRepository,
+                   manifest.revision == pinnedModel.modelRevision else {
+                    return nil
+                }
+                return ContentBoundModelCandidate(
+                    record: record,
+                    directory: directory,
+                    managedRoot: managedRoot
+                )
+            }.sorted {
+                if $0.record.path != $1.record.path {
+                    return $0.record.path < $1.record.path
+                }
+                return $0.record.id < $1.record.id
+            }
+
+            guard !candidates.isEmpty else {
+                throw ContentBoundModelLoadError.exactManagedModelUnavailable(
+                    repository: pinnedModel.modelRepository,
+                    revision: pinnedModel.modelRevision
+                )
+            }
+
+            var selected: (
+                candidate: ContentBoundModelCandidate,
+                modelID: ModelID,
+                preparedLoad: ContentBoundAuthorizationExecutor.PreparedLoad
+            )?
+            var lastAuthorizationError: Error?
+            for candidate in candidates {
+                guard let uuid = UUID(uuidString: candidate.record.id) else {
+                    lastAuthorizationError = ContentBoundModelLoadError.invalidRegisteredModelID(
+                        candidate.record.id
+                    )
+                    continue
+                }
+                do {
+                    let modelID = ModelID(uuid)
+                    let preparedLoad = try await authorizationExecutor.prepare(
+                        modelDirectory: candidate.directory,
+                        managedRoot: candidate.managedRoot,
+                        expectedSHA256: pinnedModel.artifactFingerprintSHA256,
+                        modelID: modelID,
+                        displayName: candidate.record.displayName
+                    )
+                    selected = (candidate, modelID, preparedLoad)
+                    break
+                } catch is CancellationError {
+                    throw ContentBoundModelLoadError.cancelled
+                } catch ContentBoundModelLoadError.cancelled {
+                    throw ContentBoundModelLoadError.cancelled
+                } catch {
+                    lastAuthorizationError = error
+                }
+            }
+            guard let selected else {
+                throw ContentBoundModelLoadError.authorizationFailed(
+                    repository: pinnedModel.modelRepository,
+                    revision: pinnedModel.modelRevision,
+                    reason: lastAuthorizationError?.localizedDescription
+                        ?? "No matching installation passed fingerprint verification."
+                )
+            }
+            loadState = .loading(modelID: selected.candidate.record.id)
+            ownedLoadingModelID = selected.candidate.record.id
+
+            let response = try await runtimeClient.loadModel(selected.preparedLoad.request)
+            guard response.status == .loaded else {
+                throw ContentBoundModelLoadError.runtimeRejected(
+                    Self.failureMessage(response.error)
+                )
+            }
+            guard response.modelID == selected.modelID else {
+                throw ContentBoundModelLoadError.runtimeModelIdentityMismatch
+            }
+            guard response.error == nil else {
+                throw ContentBoundModelLoadError.runtimeRejected(
+                    Self.failureMessage(response.error)
+                )
+            }
+            guard let verifiedFingerprint = response.verifiedModelSHA256,
+                  Self.constantTimeEqualSHA256(
+                      verifiedFingerprint,
+                      pinnedModel.artifactFingerprintSHA256
+                  ) else {
+                throw ContentBoundModelLoadError.runtimeFingerprintMismatch
+            }
+            guard !Task.isCancelled else {
+                throw ContentBoundModelLoadError.cancelled
+            }
+
+            loadState = .loaded(modelID: selected.candidate.record.id)
+            logLoadTiming(
+                modelName: selected.candidate.record.displayName,
+                modelID: selected.candidate.record.id,
+                metrics: response.metrics
+            )
+            withExtendedLifetime(selected.preparedLoad.authorization) {}
+            return selected.modelID
+        } catch {
+            let wasCancelled = error is CancellationError
+                || (error as? ContentBoundModelLoadError) == .cancelled
+            if wasCancelled {
+                if let ownedLoadingModelID,
+                   loadState == .loading(modelID: ownedLoadingModelID) {
+                    loadState = .idle
+                }
+            } else {
+                loadState = .failed(message: error.localizedDescription)
+            }
+            if error is CancellationError {
+                throw ContentBoundModelLoadError.cancelled
+            }
+            throw error
+        }
+    }
+
     /// Marks the given model active in the store and loads it into the runtime service.
     public func activateAndLoad(modelID modelIDString: String) async {
         guard !Task.isCancelled else { return }
+        guard !isRuntimeReserved() else {
+            loadState = .failed(message: Self.runtimeReservedMessage)
+            return
+        }
         // Ignore overlapping loads so concurrent taps cannot leave the published
         // load state and the runtime out of sync.
         if case .loading = loadState { return }
@@ -627,6 +1064,17 @@ public final class ModelLibrary: ObservableObject {
         return error.message
     }
 
+    private static func constantTimeEqualSHA256(_ lhs: String, _ rhs: String) -> Bool {
+        let left = Array(lhs.utf8)
+        let right = Array(rhs.utf8)
+        guard left.count == 64, right.count == 64 else { return false }
+        var difference: UInt8 = 0
+        for index in 0..<64 {
+            difference |= left[index] ^ right[index]
+        }
+        return difference == 0
+    }
+
     /// Redacts filesystem paths from user-facing failure text: the home directory
     /// is replaced with `~` (so even a bare `/Users/<name>` reveals no username),
     /// and any other absolute path is shortened to its final component. URLs
@@ -745,4 +1193,10 @@ public final class ModelLibrary: ObservableObject {
     private func persistRoleAssignments() {
         try? store.appSettings.setSetting(ModelRoleAssignments.settingsKey, value: roleAssignments)
     }
+}
+
+private struct ContentBoundModelCandidate {
+    var record: ModelRecord
+    var directory: URL
+    var managedRoot: URL
 }

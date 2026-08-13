@@ -20,6 +20,10 @@ public struct GenerateRequest: Codable, Sendable {
 
     public let generationID: GenerationID
     public let modelID: ModelID
+    /// Optional content identity required at generation admission. When present,
+    /// the runtime must reject the request unless the currently loaded model was
+    /// verified against this exact lowercase SHA-256 fingerprint.
+    public let expectedModelSHA256: String?
     public let prompt: String
     public let systemPrompt: String?
     /// Prior turns (oldest→newest) prepended to the chat template so the model can
@@ -30,6 +34,7 @@ public struct GenerateRequest: Codable, Sendable {
     public init(
         generationID: GenerationID,
         modelID: ModelID,
+        expectedModelSHA256: String? = nil,
         prompt: String,
         systemPrompt: String?,
         history: [Turn] = [],
@@ -37,6 +42,7 @@ public struct GenerateRequest: Codable, Sendable {
     ) {
         self.generationID = generationID
         self.modelID = modelID
+        self.expectedModelSHA256 = expectedModelSHA256
         self.prompt = prompt
         self.systemPrompt = systemPrompt
         self.history = history
@@ -47,6 +53,11 @@ public struct GenerateRequest: Codable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.generationID = try container.decode(GenerationID.self, forKey: .generationID)
         self.modelID = try container.decode(ModelID.self, forKey: .modelID)
+        // Tolerate requests encoded before content-bound generation admission.
+        self.expectedModelSHA256 = try container.decodeIfPresent(
+            String.self,
+            forKey: .expectedModelSHA256
+        )
         self.prompt = try container.decode(String.self, forKey: .prompt)
         self.systemPrompt = try container.decodeIfPresent(String.self, forKey: .systemPrompt)
         // Tolerate requests encoded before `history` existed.

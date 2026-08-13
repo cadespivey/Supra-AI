@@ -51,8 +51,12 @@ public final class SignedReleaseModelAuthorization: @unchecked Sendable {
             throw SignedReleaseModelAuthorizationError.invalidExpectedSHA256
         }
 
-        let paths = try validatedPaths(modelDirectory: modelDirectory, managedRoot: managedRoot)
-        let snapshot = try captureSnapshot(paths: paths)
+        let inspection = try inspectSnapshot(
+            modelDirectory: modelDirectory,
+            managedRoot: managedRoot
+        )
+        let paths = inspection.paths
+        let snapshot = inspection.snapshot
         guard constantTimeEqual(snapshot.contentBinding.fingerprintSHA256, expectedSHA256) else {
             throw SignedReleaseModelAuthorizationError.fingerprintMismatch
         }
@@ -75,6 +79,20 @@ public final class SignedReleaseModelAuthorization: @unchecked Sendable {
         )
         try result.reverify()
         return result
+    }
+
+    /// Computes the canonical content identity for one app-managed model without
+    /// minting runtime authority. Review creation uses this to freeze an exact
+    /// model pin before any runnable request exists; the later load path calls
+    /// `authorize` and independently repeats the same tree and byte verification.
+    static func inspectContentBinding(
+        modelDirectory: URL,
+        managedRoot: URL
+    ) throws -> RuntimeModelContentBinding {
+        try inspectSnapshot(
+            modelDirectory: modelDirectory,
+            managedRoot: managedRoot
+        ).snapshot.contentBinding
     }
 
     public func makeLoadRequest(modelID: ModelID, displayName: String) throws -> LoadModelRequest {
@@ -116,6 +134,17 @@ public final class SignedReleaseModelAuthorization: @unchecked Sendable {
               ) else {
             throw SignedReleaseModelAuthorizationError.fingerprintMismatch
         }
+    }
+
+    private static func inspectSnapshot(
+        modelDirectory: URL,
+        managedRoot: URL
+    ) throws -> (paths: ValidatedPaths, snapshot: Snapshot) {
+        let paths = try validatedPaths(
+            modelDirectory: modelDirectory,
+            managedRoot: managedRoot
+        )
+        return (paths, try captureSnapshot(paths: paths))
     }
 
     private static func captureSnapshot(paths: ValidatedPaths) throws -> Snapshot {

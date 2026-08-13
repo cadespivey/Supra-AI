@@ -44,6 +44,19 @@ public struct ExhaustiveListGenerationInput: Sendable {
     public var prompt: String
 }
 
+/// Versioned runtime behavior for one exhaustive-list prompt builder. Shipping
+/// composition uses the same value for XPC generation and persisted audit
+/// lineage; changing it requires a promptBuilderVersion bump.
+public struct ExhaustiveListGenerationConfiguration: Equatable, Sendable {
+    public var systemPrompt: String?
+    public var options: GenerationOptions
+
+    public init(systemPrompt: String?, options: GenerationOptions) {
+        self.systemPrompt = systemPrompt
+        self.options = options
+    }
+}
+
 public struct ExhaustiveListItem: Codable, Equatable, Sendable {
     public var itemKey: String
     public var values: [String]
@@ -87,6 +100,79 @@ public struct ExhaustiveListMetrics: Codable, Equatable, Sendable {
         case duplicateCount = "duplicate_count"
         case conflictCount = "conflict_count"
         case unexpectedItemKeys = "unexpected_item_keys"
+    }
+}
+
+/// Stable, public projection of the exact reconciliation payload persisted for an
+/// exhaustive-list run. Review Projects decode this envelope instead of inferring
+/// rows or evidence from rendered Markdown.
+public struct ExhaustiveListReviewSnapshot: Codable, Equatable, Sendable {
+    public var schemaVersion: Int
+    public var items: [ExhaustiveListItem]
+    public var omissions: [ExhaustiveListOmission]
+    public var metrics: ExhaustiveListMetrics
+    public var failedPartitions: [ExhaustiveListReviewFailedPartition]
+    public var excludedMembers: [ExhaustiveListReviewExcludedMember]
+
+    public init(
+        schemaVersion: Int = 1,
+        items: [ExhaustiveListItem],
+        omissions: [ExhaustiveListOmission],
+        metrics: ExhaustiveListMetrics,
+        failedPartitions: [ExhaustiveListReviewFailedPartition],
+        excludedMembers: [ExhaustiveListReviewExcludedMember]
+    ) {
+        self.schemaVersion = schemaVersion
+        self.items = items
+        self.omissions = omissions
+        self.metrics = metrics
+        self.failedPartitions = failedPartitions
+        self.excludedMembers = excludedMembers
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case items
+        case omissions
+        case metrics
+        case failedPartitions = "failed_partitions"
+        case excludedMembers = "excluded_members"
+    }
+}
+
+public struct ExhaustiveListReviewFailedPartition: Codable, Equatable, Sendable {
+    public var partitionKey: String
+    public var documentNames: [String]
+    public var reason: String
+    public var errorSummary: String
+
+    public init(
+        partitionKey: String,
+        documentNames: [String],
+        reason: String,
+        errorSummary: String
+    ) {
+        self.partitionKey = partitionKey
+        self.documentNames = documentNames
+        self.reason = reason
+        self.errorSummary = errorSummary
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case partitionKey = "partition_key"
+        case documentNames = "document_names"
+        case reason
+        case errorSummary = "error_summary"
+    }
+}
+
+public struct ExhaustiveListReviewExcludedMember: Codable, Equatable, Sendable {
+    public var name: String
+    public var reason: String
+
+    public init(name: String, reason: String) {
+        self.name = name
+        self.reason = reason
     }
 }
 
@@ -146,10 +232,15 @@ public enum CorpusNegativeGate {
             reasons.append("An adequate exhaustive method was not run; ranked retrieval cannot establish absence.")
         }
         let adequateExhaustiveRun = method == .exhaustiveCorpus
-            && run?.partitionStrategy.hasPrefix("part_range:") == true
-            && run?.partitionStrategyVersion == 1
+            && run.map { run in
+                run.taskKind == CorpusAnalysisTaskKind.exhaustiveList.rawValue
+                    && run.partitionStrategy.hasPrefix("exact_revision_slice:")
+                    && run.partitionStrategyVersion == 2
+                    && run.requestSchemaVersion == 2
+                    && run.requestDigest.map(isSHA256) == true
+            } == true
         if method == .exhaustiveCorpus, !adequateExhaustiveRun {
-            reasons.append("An adequate exhaustive method was not run; the persisted run lacks the required part-range strategy and version.")
+            reasons.append("An adequate exhaustive method was not run; the persisted run lacks exact-slice v2 request lineage.")
         }
         if positiveFindingCount > 0 {
             reasons.append("The exhaustive run found \(positiveFindingCount) positive item(s).")
@@ -247,6 +338,12 @@ public enum CorpusNegativeGate {
             verificationDimensions: dimensions
         )
     }
+
+    private static func isSHA256(_ value: String) -> Bool {
+        value.utf8.count == 64 && value.utf8.allSatisfy {
+            ($0 >= 48 && $0 <= 57) || ($0 >= 97 && $0 <= 102)
+        }
+    }
 }
 
 /// First task-specific consumer of the generic coverage ledger. The generator
@@ -254,6 +351,8 @@ public enum CorpusNegativeGate {
 /// strict schema boundary and response-digest failure record.
 public final class ExhaustiveListTask: @unchecked Sendable {
     public typealias Generator = @Sendable (ExhaustiveListGenerationInput) async throws -> String
+    public typealias PartitionBoundaryHandler = @Sendable () async throws -> Void
+    public typealias ModelPhaseCompletionHandler = @Sendable () async -> Void
 
     public static let schemaVersion = 1
     public static let verificationVersion = "exhaustive-list-v1"
@@ -269,31 +368,132 @@ public final class ExhaustiveListTask: @unchecked Sendable {
         request: ExhaustiveListRequest,
         generator: @escaping Generator
     ) async throws -> ExhaustiveListResult {
-        guard let resolvedModelLineage = DocumentGenerationModelLineage.decode(
-            json: request.modelLineageJSON
-        ) else {
+        guard let pinnedModel = CorpusAnalysisPinnedModel.decode(json: request.modelLineageJSON) else {
             throw DocumentGenerationLineageError.stableModelIdentityUnavailable
         }
-        let promptCollector = PromptCollector()
-        let engineResult = try await CorpusAnalysisEngine(store: store).run(
+        try pinnedModel.validate()
+        let queuedRequest = ExhaustiveListQueuedRequest(
+            taskSchemaVersion: Self.schemaVersion,
+            promptBuilderVersion: Self.promptBuilderVersion,
+            runKey: request.runKey,
+            matterID: request.matterID,
+            title: request.title,
+            query: request.query,
+            scope: request.scope,
+            characterBudget: request.characterBudget,
+            maximumRetryCount: request.maximumRetryCount
+        )
+        let payload = try CorpusAnalysisQueuePreparer(store: store).prepareExhaustiveList(
+            request: queuedRequest,
+            pinnedModel: pinnedModel
+        )
+        return try await runPrepared(
+            payload: payload,
+            evaluationExpectedItemKeys: request.evaluationExpectedItemKeys,
+            generationConfiguration: nil,
+            progressHandler: { _ in },
+            partitionBoundaryHandler: {},
+            modelPhaseDidComplete: {},
+            generator: generator
+        )
+    }
+
+    /// Executes a request whose exact task, model identity, snapshot, partitions,
+    /// and slices were already frozen before it entered the durable FIFO. Production
+    /// execution must use this path so relaunch never prepares a second live run.
+    public func runPrepared(
+        payload: CorpusAnalysisJobPayload,
+        generationConfiguration: ExhaustiveListGenerationConfiguration? = nil,
+        progressHandler: @escaping @Sendable (CorpusAnalysisCoverage) async -> Void = { _ in },
+        partitionBoundaryHandler: @escaping PartitionBoundaryHandler = {},
+        modelPhaseDidComplete: @escaping ModelPhaseCompletionHandler = {},
+        generator: @escaping Generator
+    ) async throws -> ExhaustiveListResult {
+        try await runPrepared(
+            payload: payload,
+            evaluationExpectedItemKeys: [],
+            generationConfiguration: generationConfiguration,
+            progressHandler: progressHandler,
+            partitionBoundaryHandler: partitionBoundaryHandler,
+            modelPhaseDidComplete: modelPhaseDidComplete,
+            generator: generator
+        )
+    }
+
+    private func runPrepared(
+        payload: CorpusAnalysisJobPayload,
+        evaluationExpectedItemKeys: [String],
+        generationConfiguration: ExhaustiveListGenerationConfiguration?,
+        progressHandler: @escaping @Sendable (CorpusAnalysisCoverage) async -> Void,
+        partitionBoundaryHandler: @escaping PartitionBoundaryHandler,
+        modelPhaseDidComplete: @escaping ModelPhaseCompletionHandler,
+        generator: @escaping Generator
+    ) async throws -> ExhaustiveListResult {
+        guard payload.schemaVersion == 2 else {
+            throw CorpusAnalysisPreparationError.preparedRunMismatch("payload schema")
+        }
+        guard case .exhaustiveList(let frozenRequest) = payload.task else {
+            throw CorpusAnalysisPreparationError.preparedRunMismatch("task payload")
+        }
+        guard frozenRequest.taskSchemaVersion == Self.schemaVersion else {
+            throw CorpusAnalysisPreparationError.unsupportedTaskSchema(
+                frozenRequest.taskSchemaVersion
+            )
+        }
+        guard frozenRequest.promptBuilderVersion == Self.promptBuilderVersion else {
+            throw CorpusAnalysisPreparationError.unsupportedPromptBuilder(
+                frozenRequest.promptBuilderVersion
+            )
+        }
+        let pinnedModel = payload.pinnedModel
+        try pinnedModel.validate()
+        let resolvedModelLineage = DocumentGenerationModelLineage(
+            modelRepository: pinnedModel.modelRepository,
+            modelRevision: pinnedModel.modelRevision
+        )
+        let request = ExhaustiveListRequest(
+            runKey: frozenRequest.runKey,
+            matterID: frozenRequest.matterID,
+            title: frozenRequest.title,
+            query: frozenRequest.query,
+            scope: frozenRequest.scope,
+            characterBudget: frozenRequest.characterBudget,
+            maximumRetryCount: frozenRequest.maximumRetryCount,
+            evaluationExpectedItemKeys: evaluationExpectedItemKeys,
+            modelLineageJSON: try CorpusAnalysisRequestDigest.canonicalJSON(pinnedModel)
+        )
+        let canonicalModelLineage = try CorpusAnalysisRequestDigest.canonicalJSON(pinnedModel)
+        let engine = CorpusAnalysisEngine(store: store)
+        let engineResult = try await engine.runPrepared(
             request: CorpusAnalysisRequest(
                 runKey: request.runKey,
                 matterID: request.matterID,
                 taskKind: .exhaustiveList,
-                scope: request.scope,
-                characterBudget: request.characterBudget,
-                maximumRetryCount: request.maximumRetryCount,
-                modelLineageJSON: request.modelLineageJSON
-            )
+                scope: frozenRequest.scope,
+                characterBudget: frozenRequest.characterBudget,
+                maximumRetryCount: frozenRequest.maximumRetryCount,
+                modelLineageJSON: canonicalModelLineage
+            ),
+            runID: payload.runID,
+            requestDigest: payload.requestDigest,
+            progressHandler: progressHandler,
+            partitionBoundaryHandler: partitionBoundaryHandler,
+            modelPhaseDidComplete: modelPhaseDidComplete
         ) { partition in
-            let prompt = Self.prompt(query: request.query, partition: partition)
-            promptCollector.append(prompt)
+            let prompt = Self.prompt(query: frozenRequest.query, partition: partition)
             let raw = try await generator(ExhaustiveListGenerationInput(
                 partition: partition,
                 prompt: prompt
             ))
             return try Self.decodeMapResponse(raw)
         }
+        try Task.checkCancellation()
+        let auditPrompt = try engine.preparedPartitionInputs(
+            matterID: request.matterID,
+            runID: payload.runID
+        ).map { partition in
+            Self.prompt(query: frozenRequest.query, partition: partition)
+        }.joined(separator: "\n\n")
 
         let reconciliation = Self.reconcile(
             findings: engineResult.findings,
@@ -305,15 +505,24 @@ public final class ExhaustiveListTask: @unchecked Sendable {
         )
         let excludedMembers = engineResult.snapshot.members
             .filter { $0.disposition == .excluded }
-            .map { ExhaustiveListExcludedMember(name: $0.displayName, reason: $0.reason ?? "excluded") }
-        let reconciliationRecord = ExhaustiveListReconciliationRecord(
+            .map {
+                ExhaustiveListReviewExcludedMember(
+                    name: $0.displayName,
+                    reason: $0.reason ?? "excluded"
+                )
+            }
+        let reconciliationRecord = ExhaustiveListReviewSnapshot(
             items: reconciliation.items,
             omissions: reconciliation.omissions,
             metrics: reconciliation.metrics,
             failedPartitions: disclosures,
             excludedMembers: excludedMembers
         )
-        let material = try evidenceMaterial(for: reconciliation.items)
+        let material = try evidenceMaterial(
+            for: reconciliation.items,
+            matterID: request.matterID,
+            runID: engineResult.run.id
+        )
         let verificationResults = try supportResults(
             items: reconciliation.items,
             material: material
@@ -406,7 +615,7 @@ public final class ExhaustiveListTask: @unchecked Sendable {
         let verificationStatus: OutputVerificationStatus = needsReview ? .needsReview : .allSupported
         let outputStatus: StructuredOutputStatus = needsReview ? .needsReview : .complete
         let markdown = Self.markdown(
-            title: request.title,
+            title: frozenRequest.title,
             assuranceState: OutputAssuranceState(rawValue: taskRun.assuranceState ?? "") ?? .corpusIncomplete,
             coverage: engineResult.coverage,
             reconciliation: reconciliationRecord,
@@ -426,23 +635,31 @@ public final class ExhaustiveListTask: @unchecked Sendable {
                 )
             }
         )
-        let lineage = try DocumentSourceLineageBuilder.make(
+        var lineage = try DocumentSourceLineageBuilder.make(
             store: store,
             matterID: request.matterID,
-            scope: RetrievalScope(documentIDs: request.scope.documentIDs),
+            scope: RetrievalScope(documentIDs: frozenRequest.scope.documentIDs),
             configuration: DocumentRetrievalConfiguration(
                 mode: DocumentSourceSetMode.exhaustive.rawValue,
                 candidateLimit: engineResult.coverage.eligibleMemberCount,
                 packedLimit: material.sources.count,
-                characterBudget: request.characterBudget
+                characterBudget: frozenRequest.characterBudget
             ),
             packingReport: packingReport
+        )
+        lineage.corpusSnapshotHash = try CorpusAnalysisRequestDigest.frozenCorpusLineage(
+            snapshot: engineResult.snapshot,
+            partitions: engineResult.partitions,
+            slices: store.corpusAnalysis.fetchSlices(
+                matterID: request.matterID,
+                runID: engineResult.run.id
+            )
         )
         let sourceSet = DocumentSourceSetRecord(
             matterID: request.matterID,
             mode: DocumentSourceSetMode.exhaustive.rawValue,
-            scopeJSON: try Self.canonicalJSON(request.scope),
-            retrievalQuery: request.query,
+            scopeJSON: try Self.canonicalJSON(frozenRequest.scope),
+            retrievalQuery: frozenRequest.query,
             packingReportJSON: lineage.packingReportJSON,
             embeddingModelID: lineage.embeddingModelID,
             embeddingModelRevision: lineage.embeddingModelRevision,
@@ -456,7 +673,7 @@ public final class ExhaustiveListTask: @unchecked Sendable {
                 documentID: source.reference.documentID,
                 revisionID: source.reference.revisionID,
                 citationLabel: material.labelByEvidence[source.reference] ?? "E\(index + 1)",
-                locatorJSON: source.reference.locatorJSON,
+                locatorJSON: source.outputLocatorJSON,
                 excerpt: source.excerpt,
                 rank: index + 1
             )
@@ -465,11 +682,13 @@ public final class ExhaustiveListTask: @unchecked Sendable {
                     modelRepository: resolvedModelLineage.modelRepository,
                     modelRevision: resolvedModelLineage.modelRevision,
                     promptBuilderVersion: Self.promptBuilderVersion,
-                    prompt: promptCollector.joined(or: request.query),
+                    prompt: auditPrompt.isEmpty ? frozenRequest.query : auditPrompt,
+                    systemPrompt: generationConfiguration?.systemPrompt,
                     optionsJSON: try Self.canonicalJSON(GenerationAuditOptions(
-                        characterBudget: request.characterBudget,
-                        maximumRetryCount: request.maximumRetryCount,
-                        taskKind: CorpusAnalysisTaskKind.exhaustiveList.rawValue
+                        characterBudget: frozenRequest.characterBudget,
+                        maximumRetryCount: frozenRequest.maximumRetryCount,
+                        taskKind: CorpusAnalysisTaskKind.exhaustiveList.rawValue,
+                        generationOptions: generationConfiguration?.options
                     ))
                 )
         let version = try store.structuredOutputs.createVersionWithSourceSetAtomically(
@@ -477,7 +696,7 @@ public final class ExhaustiveListTask: @unchecked Sendable {
             newOutput: StructuredOutputRecord(
                 id: outputID,
                 matterID: request.matterID,
-                title: request.title,
+                title: frozenRequest.title,
                 outputType: StructuredOutputType.documentExhaustiveList.rawValue,
                 status: StructuredOutputStatus.draft.rawValue
             ),
@@ -521,8 +740,9 @@ public final class ExhaustiveListTask: @unchecked Sendable {
         """
         TASK: \(query)
         Return only strict JSON with this schema:
-        {"schema_version":1,"items":[{"item_key":"stable-key","value":"literal value","evidence":[{"document_id":"...","revision_id":"...","locator_json":"..."}],"contrary_evidence":[]}]}
+        {"schema_version":1,"items":[{"item_key":"stable-key","value":"literal value","evidence":[{"document_id":"...","revision_id":"...","locator_json":"...","quote":"exact source text","char_start":0,"char_end":17}],"contrary_evidence":[]}]}
         Every emitted item requires at least one exact reference across evidence and contrary_evidence.
+        Evidence quote text must occur exactly once in the cited presented slice. Optional char_start and char_end are slice-relative Character offsets and, when supplied, must exactly bound that quote.
         A partition may emit evidence as empty only when contrary_evidence is nonempty; the reconciled item still requires primary evidence before it can be treated as supported.
         \(partition.promptEnvelope)
         """
@@ -532,28 +752,13 @@ public final class ExhaustiveListTask: @unchecked Sendable {
         var characterBudget: Int
         var maximumRetryCount: Int
         var taskKind: String
+        var generationOptions: GenerationOptions?
 
         private enum CodingKeys: String, CodingKey {
             case characterBudget = "character_budget"
             case maximumRetryCount = "maximum_retry_count"
             case taskKind = "task_kind"
-        }
-    }
-
-    private final class PromptCollector: @unchecked Sendable {
-        private let lock = NSLock()
-        private var prompts: [String] = []
-
-        func append(_ prompt: String) {
-            lock.withLock { prompts.append(prompt) }
-        }
-
-        func joined(or fallback: String) -> String {
-            lock.withLock {
-                prompts.isEmpty
-                    ? fallback
-                    : prompts.joined(separator: "\n\n--- prompt boundary ---\n\n")
-            }
+            case generationOptions = "generation_options"
         }
     }
 
@@ -647,7 +852,7 @@ public final class ExhaustiveListTask: @unchecked Sendable {
     private func failedPartitionDisclosures(
         partitions: [CorpusAnalysisPartitionRecord],
         snapshot: CorpusAnalysisSnapshot
-    ) throws -> [ExhaustiveListFailedPartition] {
+    ) throws -> [ExhaustiveListReviewFailedPartition] {
         let nameByRevision = Dictionary(uniqueKeysWithValues: snapshot.members.flatMap { member in
             member.revisionIDs.map { ($0, member.displayName) }
         })
@@ -659,7 +864,7 @@ public final class ExhaustiveListTask: @unchecked Sendable {
                 from: Data(partition.inputRevisionIDsJSON.utf8)
             )
             let names = Array(Set(revisionIDs.compactMap { nameByRevision[$0] })).sorted()
-            return ExhaustiveListFailedPartition(
+            return ExhaustiveListReviewFailedPartition(
                 partitionKey: partition.partitionKey,
                 documentNames: names,
                 reason: partition.dispositionReason ?? "failed",
@@ -670,8 +875,8 @@ public final class ExhaustiveListTask: @unchecked Sendable {
 
     private static func coverageFailures(
         coverage: CorpusAnalysisCoverage,
-        disclosures: [ExhaustiveListFailedPartition],
-        excludedMembers: [ExhaustiveListExcludedMember]
+        disclosures: [ExhaustiveListReviewFailedPartition],
+        excludedMembers: [ExhaustiveListReviewExcludedMember]
     ) -> [String] {
         var failures = disclosures.map { disclosure in
             let name = disclosure.documentNames.isEmpty
@@ -689,8 +894,8 @@ public final class ExhaustiveListTask: @unchecked Sendable {
 
     private static func listFailures(
         reconciliation: ExhaustiveListReconciliation,
-        disclosures: [ExhaustiveListFailedPartition],
-        excludedMembers: [ExhaustiveListExcludedMember]
+        disclosures: [ExhaustiveListReviewFailedPartition],
+        excludedMembers: [ExhaustiveListReviewExcludedMember]
     ) -> [String] {
         var failures = reconciliation.omissions.map {
             "Omitted evaluation item \($0.itemKey): \($0.reason)."
@@ -734,28 +939,83 @@ public final class ExhaustiveListTask: @unchecked Sendable {
                 return VerificationDimensionEvidence(
                     sourceID: reference.revisionID,
                     sourceLabel: source.documentName,
-                    locator: reference.locatorJSON,
+                    locator: source.outputLocatorJSON,
                     excerpt: source.excerpt
                 )
             }
     }
 
-    private func evidenceMaterial(for items: [ExhaustiveListItem]) throws -> ExhaustiveListEvidenceMaterial {
+    private func evidenceMaterial(
+        for items: [ExhaustiveListItem],
+        matterID: String,
+        runID: String
+    ) throws -> ExhaustiveListEvidenceMaterial {
         let references = Array(Set(items.flatMap { $0.evidence + $0.contraryEvidence }))
             .sorted(by: Self.evidenceLessThan)
+        let slices = try store.corpusAnalysis.fetchSlices(matterID: matterID, runID: runID)
+        guard let run = try store.corpusAnalysis.fetchRun(matterID: matterID, id: runID),
+              let snapshotData = run.corpusSnapshotJSON.data(using: .utf8),
+              let snapshot = try? JSONDecoder().decode(
+                  CorpusAnalysisSnapshot.self,
+                  from: snapshotData
+              ) else {
+            throw CorpusAnalysisEngineError.invalidPersistedJSON("evidence snapshot")
+        }
+        let frozenNameByDocumentID = Dictionary(
+            uniqueKeysWithValues: snapshot.members.compactMap { member in
+                member.documentID.map { ($0, member.displayName) }
+            }
+        )
         var sources: [ExhaustiveListEvidenceSource] = []
         var labels: [CorpusAnalysisEvidenceReference: String] = [:]
         for (index, reference) in references.enumerated() {
+            let matchingSlices = slices.filter { slice in
+                slice.documentID == reference.documentID
+                    && slice.revisionID == reference.revisionID
+                    && slice.locatorJSON == reference.locatorJSON
+            }
+            guard matchingSlices.count == 1, let slice = matchingSlices.first else {
+                throw CorpusAnalysisEngineError.invalidFindingEvidence(reference.revisionID)
+            }
             guard let revision = try store.documentRevisions.fetchRevision(id: reference.revisionID),
-                  revision.documentID == reference.documentID else {
+                  revision.documentID == reference.documentID,
+                  revision.partIndex == slice.partIndex,
+                  revision.text.count == slice.revisionCharCount,
+                  slice.charStart >= 0,
+                  slice.charEnd > slice.charStart,
+                  slice.charEnd <= revision.text.count else {
                 throw CorpusAnalysisEngineError.revisionUnavailable(reference.revisionID)
             }
+            let sliceRange = slice.charStart..<slice.charEnd
+            let sliceText = Self.substring(revision.text, range: sliceRange)
+            guard CorpusAnalysisRequestDigest.sha256(Data(sliceText.utf8)) == slice.textSHA256,
+                  let relativeStart = reference.charStart,
+                  let relativeEnd = reference.charEnd,
+                  relativeStart >= 0,
+                  relativeEnd > relativeStart,
+                  relativeEnd <= sliceText.count,
+                  let quote = reference.quote,
+                  !quote.isEmpty,
+                  Self.substring(
+                      sliceText,
+                      range: relativeStart..<relativeEnd
+                  ) == quote,
+                  var locator = try? JSONDecoder().decode(
+                      DocumentSourceLocator.self,
+                      from: Data(slice.locatorJSON.utf8)
+                  ),
+                  locator.charStart == slice.charStart,
+                  locator.charEnd == slice.charEnd else {
+                throw CorpusAnalysisEngineError.invalidFindingEvidence(reference.revisionID)
+            }
+            locator.charStart = slice.charStart + relativeStart
+            locator.charEnd = slice.charStart + relativeEnd
             labels[reference] = "E\(index + 1)"
             sources.append(ExhaustiveListEvidenceSource(
                 reference: reference,
-                documentName: try store.documentLibrary.fetchDocument(id: reference.documentID)?.displayName
-                    ?? reference.documentID,
-                excerpt: DocumentChunker.excerpt(revision.text)
+                documentName: frozenNameByDocumentID[reference.documentID] ?? reference.documentID,
+                outputLocatorJSON: locator.encodedJSON(),
+                excerpt: quote
             ))
         }
         return ExhaustiveListEvidenceMaterial(sources: sources, labelByEvidence: labels)
@@ -768,34 +1028,73 @@ public final class ExhaustiveListTask: @unchecked Sendable {
         let excerptByReference = Dictionary(uniqueKeysWithValues: material.sources.map {
             ($0.reference, $0.excerpt)
         })
+        let locatorByReference = Dictionary(uniqueKeysWithValues: material.sources.map {
+            ($0.reference, $0.outputLocatorJSON)
+        })
         return try items.map { item in
             let evidence = item.evidence.map { reference in
                 SupportEvidence(
                     sourceID: reference.revisionID,
                     sourceLabel: material.labelByEvidence[reference] ?? "Evidence",
-                    locator: reference.locatorJSON,
+                    locator: locatorByReference[reference] ?? reference.locatorJSON,
                     retainedExcerpt: excerptByReference[reference] ?? "Evidence retained in source set.",
                     verifierName: "ExhaustiveListTask",
                     verifierVersion: Self.verificationVersion
                 )
             }
+            let unsupportedValues = item.values.filter { value in
+                !item.evidence.contains { reference in
+                    excerptByReference[reference].map {
+                        Self.excerpt($0, supportsLiteralValue: value)
+                    } == true
+                }
+            }
+            let status: PropositionSupportStatus
+            let reasons: [String]
+            if evidence.isEmpty {
+                status = .unverifiable
+                reasons = ["No primary supporting evidence remained after contrary-evidence reconciliation."]
+            } else if !unsupportedValues.isEmpty {
+                status = .unsupported
+                reasons = [
+                    "The retained exact evidence does not contain the emitted value: "
+                        + unsupportedValues.joined(separator: " | ")
+                ]
+            } else {
+                status = .supported
+                reasons = item.values.count > 1 ? ["Conflicting values require review."] : []
+            }
             return try PropositionSupportResult(
                 propositionID: item.itemKey,
-                status: evidence.isEmpty ? .unverifiable : .supported,
-                reasons: evidence.isEmpty
-                    ? ["No primary supporting evidence remained after contrary-evidence reconciliation."]
-                    : (item.values.count > 1 ? ["Conflicting values require review."] : []),
+                status: status,
+                reasons: reasons,
                 evidence: evidence,
                 timestamp: Date()
             )
         }
     }
 
+    private static func excerpt(_ excerpt: String, supportsLiteralValue value: String) -> Bool {
+        let normalizedExcerpt = excerpt.split(whereSeparator: \.isWhitespace)
+            .joined(separator: " ")
+            .lowercased()
+        let normalizedValue = value.split(whereSeparator: \.isWhitespace)
+            .joined(separator: " ")
+            .lowercased()
+        return !normalizedValue.isEmpty && normalizedExcerpt.contains(normalizedValue)
+    }
+
+    private static func substring(_ value: String, range: Range<Int>) -> String {
+        let lower = value.index(value.startIndex, offsetBy: range.lowerBound)
+        let upper = value.index(value.startIndex, offsetBy: range.upperBound)
+        return String(value[lower..<upper])
+    }
+
     private static func markdown(
         title: String,
         assuranceState: OutputAssuranceState,
         coverage: CorpusAnalysisCoverage,
-        reconciliation: ExhaustiveListReconciliationRecord,
+        reconciliation: ExhaustiveListReviewSnapshot,
         labels: [CorpusAnalysisEvidenceReference: String]
     ) -> String {
         var lines = [
@@ -909,24 +1208,6 @@ private struct ExhaustiveListReconciliation {
     var metrics: ExhaustiveListMetrics
 }
 
-private struct ExhaustiveListReconciliationRecord: Codable {
-    var schemaVersion = 1
-    var items: [ExhaustiveListItem]
-    var omissions: [ExhaustiveListOmission]
-    var metrics: ExhaustiveListMetrics
-    var failedPartitions: [ExhaustiveListFailedPartition]
-    var excludedMembers: [ExhaustiveListExcludedMember]
-
-    private enum CodingKeys: String, CodingKey {
-        case schemaVersion = "schema_version"
-        case items
-        case omissions
-        case metrics
-        case failedPartitions = "failed_partitions"
-        case excludedMembers = "excluded_members"
-    }
-}
-
 private struct ExhaustiveListValidationRecord: Codable {
     var schemaVersion = 1
     var schemaInvalidPartitionCount: Int
@@ -941,28 +1222,10 @@ private struct ExhaustiveListValidationRecord: Codable {
     }
 }
 
-private struct ExhaustiveListFailedPartition: Codable {
-    var partitionKey: String
-    var documentNames: [String]
-    var reason: String
-    var errorSummary: String
-
-    private enum CodingKeys: String, CodingKey {
-        case partitionKey = "partition_key"
-        case documentNames = "document_names"
-        case reason
-        case errorSummary = "error_summary"
-    }
-}
-
-private struct ExhaustiveListExcludedMember: Codable {
-    var name: String
-    var reason: String
-}
-
 private struct ExhaustiveListEvidenceSource {
     var reference: CorpusAnalysisEvidenceReference
     var documentName: String
+    var outputLocatorJSON: String
     var excerpt: String
 }
 

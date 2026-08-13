@@ -33,6 +33,17 @@ public struct DocumentPartCorrectionDraft: Identifiable, Sendable, Equatable {
     public let history: [DocumentPartRevisionItem]
 }
 
+public struct PermanentDeletionNotice: Identifiable, Sendable, Equatable {
+    public var id: String { "\(title)|\(message)" }
+    public let title: String
+    public let message: String
+
+    public init(title: String, message: String) {
+        self.title = title
+        self.message = message
+    }
+}
+
 /// Drives the per-matter Documents tab: folders, document instances, tags, import,
 /// search, and trash (plan §39). Import is gated on completed Document Intelligence
 /// setup and routed through the app-wide processing queue.
@@ -60,6 +71,7 @@ public final class MatterDocumentsController: ObservableObject {
     }
     @Published public private(set) var searchHits: [DocumentSearchHit] = []
     @Published public var message: String?
+    @Published public private(set) var permanentDeletionNotice: PermanentDeletionNotice?
     /// Documents whose saved correction is waiting for its replacement index to
     /// become visible. Keep the transition on screen briefly even when a tiny
     /// document re-indexes within the same UI turn; otherwise the editor closes
@@ -479,8 +491,13 @@ public final class MatterDocumentsController: ObservableObject {
     }
 
     public func permanentlyDelete(documentID: String) {
-        var orphanedBlobCount = 0
-        if let result = try? store.documentLibrary.permanentlyDeleteDocument(id: documentID) {
+        permanentDeletionNotice = nil
+        do {
+            let result = try store.documentLibrary.permanentlyDeleteDocument(
+                id: documentID,
+                actor: "user"
+            )
+            var orphanedBlobCount = 0
             for path in result.removedBlobPaths {
                 let fileURL = storage.url(forManagedRelativePath: path)
                 do {
@@ -493,15 +510,33 @@ public final class MatterDocumentsController: ObservableObject {
                     if FileManager.default.fileExists(atPath: fileURL.path) { orphanedBlobCount += 1 }
                 }
             }
+            if orphanedBlobCount > 0 {
+                permanentDeletionNotice = PermanentDeletionNotice(
+                    title: "Deletion needs attention",
+                    message:
+                        "The source was removed, but \(orphanedBlobCount) local file(s) could not be deleted."
+                )
+                _ = try? store.auditEvents.recordEvent(
+                    matterID: matterID,
+                    eventType: "document_blob_cleanup_failed",
+                    actor: "user",
+                    summary: "Managed blob cleanup remained incomplete after document deletion.",
+                    relatedTable: "matter_documents",
+                    relatedID: documentID,
+                    metadataJSON: "{\"orphaned_blob_count\":\(orphanedBlobCount),\"schema_version\":1}"
+                )
+            }
+        } catch {
+            permanentDeletionNotice = PermanentDeletionNotice(
+                title: "Deletion needs attention",
+                message: "Couldn’t permanently delete the source: \(error.localizedDescription)"
+            )
         }
-        _ = try? store.auditEvents.recordEvent(
-            matterID: matterID, eventType: "document_permanently_deleted", actor: "user",
-            summary: orphanedBlobCount == 0
-                ? "Permanently deleted a document"
-                : "Permanently deleted a document; \(orphanedBlobCount) blob file(s) could not be removed and were left for cleanup",
-            relatedTable: "matter_documents", relatedID: documentID
-        )
         reload()
+    }
+
+    public func clearPermanentDeletionNotice() {
+        permanentDeletionNotice = nil
     }
 
     // MARK: - Search

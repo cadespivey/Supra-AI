@@ -33,13 +33,21 @@ struct SupraAIApp: App {
 @MainActor
 private final class SupraApplicationDelegate: NSObject, NSApplicationDelegate {
     private var freshWindowOpenScheduled = false
+#if DEBUG
+    private var uiTestWindowWidthScheduled = false
+    private var uiTestWindowWidthApplied = false
+#endif
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        scheduleFreshUITestWindowIfNeeded(notification.object as? NSApplication)
+        let app = notification.object as? NSApplication
+        scheduleFreshUITestWindowIfNeeded(app)
+        scheduleUITestWindowWidthIfNeeded(app)
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
-        scheduleFreshUITestWindowIfNeeded(notification.object as? NSApplication)
+        let app = notification.object as? NSApplication
+        scheduleFreshUITestWindowIfNeeded(app)
+        scheduleUITestWindowWidthIfNeeded(app)
     }
 
     private func scheduleFreshUITestWindowIfNeeded(_ app: NSApplication?) {
@@ -58,7 +66,44 @@ private final class SupraApplicationDelegate: NSObject, NSApplicationDelegate {
                     .item(withTitle: "New Window"),
                   let action = item.action else { return }
             app.sendAction(action, to: item.target, from: item)
+            self.scheduleUITestWindowWidthIfNeeded(app)
         }
+    }
+
+    private func scheduleUITestWindowWidthIfNeeded(_ app: NSApplication?) {
+#if DEBUG
+        guard let requestedWidth = requestedUITestWindowWidth,
+              let app,
+              !uiTestWindowWidthApplied,
+              !uiTestWindowWidthScheduled else { return }
+        uiTestWindowWidthScheduled = true
+        DispatchQueue.main.async { [weak self, weak app] in
+            guard let self, let app else { return }
+            self.uiTestWindowWidthScheduled = false
+            guard !self.uiTestWindowWidthApplied,
+                  let window = app.windows.first(where: \.canBecomeMain) else { return }
+            var frame = window.frame
+            frame.origin.x += (frame.width - requestedWidth) / 2
+            frame.size.width = requestedWidth
+            window.setFrame(frame, display: true)
+            self.uiTestWindowWidthApplied = true
+        }
+#endif
+    }
+
+    private var requestedUITestWindowWidth: CGFloat? {
+#if DEBUG
+        let arguments = ProcessInfo.processInfo.arguments
+        guard AppEnvironment.isUITestMode,
+              let marker = arguments.firstIndex(of: "-uiTestWindowWidth"),
+              arguments.indices.contains(marker + 1),
+              let width = Double(arguments[marker + 1]),
+              width.isFinite,
+              width > 0 else { return nil }
+        return CGFloat(width)
+#else
+        nil
+#endif
     }
 
     private var shouldEnsureFreshUITestWindow: Bool {

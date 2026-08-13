@@ -58,7 +58,8 @@ public final class DocumentExportService: @unchecked Sendable {
             throw ExportError.outputNotFound
         }
         let versions = try store.structuredOutputs.fetchVersions(structuredOutputID: structuredOutputID)
-        guard let activeVersion = versions.first(where: { $0.id == output.activeVersionID }) ?? versions.first else {
+        guard let activeVersionID = output.activeVersionID,
+              let activeVersion = versions.first(where: { $0.id == activeVersionID }) else {
             throw ExportError.noActiveVersion
         }
         let verificationStatus = OutputVerificationStatus(rawValue: activeVersion.verificationStatus)
@@ -70,6 +71,19 @@ public final class DocumentExportService: @unchecked Sendable {
         guard verificationStatus == .allSupported,
               OutputAssurancePresentation.isExportEligible(assurance) else {
             throw ExportError.assuranceBlocked(OutputAssurancePresentation.text(for: assurance))
+        }
+        if output.outputType == StructuredOutputType.documentExhaustiveList.rawValue {
+            guard let rawAssurance = activeVersion.assuranceState,
+                  let exactAssurance = OutputAssuranceState(rawValue: rawAssurance),
+                  let proofRun = try store.corpusAnalysis.fetchExactExportRun(
+                      matterID: matterID,
+                      structuredOutputVersionID: activeVersion.id
+                  ),
+                  proofRun.assuranceState == exactAssurance.rawValue else {
+                throw ExportError.assuranceBlocked(
+                    "Exhaustive output is not linked to one matching persisted exact corpus proof."
+                )
+            }
         }
 
         let payload = try makePayload(output: output, version: activeVersion, matterID: matterID)

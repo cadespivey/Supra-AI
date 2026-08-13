@@ -692,7 +692,8 @@ public final class DocumentChronologyController: ObservableObject {
                     sourceKind: DocumentSourceKind(rawValue: chunk.sourceKind) ?? .text,
                     pageIndex: chunk.pageIndex, pageLabel: chunk.pageLabel, sheetName: chunk.sheetName,
                     cellRange: chunk.cellRange, emailPartPath: chunk.emailPartPath,
-                    charStart: chunk.charStart, charEnd: chunk.charEnd
+                    charStart: chunk.charStart, charEnd: chunk.charEnd,
+                    boundingBoxesJSON: chunk.boundingBoxesJSON
                 )
                 let low = (chunk.ocrConfidence.map { $0 < OCRPolicy.lowConfidenceThreshold } ?? false)
                 let structureContext = chunk.chunkerVersion == 2

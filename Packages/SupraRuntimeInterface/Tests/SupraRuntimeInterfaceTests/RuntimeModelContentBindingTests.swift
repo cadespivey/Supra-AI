@@ -190,6 +190,28 @@ final class RuntimeModelContentBindingTests: XCTestCase {
         XCTAssertNil(decoded.verifiedModelSHA256)
     }
 
+    func testGenerateRequestRoundTripsExpectedModelSHA256() throws {
+        // T-QUEUE-03 expected RED: GenerateRequest has no expectedModelSHA256
+        // field or initializer argument, so generation admission can authenticate
+        // only a UUID even after a content-bound model load.
+        let request = GenerateRequest(
+            generationID: GenerationID(),
+            modelID: ModelID(),
+            expectedModelSHA256: Self.expectedFingerprint,
+            prompt: "Return the synthetic lifecycle canary.",
+            systemPrompt: "Return only the canary.",
+            options: GenerationOptions(maxOutputTokens: 17)
+        )
+
+        let decoded = try RuntimeXPCCodec.decode(
+            GenerateRequest.self,
+            from: RuntimeXPCCodec.encode(request)
+        )
+
+        XCTAssertEqual(decoded.expectedModelSHA256, Self.expectedFingerprint)
+        XCTAssertEqual(decoded.options.maxOutputTokens, 17)
+    }
+
     func testBindingDecoderRejectsMalformedOrNoncanonicalDocuments() throws {
         try assertBindingDecodeRejected("unknown algorithm") { object in
             object["algorithm"] = "supra-release-model-sha256-v2"

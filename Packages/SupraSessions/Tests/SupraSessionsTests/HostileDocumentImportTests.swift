@@ -212,6 +212,109 @@ final class HostileDocumentImportTests: XCTestCase {
         XCTAssertFalse(containsRegularFile(under: managed.appendingPathComponent("blobs")))
     }
 
+    func testPolicyRollbackFailureKeepsResidualDocumentAndBlobAccountable() async throws {
+        // Expected RED: rollbackRejectedDocument swallows its Store error and
+        // records a clean policy rejection even though the document and blob
+        // remain live without durable residual identities in the source ledger.
+        let source = sources.appendingPathComponent("rollback-613.txt")
+        try Data("POST-COPY-ROLLBACK-613".utf8).write(to: source)
+        let (store, matterID) = try makeStoreAndMatter()
+        try installRollbackAuditFailure(in: store, message: "synthetic import rollback failure 613")
+        let service = DocumentImportService(
+            store: store,
+            storage: DocumentStorage(root: managed),
+            extraction: ExtractionService(extractors: [
+                .plainText: PostCopyPolicyRejectingExtractor(),
+            ]),
+            ocr: nil
+        )
+
+        let outcome = try await service.importSources([source], matterID: matterID)
+
+        let residual = try XCTUnwrap(
+            try store.documentLibrary.fetchDocuments(matterID: matterID).first
+        )
+        let blob = try XCTUnwrap(try store.documentLibrary.fetchBlobs(limit: 10).first)
+        let ledger = try XCTUnwrap(
+            try store.documentJobs.fetchSources(batchID: outcome.batchID).first
+        )
+        let item = try XCTUnwrap(outcome.report.items.first)
+        XCTAssertEqual(ledger.state, DocumentImportSourceState.failed.rawValue)
+        XCTAssertEqual(
+            ledger.rejectionCode,
+            ImportPolicyViolation.Code.expandedBytesLimit.rawValue
+        )
+        XCTAssertEqual(ledger.documentID, residual.id)
+        XCTAssertEqual(ledger.blobSHA256, blob.sha256)
+        XCTAssertEqual(item.disposition, DocumentImportDisposition.extractionFailed.rawValue)
+        XCTAssertEqual(item.documentID, residual.id)
+        XCTAssertEqual(
+            item.rejectionCode,
+            ImportPolicyViolation.Code.expandedBytesLimit.rawValue
+        )
+        XCTAssertTrue(item.reason?.contains("synthetic post-copy rejection 613") == true)
+        XCTAssertTrue(item.reason?.contains("synthetic import rollback failure 613") == true)
+        XCTAssertNotEqual(item.disposition, DocumentImportSourceState.rejected.rawValue)
+    }
+
+    func testCancellationRollbackFailureDoesNotMasqueradeAsCleanCancellation() async throws {
+        // Expected RED: cancellation cleanup swallows permanent-delete failure
+        // and rethrows CancellationError, falsely claiming that no imported
+        // residue needs attention.
+        let source = sources.appendingPathComponent("cancel-rollback-911.txt")
+        try Data("POST-COPY-CANCEL-ROLLBACK-911".utf8).write(to: source)
+        let (store, matterID) = try makeStoreAndMatter()
+        try installRollbackAuditFailure(
+            in: store,
+            message: "synthetic cancellation rollback failure 911"
+        )
+        let service = DocumentImportService(
+            store: store,
+            storage: DocumentStorage(root: managed),
+            extraction: ExtractionService(extractors: [
+                .plainText: PostCopyCancellingExtractor(),
+            ]),
+            ocr: nil
+        )
+
+        do {
+            _ = try await service.importSources([source], matterID: matterID)
+            XCTFail("Expected rollback failure to supersede clean cancellation")
+        } catch {
+            XCTAssertFalse(error is CancellationError)
+            XCTAssertTrue(
+                error.localizedDescription.contains("synthetic cancellation rollback failure 911")
+            )
+        }
+
+        let residual = try XCTUnwrap(
+            try store.documentLibrary.fetchDocuments(matterID: matterID).first
+        )
+        let blob = try XCTUnwrap(try store.documentLibrary.fetchBlobs(limit: 10).first)
+        let batch = try XCTUnwrap(try store.documentJobs.fetchBatches(matterID: matterID).first)
+        let ledger = try XCTUnwrap(try store.documentJobs.fetchSources(batchID: batch.id).first)
+        XCTAssertEqual(ledger.state, DocumentImportSourceState.failed.rawValue)
+        XCTAssertEqual(ledger.documentID, residual.id)
+        XCTAssertEqual(ledger.blobSHA256, blob.sha256)
+        XCTAssertTrue(
+            ledger.reason?.contains("synthetic cancellation rollback failure 911") == true
+        )
+    }
+
+    private func installRollbackAuditFailure(in store: SupraStore, message: String) throws {
+        let escapedMessage = message.replacingOccurrences(of: "'", with: "''")
+        try store.database.writer.write { db in
+            try db.execute(sql: """
+                CREATE TRIGGER reject_import_rollback_audit
+                BEFORE INSERT ON audit_events
+                WHEN NEW.event_type = 'document_permanently_deleted'
+                BEGIN
+                    SELECT RAISE(ABORT, '\(escapedMessage)');
+                END
+                """)
+        }
+    }
+
     private func makeStoreAndMatter() throws -> (SupraStore, String) {
         let database = base.appendingPathComponent("store-\(UUID().uuidString).sqlite")
         let store = try SupraStore(url: database)
@@ -228,6 +331,21 @@ final class HostileDocumentImportTests: XCTestCase {
             if (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true { return true }
         }
         return false
+    }
+}
+
+private struct PostCopyPolicyRejectingExtractor: DocumentExtractor {
+    func extract(fileURL: URL) async throws -> ExtractionResult {
+        throw ImportPolicyViolation(
+            .expandedBytesLimit,
+            "synthetic post-copy rejection 613"
+        )
+    }
+}
+
+private struct PostCopyCancellingExtractor: DocumentExtractor {
+    func extract(fileURL: URL) async throws -> ExtractionResult {
+        throw CancellationError()
     }
 }
 

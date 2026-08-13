@@ -109,7 +109,7 @@ final class GenerationLineageMigrationTests: XCTestCase {
 
         try migrator.migrate(queue)
         try queue.read { db in
-            XCTAssertEqual(try appliedMigrations(db).last, "v071_create_draft_artifact_intents")
+            XCTAssertEqual(try appliedMigrations(db).last, "v073_create_case_file_review_projects")
             XCTAssertEqual(Set(try db.columns(in: "structured_output_versions").map(\.name)), Set([
                 "id", "structured_output_id", "version_index", "parent_version_id",
                 "content_markdown", "required_sections_json", "present_sections_json",
@@ -138,9 +138,9 @@ final class GenerationLineageMigrationTests: XCTestCase {
         let migratedLinked = try XCTUnwrap(outputs.fetchVersion(id: linkedVersionID))
         let migratedUnrelated = try XCTUnwrap(outputs.fetchVersion(id: unrelatedVersionID))
         XCTAssertEqual(migratedLinked.contentMarkdown, "RUN-LINKED-CONTENT")
-        XCTAssertEqual(migratedLinked.assuranceState, OutputAssuranceState.corpusComplete.rawValue)
+        XCTAssertEqual(migratedLinked.assuranceState, OutputAssuranceState.stale.rawValue)
         XCTAssertNil(migratedLinked.promptBuilderVersion)
-        XCTAssertNil(migratedLinked.staleReason)
+        XCTAssertFalse(migratedLinked.staleReason?.isEmpty ?? true)
         XCTAssertEqual(migratedUnrelated.contentMarkdown, "UNRELATED-HISTORICAL-CONTENT")
         XCTAssertNil(migratedUnrelated.assuranceState)
         XCTAssertNil(migratedUnrelated.promptBuilderVersion)

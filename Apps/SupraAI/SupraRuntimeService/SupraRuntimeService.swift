@@ -153,6 +153,7 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
     ) {
         stateLock.lock()
         let loadedModelID = loadedModelID
+        let loadedModelSHA256 = currentModelRequest?.contentBinding?.fingerprintSHA256
         guard loadedModelID == request.modelID else {
             stateLock.unlock()
             reply(
@@ -163,6 +164,24 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
                 )
             )
             return
+        }
+
+        if let expectedModelSHA256 = request.expectedModelSHA256 {
+            guard Self.isLowercaseSHA256(expectedModelSHA256),
+                  let loadedModelSHA256,
+                  Self.constantTimeEqualSHA256(loadedModelSHA256, expectedModelSHA256) else {
+                stateLock.unlock()
+                reply(
+                    GenerateStartResponse(
+                        status: .invalidRequest,
+                        generationID: request.generationID,
+                        error: RuntimeErrorMapper.invalidRequest(
+                            "The loaded model does not match the request's required content fingerprint."
+                        )
+                    )
+                )
+                return
+            }
         }
 
         guard pendingModelMutationCount == 0, activeGenerationReservation == nil else {
@@ -606,6 +625,23 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
         precondition(pendingModelMutationCount > 0, "Unbalanced runtime model mutation reservation")
         pendingModelMutationCount -= 1
         stateLock.unlock()
+    }
+
+    private static func isLowercaseSHA256(_ value: String) -> Bool {
+        value.utf8.count == 64 && value.utf8.allSatisfy {
+            ($0 >= 48 && $0 <= 57) || ($0 >= 97 && $0 <= 102)
+        }
+    }
+
+    private static func constantTimeEqualSHA256(_ lhs: String, _ rhs: String) -> Bool {
+        let left = Array(lhs.utf8)
+        let right = Array(rhs.utf8)
+        guard left.count == 64, right.count == 64 else { return false }
+        var difference: UInt8 = 0
+        for index in 0..<64 {
+            difference |= left[index] ^ right[index]
+        }
+        return difference == 0
     }
 
     private func finishGeneration(

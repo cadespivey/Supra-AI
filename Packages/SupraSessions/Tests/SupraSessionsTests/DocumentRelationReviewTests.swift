@@ -103,7 +103,7 @@ final class DocumentRelationReviewTests: XCTestCase {
                 runKey: "t-ver-07-comparison",
                 matterID: matter.id,
                 taskKind: .comparison,
-                characterBudget: 1
+                characterBudget: 56
             )
         ) { Self.findings($0) }
         XCTAssertEqual(comparison.run.assuranceState, OutputAssuranceState.corpusIncomplete.rawValue)
@@ -118,7 +118,7 @@ final class DocumentRelationReviewTests: XCTestCase {
                 runKey: "t-ver-07-negative",
                 matterID: matter.id,
                 taskKind: .negativeCheck,
-                characterBudget: 1
+                characterBudget: 56
             )
         ) { Self.findings($0) }
         XCTAssertEqual(negative.run.assuranceState, OutputAssuranceState.negativeBlocked.rawValue)
@@ -144,7 +144,7 @@ final class DocumentRelationReviewTests: XCTestCase {
                 runKey: "t-ver-07-reviewed-comparison",
                 matterID: matter.id,
                 taskKind: .comparison,
-                characterBudget: 1
+                characterBudget: 56
             )
         ) { Self.findings($0) }
         XCTAssertEqual(cleared.run.assuranceState, OutputAssuranceState.corpusComplete.rawValue)

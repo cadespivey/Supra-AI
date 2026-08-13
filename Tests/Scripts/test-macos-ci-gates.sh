@@ -32,6 +32,20 @@ run_case() {
   fi
 }
 
+app_smoke_selector_present() {
+  local file="$1"
+  local selector="$2"
+  awk -v selector="$selector" '
+    {
+      line = $0
+      sub(/^[[:space:]]+/, "", line)
+      sub(/[[:space:]]+$/, "", line)
+      if (line == selector " \\") { found = 1 }
+    }
+    END { exit found ? 0 : 1 }
+  ' "$file"
+}
+
 package_fixture="${temporary_dir}/packages"
 mkdir -p "${package_fixture}/Packages"
 while IFS= read -r package; do
@@ -546,6 +560,74 @@ run_case \
 # disables signing even though Debug XPC authentication requires identifier-
 # bearing ad-hoc signatures on both the app and its embedded service.
 app_smoke_script="${scripts}/run-app-smoke-tests.sh"
+
+# T-RP-CI-02 expected RED: an unanchored selector presence check accepts a
+# commented command line even though xcodebuild will never execute it.
+commented_review_selector="${temporary_dir}/commented-review-selector.sh"
+printf '%s\n' \
+  '# -only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPUI18MinimumWidthSourcesKeepsProgressAndCompactFilterUsable \' \
+  >"$commented_review_selector"
+if app_smoke_selector_present \
+    "$commented_review_selector" \
+    '-only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPUI18MinimumWidthSourcesKeepsProgressAndCompactFilterUsable'; then
+  record_failure 'app smoke selector guard accepts a commented-out Review test'
+else
+  printf '%s\n' 'PASS: app smoke selector guard rejects commented-out Review tests'
+fi
+
+# T-RP-CI-03 expected RED: `class_contains_test` currently accepts a commented
+# Swift method inside the correct class, so --check can pass after all eight
+# claimed Review tests are disabled.
+commented_review_tests="${temporary_dir}/CommentedCaseFileReviewUITests.swift"
+printf '%s\n' \
+  'final class CaseFileReviewCompositionUITests: XCTestCase {' \
+  '  // func testTRPUI13WorkflowControlsPinAccessibleFiltersProgressAndGuardedNavigation() {}' \
+  '  // func testTRPUI20FullSnapshotExportUsesPermanentLedgerStrip() {}' \
+  '}' \
+  'final class CaseFileReviewHostedUITests: XCTestCase {' \
+  '  // func testTRPUI14ProgressAndAttentionFiltersReconcileHiddenSourcesAndExplicitEmptyState() {}' \
+  '  // func testTRPUI15DirtyDraftCancelKeepsProjectAndDiscardSwitchesWithoutCrossProjectLeak() {}' \
+  '  // func testTRPUI16FailedProjectSwitchRetainsExactDraftForResume() {}' \
+  '  // func testTRPUI17FailedOpenReviewRetainsExactDraftForResume() {}' \
+  '  // func testTRPUI18MinimumWidthSourcesKeepsProgressAndCompactFilterUsable() {}' \
+  '  // func testTRPUI19DirtyDraftAndFilteredMinimumWidthExportFullSavedSnapshot() {}' \
+  '}' >"$commented_review_tests"
+run_case \
+  "commented Review methods fail the app-smoke presence guard" \
+  1 \
+  "claimed Review workflow smoke tests are missing" \
+  env SUPRA_CASE_FILE_REVIEW_UI_TEST_FILE="$commented_review_tests" \
+    bash "${scripts}/run-app-smoke-tests.sh" --check
+
+# T-RP-CREATE-CI-02 expected RED: all standing Review workflow methods can be
+# present while the six Guided New Review methods are commented out. The
+# check-only hook must reject that file before CI can claim creation coverage.
+commented_review_creation_tests="${temporary_dir}/CommentedReviewCreationUITests.swift"
+printf '%s\n' \
+  'final class CaseFileReviewCompositionUITests: XCTestCase {' \
+  '  func testTRPUI13WorkflowControlsPinAccessibleFiltersProgressAndGuardedNavigation() {}' \
+  '  func testTRPUI20FullSnapshotExportUsesPermanentLedgerStrip() {}' \
+  '  // func testTRPCREATEUI03ProductionCompositionUsesAtomicPinnedQueueAndExactHandoff() {}' \
+  '}' \
+  'final class CaseFileReviewHostedUITests: XCTestCase {' \
+  '  func testTRPUI14ProgressAndAttentionFiltersReconcileHiddenSourcesAndExplicitEmptyState() {}' \
+  '  func testTRPUI15DirtyDraftCancelKeepsProjectAndDiscardSwitchesWithoutCrossProjectLeak() {}' \
+  '  func testTRPUI16FailedProjectSwitchRetainsExactDraftForResume() {}' \
+  '  func testTRPUI17FailedOpenReviewRetainsExactDraftForResume() {}' \
+  '  func testTRPUI18MinimumWidthSourcesKeepsProgressAndCompactFilterUsable() {}' \
+  '  func testTRPUI19DirtyDraftAndFilteredMinimumWidthExportFullSavedSnapshot() {}' \
+  '  // func testTRPCREATEUI01NewReviewSetupUsesExactSelectedScopeAndDurableSubmission() {}' \
+  '  // func testTRPCREATEUI02PausedRunSurvivesRelaunchThenResumesAndCancels() {}' \
+  '  // func testTRPCREATEUI04SelectedScopeRejectsEveryExcludedSource() {}' \
+  '  // func testTRPCREATEUI05ClosingDuringModelVerificationCancelsWithoutCreatingAJob() {}' \
+  '  // func testTRPCREATEUI06ScopeDriftRefreshesReceiptAndRequiresSecondStart() {}' \
+  '}' >"$commented_review_creation_tests"
+run_case \
+  "commented Guided New Review methods fail the app-smoke presence guard" \
+  1 \
+  "claimed Guided New Review smoke tests are missing" \
+  env SUPRA_CASE_FILE_REVIEW_UI_TEST_FILE="$commented_review_creation_tests" \
+    bash "${scripts}/run-app-smoke-tests.sh" --check
 # Expected RED: the Diagnostics routing-availability test existed but the
 # protected smoke command did not select it, so deletion or wording drift would
 # still leave every executed CI test green.
@@ -561,6 +643,64 @@ if grep -Fq -- '-only-testing:SupraAIUITests/GuidedDocumentQAUITests/testGuidedC
   printf '%s\n' 'PASS: app smoke executes the guided document Q&A hosted guard'
 else
   record_failure 'app smoke does not execute the guided document Q&A hosted guard'
+fi
+
+# T-QUEUE-03 expected RED: the shipping composition proof exists in the UI-test
+# target, but the protected app-smoke command does not select it yet. A test that
+# CI never executes cannot guard production runner wiring.
+if grep -Fq -- '-only-testing:SupraAIUITests/CorpusReviewQueueCompositionUITests' "$app_smoke_script"; then
+  printf '%s\n' 'PASS: app smoke executes the corpus review queue composition guard'
+else
+  record_failure 'app smoke does not execute the corpus review queue composition guard'
+fi
+
+# T-RP-CI-01 expected RED: the verified Review workflow claim names app-smoke,
+# but that protected command does not select the progress/filter, guarded
+# navigation, failed-navigation recovery, or minimum-width Sources gates.
+review_workflow_selectors=(
+  '-only-testing:SupraAIUITests/CaseFileReviewCompositionUITests/testTRPUI13WorkflowControlsPinAccessibleFiltersProgressAndGuardedNavigation'
+  '-only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPUI14ProgressAndAttentionFiltersReconcileHiddenSourcesAndExplicitEmptyState'
+  '-only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPUI15DirtyDraftCancelKeepsProjectAndDiscardSwitchesWithoutCrossProjectLeak'
+  '-only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPUI16FailedProjectSwitchRetainsExactDraftForResume'
+  '-only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPUI17FailedOpenReviewRetainsExactDraftForResume'
+  '-only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPUI18MinimumWidthSourcesKeepsProgressAndCompactFilterUsable'
+  '-only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPUI19DirtyDraftAndFilteredMinimumWidthExportFullSavedSnapshot'
+  '-only-testing:SupraAIUITests/CaseFileReviewCompositionUITests/testTRPUI20FullSnapshotExportUsesPermanentLedgerStrip'
+)
+review_workflow_missing=0
+for selector in "${review_workflow_selectors[@]}"; do
+  if ! app_smoke_selector_present "$app_smoke_script" "$selector"; then
+    review_workflow_missing=1
+  fi
+done
+if (( review_workflow_missing == 0 )); then
+  printf '%s\n' 'PASS: app smoke executes the claimed Review workflow guards'
+else
+  record_failure 'app smoke does not execute every claimed Review workflow guard'
+fi
+
+# T-RP-CREATE-CI-01 expected RED: Guided New Review has hosted setup and
+# lifecycle and trust-boundary tests plus one production-composition proof, but
+# the protected app-smoke command does not select any of them yet. A product
+# claim cannot name app-smoke until each exact method is present and executed.
+review_creation_selectors=(
+  '-only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPCREATEUI01NewReviewSetupUsesExactSelectedScopeAndDurableSubmission'
+  '-only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPCREATEUI02PausedRunSurvivesRelaunchThenResumesAndCancels'
+  '-only-testing:SupraAIUITests/CaseFileReviewCompositionUITests/testTRPCREATEUI03ProductionCompositionUsesAtomicPinnedQueueAndExactHandoff'
+  '-only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPCREATEUI04SelectedScopeRejectsEveryExcludedSource'
+  '-only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPCREATEUI05ClosingDuringModelVerificationCancelsWithoutCreatingAJob'
+  '-only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPCREATEUI06ScopeDriftRefreshesReceiptAndRequiresSecondStart'
+)
+review_creation_missing=0
+for selector in "${review_creation_selectors[@]}"; do
+  if ! app_smoke_selector_present "$app_smoke_script" "$selector"; then
+    review_creation_missing=1
+  fi
+done
+if (( review_creation_missing == 0 )); then
+  printf '%s\n' 'PASS: app smoke executes the claimed Guided New Review guards'
+else
+  record_failure 'app smoke does not execute every claimed Guided New Review guard'
 fi
 
 # The deterministic guided-Q&A runtime and model fixture are test authority, not
@@ -653,8 +793,12 @@ else
   record_failure 'affected drafting surface lacks interrupted artifact filenames or explicit resolution'
 fi
 
-if grep -Eq 'guidedQAUITestAuthorized[[:space:]]*=[[:space:]]*Self\.isUITestMode[[:space:]]*&&' "$app_environment" \
-    && grep -Fq 'guidedQAUITestAuthorized ? GuidedQAUITestRuntimeClient() : runtimeClient' "$app_environment"; then
+guided_qa_runtime_composition="$(sed -n '/let guidedQAUITestAuthorized =/,/let guidedQAUITestModelRoot =/p' "$app_environment")"
+if grep -Eq 'guidedQAUITestAuthorized[[:space:]]*=[[:space:]]*Self\.isUITestMode[[:space:]]*&&' <<<"$guided_qa_runtime_composition" \
+    && grep -Fq 'let baseRuntimeClient: any RuntimeClientProtocol = guidedQAUITestAuthorized' <<<"$guided_qa_runtime_composition" \
+    && grep -Fq '? GuidedQAUITestRuntimeClient()' <<<"$guided_qa_runtime_composition" \
+    && grep -Fq ': RuntimeClient()' <<<"$guided_qa_runtime_composition" \
+    && grep -Fq 'let runtimeClient = ExclusiveRuntimeClient(base: baseRuntimeClient)' <<<"$guided_qa_runtime_composition"; then
   printf '%s\n' 'PASS: guided Q&A synthetic runtime requires hermetic UI-test authority'
 else
   record_failure 'guided Q&A synthetic runtime is not gated by hermetic UI-test authority'

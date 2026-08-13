@@ -332,10 +332,23 @@ public final class MattersRepository: @unchecked Sendable {
     /// FTS rows are cleared here and the managed paths of any now-unreferenced blob are
     /// returned for the caller to delete from disk.
     @discardableResult
-    public func permanentlyDeleteMatter(id: String) throws -> [String] {
-        try writer.write { db in
+    public func permanentlyDeleteMatter(
+        id: String,
+        actor: String = "system",
+        at timestamp: Date = Date()
+    ) throws -> [String] {
+        let normalizedActor = try Self.requireNonEmpty(actor, fieldName: "actor")
+        return try writer.write { db in
+            guard let matter = try MatterRecord.fetchOne(db, key: id) else { return [] }
             let docIDs = try String.fetchAll(
-                db, sql: "SELECT id FROM matter_documents WHERE matter_id = ?", arguments: [id]
+                db,
+                sql: "SELECT id FROM matter_documents WHERE matter_id = ? ORDER BY id",
+                arguments: [id]
+            )
+            try DocumentAttachmentIntegrity.validateDeletionBoundary(
+                parentIDs: docIDs,
+                matterID: id,
+                in: db
             )
             let blobIDs = Set(try String.fetchAll(
                 db,
@@ -368,7 +381,7 @@ public final class MattersRepository: @unchecked Sendable {
             try db.execute(sql: "DELETE FROM matters WHERE id = ?", arguments: [id])
 
             var removedPaths: [String] = []
-            for blobID in blobIDs {
+            for blobID in blobIDs.sorted() {
                 let remaining = try Int.fetchOne(
                     db, sql: "SELECT COUNT(*) FROM matter_documents WHERE blob_id = ?", arguments: [blobID]
                 ) ?? 0
@@ -378,8 +391,33 @@ public final class MattersRepository: @unchecked Sendable {
                 }
                 try db.execute(sql: "DELETE FROM document_blobs WHERE id = ?", arguments: [blobID])
             }
-            return removedPaths
+            let metadataJSON = try Self.canonicalMetadataJSON([
+                "schema_version": 1,
+                "matter_id": id,
+                "matter_name": matter.name,
+                "removed_document_count": docIDs.count,
+                "removed_document_ids": docIDs,
+            ])
+            try AuditEventRecord(
+                matterID: nil,
+                timestamp: timestamp,
+                eventType: "matter_permanently_deleted",
+                actor: normalizedActor,
+                summary: "Permanently deleted matter source data.",
+                relatedTable: MatterRecord.databaseTableName,
+                relatedID: id,
+                metadataJSON: metadataJSON
+            ).insert(db)
+            return removedPaths.sorted()
         }
+    }
+
+    private static func canonicalMetadataJSON(_ value: [String: Any]) throws -> String {
+        let data = try JSONSerialization.data(
+            withJSONObject: value,
+            options: [.sortedKeys, .withoutEscapingSlashes]
+        )
+        return String(decoding: data, as: UTF8.self)
     }
 
     private static func validateMatterFields(

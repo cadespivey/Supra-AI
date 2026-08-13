@@ -8,6 +8,17 @@ public struct CatalogModel: Identifiable, Sendable, Equatable {
     public let approxSizeGB: Double
     public let notes: String
 
+    /// Conservative model-weight estimate used by hardware-fit presentation.
+    /// MLX quantized weights are memory-mapped near their on-disk size; context
+    /// and runtime overhead are reserved by the policy's working-set margin.
+    public var estimatedResidentBytes: UInt64 {
+        approximateDownloadBytes
+    }
+
+    public var approximateDownloadBytes: UInt64 {
+        UInt64((approxSizeGB * 1_000_000_000).rounded())
+    }
+
     public init(repoID: String, displayName: String, approxSizeGB: Double, notes: String) {
         self.repoID = repoID
         self.displayName = displayName
@@ -156,6 +167,12 @@ public enum ModelCatalog {
     public static var defaultCritiqueModel: CatalogModel { model("mlx-community/DeepSeek-R1-Distill-Qwen-32B-4bit") }
 
     public static func model(_ repoID: String) -> CatalogModel {
-        curated.first { $0.repoID == repoID } ?? curated[0]
+        modelIfPresent(repoID) ?? curated[0]
+    }
+
+    /// Optional lookup for decisions where an unknown repository must remain
+    /// unknown. The legacy `model(_:)` fallback remains intact for role defaults.
+    public static func modelIfPresent(_ repoID: String) -> CatalogModel? {
+        curated.first { $0.repoID == repoID }
     }
 }

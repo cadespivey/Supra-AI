@@ -585,6 +585,30 @@ public final class DocumentJobRepository: @unchecked Sendable {
         }
     }
 
+    /// Completes only the job that still owns the active FIFO slot. A concurrent
+    /// matter delete or user cancellation wins instead of being resurrected by a
+    /// late runner callback.
+    @discardableResult
+    public func completeActiveJob(id: String) throws -> Bool {
+        try writer.write { db in
+            let now = Date()
+            try db.execute(
+                sql: """
+                UPDATE document_processing_jobs
+                SET status = ?, phase = ?, completed_at = ?, queue_position = NULL, updated_at = ?
+                WHERE id = ? AND status = ?
+                """,
+                arguments: [
+                    DocumentProcessingJobStatus.complete.rawValue,
+                    DocumentProcessingPhase.complete.rawValue,
+                    now, now, id,
+                    DocumentProcessingJobStatus.active.rawValue,
+                ]
+            )
+            return db.changesCount == 1
+        }
+    }
+
     public func failJob(id: String, errorSummary: String) throws {
         try writer.write { db in
             let now = Date()
@@ -603,6 +627,29 @@ public final class DocumentJobRepository: @unchecked Sendable {
         }
     }
 
+    /// Fails only a job that still owns the active FIFO slot. Terminal state set
+    /// by deletion or cancellation is authoritative and cannot be overwritten.
+    @discardableResult
+    public func failActiveJob(id: String, errorSummary: String) throws -> Bool {
+        try writer.write { db in
+            let now = Date()
+            try db.execute(
+                sql: """
+                UPDATE document_processing_jobs
+                SET status = ?, phase = ?, error_summary = ?, completed_at = ?, queue_position = NULL, updated_at = ?
+                WHERE id = ? AND status = ?
+                """,
+                arguments: [
+                    DocumentProcessingJobStatus.failed.rawValue,
+                    DocumentProcessingPhase.failed.rawValue,
+                    errorSummary, now, now, id,
+                    DocumentProcessingJobStatus.active.rawValue,
+                ]
+            )
+            return db.changesCount == 1
+        }
+    }
+
     public func cancelJob(id: String) throws {
         try writer.write { db in
             let now = Date()
@@ -618,6 +665,38 @@ public final class DocumentJobRepository: @unchecked Sendable {
                     now, id
                 ]
             )
+        }
+    }
+
+    @discardableResult
+    public func cancelQueuedJob(id: String) throws -> Bool {
+        try cancelJob(id: id, requiredStatus: .queued)
+    }
+
+    @discardableResult
+    public func cancelActiveJob(id: String) throws -> Bool {
+        try cancelJob(id: id, requiredStatus: .active)
+    }
+
+    private func cancelJob(
+        id: String,
+        requiredStatus: DocumentProcessingJobStatus
+    ) throws -> Bool {
+        try writer.write { db in
+            let now = Date()
+            try db.execute(
+                sql: """
+                UPDATE document_processing_jobs
+                SET status = ?, phase = ?, queue_position = NULL, updated_at = ?
+                WHERE id = ? AND status = ?
+                """,
+                arguments: [
+                    DocumentProcessingJobStatus.cancelled.rawValue,
+                    DocumentProcessingPhase.cancelled.rawValue,
+                    now, id, requiredStatus.rawValue,
+                ]
+            )
+            return db.changesCount == 1
         }
     }
 

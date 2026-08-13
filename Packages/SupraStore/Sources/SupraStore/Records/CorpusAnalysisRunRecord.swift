@@ -13,6 +13,8 @@ public struct CorpusAnalysisRunRecord: Codable, FetchableRecord, PersistableReco
     public var partitionStrategy: String
     public var partitionStrategyVersion: Int
     public var modelLineageJSON: String?
+    public var requestSchemaVersion: Int?
+    public var requestDigest: String?
     public var status: String
     public var coverageJSON: String?
     public var reconciliationJSON: String?
@@ -34,6 +36,8 @@ public struct CorpusAnalysisRunRecord: Codable, FetchableRecord, PersistableReco
         partitionStrategyVersion: Int,
         modelLineageJSON: String? = nil,
         status: String,
+        requestSchemaVersion: Int? = nil,
+        requestDigest: String? = nil,
         coverageJSON: String? = nil,
         reconciliationJSON: String? = nil,
         validationResultsJSON: String? = nil,
@@ -52,6 +56,8 @@ public struct CorpusAnalysisRunRecord: Codable, FetchableRecord, PersistableReco
         self.partitionStrategy = partitionStrategy
         self.partitionStrategyVersion = partitionStrategyVersion
         self.modelLineageJSON = modelLineageJSON
+        self.requestSchemaVersion = requestSchemaVersion
+        self.requestDigest = requestDigest
         self.status = status
         self.coverageJSON = coverageJSON
         self.reconciliationJSON = reconciliationJSON
@@ -73,6 +79,8 @@ public struct CorpusAnalysisRunRecord: Codable, FetchableRecord, PersistableReco
         case partitionStrategy = "partition_strategy"
         case partitionStrategyVersion = "partition_strategy_version"
         case modelLineageJSON = "model_lineage_json"
+        case requestSchemaVersion = "request_schema_version"
+        case requestDigest = "request_digest"
         case status
         case coverageJSON = "coverage_json"
         case reconciliationJSON = "reconciliation_json"

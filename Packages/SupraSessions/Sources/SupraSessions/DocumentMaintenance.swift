@@ -43,16 +43,35 @@ public final class DocumentMaintenance: @unchecked Sendable {
         for document in expired {
             if alreadyPurged.contains(document.id) { continue }
             do {
-                let result = try store.documentLibrary.permanentlyDeleteDocument(id: document.id)
+                let result = try store.documentLibrary.permanentlyDeleteDocument(
+                    id: document.id,
+                    actor: "system",
+                    at: now
+                )
+                guard !result.removedDocumentIDs.isEmpty else { continue }
+                var orphanedBlobCount = 0
                 for path in result.removedBlobPaths {
-                    try? FileManager.default.removeItem(at: storage.url(forManagedRelativePath: path))
+                    let fileURL = storage.url(forManagedRelativePath: path)
+                    do {
+                        try FileManager.default.removeItem(at: fileURL)
+                    } catch {
+                        if FileManager.default.fileExists(atPath: fileURL.path) {
+                            orphanedBlobCount += 1
+                        }
+                    }
                 }
                 alreadyPurged.formUnion(result.removedDocumentIDs)
-                _ = try? store.auditEvents.recordEvent(
-                    matterID: document.matterID, eventType: "document_permanently_deleted", actor: "system",
-                    summary: "Auto-purged a document deleted over \(days) days ago",
-                    relatedTable: "matter_documents", relatedID: document.id
-                )
+                if orphanedBlobCount > 0 {
+                    _ = try? store.auditEvents.recordEvent(
+                        matterID: document.matterID,
+                        eventType: "document_blob_cleanup_failed",
+                        actor: "system",
+                        summary: "Managed blob cleanup remained incomplete after auto-purge.",
+                        relatedTable: "matter_documents",
+                        relatedID: document.id,
+                        metadataJSON: "{\"orphaned_blob_count\":\(orphanedBlobCount),\"schema_version\":1}"
+                    )
+                }
                 purged += 1
             } catch {
                 // A document that can't be purged stays in the trash; record it so the

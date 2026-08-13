@@ -12,6 +12,75 @@ import XCTest
 @MainActor
 final class MatterDocumentsControllerTests: XCTestCase {
 
+    func testPermanentDeleteFailureKeepsDocumentAndSurfacesErrorWithoutFalseSuccess() throws {
+        // Expected RED: the controller currently swallows the repository error,
+        // writes a caller-owned success event, and gives the user no failure state.
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ControllerDeleteTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let store = try SupraStore.inMemory()
+        let matter = try store.matters.createMatter(name: "Synthetic deletion rollback")
+        let blob = try store.documentLibrary.upsertBlob(DocumentBlobRecord(
+            sha256: "controller-delete-rollback-97",
+            byteSize: 97,
+            originalExtension: "txt",
+            managedRelativePath: "blobs/controller-delete-rollback-97.txt"
+        )).blob
+        let document = try store.documentLibrary.insertDocument(MatterDocumentRecord(
+            matterID: matter.id,
+            blobID: blob.id,
+            displayName: "rollback-97.txt"
+        ))
+        try store.documentLibrary.softDeleteDocument(id: document.id)
+        try store.database.writer.write { db in
+            try db.execute(sql: """
+                CREATE TRIGGER controller_reject_document_delete_audit
+                BEFORE INSERT ON audit_events
+                WHEN NEW.event_type = 'document_permanently_deleted'
+                BEGIN
+                    SELECT RAISE(ABORT, 'synthetic controller delete rollback');
+                END
+                """)
+        }
+        let storage = DocumentStorage(root: base.appendingPathComponent("Managed"))
+        let importService = DocumentImportService(store: store, storage: storage, ocr: nil)
+        let queue = DocumentProcessingQueue(
+            store: store,
+            importService: importService,
+            makeIndexingService: { DocumentIndexingService(store: store, embedder: nil) },
+            notifier: NoopDocumentNotifier()
+        )
+        let controller = MatterDocumentsController(
+            matterID: matter.id,
+            store: store,
+            queue: queue,
+            isImportReady: { true },
+            storage: storage
+        )
+
+        controller.permanentlyDelete(documentID: document.id)
+
+        XCTAssertNotNil(try store.documentLibrary.fetchDocument(id: document.id))
+        XCTAssertTrue(controller.trashedDocuments.contains { $0.id == document.id })
+        XCTAssertNil(
+            controller.message,
+            "permanent deletion must not reuse the general import/search message bucket"
+        )
+        XCTAssertEqual(controller.permanentDeletionNotice?.title, "Deletion needs attention")
+        XCTAssertTrue(
+            controller.permanentDeletionNotice?.message.contains(
+                "synthetic controller delete rollback"
+            ) ?? false
+        )
+        XCTAssertTrue(
+            try store.auditEvents.fetchEvents(
+                relatedTable: "matter_documents",
+                relatedID: document.id,
+                eventType: "document_permanently_deleted"
+            ).isEmpty
+        )
+    }
+
     // Expected RED: observed 2 — `unclassifiedCount` today counts every document
     // that satisfies `needsClassification`, including one whose extracted text sits
     // below the 40-character classification floor (`OCRPolicy.minimumUsableTextLength`).

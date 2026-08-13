@@ -46,6 +46,30 @@ run_case \
     in_claim && /^    verification:/ { print; exit }
   ' "$claims"
 
+# T-SETUP-12 expected RED: hardware-derived model suitability is not yet an
+# independently owned product claim, so its exact policy/test anchors can drift.
+run_case \
+  "local AI hardware recommendation claim is registered" \
+  0 \
+  'Packages/SupraSessions/Tests/SupraSessionsTests/LocalAIRecommendationPolicyTests.swift' \
+  awk '
+    /^  - id: "LOCAL-AI-HARDWARE-RECOMMENDATION"/ { in_claim = 1 }
+    in_claim { print }
+    in_claim && /^    publication_anchor:/ { exit }
+  ' "$claims"
+
+claims_without_local_ai_recommendation="${temporary_dir}/claims-without-local-ai-recommendation.yml"
+awk '
+  /^  - id: "LOCAL-AI-HARDWARE-RECOMMENDATION"/ { removing = 1; next }
+  removing && /^  - id:/ { removing = 0 }
+  !removing { print }
+' "$claims" >"$claims_without_local_ai_recommendation"
+run_case \
+  "local AI hardware recommendation cannot disappear" \
+  1 \
+  'required claim topic is missing: local-ai-hardware-recommendation' \
+  env SUPRA_CLAIMS_FILE="$claims_without_local_ai_recommendation" bash "$verifier"
+
 # T-RST-H10 expected RED: the public restore safety guarantees have no owned,
 # versioned entries in the controlled claims inventory, so drift is not gated.
 run_case \

@@ -265,6 +265,7 @@ public final class DocumentLibraryRepository: @unchecked Sendable {
     @discardableResult
     public func insertDocument(_ document: MatterDocumentRecord) throws -> MatterDocumentRecord {
         try writer.write { db in
+            try DocumentAttachmentIntegrity.validateParentScope(document, in: db)
             try document.insert(db)
             return document
         }
@@ -469,9 +470,13 @@ public final class DocumentLibraryRepository: @unchecked Sendable {
             try MatterDocumentRecord.fetchAll(
                 db,
                 sql: """
-                SELECT * FROM matter_documents
-                WHERE deleted_at IS NOT NULL AND deleted_at < ?
-                ORDER BY deleted_at ASC
+                SELECT document.*
+                FROM matter_documents AS document
+                JOIN matters AS matter ON matter.id = document.matter_id
+                WHERE document.deleted_at IS NOT NULL
+                  AND document.deleted_at < ?
+                  AND matter.deleted_at IS NULL
+                ORDER BY document.deleted_at ASC
                 """,
                 arguments: [cutoff]
             )
@@ -528,12 +533,257 @@ public final class DocumentLibraryRepository: @unchecked Sendable {
     /// freed blob's managed file path is returned so the caller can delete it; a
     /// blob is only freed when no surviving document still references it.
     @discardableResult
-    public func permanentlyDeleteDocument(id: String) throws -> PermanentDeleteResult {
-        try writer.write { db in
-            guard try MatterDocumentRecord.fetchOne(db, key: id) != nil else {
+    public func permanentlyDeleteDocument(
+        id: String,
+        actor: String = "system",
+        at timestamp: Date = Date()
+    ) throws -> PermanentDeleteResult {
+        let normalizedActor = try Self.requireNonEmpty(actor, fieldName: "actor")
+        return try writer.write { db in
+            guard let root = try MatterDocumentRecord.fetchOne(db, key: id) else {
                 return PermanentDeleteResult(removedBlobPaths: [], removedDocumentIDs: [])
             }
-            let subtreeIDs = try Self.documentSubtreeIDs(db, rootID: id)
+            let subtreeIDs = try Self.documentSubtreeIDs(
+                db,
+                rootID: id,
+                matterID: root.matterID
+            )
+            try DocumentAttachmentIntegrity.validateDeletionBoundary(
+                parentIDs: subtreeIDs,
+                matterID: root.matterID,
+                in: db
+            )
+            let removedDocumentIDs = Set(subtreeIDs)
+
+            let revisionIDs = Set(try String.fetchAll(
+                db,
+                sql: """
+                    SELECT id FROM document_part_revisions
+                    WHERE document_id IN (\(databaseQuestionMarks(count: subtreeIDs.count)))
+                    """,
+                arguments: StatementArguments(subtreeIDs)
+            ))
+            let chunkIDs = Set(try String.fetchAll(
+                db,
+                sql: """
+                    SELECT id FROM document_chunks
+                    WHERE document_id IN (\(databaseQuestionMarks(count: subtreeIDs.count)))
+                    """,
+                arguments: StatementArguments(subtreeIDs)
+            ))
+
+            // Capture every directly dependent saved version before FK SET NULL
+            // clears the live document/chunk/revision identities on source rows.
+            var sourcePredicates = [
+                "source.document_id IN (\(databaseQuestionMarks(count: subtreeIDs.count)))"
+            ]
+            var sourceArguments: [DatabaseValueConvertible] = subtreeIDs
+            if !chunkIDs.isEmpty {
+                sourcePredicates.append(
+                    "source.chunk_id IN (\(databaseQuestionMarks(count: chunkIDs.count)))"
+                )
+                sourceArguments.append(contentsOf: chunkIDs.sorted())
+            }
+            if !revisionIDs.isEmpty {
+                sourcePredicates.append(
+                    "source.revision_id IN (\(databaseQuestionMarks(count: revisionIDs.count)))"
+                )
+                sourceArguments.append(contentsOf: revisionIDs.sorted())
+            }
+            let dependentSources = try DocumentOutputSourceRecord.fetchAll(
+                db,
+                sql: """
+                    SELECT source.*
+                    FROM document_output_sources AS source
+                    WHERE \(sourcePredicates.joined(separator: " OR "))
+                    """,
+                arguments: StatementArguments(sourceArguments)
+            )
+            var impactedVersionIDs = Set<String>()
+            for source in dependentSources {
+                if let versionID = source.structuredOutputVersionID {
+                    impactedVersionIDs.insert(versionID)
+                }
+                if let sourceSet = try DocumentSourceSetRecord.fetchOne(db, key: source.sourceSetID),
+                   let versionID = sourceSet.structuredOutputVersionID {
+                    impactedVersionIDs.insert(versionID)
+                }
+            }
+
+            let matterRuns = try CorpusAnalysisRunRecord.fetchAll(
+                db,
+                sql: "SELECT * FROM corpus_analysis_runs WHERE matter_id = ? ORDER BY id",
+                arguments: [root.matterID]
+            )
+            var impactedRunIDs = Set<String>()
+            if !revisionIDs.isEmpty {
+                var sliceArguments: [DatabaseValueConvertible] = [root.matterID]
+                sliceArguments.append(contentsOf: subtreeIDs)
+                sliceArguments.append(contentsOf: revisionIDs.sorted())
+                impactedRunIDs.formUnion(try String.fetchAll(
+                    db,
+                    sql: """
+                        SELECT DISTINCT slice.run_id
+                        FROM corpus_analysis_partition_slices AS slice
+                        JOIN corpus_analysis_runs AS run ON run.id = slice.run_id
+                        WHERE run.matter_id = ?
+                          AND (
+                            slice.document_id IN (\(databaseQuestionMarks(count: subtreeIDs.count)))
+                            OR slice.revision_id IN (\(databaseQuestionMarks(count: revisionIDs.count)))
+                          )
+                        """,
+                    arguments: StatementArguments(sliceArguments)
+                ))
+            } else {
+                var sliceArguments: [DatabaseValueConvertible] = [root.matterID]
+                sliceArguments.append(contentsOf: subtreeIDs)
+                impactedRunIDs.formUnion(try String.fetchAll(
+                    db,
+                    sql: """
+                        SELECT DISTINCT slice.run_id
+                        FROM corpus_analysis_partition_slices AS slice
+                        JOIN corpus_analysis_runs AS run ON run.id = slice.run_id
+                        WHERE run.matter_id = ?
+                          AND slice.document_id IN (\(databaseQuestionMarks(count: subtreeIDs.count)))
+                        """,
+                    arguments: StatementArguments(sliceArguments)
+                ))
+            }
+
+            // Pre-v2/custom runs record their actual model inputs on partitions,
+            // not exact slice rows. Malformed same-matter input lineage cannot
+            // prove exclusion and therefore fails closed.
+            let matterPartitions = try CorpusAnalysisPartitionRecord.fetchAll(
+                db,
+                sql: """
+                    SELECT partition.*
+                    FROM corpus_analysis_partitions AS partition
+                    JOIN corpus_analysis_runs AS run ON run.id = partition.run_id
+                    WHERE run.matter_id = ?
+                    ORDER BY partition.run_id, partition.id
+                    """,
+                arguments: [root.matterID]
+            )
+            let partitionDecoder = JSONDecoder()
+            for partition in matterPartitions {
+                guard let data = partition.inputRevisionIDsJSON.data(using: .utf8),
+                      let inputRevisionIDs = try? partitionDecoder.decode([String].self, from: data),
+                      !inputRevisionIDs.isEmpty,
+                      inputRevisionIDs.allSatisfy({ !$0.isEmpty }),
+                      Set(inputRevisionIDs).count == inputRevisionIDs.count else {
+                    impactedRunIDs.insert(partition.runID)
+                    continue
+                }
+                if !revisionIDs.isDisjoint(with: inputRevisionIDs) {
+                    impactedRunIDs.insert(partition.runID)
+                }
+            }
+
+            let snapshotDecoder = JSONDecoder()
+            for run in matterRuns {
+                guard let snapshotData = run.corpusSnapshotJSON.data(using: .utf8) else {
+                    impactedRunIDs.insert(run.id)
+                    continue
+                }
+                guard let snapshot = try? snapshotDecoder.decode(
+                    CorpusAnalysisSnapshot.self,
+                    from: snapshotData
+                ), Self.isSemanticallyValidDeletionSnapshot(snapshot) else {
+                    // Malformed same-matter lineage cannot prove exclusion, so
+                    // permanent deletion invalidates it conservatively.
+                    impactedRunIDs.insert(run.id)
+                    continue
+                }
+                if snapshot.members.contains(where: { member in
+                    member.documentID.map(removedDocumentIDs.contains) ?? false
+                        || !revisionIDs.isDisjoint(with: member.revisionIDs)
+                }) {
+                    impactedRunIDs.insert(run.id)
+                }
+            }
+
+            // Follow the run/version relation to a fixed point. Either side may
+            // be the only surviving pointer in historical data.
+            var dependencyExpanded = true
+            while dependencyExpanded {
+                dependencyExpanded = false
+                for run in matterRuns {
+                    if let versionID = run.structuredOutputVersionID,
+                       impactedVersionIDs.contains(versionID),
+                       impactedRunIDs.insert(run.id).inserted {
+                        dependencyExpanded = true
+                    }
+                    if impactedRunIDs.contains(run.id),
+                       let versionID = run.structuredOutputVersionID,
+                       impactedVersionIDs.insert(versionID).inserted {
+                        dependencyExpanded = true
+                    }
+                }
+            }
+
+            let staleReason = "source_permanently_deleted:document=\(id)"
+            let impactedRuns = impactedRunIDs.sorted()
+            if !impactedRuns.isEmpty {
+                let reasonsJSON = try Self.canonicalJSON([staleReason])
+                var arguments: [DatabaseValueConvertible] = [
+                    OutputAssuranceState.stale.rawValue,
+                    reasonsJSON,
+                ]
+                arguments.append(contentsOf: impactedRuns)
+                try db.execute(
+                    sql: """
+                        UPDATE corpus_analysis_runs
+                        SET assurance_state = ?, assurance_reasons_json = ?
+                        WHERE id IN (\(databaseQuestionMarks(count: impactedRuns.count)))
+                        """,
+                    arguments: StatementArguments(arguments)
+                )
+            }
+            let impactedVersions = impactedVersionIDs.sorted()
+            if !impactedVersions.isEmpty {
+                var versionArguments: [DatabaseValueConvertible] = [
+                    OutputAssuranceState.stale.rawValue,
+                    staleReason,
+                    timestamp,
+                ]
+                versionArguments.append(contentsOf: impactedVersions)
+                try db.execute(
+                    sql: """
+                        UPDATE structured_output_versions
+                        SET assurance_state = ?, stale_reason = ?, updated_at = ?
+                        WHERE id IN (\(databaseQuestionMarks(count: impactedVersions.count)))
+                        """,
+                    arguments: StatementArguments(versionArguments)
+                )
+                var outputArguments: [DatabaseValueConvertible] = [
+                    StructuredOutputStatus.needsReview.rawValue,
+                    timestamp,
+                ]
+                outputArguments.append(contentsOf: impactedVersions)
+                try db.execute(
+                    sql: """
+                        UPDATE structured_outputs
+                        SET status = ?, updated_at = ?
+                        WHERE active_version_id IN (
+                            \(databaseQuestionMarks(count: impactedVersions.count))
+                        )
+                        """,
+                    arguments: StatementArguments(outputArguments)
+                )
+            }
+
+            // Review evidence retains its frozen source snapshot, but every
+            // live preview pointer and dependent support projection must be
+            // degraded before document/revision FK actions set live IDs null.
+            let impactedReviewProjectIDs = try CaseFileReviewRepository
+                .degradeForPermanentSourceDeletion(
+                    matterID: root.matterID,
+                    documentIDs: subtreeIDs,
+                    revisionIDs: revisionIDs.sorted(),
+                    actor: normalizedActor,
+                    at: timestamp,
+                    db: db
+                )
 
             // Capture blob ids and clear the standalone FTS5 index (no FK cascade)
             // for every document in the subtree BEFORE deleting any rows, so a FK
@@ -553,7 +803,7 @@ public final class DocumentLibraryRepository: @unchecked Sendable {
             }
 
             var removedPaths: [String] = []
-            for blobID in blobIDs {
+            for blobID in blobIDs.sorted() {
                 let remaining = try Int.fetchOne(
                     db,
                     sql: "SELECT COUNT(*) FROM matter_documents WHERE blob_id = ?",
@@ -565,7 +815,29 @@ public final class DocumentLibraryRepository: @unchecked Sendable {
                 }
                 try db.execute(sql: "DELETE FROM document_blobs WHERE id = ?", arguments: [blobID])
             }
-            return PermanentDeleteResult(removedBlobPaths: removedPaths, removedDocumentIDs: subtreeIDs)
+            let metadataJSON = try Self.canonicalJSON([
+                "schema_version": 1,
+                "matter_id": root.matterID,
+                "document_id": id,
+                "removed_document_ids": subtreeIDs.sorted(),
+                "invalidated_output_version_ids": impactedVersions,
+                "invalidated_corpus_run_ids": impactedRuns,
+                "invalidated_case_file_review_project_ids": impactedReviewProjectIDs,
+            ])
+            try AuditEventRecord(
+                matterID: root.matterID,
+                timestamp: timestamp,
+                eventType: "document_permanently_deleted",
+                actor: normalizedActor,
+                summary: "Permanently deleted document source data and invalidated dependent work.",
+                relatedTable: MatterDocumentRecord.databaseTableName,
+                relatedID: id,
+                metadataJSON: metadataJSON
+            ).insert(db)
+            return PermanentDeleteResult(
+                removedBlobPaths: removedPaths.sorted(),
+                removedDocumentIDs: subtreeIDs
+            )
         }
     }
 
@@ -785,23 +1057,64 @@ public final class DocumentLibraryRepository: @unchecked Sendable {
 
     /// Breadth-first list of a document id followed by all of its attachment
     /// descendants (root first), used to purge an entire attachment subtree.
-    private static func documentSubtreeIDs(_ db: Database, rootID: String) throws -> [String] {
+    private static func documentSubtreeIDs(
+        _ db: Database,
+        rootID: String,
+        matterID: String
+    ) throws -> [String] {
         var result: [String] = []
         var seen = Set<String>()
         var queue: [String] = [rootID]
-        while let current = queue.first {
-            queue.removeFirst()
+        var cursor = 0
+        while cursor < queue.count {
+            let current = queue[cursor]
+            cursor += 1
             // Cycle guard against a corrupted/cyclic parent pointer.
             guard seen.insert(current).inserted else { continue }
             result.append(current)
             let children = try String.fetchAll(
                 db,
-                sql: "SELECT id FROM matter_documents WHERE parent_document_id = ?",
-                arguments: [current]
+                sql: """
+                    SELECT id FROM matter_documents
+                    WHERE parent_document_id = ? AND matter_id = ?
+                    ORDER BY id
+                    """,
+                arguments: [current, matterID]
             )
             queue.append(contentsOf: children)
         }
         return result
+    }
+
+    private static func isSemanticallyValidDeletionSnapshot(
+        _ snapshot: CorpusAnalysisSnapshot
+    ) -> Bool {
+        guard snapshot.schemaVersion > 0 else { return false }
+        var memberKeys = Set<String>()
+        for member in snapshot.members {
+            guard !member.memberKey.isEmpty,
+                  !member.displayName.isEmpty,
+                  member.documentID.map({ !$0.isEmpty }) ?? true,
+                  member.revisionIDs.allSatisfy({ !$0.isEmpty }),
+                  Set(member.revisionIDs).count == member.revisionIDs.count,
+                  memberKeys.insert(member.memberKey).inserted else {
+                return false
+            }
+            if member.disposition == .eligible {
+                guard member.documentID != nil, !member.revisionIDs.isEmpty else {
+                    return false
+                }
+            }
+        }
+        return true
+    }
+
+    private static func canonicalJSON(_ value: Any) throws -> String {
+        let data = try JSONSerialization.data(
+            withJSONObject: value,
+            options: [.sortedKeys, .withoutEscapingSlashes]
+        )
+        return String(decoding: data, as: UTF8.self)
     }
 
     private static func requireNonEmpty(_ value: String, fieldName: String) throws -> String {
@@ -816,4 +1129,66 @@ public final class DocumentLibraryRepository: @unchecked Sendable {
 public enum DocumentLibraryRepositoryError: Error, Equatable, Sendable {
     case requiredFieldMissing(String)
     case documentNotFound(String)
+}
+
+enum DocumentAttachmentIntegrity {
+    static func validateParentScope(
+        _ document: MatterDocumentRecord,
+        in db: Database
+    ) throws {
+        guard let parentID = document.parentDocumentID else { return }
+        guard let parent = try MatterDocumentRecord.fetchOne(db, key: parentID) else {
+            throw DocumentAttachmentIntegrityError.parentUnavailable(parentID)
+        }
+        guard parent.matterID == document.matterID else {
+            throw DocumentAttachmentIntegrityError.crossMatterParent(
+                childID: document.id,
+                parentID: parentID
+            )
+        }
+    }
+
+    static func validateDeletionBoundary(
+        parentIDs: [String],
+        matterID: String,
+        in db: Database
+    ) throws {
+        guard !parentIDs.isEmpty else { return }
+        if let row = try Row.fetchOne(
+            db,
+            sql: """
+                SELECT child.id AS child_id, child.parent_document_id AS parent_id
+                FROM matter_documents AS child
+                WHERE child.parent_document_id IN (
+                    \(databaseQuestionMarks(count: parentIDs.count))
+                )
+                  AND child.matter_id <> ?
+                ORDER BY child.id
+                LIMIT 1
+                """,
+            arguments: StatementArguments(parentIDs + [matterID])
+        ) {
+            throw DocumentAttachmentIntegrityError.crossMatterDeletionBoundary(
+                childID: row["child_id"],
+                parentID: row["parent_id"]
+            )
+        }
+    }
+}
+
+public enum DocumentAttachmentIntegrityError: Error, LocalizedError, Equatable, Sendable {
+    case parentUnavailable(String)
+    case crossMatterParent(childID: String, parentID: String)
+    case crossMatterDeletionBoundary(childID: String, parentID: String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .parentUnavailable(let parentID):
+            "The parent document \(parentID) is unavailable."
+        case .crossMatterParent:
+            "An attachment cannot use a parent document from another matter."
+        case .crossMatterDeletionBoundary:
+            "Permanent deletion stopped because an attachment crosses a matter boundary."
+        }
+    }
 }

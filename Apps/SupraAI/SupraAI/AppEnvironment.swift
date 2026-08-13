@@ -129,10 +129,14 @@ final class AppEnvironment: ObservableObject {
     private let interruptedDraftRecoveryUITestRoot: URL?
 
     private let runtimeStatusController: RuntimeStatusController
-    private let runtimeClient: RuntimeClient
+    private let runtimeClient: ExclusiveRuntimeClient
     /// Non-nil only for the explicitly authorized guided-Q&A XCUITest launch.
     /// The synthetic model fixture is confined to this throwaway root.
     private let guidedQAUITestModelRoot: URL?
+    /// Non-nil only for the hermetic Guided Review creation fixture. It gives
+    /// managed-model pinning a tiny signed synthetic install without consulting
+    /// the user's model library.
+    private let reviewCreationUITestModelRoot: URL?
     /// Fires a classification-only pass for the selected matter whenever a model
     /// finishes loading, so documents imported while no model was available get
     /// classified once one is ready (the queue de-dupes and no-ops when nothing is
@@ -142,18 +146,30 @@ final class AppEnvironment: ObservableObject {
     init() {
         let coldStartRestore = AppEnvironment.prepareColdStartRestore()
         let restoreActivation = coldStartRestore?.activation
-        let interruptedDraftRecoveryUITestRoot = Self.interruptedDraftRecoveryUITestRoot()
-        let runtimeClient = RuntimeClient()
         let guidedQAUITestAuthorized = Self.isUITestMode && ProcessInfo.processInfo.arguments.contains("-uiTestGuidedQA")
+        let reviewCreationUITestAuthorized = Self.isUITestMode
+            && ProcessInfo.processInfo.arguments.contains("-uiTestReviewCreation")
+        let reviewCreationUITestScenario = Self.reviewCreationUITestScenario
+        let interruptedDraftRecoveryUITestRoot = Self.interruptedDraftRecoveryUITestRoot()
+        let baseRuntimeClient: any RuntimeClientProtocol = guidedQAUITestAuthorized
+            ? GuidedQAUITestRuntimeClient()
+            : RuntimeClient()
+        let runtimeClient = ExclusiveRuntimeClient(base: baseRuntimeClient)
         let guidedQAUITestModelRoot = guidedQAUITestAuthorized
             ? Optional(FileManager.default.temporaryDirectory.appendingPathComponent(
                 "SupraAI-UITest-GuidedQA-\(UUID().uuidString)",
                 isDirectory: true
             ))
             : nil
+        let reviewCreationUITestModelRoot = reviewCreationUITestAuthorized
+            ? Optional(FileManager.default.temporaryDirectory.appendingPathComponent(
+                "SupraAI-UITest-ReviewCreationModel-\(UUID().uuidString)",
+                isDirectory: true
+            ))
+            : nil
         let guidedQAUITestManagedRoots = guidedQAUITestModelRoot.map { [$0] }
+            ?? reviewCreationUITestModelRoot.map { [$0] }
             ?? [ManagedModelStorage.modelsDirectory()]
-        let taskRuntimeClient: any RuntimeClientProtocol = guidedQAUITestAuthorized ? GuidedQAUITestRuntimeClient() : runtimeClient
         let storeResult = AppEnvironment.makeStore(
             after: restoreActivation,
             replayOutcome: coldStartRestore?.outcome,
@@ -164,8 +180,11 @@ final class AppEnvironment: ObservableObject {
         let appVersion = AppEnvironment.currentAppVersion()
         let modelLibrary = ModelLibrary(
             store: store,
-            runtimeClient: taskRuntimeClient,
-            managedModelRoots: guidedQAUITestManagedRoots
+            runtimeClient: runtimeClient,
+            managedModelRoots: guidedQAUITestManagedRoots,
+            hardwareProfile: Self.reviewCreationHardwareProfile(
+                modelsDirectory: ManagedModelStorage.modelsDirectory()
+            )
         )
         let tokenStore = APIKeyStoreComposition.live()
         self.store = store
@@ -174,6 +193,7 @@ final class AppEnvironment: ObservableObject {
         self.runtimeStatusController = RuntimeStatusController(runtimeClient: runtimeClient)
         self.runtimeClient = runtimeClient
         self.guidedQAUITestModelRoot = guidedQAUITestModelRoot
+        self.reviewCreationUITestModelRoot = reviewCreationUITestModelRoot
         self.interruptedDraftRecoveryUITestRoot = interruptedDraftRecoveryUITestRoot
         self.modelLibrary = modelLibrary
         self.chatController = GlobalChatController(
@@ -193,6 +213,13 @@ final class AppEnvironment: ObservableObject {
             tokenStore: tokenStore
         )
         let documentStorage = DocumentStorage.makeDefault()
+        let caseFileReviewExportStorage = Self.reviewExportUITestRoot()
+            .map { DocumentStorage(root: $0) }
+            ?? documentStorage
+        let caseFileReviewExportService = CaseFileReviewExportService(
+            store: store,
+            storage: caseFileReviewExportStorage
+        )
 #if DEBUG
         let restoreUITestFixture = AppEnvironment.makeRestoreUITestFixtureIfRequested()
 #else
@@ -292,6 +319,11 @@ final class AppEnvironment: ObservableObject {
         self.embeddingDownloadController.onModelRegistered = { [weak documentSetup] in
             documentSetup?.handleEmbeddingModelDownloaded()
         }
+        let corpusAnalysisRunner = CorpusAnalysisQueueRunner.live(
+            store: store,
+            modelLibrary: modelLibrary,
+            runtimeClient: runtimeClient
+        )
         let importService = DocumentImportService(store: store)
         let queue = DocumentProcessingQueue(
             store: store,
@@ -310,8 +342,18 @@ final class AppEnvironment: ObservableObject {
             classificationService: Self.isUITestMode ? nil : DocumentClassificationService(
                 store: store,
                 modelLibrary: modelLibrary,
-                runtimeClient: taskRuntimeClient
-            )
+                runtimeClient: runtimeClient
+            ),
+            corpusAnalysisRunner: { payload in
+                if reviewCreationUITestScenario == "paused" {
+                    try await Task.sleep(for: .seconds(300))
+                    return
+                }
+                try await corpusAnalysisRunner.run(payload)
+            },
+            corpusAnalysisPauseRequester: { runID in
+                corpusAnalysisRunner.requestPause(runID: runID)
+            }
         )
         documentSetup.setReindexEnqueuer { [weak queue] matterID in
             _ = queue?.enqueueReindex(matterID: matterID)
@@ -348,9 +390,37 @@ final class AppEnvironment: ObservableObject {
         }
         self.mattersController = MattersController(
             store: store,
-            runtimeClient: taskRuntimeClient,
+            runtimeClient: runtimeClient,
             defaultSystemPrompt: systemPrompt,
             documentQueue: queue,
+            caseFileReviewExportService: caseFileReviewExportService,
+            submitCorpusAnalysis: { request, pinnedModel, approvedScopeReceipt in
+                let prepared = try CorpusAnalysisQueuePreparer(store: store)
+                    .prepareExhaustiveListSubmission(
+                        request: request,
+                        pinnedModel: pinnedModel
+                    )
+                return try queue.enqueueCorpusAnalysis(
+                    prepared: prepared,
+                    approvedScopeReceipt: approvedScopeReceipt,
+                    startImmediately: reviewCreationUITestScenario != "setup"
+                        && reviewCreationUITestScenario != "scopeDrift"
+                )
+            },
+            makeCorpusAnalysisPinnedModel: { modelID in
+                if reviewCreationUITestScenario == "slowVerification" {
+                    try await Task.sleep(for: .seconds(300))
+                    try Task.checkCancellation()
+                }
+                let pinnedModel = try await modelLibrary.makeCorpusAnalysisPinnedModel(modelID: modelID)
+#if DEBUG
+                if reviewCreationUITestScenario == "scopeDrift" {
+                    try Self.seedUITestReviewCreationLateSource(store: store)
+                }
+#endif
+                try Task.checkCancellation()
+                return pinnedModel
+            },
             isImportReady: { documentSetup.isReadyForImport },
             draftingStorage: draftingStorage,
             beforeMotionPersistence: beforeMotionPersistence
@@ -368,6 +438,7 @@ final class AppEnvironment: ObservableObject {
         // Let speculative pre-warms back off while a generation is running, so they
         // never evict the model out from under an in-flight answer.
         modelLibrary.isRuntimeGenerating = { [weak self] in self?.runtimeServiceState == .generating }
+        modelLibrary.isRuntimeReserved = { runtimeClient.ordinaryWorkIsBlocked }
         // When a model becomes loaded, classify any pending documents in the selected
         // matter (a no-op when none are pending). Collapse the load state to a Bool and
         // fire only on the transition into loaded.
@@ -498,18 +569,27 @@ final class AppEnvironment: ObservableObject {
         // Seed UI-test data before any runtime/status refresh that may take time on
         // a machine without the helper service running; the shell can render matters
         // immediately while the rest of bootstrap finishes.
-        if Self.isUITestMode { seedUITestFixturesIfNeeded() }
+        if Self.isUITestMode {
+            seedUITestFixturesIfNeeded()
+            await seedUITestReviewProjectIfNeeded()
+        }
         if Self.isDemoMode { seedDemoFixturesIfNeeded() }
         #if DEBUG
         dumpStoreToPasteboardIfRequested()
         dumpOpinionToPasteboardIfRequested()
         #endif
         await refreshRuntimeStatus()
+        // Reconcile and claim persisted corpus work before scheduling the ordinary
+        // chat-model warm. Both use the one chat-runtime slot, and exact review
+        // loads must never race a routed fallback load during launch.
+        documentQueue.bootstrap()
         // If the runtime already holds a model from a previous session, re-enable
         // chat without forcing the user to re-load it (the chat gate keys on
         // ModelLibrary.loadState, which otherwise starts idle each launch).
         modelLibrary.reconcileLoadedModel(runtimeStatusController.loadedModelID)
-        autoLoadStartupModelIfNeeded()
+        if !documentQueue.hasPendingCorpusAnalysisWork {
+            autoLoadStartupModelIfNeeded()
+        }
         await documentSetupController.refreshAll()
         documentChunkerVersion = (try? store.documentSettings.loadSettings().chunkerVersion)
             ?? DocumentChunkerRolloutService.approvedDefaultVersion
@@ -524,8 +604,6 @@ final class AppEnvironment: ObservableObject {
         // the chat model — and it removes the first-use wait on Document Q&A, semantic
         // search, and import indexing.
         if !Self.isUITestMode, !Self.isHeadlessProbeMode { documentSetupController.prewarmEmbeddingModel() }
-        // Reconcile any document job interrupted by a previous quit (plan §5.4).
-        documentQueue.bootstrap()
         // Auto-purge documents and chats soft-deleted past the retention window
         // (plan §12.2). Matters are never auto-purged — only manually from the Recycle Bin.
         let maintenance = DocumentMaintenance(store: store)
@@ -903,6 +981,45 @@ final class AppEnvironment: ObservableObject {
         ProcessInfo.processInfo.arguments.contains("-uiTestMode")
     }
 
+    private static var reviewCreationUITestScenario: String? {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard isUITestMode,
+              arguments.contains("-uiTestReviewCreation"),
+              let marker = arguments.firstIndex(of: "-uiTestReviewCreationScenario"),
+              arguments.indices.contains(marker + 1) else { return nil }
+        return arguments[marker + 1]
+    }
+
+    /// Resolves the hardware profile projected into Guided New Review. Production
+    /// and every unauthorized fixture path use the live Mac probe; the exact Review
+    /// XCUITest launch may inject only physical memory so 96 GB and 128 GB policy
+    /// tiers remain independently observable without spoofing production state.
+    private static func reviewCreationHardwareProfile(
+        modelsDirectory: URL,
+        arguments: [String] = ProcessInfo.processInfo.arguments
+    ) -> MacHardwareProfile {
+#if DEBUG
+        if isUITestMode,
+           arguments.contains("-uiTestReviewCreation"),
+           let marker = arguments.firstIndex(of: "-uiTestLocalAIMemoryGB"),
+           arguments.indices.contains(marker + 1),
+           let memoryGB = UInt64(arguments[marker + 1]),
+           memoryGB > 0 {
+            let (physicalMemoryBytes, overflow) = memoryGB.multipliedReportingOverflow(
+                by: 1_073_741_824
+            )
+            if !overflow {
+                return MacHardwareProfile(
+                    physicalMemoryBytes: physicalMemoryBytes,
+                    recommendedWorkingSetBytes: (physicalMemoryBytes / 4) * 3,
+                    availableModelDiskBytes: nil
+                )
+            }
+        }
+#endif
+        return MacHardwareProfileProbe.current(modelsDirectory: modelsDirectory)
+    }
+
     /// True when launched with `-demoMode`: the same hermetic throwaway store as UI
     /// tests, seeded with entirely FICTITIOUS demo data (fictional parties, clients,
     /// and documents; only the case law is real) for marketing screenshots. Never
@@ -954,7 +1071,619 @@ final class AppEnvironment: ObservableObject {
         seedUITestDocumentCorrectionIfNeeded()
         seedUITestDocumentRelationsIfNeeded()
         seedUITestGuidedQAIfNeeded()
+        seedUITestReviewCreationIfNeeded()
         seedUITestMotionDraftIfNeeded()
+    }
+
+    /// Builds one coverage-complete, exact-v2 exhaustive result whose contrary
+    /// evidence intentionally leaves it review-required, then freezes it as a
+    /// Review Project only for the dedicated hosted Review tests. An additional
+    /// switching flag adds one older, exact-run-backed project without enlarging
+    /// the ordinary Review fixture. `-uiTestMode` keeps both synthetic graphs in a
+    /// fresh, throwaway store rather than the user's database.
+    private func seedUITestReviewProjectIfNeeded() async {
+        guard Self.isUITestMode,
+              ProcessInfo.processInfo.arguments.contains("-uiTestReviewProject"),
+              let matterID = mattersController.matters.first?.id else { return }
+
+        do {
+            guard try store.caseFileReviews.fetchProjects(matterID: matterID).isEmpty else {
+                return
+            }
+
+            let alphaExcerpt =
+                "The fictional Atlas Supply Agreement fixes payment on March 18, 2031."
+            let betaSupportingExcerpt =
+                "The fictional Atlas Supply Agreement requires renewal notice at least 120 calendar days before expiration."
+            let betaContraryExcerpt =
+                "A fictional amendment states that either party may give renewal notice 90 calendar days before expiration."
+            let sourceSpecs = [
+                (
+                    documentID: "ui-review-a-payment-document",
+                    revisionID: "ui-review-a-payment-revision",
+                    displayName: "Atlas Payment Schedule.txt",
+                    text: alphaExcerpt
+                ),
+                (
+                    documentID: "ui-review-b-renewal-document",
+                    revisionID: "ui-review-b-renewal-revision",
+                    displayName: "Atlas Renewal Clause.txt",
+                    text: betaSupportingExcerpt
+                ),
+                (
+                    documentID: "ui-review-c-amendment-document",
+                    revisionID: "ui-review-c-amendment-revision",
+                    displayName: "Atlas Amendment.txt",
+                    text: betaContraryExcerpt
+                ),
+            ]
+            let modelLineageJSON =
+                #"{"artifact_fingerprint_sha256":"7777777777777777777777777777777777777777777777777777777777777777","content_binding_algorithm":"supra-release-model-sha256-v1","content_binding_schema_version":1,"model_repository":"synthetic/review-uitest","model_revision":"0123456789abcdef0123456789abcdef01234567"}"#
+
+            for spec in sourceSpecs where try store.documentLibrary.fetchDocument(
+                id: spec.documentID
+            ) == nil {
+                let contentDigest = SHA256.hash(data: Data(spec.text.utf8))
+                    .map { String(format: "%02x", $0) }
+                    .joined()
+                let blob = try store.documentLibrary.upsertBlob(DocumentBlobRecord(
+                    id: "\(spec.documentID)-blob",
+                    sha256: contentDigest,
+                    byteSize: spec.text.utf8.count,
+                    originalExtension: "txt",
+                    managedRelativePath: "uitest/\(spec.displayName)"
+                )).blob
+                let document = try store.documentLibrary.insertDocument(MatterDocumentRecord(
+                    id: spec.documentID,
+                    matterID: matterID,
+                    blobID: blob.id,
+                    displayName: spec.displayName,
+                    status: MatterDocumentStatus.ready.rawValue,
+                    extractionStatus: DocumentExtractionStatus.extracted.rawValue,
+                    indexStatus: DocumentIndexStatus.textIndexed.rawValue,
+                    sourceKind: DocumentSourceKind.text.rawValue,
+                    extractionMethod: "synthetic@toolchain:review-uitest"
+                ))
+                _ = try store.documentRevisions.replacePartsAndPersistLineage(
+                    documentID: document.id,
+                    parts: [DocumentPagePartRecord(
+                        id: "\(spec.documentID)-part",
+                        documentID: document.id,
+                        partIndex: 0,
+                        sourceKind: DocumentSourceKind.text.rawValue,
+                        normalizedText: spec.text,
+                        charCount: spec.text.count
+                    )],
+                    revisions: [DocumentPartRevisionRecord(
+                        id: spec.revisionID,
+                        documentID: document.id,
+                        partIndex: 0,
+                        derivationKey: "review-uitest:\(spec.documentID)",
+                        origin: "synthetic_test",
+                        method: "plain-text",
+                        text: spec.text,
+                        charCount: spec.text.count
+                    )],
+                    selections: [DocumentPartSelectionRecord(
+                        id: "\(spec.documentID)-selection",
+                        documentID: document.id,
+                        partIndex: 0,
+                        selectedRevisionID: spec.revisionID,
+                        selectionKey: "review-uitest:\(spec.documentID)",
+                        selectedBy: "test",
+                        decisionJSON: #"{"rule":"synthetic_review_ui_fixture"}"#
+                    )]
+                )
+            }
+
+            let result = try await ExhaustiveListTask(store: store).run(
+                request: ExhaustiveListRequest(
+                    runKey: "ui-review-project-run",
+                    matterID: matterID,
+                    title: "Atlas Supply Agreement review",
+                    query: "Extract the exact payment deadline and renewal notice period, retaining contrary terms.",
+                    scope: CorpusAnalysisScope(documentIDs: sourceSpecs.map(\.documentID)),
+                    characterBudget: 4_219,
+                    modelLineageJSON: modelLineageJSON
+                )
+            ) { input in
+                func reference(
+                    documentID: String,
+                    revisionID: String,
+                    quote: String
+                ) throws -> CorpusAnalysisEvidenceReference {
+                    guard let source = input.partition.sources.first(where: {
+                        $0.documentID == documentID && $0.revisionID == revisionID
+                    }) else {
+                        throw CorpusAnalysisMapFailure.permanent(
+                            "Synthetic Review UI source was not presented to the mapper."
+                        )
+                    }
+                    guard let range = Self.reviewUITestCharacterRange(of: quote, in: source.text) else {
+                        throw CorpusAnalysisMapFailure.permanent(
+                            "Synthetic Review UI excerpt was not present in its exact slice."
+                        )
+                    }
+                    return CorpusAnalysisEvidenceReference(
+                        documentID: source.documentID,
+                        revisionID: source.revisionID,
+                        locatorJSON: source.locatorJSON,
+                        quote: quote,
+                        charStart: range.lowerBound,
+                        charEnd: range.upperBound
+                    )
+                }
+
+                let response = ReviewUITestMapResponse(items: [
+                    ReviewUITestMapItem(
+                        itemKey: "Synthetic payment deadline",
+                        value: "March 18, 2031",
+                        evidence: [try reference(
+                            documentID: sourceSpecs[0].documentID,
+                            revisionID: sourceSpecs[0].revisionID,
+                            quote: alphaExcerpt
+                        )],
+                        contraryEvidence: []
+                    ),
+                    ReviewUITestMapItem(
+                        itemKey: "Synthetic renewal notice period",
+                        value: "120 calendar days",
+                        evidence: [try reference(
+                            documentID: sourceSpecs[1].documentID,
+                            revisionID: sourceSpecs[1].revisionID,
+                            quote: betaSupportingExcerpt
+                        )],
+                        contraryEvidence: [try reference(
+                            documentID: sourceSpecs[2].documentID,
+                            revisionID: sourceSpecs[2].revisionID,
+                            quote: betaContraryExcerpt
+                        )]
+                    ),
+                ])
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+                return String(decoding: try encoder.encode(response), as: UTF8.self)
+            }
+
+            _ = try store.caseFileReviews.createOrFetchProject(
+                matterID: matterID,
+                sourceRunID: result.run.id,
+                title: "Atlas Supply Agreement review",
+                actor: "Synthetic UI reviewer",
+                at: Date(timeIntervalSince1970: 1_931_478_400)
+            )
+
+            if ProcessInfo.processInfo.arguments.contains("-uiTestReviewProjectSwitching") {
+                let amendmentSource = sourceSpecs[2]
+                let amendmentResult = try await ExhaustiveListTask(store: store).run(
+                    request: ExhaustiveListRequest(
+                        runKey: "ui-review-project-switching-run",
+                        matterID: matterID,
+                        title: "Atlas Amendment review",
+                        query: "Extract the exact amended renewal notice period.",
+                        scope: CorpusAnalysisScope(documentIDs: [amendmentSource.documentID]),
+                        characterBudget: 4_219,
+                        modelLineageJSON: modelLineageJSON
+                    )
+                ) { input in
+                    guard let source = input.partition.sources.first(where: {
+                        $0.documentID == amendmentSource.documentID
+                            && $0.revisionID == amendmentSource.revisionID
+                    }) else {
+                        throw CorpusAnalysisMapFailure.permanent(
+                            "Synthetic Review switching source was not presented to the mapper."
+                        )
+                    }
+                    guard let range = Self.reviewUITestCharacterRange(
+                        of: betaContraryExcerpt,
+                        in: source.text
+                    ) else {
+                        throw CorpusAnalysisMapFailure.permanent(
+                            "Synthetic Review switching excerpt was not present in its exact slice."
+                        )
+                    }
+                    let reference = CorpusAnalysisEvidenceReference(
+                        documentID: source.documentID,
+                        revisionID: source.revisionID,
+                        locatorJSON: source.locatorJSON,
+                        quote: betaContraryExcerpt,
+                        charStart: range.lowerBound,
+                        charEnd: range.upperBound
+                    )
+                    let response = ReviewUITestMapResponse(items: [
+                        ReviewUITestMapItem(
+                            itemKey: "Synthetic amended renewal notice period",
+                            value: "90 calendar days",
+                            evidence: [reference],
+                            contraryEvidence: []
+                        ),
+                    ])
+                    let encoder = JSONEncoder()
+                    encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+                    return String(decoding: try encoder.encode(response), as: UTF8.self)
+                }
+
+                let amendmentProject = try store.caseFileReviews.createOrFetchProject(
+                    matterID: matterID,
+                    sourceRunID: amendmentResult.run.id,
+                    title: "Atlas Amendment review",
+                    actor: "Synthetic UI reviewer",
+                    at: Date(timeIntervalSince1970: 1_931_478_300)
+                )
+
+#if DEBUG
+                if Self.isUITestMode,
+                   ProcessInfo.processInfo.arguments.contains("-uiTestReviewNavigationFailure") {
+                    try await store.database.writer.write { db in
+                        try db.execute(
+                            sql: """
+                                UPDATE case_file_review_projects
+                                SET active_table_id = NULL
+                                WHERE id = ? AND active_table_id IS NOT NULL
+                                """,
+                            arguments: [amendmentProject.project.id]
+                        )
+                        guard db.changesCount == 1 else {
+                            throw CaseFileReviewRepositoryError.corruptGraph(
+                                amendmentProject.project.id
+                            )
+                        }
+                    }
+                }
+#endif
+            }
+            mattersController.caseFileReviewController?.load()
+        } catch {
+            assertionFailure("Could not seed Review Project accessibility fixture: \(error)")
+        }
+    }
+
+    /// Seeds the Guided New Review surface with two exact eligible documents,
+    /// three named exclusions, and one tiny signed managed model. The paused
+    /// scenario additionally creates a 1-of-3 durable corpus ledger so the hosted
+    /// test can cross a real process boundary before resuming it. Every path is
+    /// doubly gated and uses the UI-test Store; none can reach user data.
+    private func seedUITestReviewCreationIfNeeded() {
+#if DEBUG
+        guard Self.isUITestMode,
+              ProcessInfo.processInfo.arguments.contains("-uiTestReviewCreation"),
+              let reviewCreationUITestModelRoot,
+              let matterID = mattersController.matters.first?.id else { return }
+
+        do {
+            _ = try seedUITestReviewCreationModel(
+                in: reviewCreationUITestModelRoot
+            )
+            for document in try store.documentLibrary.fetchDocuments(matterID: matterID)
+                where document.displayName == "agreement.pdf" {
+                _ = try store.documentLibrary.permanentlyDeleteDocument(
+                    id: document.id,
+                    actor: "guided-review-ui-test",
+                    at: Date(timeIntervalSince1970: 1_931_478_200)
+                )
+            }
+            let documents = try store.documentLibrary.fetchDocuments(matterID: matterID)
+            if !documents.contains(where: { $0.id == "ui-review-create-default-document" }) {
+                try seedUITestReviewCreationSources(matterID: matterID)
+            }
+            if Self.reviewCreationUITestScenario == "paused" {
+                try seedUITestPausedReviewCreationRun(
+                    matterID: matterID
+                )
+            }
+        } catch {
+            assertionFailure("Could not seed Guided Review creation fixture: \(error)")
+        }
+#endif
+    }
+
+#if DEBUG
+    private func seedUITestReviewCreationModel(
+        in authorizedRoot: URL
+    ) throws -> ModelID {
+        let modelIDString = "88888888-8888-4888-8888-888888888888"
+        let scenario = Self.reviewCreationUITestScenario
+        let usesRecommendedHardwareModel = scenario == "hardware96"
+            || scenario == "hardware128"
+        let repositoryID = usesRecommendedHardwareModel
+            ? "mlx-community/Qwen3-32B-4bit"
+            : "supra-test/guided-review"
+        let displayName = usesRecommendedHardwareModel
+            ? "Qwen3 32B (4-bit)"
+            : "Synthetic Review Model"
+        let modelDirectory = authorizedRoot
+            .appendingPathComponent("guided-review-ui-model", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: modelDirectory,
+            withIntermediateDirectories: true
+        )
+        let artifacts: [(String, Data)] = [
+            ("config.json", Data(#"{"model_type":"guided_review_ui_test"}"#.utf8)),
+            ("model.safetensors", Data("guided-review-ui-test-weights".utf8)),
+        ]
+        for (name, data) in artifacts {
+            try data.write(
+                to: modelDirectory.appendingPathComponent(name, isDirectory: false),
+                options: .atomic
+            )
+        }
+        let manifest = ModelArtifactManifest(
+            repositoryID: repositoryID,
+            revision: String(repeating: "8", count: 40),
+            files: artifacts.map { name, data in
+                ModelArtifactManifest.File(
+                    relativePath: name,
+                    size: Int64(data.count),
+                    digestAlgorithm: .sha256,
+                    digest: SHA256.hash(data: data)
+                        .map { String(format: "%02x", $0) }
+                        .joined()
+                )
+            }
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        try encoder.encode(manifest).write(
+            to: ManagedModelStorage.manifestURL(in: modelDirectory),
+            options: .atomic
+        )
+        try store.models.upsertModel(ModelRecord(
+            id: modelIDString,
+            displayName: displayName,
+            path: modelDirectory.path,
+            isActive: true,
+            validationStatus: "verified"
+        ))
+        modelLibrary.refresh()
+        guard let uuid = UUID(uuidString: modelIDString) else {
+            throw CaseFileReviewCreationError.modelUnavailable
+        }
+        return ModelID(uuid)
+    }
+
+    private func seedUITestReviewCreationSources(matterID: String) throws {
+        let defaultText = String(repeating: "Atlas ready agreement renewal terms. ", count: 3)
+        let amendmentText = String(repeating: "Atlas amendment fixes notice at ninety days. ", count: 6)
+        try Self.insertUITestReviewCreationSource(
+            store: store,
+            matterID: matterID,
+            id: "ui-review-create-default-document",
+            name: "Atlas Ready Agreement.txt",
+            text: defaultText,
+            status: .ready,
+            extractionStatus: .extracted,
+            indexStatus: .textIndexed
+        )
+        try Self.insertUITestReviewCreationSource(
+            store: store,
+            matterID: matterID,
+            id: "ui-review-create-amendment-document",
+            name: "Atlas Amendment.txt",
+            text: amendmentText,
+            status: .ready,
+            extractionStatus: .extracted,
+            indexStatus: .textIndexed
+        )
+        try Self.insertUITestReviewCreationSource(
+            store: store,
+            matterID: matterID,
+            id: "ui-review-create-review-required-document",
+            name: "Beacon Review Draft.txt",
+            text: nil,
+            status: .needsReview,
+            extractionStatus: .extracted,
+            indexStatus: .textIndexed
+        )
+        try Self.insertUITestReviewCreationSource(
+            store: store,
+            matterID: matterID,
+            id: "ui-review-create-extraction-failed-document",
+            name: "Atlas Extraction Failure.txt",
+            text: nil,
+            status: .failed,
+            extractionStatus: .failed,
+            indexStatus: .failed
+        )
+
+        let batch = try store.documentJobs.createBatch(matterID: matterID)
+        let unfinished = try store.documentJobs.recordDiscovered(
+            batchID: batch.id,
+            matterID: matterID,
+            sourceKey: "selection:review-creation-import-pending",
+            sourceDisplayPath: "Atlas Import Pending.txt",
+            sourceBookmark: Data("SYNTHETIC-REVIEW-CREATION-BOOKMARK".utf8),
+            state: .selected
+        )
+        _ = try store.documentJobs.markState(sourceID: unfinished.id, state: .copying)
+    }
+
+    private static func seedUITestReviewCreationLateSource(store: SupraStore) throws {
+        guard Self.isUITestMode,
+              ProcessInfo.processInfo.arguments.contains("-uiTestReviewCreation"),
+              Self.reviewCreationUITestScenario == "scopeDrift",
+              let matterID = try store.matters.fetchMatters().first?.id else {
+            throw CaseFileReviewCreationError.submissionFailed
+        }
+        let documentID = "ui-review-create-late-document"
+        guard try !store.documentLibrary.fetchDocuments(matterID: matterID).contains(where: {
+            $0.id == documentID
+        }) else { return }
+        try Self.insertUITestReviewCreationSource(
+            store: store,
+            matterID: matterID,
+            id: documentID,
+            name: "Atlas Late Addendum.txt",
+            text: String(repeating: "Atlas late addendum extends renewal notice. ", count: 4),
+            status: .ready,
+            extractionStatus: .extracted,
+            indexStatus: .textIndexed
+        )
+    }
+
+    private static func insertUITestReviewCreationSource(
+        store: SupraStore,
+        matterID: String,
+        id: String,
+        name: String,
+        text: String?,
+        status: MatterDocumentStatus,
+        extractionStatus: DocumentExtractionStatus,
+        indexStatus: DocumentIndexStatus
+    ) throws {
+        let blob = try store.documentLibrary.upsertBlob(DocumentBlobRecord(
+            id: "\(id)-blob",
+            sha256: "\(id)-synthetic-sha",
+            byteSize: text?.utf8.count ?? 0,
+            originalExtension: "txt",
+            managedRelativePath: "uitest/review-creation/\(name)"
+        )).blob
+        let document = try store.documentLibrary.insertDocument(MatterDocumentRecord(
+            id: id,
+            matterID: matterID,
+            blobID: blob.id,
+            displayName: name,
+            status: status.rawValue,
+            extractionStatus: extractionStatus.rawValue,
+            indexStatus: indexStatus.rawValue,
+            extractionMethod: "synthetic@toolchain:review-creation-uitest"
+        ))
+        guard let text else { return }
+        let part = DocumentPagePartRecord(
+            id: "\(id)-part",
+            documentID: document.id,
+            partIndex: 0,
+            sourceKind: DocumentSourceKind.text.rawValue,
+            normalizedText: text,
+            charCount: text.count
+        )
+        let revision = DocumentPartRevisionRecord(
+            id: "\(id)-revision",
+            documentID: document.id,
+            partIndex: 0,
+            derivationKey: "review-creation-uitest:\(id)",
+            origin: "parser",
+            method: "synthetic",
+            text: text,
+            charCount: text.count
+        )
+        let selection = DocumentPartSelectionRecord(
+            id: "\(id)-selection",
+            documentID: document.id,
+            partIndex: 0,
+            selectedRevisionID: revision.id,
+            selectionKey: "review-creation-uitest:\(id)",
+            selectedBy: "policy",
+            policyVersion: 1,
+            decisionJSON: #"{"rule":"synthetic_review_creation_ui_fixture"}"#
+        )
+        _ = try store.documentRevisions.replacePartsAndPersistLineage(
+            documentID: document.id,
+            parts: [part],
+            revisions: [revision],
+            selections: [selection]
+        )
+    }
+
+    private func seedUITestPausedReviewCreationRun(
+        matterID: String
+    ) throws {
+        let existing = try store.documentJobs.fetchJobs(matterID: matterID).contains {
+            $0.kind == DocumentProcessingJobKind.corpusAnalysis.rawValue
+        }
+        guard !existing else { return }
+
+        let pinnedModel = CorpusAnalysisPinnedModel(
+            modelRepository: "supra-test/guided-review",
+            modelRevision: String(repeating: "8", count: 40),
+            contentBindingAlgorithm: RuntimeModelContentBinding.fingerprintAlgorithm,
+            contentBindingSchemaVersion: RuntimeModelContentBinding.supportedManifestSchemaVersion,
+            artifactFingerprintSHA256: SHA256.hash(
+                data: Data("guided-review-paused-ui-pin".utf8)
+            ).map { String(format: "%02x", $0) }.joined()
+        )
+        let request = ExhaustiveListQueuedRequest(
+            taskSchemaVersion: ExhaustiveListTask.schemaVersion,
+            promptBuilderVersion: ExhaustiveListTask.promptBuilderVersion,
+            runKey: "ui-review-creation-paused-run",
+            matterID: matterID,
+            title: "Paused Atlas deadline review",
+            query: "Extract the amended renewal deadline from the synthetic Atlas source.",
+            scope: CorpusAnalysisScope(
+                schemaVersion: 1,
+                documentIDs: ["ui-review-create-amendment-document"]
+            ),
+            characterBudget: 100,
+            maximumRetryCount: 2
+        )
+        let payload = try CorpusAnalysisQueuePreparer(store: store).prepareExhaustiveList(
+            request: request,
+            pinnedModel: pinnedModel
+        )
+        let partitions = try store.corpusAnalysis.fetchPartitions(
+            matterID: matterID,
+            runID: payload.runID
+        )
+        guard partitions.count == 3 else {
+            throw CaseFileReviewCreationError.submissionFailed
+        }
+        _ = try store.corpusAnalysis.updateStatus(
+            matterID: matterID,
+            runID: payload.runID,
+            to: .running
+        )
+        let first = try store.corpusAnalysis.beginAttempt(
+            matterID: matterID,
+            runID: payload.runID,
+            partitionID: partitions[0].id
+        )
+        try store.corpusAnalysis.completeAttemptSucceeded(
+            matterID: matterID,
+            runID: payload.runID,
+            partitionID: first.id,
+            findingsJSON: "[]"
+        )
+        let payloadJSON = String(decoding: try JSONEncoder().encode(payload), as: UTF8.self)
+        let job = try store.documentJobs.enqueueJob(
+            matterID: matterID,
+            kind: DocumentProcessingJobKind.corpusAnalysis.rawValue,
+            payloadJSON: payloadJSON
+        )
+        try store.documentJobs.pauseJob(id: job.id)
+    }
+
+#endif
+
+    nonisolated private static func reviewUITestCharacterRange(
+        of quote: String,
+        in value: String
+    ) -> Range<Int>? {
+        guard let range = value.range(of: quote) else { return nil }
+        return value.distance(from: value.startIndex, to: range.lowerBound)
+            ..< value.distance(from: value.startIndex, to: range.upperBound)
+    }
+
+    private struct ReviewUITestMapResponse: Encodable, Sendable {
+        var schemaVersion = 1
+        var items: [ReviewUITestMapItem]
+
+        private enum CodingKeys: String, CodingKey {
+            case schemaVersion = "schema_version"
+            case items
+        }
+    }
+
+    private struct ReviewUITestMapItem: Encodable, Sendable {
+        var itemKey: String
+        var value: String
+        var evidence: [CorpusAnalysisEvidenceReference]
+        var contraryEvidence: [CorpusAnalysisEvidenceReference]
+
+        private enum CodingKeys: String, CodingKey {
+            case itemKey = "item_key"
+            case value
+            case evidence
+            case contraryEvidence = "contrary_evidence"
+        }
     }
 
     /// Seeds one ready and one review-required revision-bound passage plus a
@@ -2185,6 +2914,61 @@ final class AppEnvironment: ObservableObject {
             .appendingPathComponent("SupraAI.sqlite", isDirectory: false)
     }
 
+    /// Allows only the dedicated paused and cancellation Guided Review fixtures to
+    /// retain their throwaway Store across relaunch. The XCUITest supplies a path
+    /// inside this app container's temporary directory; all other Review launches
+    /// stay fresh.
+    private static func reviewCreationUITestRoot() -> URL? {
+        let environment = ProcessInfo.processInfo.environment
+        guard isUITestMode,
+              ProcessInfo.processInfo.arguments.contains("-uiTestReviewCreation"),
+              let scenario = reviewCreationUITestScenario,
+              ["paused", "slowVerification"].contains(scenario),
+              let rawRoot = environment["SUPRA_UI_TEST_REVIEW_CREATION_ROOT"]?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+              !rawRoot.isEmpty else { return nil }
+
+        let temporaryRoot = FileManager.default.temporaryDirectory
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+        let candidate = URL(fileURLWithPath: rawRoot, isDirectory: true)
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+        guard candidate.path.hasPrefix("\(temporaryRoot.path)/") else { return nil }
+        return candidate
+    }
+
+    private static func reviewCreationUITestStoreURL() -> URL? {
+        reviewCreationUITestRoot()?
+            .appendingPathComponent(".supra-ui-test-store", isDirectory: true)
+            .appendingPathComponent("SupraAI.sqlite", isDirectory: false)
+    }
+
+    /// Gives only the dedicated Review-export UI test a throwaway managed-file
+    /// root. Normal launches always use the app's standard managed storage.
+    private static func reviewExportUITestRoot() -> URL? {
+#if DEBUG
+        let arguments = ProcessInfo.processInfo.arguments
+        let environment = ProcessInfo.processInfo.environment
+        guard isUITestMode,
+              arguments.contains("-uiTestReviewExport"),
+              let rawRoot = environment["SUPRA_UI_TEST_REVIEW_EXPORT_ROOT"]?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+              !rawRoot.isEmpty else { return nil }
+
+        let temporaryRoot = FileManager.default.temporaryDirectory
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+        let candidate = URL(fileURLWithPath: rawRoot, isDirectory: true)
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+        guard candidate.path.hasPrefix("\(temporaryRoot.path)/") else { return nil }
+        return candidate
+#else
+        return nil
+#endif
+    }
+
     /// Opens the on-disk store, falling back to a temporary store so the app still
     /// launches if the Application Support database cannot be created. `isFallback`
     /// is true for that degraded last-resort store (not for the UI-test store).
@@ -2210,7 +2994,8 @@ final class AppEnvironment: ObservableObject {
             // migrates the user's real store — which also removes the Debug-build
             // erase-on-schema-change hazard for probe runs.
             let url: URL
-            if let persistentUITestStoreURL = interruptedDraftRecoveryUITestStoreURL() {
+            if let persistentUITestStoreURL = interruptedDraftRecoveryUITestStoreURL()
+                ?? reviewCreationUITestStoreURL() {
                 try? FileManager.default.createDirectory(
                     at: persistentUITestStoreURL.deletingLastPathComponent(),
                     withIntermediateDirectories: true

@@ -1,6 +1,7 @@
 import Foundation
 import GRDB
 import SupraCore
+import SupraDocuments
 import SupraNetworking
 import SupraResearch
 import SupraRuntimeClient
@@ -830,6 +831,112 @@ final class SupraSessionsTests: XCTestCase {
         // Matter, its chat, and the chat's messages are all hard-deleted (FK cascade).
         XCTAssertTrue(try store.chats.fetchMessages(chatID: matterChat.id).isEmpty)
         XCTAssertTrue(try store.matters.fetchSoftDeletedMatters().isEmpty)
+        let events = try store.auditEvents.fetchEvents(
+            relatedTable: "matters",
+            relatedID: matter.id,
+            eventType: "matter_permanently_deleted"
+        )
+        XCTAssertEqual(events.count, 1)
+        XCTAssertEqual(events.first?.actor, "user")
+    }
+
+    func testRecycleBinPermanentDeleteFailureRemainsVisibleAndReportsError() throws {
+        // Expected RED: permanent-delete errors are currently collapsed to an
+        // empty result, so the row happens to remain but the user sees no reason.
+        let store = try makeStore()
+        let bin = RecycleBinController(store: store)
+        let matter = try store.matters.createMatter(name: "Rollback matter", jurisdiction: "FL")
+        try store.matters.softDeleteMatter(id: matter.id)
+        try store.database.writer.write { db in
+            try db.execute(sql: """
+                CREATE TRIGGER recycle_bin_reject_matter_delete_audit
+                BEFORE INSERT ON audit_events
+                WHEN NEW.event_type = 'matter_permanently_deleted'
+                BEGIN
+                    SELECT RAISE(ABORT, 'synthetic recycle bin delete rollback');
+                END
+                """)
+        }
+        bin.reload()
+
+        bin.permanentlyDeleteMatter(id: matter.id)
+
+        XCTAssertEqual(bin.matters.map(\.id), [matter.id])
+        XCTAssertTrue(bin.deletionError?.contains("synthetic recycle bin delete rollback") ?? false)
+        XCTAssertNotNil(
+            try store.database.writer.read { db in
+                try MatterRecord.fetchOne(db, key: matter.id)
+            }
+        )
+    }
+
+    func testDocumentCleanupFailureAuditStaysInOwningMatter() throws {
+        // Expected RED: RecycleBinController drops the deleted document's
+        // matter id before recording post-commit file-cleanup failure, so the
+        // warning audit is written globally even though its matter survives.
+        let store = try makeStore()
+        let owner = try store.matters.createMatter(name: "Scoped cleanup 613")
+        let unrelated = try store.matters.createMatter(name: "Unrelated cleanup 911")
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("RecycleCleanup-\(UUID().uuidString)", isDirectory: true)
+        let storage = DocumentStorage(root: root)
+        try storage.initializeStorage()
+        let relativePath = "blobs/61/cleanup-613.bin"
+        let managedURL = storage.url(forManagedRelativePath: relativePath)
+        try FileManager.default.createDirectory(
+            at: managedURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data("KEEP-613".utf8).write(to: managedURL)
+        try FileManager.default.setAttributes(
+            [.immutable: true],
+            ofItemAtPath: managedURL.path
+        )
+        defer {
+            try? FileManager.default.setAttributes(
+                [.immutable: false],
+                ofItemAtPath: managedURL.path
+            )
+            try? FileManager.default.removeItem(at: root)
+        }
+        let blob = try store.documentLibrary.upsertBlob(DocumentBlobRecord(
+            sha256: "cleanup-scope-613",
+            byteSize: 8,
+            originalExtension: "bin",
+            managedRelativePath: relativePath
+        )).blob
+        let document = try store.documentLibrary.insertDocument(MatterDocumentRecord(
+            id: "cleanup-document-613",
+            matterID: owner.id,
+            blobID: blob.id,
+            displayName: "Cleanup 613.bin"
+        ))
+        try store.documentLibrary.softDeleteDocument(id: document.id)
+        let bin = RecycleBinController(store: store, storage: storage)
+        bin.reload()
+
+        bin.permanentlyDeleteDocument(id: document.id)
+
+        XCTAssertNil(try store.documentLibrary.fetchDocument(id: document.id))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: managedURL.path))
+        XCTAssertEqual(
+            bin.deletionError,
+            "The source was removed, but 1 managed file(s) still need cleanup."
+        )
+        let event = try XCTUnwrap(
+            try store.auditEvents.fetchEvents(
+                relatedTable: MatterDocumentRecord.databaseTableName,
+                relatedID: document.id,
+                eventType: "document_blob_cleanup_failed"
+            ).first
+        )
+        XCTAssertEqual(event.matterID, owner.id)
+        XCTAssertNotEqual(event.matterID, unrelated.id)
+        XCTAssertEqual(event.actor, "user")
+        XCTAssertEqual(
+            event.metadataJSON,
+            "{\"orphaned_blob_count\":1,\"schema_version\":1}"
+        )
     }
 
     func testMentionsFederalCitationMatchesStatutesRegulationsAndReporters() {

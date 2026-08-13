@@ -80,6 +80,9 @@ public final class DocumentProcessingQueue: ObservableObject {
     @Published public private(set) var resumableJobs: [DocumentProcessingJobRecord] = []
     @Published public private(set) var resumableImports: [ResumableDocumentImport] = []
     @Published public private(set) var lastError: String?
+    /// Active Review job that has received a cooperative pause request and is
+    /// finishing its current partition before the durable job becomes paused.
+    @Published public private(set) var pausingCorpusJobID: String?
     /// The most recent import that completed with per-file failures, for in-app
     /// surfacing (the Documents tab shows a banner). Cleared on a later clean
     /// import of the same matter or via `clearImportFailure()`.
@@ -93,12 +96,16 @@ public final class DocumentProcessingQueue: ObservableObject {
     private let classificationService: DocumentClassificationService?
     private let notifier: any DocumentNotifying
     private let corpusAnalysisRunner: (@Sendable (CorpusAnalysisJobPayload) async throws -> Void)?
+    private let corpusAnalysisPauseRequester: (@Sendable (String) -> Void)?
 
     /// Fast-path URLs for jobs that run in this process. Durable selected-source
     /// rows and bookmarks are written before enqueue returns, so these are never
     /// the sole source authority for FIFO-queued imports.
     private var pendingSources: [String: [URL]] = [:]
     private var runTask: Task<Void, Never>?
+    private var activeCorpusTask: Task<Void, Error>?
+    private var activeCorpusJobID: String?
+    private var hasBootstrapped = false
 
     public init(
         store: SupraStore,
@@ -106,7 +113,8 @@ public final class DocumentProcessingQueue: ObservableObject {
         makeIndexingService: @escaping @Sendable () -> DocumentIndexingService,
         classificationService: DocumentClassificationService? = nil,
         notifier: any DocumentNotifying = SystemDocumentNotifier(),
-        corpusAnalysisRunner: (@Sendable (CorpusAnalysisJobPayload) async throws -> Void)? = nil
+        corpusAnalysisRunner: (@Sendable (CorpusAnalysisJobPayload) async throws -> Void)? = nil,
+        corpusAnalysisPauseRequester: (@Sendable (String) -> Void)? = nil
     ) {
         self.store = store
         self.importService = importService
@@ -114,26 +122,36 @@ public final class DocumentProcessingQueue: ObservableObject {
         self.classificationService = classificationService
         self.notifier = notifier
         self.corpusAnalysisRunner = corpusAnalysisRunner
+        self.corpusAnalysisPauseRequester = corpusAnalysisPauseRequester
     }
 
     deinit {
         // Stop the background pump if the queue is ever released, so a detached
         // runLoop can't keep running after its owner is gone.
+        activeCorpusTask?.cancel()
         runTask?.cancel()
     }
 
     /// Relaunch reconciliation: any job left active is treated as interrupted and
     /// moved to paused for the user to resume (plan §5.4).
     public func bootstrap() {
-        do {
-            _ = try store.documentJobs.reconcileOrphanedBatches()
-            _ = try store.documentJobs.reconcileInterruptedJobs()
-            try reconcileQueuedImportsAfterRelaunch()
-            lastImportFailure = try restoredImportFailure()
-        } catch {
-            lastError = error.localizedDescription
+        if !hasBootstrapped {
+            hasBootstrapped = true
+            do {
+                _ = try store.documentJobs.reconcileOrphanedBatches()
+                _ = try store.documentJobs.reconcileInterruptedJobs()
+                try reconcileQueuedImportsAfterRelaunch()
+                lastImportFailure = try restoredImportFailure()
+            } catch {
+                lastError = error.localizedDescription
+            }
         }
         refresh()
+        if queuedJobs.contains(where: {
+            $0.kind == DocumentProcessingJobKind.corpusAnalysis.rawValue
+        }) {
+            pump()
+        }
     }
 
     public func refresh() {
@@ -152,6 +170,14 @@ public final class DocumentProcessingQueue: ObservableObject {
                 unfinishedCount: summary.unfinishedCount
             )
         }
+    }
+
+    /// True only for corpus work that can currently own the shared chat runtime.
+    /// Paused interrupted work remains user-controlled and does not suppress the
+    /// ordinary startup load until the user resumes it.
+    public var hasPendingCorpusAnalysisWork: Bool {
+        activeJob?.kind == DocumentProcessingJobKind.corpusAnalysis.rawValue
+            || queuedJobs.contains { $0.kind == DocumentProcessingJobKind.corpusAnalysis.rawValue }
     }
 
     /// Enqueues an import job for the given source URLs.
@@ -275,13 +301,53 @@ public final class DocumentProcessingQueue: ObservableObject {
         }
     }
 
-    /// Enqueues a persisted v064 corpus-analysis run. The run itself owns the
-    /// frozen snapshot and partition ledger; the job payload carries only its id.
+    /// Atomically persists a newly planned exact corpus ledger and the one FIFO
+    /// job allowed to execute it. Reusing the same prepared value is idempotent:
+    /// its stable run and job identities let Store return the original job.
     @discardableResult
-    public func enqueueCorpusAnalysis(matterID: String, runID: String) -> String? {
+    public func enqueueCorpusAnalysis(
+        prepared submission: PreparedCorpusAnalysisSubmission,
+        approvedScopeReceipt: CorpusAnalysisSnapshot,
+        startImmediately: Bool = true
+    ) throws -> (runID: String, jobID: String)? {
         do {
             let payloadJSON = String(
-                data: try JSONEncoder().encode(CorpusAnalysisJobPayload(runID: runID)),
+                decoding: try JSONEncoder().encode(submission.payload),
+                as: UTF8.self
+            )
+            let proposedJob = DocumentProcessingJobRecord(
+                id: submission.jobID,
+                matterID: submission.run.matterID,
+                kind: DocumentProcessingJobKind.corpusAnalysis.rawValue,
+                payloadJSON: payloadJSON
+            )
+            let job = try store.corpusAnalysis.submitPreparedCorpusAnalysis(
+                run: submission.run,
+                partitions: submission.partitions,
+                slices: submission.slices,
+                job: proposedJob,
+                approvedScopeReceipt: approvedScopeReceipt
+            )
+            refresh()
+            if startImmediately { pump() }
+            return (runID: submission.run.id, jobID: job.id)
+        } catch {
+            lastError = error.localizedDescription
+            throw error
+        }
+    }
+
+    /// Enqueues a fully reconstructible corpus-analysis request whose exact inputs
+    /// were already persisted. Retained for prepared-ledger resume/tests; new
+    /// Review creation must use the atomic prepared-submission overload above.
+    @discardableResult
+    public func enqueueCorpusAnalysis(
+        matterID: String,
+        payload: CorpusAnalysisJobPayload
+    ) -> String? {
+        do {
+            let payloadJSON = String(
+                data: try JSONEncoder().encode(payload),
                 encoding: .utf8
             )
             let job = try store.documentJobs.enqueueJob(
@@ -317,9 +383,52 @@ public final class DocumentProcessingQueue: ObservableObject {
     }
 
     public func cancelQueuedJob(id: String) {
-        try? store.documentJobs.cancelJob(id: id)
-        pendingSources[id] = nil
+        if (try? store.documentJobs.cancelQueuedJob(id: id)) == true {
+            pendingSources[id] = nil
+        }
         refresh()
+    }
+
+    /// Cancels owned active corpus work without cancelling the FIFO pump. The row
+    /// becomes cancelled only after the runner acknowledges cancellation and the
+    /// corpus engine atomically balances its frozen partition ledger.
+    @discardableResult
+    public func cancel(jobID: String) -> Bool {
+        if activeCorpusJobID == jobID, let activeCorpusTask {
+            activeCorpusTask.cancel()
+            return true
+        }
+        do {
+            let cancelled = try store.corpusAnalysis.cancelQueuedOrPausedCorpusAnalysis(
+                jobID: jobID
+            )
+            if cancelled {
+                pendingSources[jobID] = nil
+            }
+            refresh()
+            return cancelled
+        } catch {
+            lastError = error.localizedDescription
+            refresh()
+            return false
+        }
+    }
+
+    /// Requests a cooperative Review pause. The active mapper is not cancelled:
+    /// its current partition checkpoints normally, then the runner stops before
+    /// beginning the next partition and this job moves to the existing paused state.
+    public func pause(jobID: String) {
+        guard activeCorpusJobID == jobID,
+              pausingCorpusJobID != jobID,
+              let corpusAnalysisPauseRequester,
+              let job = try? store.documentJobs.fetchJob(id: jobID),
+              let json = job.payloadJSON,
+              let payload = try? JSONDecoder().decode(
+                  CorpusAnalysisJobPayload.self,
+                  from: Data(json.utf8)
+              ) else { return }
+        pausingCorpusJobID = jobID
+        corpusAnalysisPauseRequester(payload.runID)
     }
 
     /// Resumes a paused job. Sources from the original session are reused if still
@@ -437,22 +546,55 @@ public final class DocumentProcessingQueue: ObservableObject {
             try? store.documentJobs.failJob(id: job.id, errorSummary: message)
             return
         }
+        guard payload.schemaVersion == 2,
+              case .exhaustiveList(let request) = payload.task,
+              request.matterID == job.matterID else {
+            let message = "The corpus-analysis job is not a coherent reconstructible v2 request."
+            lastError = message
+            try? store.documentJobs.failJob(id: job.id, errorSummary: message)
+            return
+        }
         do {
             setPhase(job.id, .analyzingCorpus)
-            try await corpusAnalysisRunner(payload)
-            try store.documentJobs.completeJob(id: job.id)
+            let task = Task {
+                try await corpusAnalysisRunner(payload)
+            }
+            activeCorpusJobID = job.id
+            activeCorpusTask = task
+            defer {
+                if activeCorpusJobID == job.id {
+                    activeCorpusJobID = nil
+                    activeCorpusTask = nil
+                }
+                if pausingCorpusJobID == job.id {
+                    pausingCorpusJobID = nil
+                }
+            }
+            try await task.value
+            _ = try store.documentJobs.completeActiveJob(id: job.id)
+            refresh()
+        } catch CorpusAnalysisQueueRunnerError.paused {
+            try? store.documentJobs.pauseJob(id: job.id)
+            refresh()
+        } catch is CancellationError {
+            _ = try? store.documentJobs.cancelActiveJob(id: job.id)
             refresh()
         } catch {
-            lastError = error.localizedDescription
-            try? store.documentJobs.failJob(id: job.id, errorSummary: error.localizedDescription)
-            _ = try? store.auditEvents.recordEvent(
-                matterID: job.matterID,
-                eventType: "corpus_analysis_failed",
-                actor: "system",
-                summary: "Corpus analysis failed: \(error.localizedDescription)",
-                relatedTable: "document_processing_jobs",
-                relatedID: job.id
-            )
+            let failed = (try? store.documentJobs.failActiveJob(
+                id: job.id,
+                errorSummary: error.localizedDescription
+            )) == true
+            if failed {
+                lastError = error.localizedDescription
+                _ = try? store.auditEvents.recordEvent(
+                    matterID: job.matterID,
+                    eventType: "corpus_analysis_failed",
+                    actor: "system",
+                    summary: "Corpus analysis failed: \(error.localizedDescription)",
+                    relatedTable: "document_processing_jobs",
+                    relatedID: job.id
+                )
+            }
         }
     }
 

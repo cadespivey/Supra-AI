@@ -985,7 +985,12 @@ final class DocumentQATests: XCTestCase {
     func testTieredDepthPersistsOnSourceSetAndKeepsPreliminaryVersion() async throws {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "McKernon Motors")
-        try await indexDoc(store, matter.id, "agreement.txt", "The service agreement was signed on March 3, 2024 by both parties.")
+        _ = try await indexRevisionBoundDoc(
+            store,
+            matter.id,
+            "agreement.txt",
+            "The service agreement was signed on March 3, 2024 by both parties."
+        )
         let runtime = StubRuntimeClient(outcome: { request in
             .events([
                 .event(request, 0, .token, token: "Signed March 3, 2024 [S1]."),

@@ -5,9 +5,12 @@ import SupraCore
 public enum DocumentSourceRepositoryError: Error, LocalizedError, Equatable, Sendable {
     case sourceSetNotFound(String)
     case documentNotFound(String)
+    case sourceDocumentDeleted(String)
     case sourceMatterMismatch(String)
     case chunkScopeMismatch(String)
     case revisionScopeMismatch(String)
+    case sourceLocatorMismatch(String)
+    case sourceExcerptMismatch(String)
     case messageNotFound(String)
     case messageMatterMismatch(String)
 
@@ -17,12 +20,18 @@ public enum DocumentSourceRepositoryError: Error, LocalizedError, Equatable, Sen
             "Document source set \(id) was not found."
         case .documentNotFound(let id):
             "Document \(id) was not found."
+        case .sourceDocumentDeleted(let id):
+            "Document \(id) is in the Recycle Bin and cannot support a new publication."
         case .sourceMatterMismatch(let id):
             "Document \(id) does not belong to the source set's matter."
         case .chunkScopeMismatch(let id):
             "Document chunk \(id) does not belong to the cited document."
         case .revisionScopeMismatch(let id):
             "Document revision \(id) does not belong to the cited document."
+        case .sourceLocatorMismatch(let id):
+            "Document source \(id) does not retain a valid locator for the cited chunk and revision."
+        case .sourceExcerptMismatch(let id):
+            "Document source \(id) does not retain the cited chunk's exact excerpt."
         case .messageNotFound(let id):
             "Message \(id) was not found."
         case .messageMatterMismatch(let id):
@@ -174,7 +183,7 @@ public final class DocumentSourceRepository: @unchecked Sendable {
         preserveUnknownRevision: Bool = false
     ) throws {
         try writer.write { db in
-            let prepared = try prepare(
+            let prepared = try DocumentSourceIntegrityValidator.prepare(
                 source,
                 preserveUnknownRevision: preserveUnknownRevision,
                 db: db
@@ -189,7 +198,7 @@ public final class DocumentSourceRepository: @unchecked Sendable {
     ) throws {
         try writer.write { db in
             for source in sources {
-                let prepared = try prepare(
+                let prepared = try DocumentSourceIntegrityValidator.prepare(
                     source,
                     preserveUnknownRevision: preserveUnknownRevision,
                     db: db
@@ -225,49 +234,6 @@ public final class DocumentSourceRepository: @unchecked Sendable {
                 arguments: [structuredOutputVersionID]
             )
         }
-    }
-
-    /// Validates matter/document/revision scope and, for ordinary new writes,
-    /// derives the exact revision from the immutable cited chunk. Callers cloning
-    /// a legacy source set opt into preserving nil so unknown history is never
-    /// silently laundered into current provenance.
-    private func prepare(
-        _ source: DocumentOutputSourceRecord,
-        preserveUnknownRevision: Bool,
-        db: Database
-    ) throws -> DocumentOutputSourceRecord {
-        guard let sourceSet = try DocumentSourceSetRecord.fetchOne(db, key: source.sourceSetID) else {
-            throw DocumentSourceRepositoryError.sourceSetNotFound(source.sourceSetID)
-        }
-
-        var prepared = source
-        if let documentID = source.documentID {
-            guard let document = try MatterDocumentRecord.fetchOne(db, key: documentID) else {
-                throw DocumentSourceRepositoryError.documentNotFound(documentID)
-            }
-            guard document.matterID == sourceSet.matterID else {
-                throw DocumentSourceRepositoryError.sourceMatterMismatch(documentID)
-            }
-        }
-
-        if let chunkID = source.chunkID,
-           let chunk = try DocumentChunkRecord.fetchOne(db, key: chunkID) {
-            if let documentID = source.documentID, chunk.documentID != documentID {
-                throw DocumentSourceRepositoryError.chunkScopeMismatch(chunkID)
-            }
-            if prepared.revisionID == nil, !preserveUnknownRevision {
-                prepared.revisionID = chunk.revisionID
-            }
-        }
-
-        if let revisionID = prepared.revisionID {
-            guard let documentID = prepared.documentID,
-                  let revision = try DocumentPartRevisionRecord.fetchOne(db, key: revisionID),
-                  revision.documentID == documentID else {
-                throw DocumentSourceRepositoryError.revisionScopeMismatch(revisionID)
-            }
-        }
-        return prepared
     }
 
     // MARK: - Exports

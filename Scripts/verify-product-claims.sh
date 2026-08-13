@@ -99,6 +99,7 @@ required_topics=(
   release-provenance query-logging file-access public-assets
   restore-quiesced-staging restore-verified-staging restore-cold-start-recovery
   restore-cold-start-order
+  local-ai-hardware-recommendation
 )
 for topic in "${required_topics[@]}"; do
   awk -F '\t' -v topic="$topic" '$2 == topic { found = 1 } END { exit(found ? 0 : 1) }' "$parsed_claims" \

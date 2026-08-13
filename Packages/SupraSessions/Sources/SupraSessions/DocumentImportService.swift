@@ -27,6 +27,15 @@ public enum ImportTraversalStage: String, Sendable {
 public typealias ImportTraversalFaultInjector = @Sendable (ImportTraversalStage, URL) throws -> Void
 public typealias ImportSourceStateObserver = @Sendable (DocumentImportSourceRecord) throws -> Void
 
+public struct DocumentImportRollbackError: Error, LocalizedError, Equatable, Sendable {
+    public let documentID: String
+    public let reason: String
+
+    public var errorDescription: String? {
+        "Imported document \(documentID) could not be rolled back: \(reason)"
+    }
+}
+
 /// The final import report stored on the batch (plan §5.1).
 public struct DocumentImportReport: Codable, Sendable {
     public var items: [DocumentImportReportItem]
@@ -169,6 +178,8 @@ public final class DocumentImportService: @unchecked Sendable {
                 )
             } catch is CancellationError {
                 throw CancellationError()
+            } catch let rollbackFailure as DocumentImportRollbackError {
+                throw rollbackFailure
             } catch let violation as ImportPolicyViolation {
                 try recordPolicyRejection(
                     violation,
@@ -280,6 +291,8 @@ public final class DocumentImportService: @unchecked Sendable {
                 )
             } catch is CancellationError {
                 throw CancellationError()
+            } catch let rollbackFailure as DocumentImportRollbackError {
+                throw rollbackFailure
             } catch let violation as ImportPolicyViolation {
                 try recordPolicyRejection(
                     violation,
@@ -672,13 +685,30 @@ public final class DocumentImportService: @unchecked Sendable {
                 blobSHA256: blob.sha256
             )
         } catch is CancellationError {
-            rollbackRejectedDocument(document.id)
+            do {
+                try rollbackRejectedDocument(document.id, matterID: matterID)
+            } catch {
+                let rollbackFailure = try recordRollbackFailure(
+                    originalReason: "Import cancellation could not be completed cleanly.",
+                    rejectionCode: nil,
+                    rollbackError: error,
+                    document: document,
+                    blob: blob,
+                    sourceDisplayPath: sourceDisplayPath,
+                    sourceID: sourceID,
+                    parentDocumentID: parentDocumentID,
+                    report: &report
+                )
+                throw rollbackFailure
+            }
             throw CancellationError()
         } catch let violation as ImportPolicyViolation {
-            rollbackRejectedDocument(document.id)
-            try recordPolicyRejection(
+            try recordPolicyRejectionAfterRollback(
                 violation,
-                url: url,
+                document: document,
+                blob: blob,
+                matterID: matterID,
+                displayName: displayName,
                 sourceDisplayPath: sourceDisplayPath,
                 sourceID: sourceID,
                 parentDocumentID: parentDocumentID,
@@ -687,10 +717,12 @@ public final class DocumentImportService: @unchecked Sendable {
             return nil
         } catch let error as ExtractionError {
             if case .policyViolation(let violation) = error {
-                rollbackRejectedDocument(document.id)
-                try recordPolicyRejection(
+                try recordPolicyRejectionAfterRollback(
                     violation,
-                    url: url,
+                    document: document,
+                    blob: blob,
+                    matterID: matterID,
+                    displayName: displayName,
                     sourceDisplayPath: sourceDisplayPath,
                     sourceID: sourceID,
                     parentDocumentID: parentDocumentID,
@@ -835,11 +867,116 @@ public final class DocumentImportService: @unchecked Sendable {
         )
     }
 
-    private func rollbackRejectedDocument(_ documentID: String) {
-        guard let result = try? store.documentLibrary.permanentlyDeleteDocument(id: documentID) else { return }
+    private func rollbackRejectedDocument(
+        _ documentID: String,
+        matterID: String
+    ) throws {
+        let result = try store.documentLibrary.permanentlyDeleteDocument(
+            id: documentID,
+            actor: "system"
+        )
+        var orphanedBlobCount = 0
         for relativePath in result.removedBlobPaths {
-            try? FileManager.default.removeItem(at: storage.url(forManagedRelativePath: relativePath))
+            let fileURL = storage.url(forManagedRelativePath: relativePath)
+            do {
+                try FileManager.default.removeItem(at: fileURL)
+            } catch {
+                if FileManager.default.fileExists(atPath: fileURL.path) {
+                    orphanedBlobCount += 1
+                }
+            }
         }
+        if orphanedBlobCount > 0 {
+            _ = try? store.auditEvents.recordEvent(
+                matterID: matterID,
+                eventType: "document_blob_cleanup_failed",
+                actor: "system",
+                summary: "Managed blob cleanup remained incomplete after rejected import rollback.",
+                relatedTable: MatterDocumentRecord.databaseTableName,
+                relatedID: documentID,
+                metadataJSON:
+                    "{\"orphaned_blob_count\":\(orphanedBlobCount),\"schema_version\":1}"
+            )
+        }
+    }
+
+    private func recordPolicyRejectionAfterRollback(
+        _ violation: ImportPolicyViolation,
+        document: MatterDocumentRecord,
+        blob: DocumentBlobRecord,
+        matterID: String,
+        displayName: String,
+        sourceDisplayPath: String,
+        sourceID: String,
+        parentDocumentID: String?,
+        report: inout DocumentImportReport
+    ) throws {
+        do {
+            try rollbackRejectedDocument(document.id, matterID: matterID)
+        } catch {
+            _ = try recordRollbackFailure(
+                originalReason: violation.localizedDescription,
+                rejectionCode: violation.code.rawValue,
+                rollbackError: error,
+                document: document,
+                blob: blob,
+                sourceDisplayPath: sourceDisplayPath,
+                sourceID: sourceID,
+                parentDocumentID: parentDocumentID,
+                report: &report
+            )
+            return
+        }
+        try recordPolicyRejection(
+            violation,
+            displayName: displayName,
+            sourceDisplayPath: sourceDisplayPath,
+            sourceID: sourceID,
+            parentDocumentID: parentDocumentID,
+            report: &report
+        )
+    }
+
+    @discardableResult
+    private func recordRollbackFailure(
+        originalReason: String,
+        rejectionCode: String?,
+        rollbackError: Error,
+        document: MatterDocumentRecord,
+        blob: DocumentBlobRecord,
+        sourceDisplayPath: String,
+        sourceID: String,
+        parentDocumentID: String?,
+        report: inout DocumentImportReport
+    ) throws -> DocumentImportRollbackError {
+        let rollbackFailure = DocumentImportRollbackError(
+            documentID: document.id,
+            reason: rollbackError.localizedDescription
+        )
+        let persistedReason =
+            "\(originalReason) Residual document cleanup failed: \(rollbackFailure.localizedDescription)"
+        try? store.documentLibrary.updateStatus(
+            documentID: document.id,
+            status: .failed
+        )
+        try transitionSource(
+            sourceID,
+            to: .failed,
+            rejectionCode: rejectionCode,
+            reason: persistedReason,
+            documentID: document.id,
+            blobSHA256: blob.sha256
+        )
+        report.items.append(DocumentImportReportItem(
+            displayName: document.displayName,
+            sourceDisplayPath: sourceDisplayPath,
+            disposition: DocumentImportDisposition.extractionFailed.rawValue,
+            reason: persistedReason,
+            documentID: document.id,
+            parentDocumentID: parentDocumentID,
+            rejectionCode: rejectionCode
+        ))
+        return rollbackFailure
     }
 
     // MARK: - Editable extracted text
