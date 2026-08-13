@@ -121,7 +121,7 @@ Supra's local-AI policy conservatively maps detected unified memory to 16, 32, 6
 ## Persistence
 
 `SupraStore` uses [GRDB](https://github.com/groue/GRDB.swift) over SQLite with an ordered
-migration list. The shipping database schema registers a contiguous migration sequence from v001 through v073; v073 remains immutable, dormant compatibility history for databases that may already have applied it and does not represent an available product capability.
+migration list. The shipping database schema registers a contiguous migration sequence from v001 through v074; v073 remains immutable, dormant compatibility history for databases that may already have applied it and does not represent an available product capability.
 Each feature area adds migrations and a repository:
 
 - Milestone 1 established chats, messages, models, and validation runs.

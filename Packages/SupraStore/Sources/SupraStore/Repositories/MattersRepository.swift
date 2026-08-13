@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import GRDB
 import SupraCore
@@ -30,6 +31,8 @@ public final class MattersRepository: @unchecked Sendable {
             jurisdiction: jurisdiction,
             partyPerspective: partyPerspective
         )
+        let normalizedCourt = Self.trimOptional(court)
+        let normalizedClientNames = Self.trimOptional(clientNames)
         let chatTitle = defaultChatTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
         return try writer.write { db in
             let now = Date()
@@ -37,11 +40,11 @@ public final class MattersRepository: @unchecked Sendable {
                 name: normalized.name,
                 jurisdiction: normalized.jurisdiction,
                 partyPerspective: partyPerspective.rawValue,
-                court: Self.trimOptional(court),
+                court: normalizedCourt,
                 judge: Self.trimOptional(judge),
                 docketNumber: Self.trimOptional(docketNumber),
                 practiceArea: Self.trimOptional(practiceArea),
-                clientNames: Self.trimOptional(clientNames),
+                clientNames: normalizedClientNames,
                 matterDescription: Self.trimOptional(matterDescription),
                 internalMatterID: Self.trimOptional(internalMatterID),
                 clientID: Self.trimOptional(clientID),
@@ -51,6 +54,24 @@ public final class MattersRepository: @unchecked Sendable {
                 updatedAt: now
             )
             try record.insert(db)
+            if try db.tableExists("matter_identity_conversion_receipts") {
+                try Self.insertIdentitySourceReceipt(
+                    db,
+                    id: "identity-source:\(record.id):r1",
+                    matterID: record.id,
+                    sourceKind: "create",
+                    identityRevision: 1,
+                    courtResolutionState: "unresolved",
+                    resolutionReason: "unknown",
+                    legacyJurisdiction: normalized.jurisdiction,
+                    legacyCourt: normalizedCourt,
+                    legacyPartyPerspective: partyPerspective.rawValue,
+                    legacyClientNames: normalizedClientNames,
+                    canonicalJurisdictionID: nil,
+                    canonicalCourtID: nil,
+                    createdAt: now
+                )
+            }
             // Create the default matter chat in the same transaction so a matter
             // never exists without it (spec §8.3); both roll back together.
             if let chatTitle, !chatTitle.isEmpty {
@@ -86,6 +107,266 @@ public final class MattersRepository: @unchecked Sendable {
         }
     }
 
+    public func fetchUnresolvedCourtResolutionQueue() throws -> [CourtIdentityResolutionQueueItem] {
+        try writer.read { db in
+            try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT matter.id AS matter_id,
+                           conversion.legacy_court AS legacy_court,
+                           conversion.id AS conversion_receipt_id,
+                           matter.identity_revision AS identity_revision
+                    FROM matters AS matter
+                    JOIN matter_identity_conversion_receipts AS conversion
+                      ON conversion.matter_id = matter.id
+                     AND conversion.identity_revision = matter.identity_revision
+                    WHERE matter.deleted_at IS NULL
+                      AND matter.court_resolution_state = 'unresolved'
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM matter_identity_decision_receipts AS decision
+                          WHERE decision.matter_id = matter.id
+                            AND decision.kind = 'court_resolution'
+                            AND decision.result_identity_revision = matter.identity_revision
+                      )
+                    ORDER BY matter.created_at, matter.id
+                    """
+            ).map { row in
+                return CourtIdentityResolutionQueueItem(
+                    matterID: row["matter_id"],
+                    legacyCourtText: row["legacy_court"],
+                    conversionReceiptID: row["conversion_receipt_id"],
+                    identityRevision: row["identity_revision"]
+                )
+            }
+        }
+    }
+
+    public func fetchCourtIdentityResolutionReceipts(
+        matterID: String
+    ) throws -> [CourtIdentityResolutionReceipt] {
+        try writer.read { db in
+            try CourtIdentityResolutionReceipt.fetchAll(
+                db,
+                sql: """
+                    SELECT *
+                    FROM matter_identity_decision_receipts
+                    WHERE matter_id = ? AND kind = 'court_resolution'
+                    ORDER BY result_identity_revision, id
+                    """,
+                arguments: [matterID]
+            )
+        }
+    }
+
+    public func resolveCourtIdentity(
+        matterID: String,
+        decisionID: String,
+        sourceConversionReceiptID: String,
+        expectedIdentityRevision: Int,
+        canonicalJurisdictionID: String,
+        canonicalCourtID: String,
+        resolutionSource: String,
+        actor: String,
+        purpose: String,
+        catalogVersion: String,
+        catalogSemanticDigest: String,
+        decidedAt: Date
+    ) throws -> CourtIdentityResolutionReceipt {
+        let fields: [(name: String, value: String)] = [
+            ("matterID", matterID),
+            ("decisionID", decisionID),
+            ("sourceConversionReceiptID", sourceConversionReceiptID),
+            ("canonicalJurisdictionID", canonicalJurisdictionID),
+            ("canonicalCourtID", canonicalCourtID),
+            ("resolutionSource", resolutionSource),
+            ("actor", actor),
+            ("purpose", purpose),
+            ("catalogVersion", catalogVersion),
+            ("catalogSemanticDigest", catalogSemanticDigest),
+        ]
+        for field in fields {
+            let trimmed = field.value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, trimmed == field.value else {
+                throw CourtIdentityResolutionError.invalidField(field.name)
+            }
+        }
+        guard expectedIdentityRevision >= 1 else {
+            throw CourtIdentityResolutionError.staleIdentityRevision
+        }
+        guard catalogVersion == Self.canonicalCourtCatalogVersion else {
+            throw CourtIdentityResolutionError.invalidField("catalogVersion")
+        }
+        guard Self.isLowercaseSHA256(catalogSemanticDigest),
+              catalogSemanticDigest == Self.canonicalCourtCatalogDigestSHA256
+        else {
+            throw CourtIdentityResolutionError.invalidField("catalogSemanticDigest")
+        }
+
+        let requestDigest = Self.courtIdentityRequestDigest(
+            matterID: matterID,
+            decisionID: decisionID,
+            sourceConversionReceiptID: sourceConversionReceiptID,
+            expectedIdentityRevision: expectedIdentityRevision,
+            canonicalJurisdictionID: canonicalJurisdictionID,
+            canonicalCourtID: canonicalCourtID,
+            resolutionSource: resolutionSource,
+            actor: actor,
+            purpose: purpose,
+            catalogVersion: catalogVersion,
+            catalogSemanticDigest: catalogSemanticDigest,
+            decidedAt: decidedAt
+        )
+
+        return try writer.write { db in
+            if let existingRow = try Row.fetchOne(
+                db,
+                sql: "SELECT * FROM matter_identity_decision_receipts WHERE id = ?",
+                arguments: [decisionID]
+            ) {
+                guard existingRow["kind"] as String == "court_resolution",
+                      existingRow["request_digest_sha256"] as String == requestDigest
+                else {
+                    throw CourtIdentityResolutionError.conflictingDecision
+                }
+                return try CourtIdentityResolutionReceipt(row: existingRow)
+            }
+
+            guard let matter = try Row.fetchOne(
+                db,
+                sql: """
+                    SELECT court, identity_revision, court_resolution_state
+                    FROM matters
+                    WHERE id = ? AND deleted_at IS NULL
+                    """,
+                arguments: [matterID]
+            ) else {
+                throw CourtIdentityResolutionError.matterUnavailable
+            }
+            let currentRevision: Int = matter["identity_revision"]
+            guard currentRevision == expectedIdentityRevision,
+                  matter["court_resolution_state"] as String == "unresolved"
+            else {
+                throw CourtIdentityResolutionError.staleIdentityRevision
+            }
+            guard let conversion = try Row.fetchOne(
+                db,
+                sql: """
+                    SELECT id, legacy_court
+                    FROM matter_identity_conversion_receipts
+                    WHERE id = ? AND matter_id = ? AND identity_revision = ?
+                    """,
+                arguments: [
+                    sourceConversionReceiptID,
+                    matterID,
+                    expectedIdentityRevision,
+                ]
+            ) else {
+                throw CourtIdentityResolutionError.sourceReceiptUnavailable
+            }
+            let legacyCourt: String? = conversion["legacy_court"]
+            let resultRevision = expectedIdentityRevision + 1
+            let createdAt = Date()
+            try db.execute(
+                sql: """
+                    INSERT INTO matter_identity_decision_receipts (
+                        id, matter_id, kind, source_conversion_receipt_id,
+                        prior_identity_revision, result_identity_revision,
+                        legacy_court, canonical_jurisdiction_id, canonical_court_id,
+                        resolution_source, actor, purpose,
+                        canonical_catalog_version,
+                        canonical_catalog_digest_sha256, request_digest_sha256,
+                        decided_at, created_at
+                    ) VALUES (?, ?, 'court_resolution', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                arguments: [
+                    decisionID, matterID, sourceConversionReceiptID,
+                    expectedIdentityRevision, resultRevision,
+                    legacyCourt, canonicalJurisdictionID, canonicalCourtID,
+                    resolutionSource, actor, purpose, catalogVersion,
+                    catalogSemanticDigest, requestDigest, decidedAt, createdAt,
+                ]
+            )
+            try db.execute(
+                sql: """
+                    UPDATE matters
+                    SET canonical_jurisdiction_id = ?, canonical_court_id = ?,
+                        court_resolution_state = 'court',
+                        canonical_catalog_version = ?,
+                        canonical_catalog_digest_sha256 = ?,
+                        identity_revision = ?, updated_at = ?
+                    WHERE id = ? AND identity_revision = ?
+                      AND court_resolution_state = 'unresolved'
+                    """,
+                arguments: [
+                    canonicalJurisdictionID, canonicalCourtID, catalogVersion,
+                    catalogSemanticDigest, resultRevision, createdAt, matterID,
+                    expectedIdentityRevision,
+                ]
+            )
+            guard db.changesCount == 1 else {
+                throw CourtIdentityResolutionError.staleIdentityRevision
+            }
+            return CourtIdentityResolutionReceipt(
+                decisionID: decisionID,
+                matterID: matterID,
+                sourceConversionReceiptID: sourceConversionReceiptID,
+                legacyCourtText: legacyCourt,
+                priorIdentityRevision: expectedIdentityRevision,
+                resultIdentityRevision: resultRevision,
+                canonicalJurisdictionID: canonicalJurisdictionID,
+                canonicalCourtID: canonicalCourtID,
+                resolutionSource: resolutionSource,
+                actor: actor,
+                purpose: purpose,
+                catalogVersion: catalogVersion,
+                catalogSemanticDigest: catalogSemanticDigest,
+                requestDigestSHA256: requestDigest,
+                decidedAt: decidedAt
+            )
+        }
+    }
+
+    private static func courtIdentityRequestDigest(
+        matterID: String,
+        decisionID: String,
+        sourceConversionReceiptID: String,
+        expectedIdentityRevision: Int,
+        canonicalJurisdictionID: String,
+        canonicalCourtID: String,
+        resolutionSource: String,
+        actor: String,
+        purpose: String,
+        catalogVersion: String,
+        catalogSemanticDigest: String,
+        decidedAt: Date
+    ) -> String {
+        let values = [
+            "supra-court-identity-decision-v1", matterID, decisionID,
+            sourceConversionReceiptID, String(expectedIdentityRevision),
+            canonicalJurisdictionID, canonicalCourtID, resolutionSource, actor,
+            purpose, catalogVersion, catalogSemanticDigest,
+            String(format: "%.6f", decidedAt.timeIntervalSince1970),
+        ]
+        var data = Data()
+        for value in values {
+            let bytes = Data(value.utf8)
+            data.append(Data("\(bytes.count):".utf8))
+            data.append(bytes)
+        }
+        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static let canonicalCourtCatalogVersion = "jurisdiction-courts-v1"
+    private static let canonicalCourtCatalogDigestSHA256 =
+        "0393b9dc507ea91ebbf939e3b7620c3e6555dd01cfdbcdc00d5298d89e14adf3"
+
+    private static func isLowercaseSHA256(_ value: String) -> Bool {
+        value.utf8.count == 64 && value.utf8.allSatisfy { byte in
+            (48...57).contains(byte) || (97...102).contains(byte)
+        }
+    }
+
     public func renameMatter(id: String, name: String) throws {
         let trimmed = try Self.requireNonEmpty(name, fieldName: "name")
         try writer.write { db in
@@ -117,7 +398,121 @@ public final class MattersRepository: @unchecked Sendable {
             jurisdiction: jurisdiction,
             partyPerspective: partyPerspective
         )
+        let normalizedCourt = Self.trimOptional(court)
+        let normalizedClientNames = Self.trimOptional(clientNames)
+        let normalizedJudge = Self.trimOptional(judge)
+        let normalizedDocketNumber = Self.trimOptional(docketNumber)
+        let normalizedPracticeArea = Self.trimOptional(practiceArea)
+        let normalizedMatterDescription = Self.trimOptional(matterDescription)
+        let normalizedInternalMatterID = Self.trimOptional(internalMatterID)
+        let normalizedClientID = Self.trimOptional(clientID)
+        let normalizedClientMatterID = Self.trimOptional(clientMatterID)
+        let normalizedNotes = Self.trimOptional(notes)
         try writer.write { db in
+            let identitySchemaExists = try db.tableExists(
+                "matter_identity_conversion_receipts"
+            )
+            let existingIdentity: Row?
+            if identitySchemaExists {
+                existingIdentity = try Row.fetchOne(
+                    db,
+                    sql: """
+                        SELECT jurisdiction, party_perspective, court, client_names,
+                               canonical_jurisdiction_id, canonical_court_id,
+                               court_resolution_state, canonical_catalog_version,
+                               canonical_catalog_digest_sha256, identity_revision
+                        FROM matters
+                        WHERE id = ? AND deleted_at IS NULL
+                        """,
+                    arguments: [id]
+                )
+            } else {
+                existingIdentity = nil
+            }
+
+            let identityInputChanged: Bool
+            let courtInputChanged: Bool
+            if let existingIdentity {
+                identityInputChanged = existingIdentity["jurisdiction"] as String
+                    != normalized.jurisdiction
+                    || existingIdentity["party_perspective"] as String
+                    != partyPerspective.rawValue
+                    || existingIdentity["court"] as String? != normalizedCourt
+                    || existingIdentity["client_names"] as String? != normalizedClientNames
+                courtInputChanged = existingIdentity["jurisdiction"] as String
+                    != normalized.jurisdiction
+                    || existingIdentity["court"] as String? != normalizedCourt
+            } else {
+                identityInputChanged = false
+                courtInputChanged = false
+            }
+
+            let now = Date()
+            if let existingIdentity, identityInputChanged {
+                let priorRevision: Int = existingIdentity["identity_revision"]
+                let resultRevision = priorRevision + 1
+                let priorState: String = existingIdentity["court_resolution_state"]
+                let resultState = courtInputChanged ? "unresolved" : priorState
+                let canonicalJurisdictionID: String? = courtInputChanged
+                    ? nil
+                    : existingIdentity["canonical_jurisdiction_id"]
+                let canonicalCourtID: String? = courtInputChanged
+                    ? nil
+                    : existingIdentity["canonical_court_id"]
+                let reason: String
+                if courtInputChanged {
+                    reason = "unknown"
+                } else {
+                    switch resultState {
+                    case "court": reason = "unchanged_canonical"
+                    case "jurisdiction_only": reason = "jurisdiction_only"
+                    case "not_applicable": reason = "not_applicable"
+                    default: reason = "unknown"
+                    }
+                }
+                try Self.insertIdentitySourceReceipt(
+                    db,
+                    id: "identity-source:\(id):r\(resultRevision)",
+                    matterID: id,
+                    sourceKind: "update",
+                    identityRevision: resultRevision,
+                    courtResolutionState: resultState,
+                    resolutionReason: reason,
+                    legacyJurisdiction: normalized.jurisdiction,
+                    legacyCourt: normalizedCourt,
+                    legacyPartyPerspective: partyPerspective.rawValue,
+                    legacyClientNames: normalizedClientNames,
+                    canonicalJurisdictionID: canonicalJurisdictionID,
+                    canonicalCourtID: canonicalCourtID,
+                    createdAt: now
+                )
+                try db.execute(
+                    sql: """
+                    UPDATE matters
+                    SET name = ?, jurisdiction = ?, party_perspective = ?, court = ?,
+                        judge = ?, docket_number = ?, practice_area = ?, client_names = ?,
+                        matter_description = ?, internal_matter_id = ?, client_id = ?,
+                        client_matter_id = ?, notes = ?, canonical_jurisdiction_id = ?,
+                        canonical_court_id = ?, court_resolution_state = ?,
+                        identity_revision = ?, updated_at = ?
+                    WHERE id = ? AND deleted_at IS NULL AND identity_revision = ?
+                    """,
+                    arguments: [
+                        normalized.name, normalized.jurisdiction, partyPerspective.rawValue,
+                        normalizedCourt, normalizedJudge, normalizedDocketNumber,
+                        normalizedPracticeArea, normalizedClientNames,
+                        normalizedMatterDescription, normalizedInternalMatterID,
+                        normalizedClientID, normalizedClientMatterID, normalizedNotes,
+                        canonicalJurisdictionID, canonicalCourtID, resultState,
+                        resultRevision, now, id, priorRevision,
+                    ]
+                )
+                guard db.changesCount == 1 else {
+                    throw CourtIdentityResolutionError.staleIdentityRevision
+                }
+                return
+            }
+
             try db.execute(
                 sql: """
                 UPDATE matters
@@ -141,17 +536,17 @@ public final class MattersRepository: @unchecked Sendable {
                     normalized.name,
                     normalized.jurisdiction,
                     partyPerspective.rawValue,
-                    Self.trimOptional(court),
-                    Self.trimOptional(judge),
-                    Self.trimOptional(docketNumber),
-                    Self.trimOptional(practiceArea),
-                    Self.trimOptional(clientNames),
-                    Self.trimOptional(matterDescription),
-                    Self.trimOptional(internalMatterID),
-                    Self.trimOptional(clientID),
-                    Self.trimOptional(clientMatterID),
-                    Self.trimOptional(notes),
-                    Date(),
+                    normalizedCourt,
+                    normalizedJudge,
+                    normalizedDocketNumber,
+                    normalizedPracticeArea,
+                    normalizedClientNames,
+                    normalizedMatterDescription,
+                    normalizedInternalMatterID,
+                    normalizedClientID,
+                    normalizedClientMatterID,
+                    normalizedNotes,
+                    now,
                     id
                 ]
             )
@@ -418,6 +813,45 @@ public final class MattersRepository: @unchecked Sendable {
             options: [.sortedKeys, .withoutEscapingSlashes]
         )
         return String(decoding: data, as: UTF8.self)
+    }
+
+    private static func insertIdentitySourceReceipt(
+        _ db: Database,
+        id: String,
+        matterID: String,
+        sourceKind: String,
+        identityRevision: Int,
+        courtResolutionState: String,
+        resolutionReason: String,
+        legacyJurisdiction: String,
+        legacyCourt: String?,
+        legacyPartyPerspective: String,
+        legacyClientNames: String?,
+        canonicalJurisdictionID: String?,
+        canonicalCourtID: String?,
+        createdAt: Date
+    ) throws {
+        try db.execute(
+            sql: """
+                INSERT INTO matter_identity_conversion_receipts (
+                    id, matter_id, source_kind, source_migration,
+                    identity_revision, court_resolution_state,
+                    resolution_reason, legacy_jurisdiction, legacy_court,
+                    legacy_party_perspective, legacy_client_names,
+                    canonical_jurisdiction_id, canonical_court_id,
+                    canonical_catalog_version,
+                    canonical_catalog_digest_sha256, created_at
+                ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+            arguments: [
+                id, matterID, sourceKind, identityRevision,
+                courtResolutionState, resolutionReason, legacyJurisdiction,
+                legacyCourt, legacyPartyPerspective, legacyClientNames,
+                canonicalJurisdictionID, canonicalCourtID,
+                canonicalCourtCatalogVersion, canonicalCourtCatalogDigestSHA256,
+                createdAt,
+            ]
+        )
     }
 
     private static func validateMatterFields(

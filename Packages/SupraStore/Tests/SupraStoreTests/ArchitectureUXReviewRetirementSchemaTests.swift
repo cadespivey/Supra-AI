@@ -25,6 +25,8 @@ final class ArchitectureUXReviewRetirementSchemaTests: XCTestCase {
             #"        migrator.registerMigration("v072_harden_corpus_review_integrity") { db in"#
         let v073Anchor =
             #"        migrator.registerMigration("v073_create_case_file_review_projects") { db in"#
+        let v074Anchor =
+            #"        migrator.registerMigration("v074_create_canonical_matter_identity") { db in"#
         let returnAnchor = "        return migrator"
         let resetAnchor =
             "            // Case File Review: children before project/matter ownership."
@@ -33,18 +35,20 @@ final class ArchitectureUXReviewRetirementSchemaTests: XCTestCase {
 
         let v072Start = try XCTUnwrap(source.range(of: v072Anchor)?.lowerBound)
         let v073Start = try XCTUnwrap(source.range(of: v073Anchor)?.lowerBound)
+        let v074Start = try XCTUnwrap(source.range(of: v074Anchor)?.lowerBound)
         let migratorReturn = try XCTUnwrap(source.range(of: returnAnchor)?.lowerBound)
         let resetStart = try XCTUnwrap(source.range(of: resetAnchor)?.lowerBound)
         let resetEnd = try XCTUnwrap(source.range(of: resetEndAnchor)?.lowerBound)
 
         XCTAssertLessThan(v072Start, v073Start)
-        XCTAssertLessThan(v073Start, migratorReturn)
+        XCTAssertLessThan(v073Start, v074Start)
+        XCTAssertLessThan(v074Start, migratorReturn)
         XCTAssertLessThan(migratorReturn, resetStart)
         XCTAssertLessThan(resetStart, resetEnd)
 
         let v072WithSeparator = source[v072Start..<v073Start]
-        let v073WithSeparator = source[v073Start..<migratorReturn]
-        let orderedWithSeparator = source[v072Start..<migratorReturn]
+        let v073WithSeparator = source[v073Start..<v074Start]
+        let orderedWithSeparator = source[v072Start..<v074Start]
         XCTAssertTrue(v072WithSeparator.hasSuffix("\n\n"))
         XCTAssertTrue(v073WithSeparator.hasSuffix("\n\n"))
         XCTAssertTrue(orderedWithSeparator.hasSuffix("\n\n"))
@@ -79,21 +83,22 @@ final class ArchitectureUXReviewRetirementSchemaTests: XCTestCase {
         )
 
         let migrations = SupraMigrator.makeMigrator().migrations
-        XCTAssertEqual(migrations.count, 73)
-        XCTAssertEqual(Array(migrations.suffix(5)), [
+        XCTAssertEqual(migrations.count, 74)
+        XCTAssertEqual(Array(migrations.suffix(6)), [
             "v069_add_verification_dimensions",
             "v070_add_authority_reviewed_proposition",
             "v071_create_draft_artifact_intents",
             "v072_harden_corpus_review_integrity",
             "v073_create_case_file_review_projects",
+            "v074_create_canonical_matter_identity",
         ])
         XCTAssertEqual(
             sha256(linesData(migrations)),
-            "004b49c67d96e2420b1a222e88c2c8c2e6f8fe04f38b2566baa79bd7aca3f130"
+            "3d7371dbbebe7708f9494548bf961df8e6b3db56c6a5077d75ac7961b577f0f0"
         )
         XCTAssertEqual(
-            sha256(linesData(Array(migrations.suffix(5)))),
-            "e49b082bd34027881c6faa733a53b330a334b0608732999fb34ae807c8e0ad69"
+            sha256(linesData(Array(migrations.suffix(6)))),
+            "31168491e35b0a09a1bb63994b9cd1a7cf1d56c22d475b034fd95538e15003a4"
         )
 
         // v072 embeds these persisted raw values into its data upgrade. Freeze
@@ -170,6 +175,7 @@ final class ArchitectureUXReviewRetirementSchemaTests: XCTestCase {
                     ]
                 )
             }
+            try migrator.migrate(queue)
             try assertHealthyDormantCompatibilityState(queue, migrator: migrator)
             expectedProjectDigest = try dormantProjectDigest(queue)
         }
@@ -205,7 +211,7 @@ final class ArchitectureUXReviewRetirementSchemaTests: XCTestCase {
                     db,
                     sql: "SELECT identifier FROM grdb_migrations ORDER BY rowid"
                 ).last,
-                "v073_create_case_file_review_projects"
+                "v074_create_canonical_matter_identity"
             )
             XCTAssertEqual(Set(try db.columns(in: "case_file_review_projects").map(\.name)), Set([
                 "id", "matter_id", "title", "status", "stale_reason", "source_run_id",

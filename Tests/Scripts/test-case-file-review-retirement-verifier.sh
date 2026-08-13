@@ -95,7 +95,7 @@ make_shipping_fixture() {
     'claims:' \
     '  - id: "STORE-MIGRATION-SEQUENCE"' \
     '    topic: "migration-count"' \
-    '    expected: "v073_create_case_file_review_projects"' \
+    '    expected: "v074_create_canonical_matter_identity"' \
     '  - id: "RETAINED-ATTORNEY-REVIEW"' \
     '    wording: "Research results and reviewed authorities remain available for attorney review."'
   write_file "${fixture_root}/ARCHITECTURE.md" \
@@ -122,9 +122,9 @@ if ! grep -Fq 'static let identityPrefix = "guided-review:"' \
   printf '%s\n' 'FAIL: fixture does not exercise the exact retired-queue discriminator allowlist' >&2
   failures=$((failures + 1))
 fi
-if ! grep -Fq 'expected: "v073_create_case_file_review_projects"' \
+if ! grep -Fq 'expected: "v074_create_canonical_matter_identity"' \
     "${base_fixture}/Docs/Verified-Product-Claims.yml"; then
-  printf '%s\n' 'FAIL: fixture does not exercise the dormant v073 claim endpoint allowlist' >&2
+  printf '%s\n' 'FAIL: fixture does not exercise the shipping v074 migration endpoint' >&2
   failures=$((failures + 1))
 fi
 if ! grep -Fq 'BEGIN hash-pinned dormant v073 evidence compatibility' \
@@ -225,8 +225,8 @@ run_case \
   'shipping app composes package-only corpus execution' \
   env SUPRA_REPO_ROOT="$stale_corpus_owner_fixture" bash "$verifier"
 
-# The migration endpoint is allowlisted only as STORE-MIGRATION-SEQUENCE's
-# exact expected value. A duplicate endpoint under another claim fails closed.
+# Verified claims receive no v073 exception after v074 becomes the shipping
+# endpoint. A stale Review endpoint under any claim fails the ordinary scan.
 stale_claim_endpoint_fixture="${temporary_dir}/stale-claim-endpoint"
 mkdir -p "$stale_claim_endpoint_fixture"
 cp -R "${base_fixture}/." "$stale_claim_endpoint_fixture"
@@ -235,9 +235,9 @@ printf '%s\n' \
   '    expected: "v073_create_case_file_review_projects"' \
   >>"${stale_claim_endpoint_fixture}/Docs/Verified-Product-Claims.yml"
 run_case \
-  'dormant v073 endpoint outside the exact migration-sequence claim fails closed' \
+  'stale dormant v073 endpoint in claims fails closed' \
   1 \
-  'exact dormant v073 claim endpoint is missing, duplicated, or outside STORE-MIGRATION-SEQUENCE' \
+  'retired capability remains [case_file_review storage identifier]' \
   env SUPRA_REPO_ROOT="$stale_claim_endpoint_fixture" bash "$verifier"
 
 # T-REVIEW-TERMS-01 expected RED for the missing fixture: retirement cannot

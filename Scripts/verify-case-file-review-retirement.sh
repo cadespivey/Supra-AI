@@ -310,47 +310,11 @@ file_count=$((file_count + 1))
 
 append_source_file "$smoke_script"
 
-# The migration-sequence claim must continue to name the exact dormant v073
-# endpoint while the immutable migration remains registered. This one endpoint
-# is compatibility evidence, not a live Case File Review product claim.
-readonly migration_sequence_claim='  - id: "STORE-MIGRATION-SEQUENCE"'
-readonly dormant_v073_claim_endpoint='    expected: "v073_create_case_file_review_projects"'
-dormant_v073_claim_endpoint_count="$(grep -Fxc -- "$dormant_v073_claim_endpoint" "$claims_file" || true)"
-dormant_v073_claim_endpoint_line="$(awk \
-  -v claim="$migration_sequence_claim" \
-  -v endpoint="$dormant_v073_claim_endpoint" '
-    $0 == claim {
-      in_claim = 1
-      next
-    }
-    /^  - id: / {
-      in_claim = 0
-    }
-    in_claim == 1 && $0 == endpoint {
-      print NR
-      exit
-    }
-  ' "$claims_file")"
-dormant_v073_claim_endpoint_allowed=0
-if [[ "$dormant_v073_claim_endpoint_count" != '1' || -z "$dormant_v073_claim_endpoint_line" ]]; then
-  fail 'exact dormant v073 claim endpoint is missing, duplicated, or outside STORE-MIGRATION-SEQUENCE'
-else
-  dormant_v073_claim_endpoint_allowed=1
-fi
-
-claims_relative="${claims_file#${repo_root}/}"
-printf '%s:0:%s\n' "$claims_relative" "$claims_relative" >>"$scoped_corpus"
-LC_ALL=C awk \
-  -v source="$claims_relative" \
-  -v allowed_line="${dormant_v073_claim_endpoint_line:-0}" \
-  -v allowed="$dormant_v073_claim_endpoint_allowed" '
-    allowed == 1 && NR == allowed_line { next }
-    {
-      sub(/\r$/, "")
-      printf "%s:%d:%s\n", source, NR, $0
-    }
-  ' "$claims_file" >>"$scoped_corpus"
-file_count=$((file_count + 1))
+# v074 is now the shipping migration endpoint, so verified claims need no
+# exception for the retired v073 identifier. Scan the whole claims file: any
+# stale Review endpoint or wording must fail through the ordinary retired-term
+# rules below.
+append_source_file "$claims_file"
 
 append_source_file "$architecture_file"
 append_source_file "$help_file"
@@ -491,5 +455,5 @@ if (( status != 0 )); then
   exit 1
 fi
 
-printf 'Case File Review retirement verification passed: %d shipping files scanned, %d retained concepts confirmed; exact retired-queue and dormant-v073 compatibility allowlisted.\n' \
+printf 'Case File Review retirement verification passed: %d shipping files scanned, %d retained concepts confirmed; exact retired-queue and dormant-v073 migration/deletion compatibility allowlisted.\n' \
   "$file_count" "$retained_count"

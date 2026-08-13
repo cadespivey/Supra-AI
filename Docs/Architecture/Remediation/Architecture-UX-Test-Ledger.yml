@@ -1365,7 +1365,7 @@ tests:
     target: "Repository retirement-verifier and verified-claims meta-tests"
     implemented_test_path: "Tests/Scripts/test-case-file-review-retirement-verifier.sh"
     selected_test_command: "bash Tests/Scripts/test-case-file-review-retirement-verifier.sh && bash Scripts/verify-product-claims.sh && bash Tests/Scripts/test-verify-product-claims.sh"
-    wire_fixture: "Exact STORE-MIGRATION-SEQUENCE v073 compatibility endpoint plus a duplicate stale Review claim fixture; 43 current claims; retained attorney-review and package-only corpus wording."
+    wire_fixture: "Exact STORE-MIGRATION-SEQUENCE v074 shipping endpoint plus a duplicate stale v073 Review claim fixture; 43 current claims; retained attorney-review and package-only corpus wording."
     expected_red_reason: "Observed RED at 78b2c633: eight live Case File Review claims and current architecture/help wording still advertised the feature; a duplicate v073 endpoint outside the migration claim also bypassed a path-wide scan."
     forbidden_default_or_side_effect: "No live Case File Review capability, admission, runtime reservation, mutation, export, claim, or UI route; immutable compatibility history and unrelated review semantics remain."
     required_native_evidence: "Selected deterministic package result; add a native journey only when this invariant reaches a user-facing surface."
