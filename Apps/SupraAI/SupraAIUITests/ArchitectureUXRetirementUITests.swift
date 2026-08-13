@@ -114,6 +114,29 @@ final class ArchitectureUXRetirementUITests: XCTestCase {
         XCTAssertFalse(recycleBin.contains("Saved analysis"))
     }
 
+    func testTXPCReviewRemove01OrdinaryRuntimeRecoveryHasAnOwnedAppSurface() throws {
+        // T-XPC-REVIEW-REMOVE-01 expected RED: RuntimeSafetyClient can quarantine
+        // uncertain cancellation, but RuntimeStatusController and Diagnostics do
+        // not observe that state or expose its owner-operated idle recovery.
+        let status = try appSource(relativePath: "SupraAI/Status/RuntimeStatusController.swift")
+        let environment = try appSource(relativePath: "SupraAI/AppEnvironment.swift")
+        let diagnostics = try appSource(relativePath: "SupraAI/DiagnosticsView.swift")
+
+        XCTAssertTrue(status.contains("private let runtimeClient: RuntimeSafetyClient"))
+        XCTAssertTrue(status.contains("@Published private(set) var recoverySnapshot"))
+        XCTAssertTrue(status.contains("func recoverRuntime() async"))
+        XCTAssertTrue(status.contains("try await runtimeClient.recoverRuntime()"))
+        XCTAssertTrue(status.contains("runtimeClient.currentRecoverySnapshot()"))
+        XCTAssertTrue(environment.contains("@Published private(set) var runtimeRecoverySnapshot"))
+        XCTAssertTrue(environment.contains("func recoverRuntime() async"))
+        XCTAssertTrue(diagnostics.contains("runtime.recovery.required"))
+        XCTAssertTrue(diagnostics.contains("runtime.recovery.action"))
+        XCTAssertTrue(diagnostics.contains("Recover Local Runtime"))
+        XCTAssertTrue(diagnostics.contains("Recovery waits for admitted work, restarts the local runtime connection, and confirms it is idle before new model work can begin."))
+        XCTAssertFalse(status.contains("Case File Review"))
+        XCTAssertFalse(diagnostics.contains("Case File Review"))
+    }
+
     private func appSource(relativePath: String) throws -> String {
         try source(at: appRoot.appendingPathComponent(relativePath))
     }

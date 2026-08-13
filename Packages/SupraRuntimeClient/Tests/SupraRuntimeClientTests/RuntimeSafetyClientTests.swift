@@ -151,6 +151,144 @@ final class RuntimeSafetyClientTests: XCTestCase {
         XCTAssertEqual(base.restartCallCount, 2)
     }
 
+    func testTXPCCancel01MismatchedCancellationIdentityFailsClosed() async throws {
+        // T-XPC-CANCEL-01 expected RED: cancellation confirmation has no
+        // injectable bounded policy, so the exact mismatch/timeout matrix is
+        // not deterministically executable before the retired wrapper is gone.
+        let generationID = GenerationID()
+        let mismatchedID = GenerationID()
+        let base = RuntimeSafetyBaseClient(
+            cancellationFailures: 0,
+            cancellationReply: .mismatched(mismatchedID)
+        )
+        let client = RuntimeSafetyClient(
+            base: base,
+            cancellationConfirmationPolicy: .test(attempts: 3)
+        )
+
+        try await cancelRuntimeSafetyGeneration(
+            generationID,
+            prompt: "mismatched-cancel-identity-907",
+            client: client,
+            base: base
+        )
+
+        XCTAssertEqual(client.currentRecoverySnapshot().phase, .recoveryRequired)
+        XCTAssertEqual(base.cancelCallCount, 1)
+        XCTAssertEqual(base.runtimeStatusCallCount, 0)
+        XCTAssertEqual(base.returnedCancellationIDs, [mismatchedID])
+    }
+
+    func testTXPCCancel01FailedCancellationStatusFailsClosed() async throws {
+        let generationID = GenerationID()
+        let base = RuntimeSafetyBaseClient(
+            cancellationFailures: 0,
+            cancellationReply: .failed
+        )
+        let client = RuntimeSafetyClient(
+            base: base,
+            cancellationConfirmationPolicy: .test(attempts: 3)
+        )
+
+        try await cancelRuntimeSafetyGeneration(
+            generationID,
+            prompt: "failed-cancel-status-911",
+            client: client,
+            base: base
+        )
+
+        XCTAssertEqual(client.currentRecoverySnapshot().phase, .recoveryRequired)
+        XCTAssertEqual(base.cancelCallCount, 1)
+        XCTAssertEqual(base.runtimeStatusCallCount, 0)
+    }
+
+    func testTXPCCancel01NotFoundRequiresExactQuiescenceAndTimesOutBoundedly() async throws {
+        let generationID = GenerationID()
+        let base = RuntimeSafetyBaseClient(
+            cancellationFailures: 0,
+            cancellationReply: .notFound
+        )
+        base.setStatus(RuntimeStatus(
+            state: .generating,
+            loadedModelID: ModelID(),
+            activeGenerationID: generationID,
+            message: "same generation remains active 919",
+            metrics: nil
+        ))
+        let client = RuntimeSafetyClient(
+            base: base,
+            cancellationConfirmationPolicy: .test(attempts: 3)
+        )
+
+        try await cancelRuntimeSafetyGeneration(
+            generationID,
+            prompt: "not-found-still-active-929",
+            client: client,
+            base: base
+        )
+
+        XCTAssertEqual(client.currentRecoverySnapshot().phase, .recoveryRequired)
+        XCTAssertEqual(base.runtimeStatusCallCount, 3)
+        XCTAssertEqual(base.countTokenCallCount, 0)
+    }
+
+    func testTXPCCancel01NotFoundAcceptsOnlyIdleAndRejectsAnotherActiveIdentity() async throws {
+        let idleGenerationID = GenerationID()
+        let idleBase = RuntimeSafetyBaseClient(
+            cancellationFailures: 0,
+            cancellationReply: .notFound
+        )
+        idleBase.setStatus(RuntimeStatus(
+            state: .modelLoaded,
+            loadedModelID: ModelID(),
+            activeGenerationID: nil,
+            message: "idle-after-not-found-937",
+            metrics: nil
+        ))
+        let idleClient = RuntimeSafetyClient(
+            base: idleBase,
+            cancellationConfirmationPolicy: .test(attempts: 3)
+        )
+        try await cancelRuntimeSafetyGeneration(
+            idleGenerationID,
+            prompt: "not-found-idle-941",
+            client: idleClient,
+            base: idleBase,
+            expectedPhase: .available
+        )
+        XCTAssertEqual(idleBase.runtimeStatusCallCount, 1)
+        _ = try await idleClient.countTokens(
+            CountTokensRequest(modelID: ModelID(), texts: ["admitted-after-idle-947"])
+        )
+        XCTAssertEqual(idleBase.countTokenCallCount, 1)
+
+        let requestedID = GenerationID()
+        let otherActiveID = GenerationID()
+        let otherBase = RuntimeSafetyBaseClient(
+            cancellationFailures: 0,
+            cancellationReply: .notFound
+        )
+        otherBase.setStatus(RuntimeStatus(
+            state: .generating,
+            loadedModelID: ModelID(),
+            activeGenerationID: otherActiveID,
+            message: "different generation active 953",
+            metrics: nil
+        ))
+        let otherClient = RuntimeSafetyClient(
+            base: otherBase,
+            cancellationConfirmationPolicy: .test(attempts: 3)
+        )
+        try await cancelRuntimeSafetyGeneration(
+            requestedID,
+            prompt: "not-found-other-active-967",
+            client: otherClient,
+            base: otherBase
+        )
+        XCTAssertEqual(otherClient.currentRecoverySnapshot().phase, .recoveryRequired)
+        XCTAssertEqual(otherBase.runtimeStatusCallCount, 1)
+    }
+
     private func request(generationID: GenerationID, prompt: String) -> GenerateRequest {
         GenerateRequest(
             generationID: generationID,
@@ -162,9 +300,56 @@ final class RuntimeSafetyClientTests: XCTestCase {
     }
 }
 
+private extension RuntimeCancellationConfirmationPolicy {
+    static func test(attempts: Int) -> RuntimeCancellationConfirmationPolicy {
+        RuntimeCancellationConfirmationPolicy(
+            maxStatusPollAttempts: attempts,
+            statusPollInterval: .zero
+        )
+    }
+}
+
+private func cancelRuntimeSafetyGeneration(
+    _ generationID: GenerationID,
+    prompt: String,
+    client: RuntimeSafetyClient,
+    base: RuntimeSafetyBaseClient,
+    expectedPhase: RuntimeRecoverySnapshot.Phase = .recoveryRequired
+) async throws {
+    let stream = try client.generate(GenerateRequest(
+        generationID: generationID,
+        modelID: ModelID(),
+        prompt: prompt,
+        systemPrompt: nil,
+        options: GenerationOptions(maxOutputTokens: 17)
+    ))
+    let consumer = Task { try await drainRuntimeSafetyStream(stream) }
+    try await waitForRuntimeSafety("generation reaches cancellation base") {
+        base.generatedPrompts == [prompt]
+    }
+    consumer.cancel()
+    _ = await consumer.result
+    try await waitForRuntimeSafety("cancellation reaches expected safety phase") {
+        if expectedPhase == .available {
+            return base.cancelCallCount == 1
+                && base.runtimeStatusCallCount >= 1
+                && client.currentRecoverySnapshot().phase == .available
+        }
+        return client.currentRecoverySnapshot().phase == expectedPhase
+    }
+}
+
 private final class RuntimeSafetyBaseClient: RuntimeClientProtocol, @unchecked Sendable {
+    enum CancellationReply: Sendable {
+        case cancelled
+        case mismatched(GenerationID)
+        case notFound
+        case failed
+    }
+
     private let lock = NSLock()
     private var remainingCancellationFailures: Int
+    private let cancellationReply: CancellationReply
     private var tokenCountGateOpen: Bool
     private var tokenCountWaiters: [CheckedContinuation<Void, Never>] = []
     private var storedStatus = RuntimeStatus(
@@ -179,11 +364,18 @@ private final class RuntimeSafetyBaseClient: RuntimeClientProtocol, @unchecked S
     private var storedConnectCallCount = 0
     private var storedRestartCallCount = 0
     private var storedCancelCallCount = 0
+    private var storedRuntimeStatusCallCount = 0
+    private var storedReturnedCancellationIDs: [GenerationID] = []
     private var storedRecentEventRequests: [Int] = []
 
-    init(cancellationFailures: Int, holdTokenCounts: Bool = false) {
+    init(
+        cancellationFailures: Int,
+        holdTokenCounts: Bool = false,
+        cancellationReply: CancellationReply = .cancelled
+    ) {
         remainingCancellationFailures = cancellationFailures
         tokenCountGateOpen = !holdTokenCounts
+        self.cancellationReply = cancellationReply
     }
 
     var generatedPrompts: [String] { lock.withLock { storedGeneratedPrompts } }
@@ -191,6 +383,10 @@ private final class RuntimeSafetyBaseClient: RuntimeClientProtocol, @unchecked S
     var connectCallCount: Int { lock.withLock { storedConnectCallCount } }
     var restartCallCount: Int { lock.withLock { storedRestartCallCount } }
     var cancelCallCount: Int { lock.withLock { storedCancelCallCount } }
+    var runtimeStatusCallCount: Int { lock.withLock { storedRuntimeStatusCallCount } }
+    var returnedCancellationIDs: [GenerationID] {
+        lock.withLock { storedReturnedCancellationIDs }
+    }
     var explicitRecentEventRequests: [Int] { lock.withLock { storedRecentEventRequests } }
 
     func setStatus(_ status: RuntimeStatus) {
@@ -255,7 +451,19 @@ private final class RuntimeSafetyBaseClient: RuntimeClientProtocol, @unchecked S
             return false
         }
         if shouldFail { throw RuntimeSafetyBaseError.cancellationRejected }
-        return CancelGenerationResponse(status: .cancelled, generationID: generationID)
+        let response: CancelGenerationResponse
+        switch cancellationReply {
+        case .cancelled:
+            response = CancelGenerationResponse(status: .cancelled, generationID: generationID)
+        case let .mismatched(returnedID):
+            response = CancelGenerationResponse(status: .cancelled, generationID: returnedID)
+        case .notFound:
+            response = CancelGenerationResponse(status: .notFound, generationID: generationID)
+        case .failed:
+            response = CancelGenerationResponse(status: .failed, generationID: generationID)
+        }
+        lock.withLock { storedReturnedCancellationIDs.append(response.generationID) }
+        return response
     }
 
     func recentEvents(
@@ -275,7 +483,10 @@ private final class RuntimeSafetyBaseClient: RuntimeClientProtocol, @unchecked S
     }
 
     func runtimeStatus() async throws -> RuntimeStatus {
-        lock.withLock { storedStatus }
+        lock.withLock {
+            storedRuntimeStatusCallCount += 1
+            return storedStatus
+        }
     }
 
     func restartRuntimeService() async throws {
