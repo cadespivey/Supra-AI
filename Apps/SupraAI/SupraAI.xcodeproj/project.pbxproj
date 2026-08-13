@@ -81,6 +81,7 @@
 		C0A820260808000000000001 /* CaseFileReviewUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0A820260808000000000101 /* CaseFileReviewUITests.swift */; };
 		C0A920260808000000000001 /* CaseFileReviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0A920260808000000000101 /* CaseFileReviewView.swift */; };
 		C0AA20260809000000000001 /* CaseFileReviewCreationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0AA20260809000000000101 /* CaseFileReviewCreationView.swift */; };
+		A0B120260813000000000001 /* ArchitectureUXRetirementUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0B120260813000000000101 /* ArchitectureUXRetirementUITests.swift */; };
 		D8049735424078FD470EAD6B /* RecycleBinView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF9D6D522EA0F7997D75B63B /* RecycleBinView.swift */; };
 		F56264303FD9BE608870FB9F /* MultilineField.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E06DCE8DB8B78E41F939F2C /* MultilineField.swift */; };
 /* End PBXBuildFile section */
@@ -124,6 +125,7 @@
 		C0A820260808000000000101 /* CaseFileReviewUITests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CaseFileReviewUITests.swift; sourceTree = "<group>"; };
 		C0A920260808000000000101 /* CaseFileReviewView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CaseFileReviewView.swift; sourceTree = "<group>"; };
 		C0AA20260809000000000101 /* CaseFileReviewCreationView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CaseFileReviewCreationView.swift; sourceTree = "<group>"; };
+		A0B120260813000000000101 /* ArchitectureUXRetirementUITests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ArchitectureUXRetirementUITests.swift; sourceTree = "<group>"; };
 		45DF0346474345DA98F88B95 /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/Cocoa.framework; sourceTree = DEVELOPER_DIR; };
 		5A0000000000000000000101 /* SupraAIApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupraAIApp.swift; sourceTree = "<group>"; };
 		5A0000000000000000000102 /* AppEnvironment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppEnvironment.swift; sourceTree = "<group>"; };
@@ -382,6 +384,7 @@
 				E4A400010000000000000101 /* RestoreSettingsUITests.swift */,
 				C0A720260807000000000101 /* CorpusReviewQueueCompositionUITests.swift */,
 				C0A820260808000000000101 /* CaseFileReviewUITests.swift */,
+				A0B120260813000000000101 /* ArchitectureUXRetirementUITests.swift */,
 			);
 			path = SupraAIUITests;
 			sourceTree = "<group>";
@@ -677,6 +680,7 @@
 				E4A400010000000000000001 /* RestoreSettingsUITests.swift in Sources */,
 				C0A720260807000000000001 /* CorpusReviewQueueCompositionUITests.swift in Sources */,
 				C0A820260808000000000001 /* CaseFileReviewUITests.swift in Sources */,
+				A0B120260813000000000001 /* ArchitectureUXRetirementUITests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

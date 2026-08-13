@@ -133,40 +133,6 @@ final class CorpusReviewQueueCompositionUITests: XCTestCase {
         }
     }
 
-    func testTDELUI01BothDocumentTrashSurfacesShareConfirmationAndRenderFailure() throws {
-        // Expected RED: MatterDocumentsView hard-deletes directly from its trash
-        // row and never renders the controller's deletion-specific notice.
-        // Follow-on RED: the shared dialog must identify the selected target and
-        // must not imply that document-owned classifications/relations survive.
-        let matterDocuments = try appSource(
-            relativePath: "SupraAI/Documents/MatterDocumentsView.swift"
-        )
-        let recycleBin = try appSource(relativePath: "SupraAI/RecycleBinView.swift")
-
-        XCTAssertTrue(matterDocuments.contains(".permanentDeletionConfirmation("))
-        XCTAssertTrue(recycleBin.contains(".permanentDeletionConfirmation("))
-        XCTAssertTrue(matterDocuments.contains("controller.permanentDeletionNotice"))
-        XCTAssertTrue(matterDocuments.contains("controller.clearPermanentDeletionNotice()"))
-        XCTAssertFalse(
-            matterDocuments.contains(
-                "Button(\"Delete Permanently\", role: .destructive) { controller.permanentlyDelete"
-            ),
-            "a trash-row click must select a pending item, not perform deletion"
-        )
-        XCTAssertTrue(
-            recycleBin.contains("Remove “\\(name)” permanently?")
-        )
-        XCTAssertTrue(
-            recycleBin.contains(
-                "Saved output text, citation display excerpts and locators, and retained corpus-analysis proof records"
-            )
-        )
-        XCTAssertFalse(
-            recycleBin.contains("Saved analysis"),
-            "document-owned classification and relation records are deleted, not retained"
-        )
-    }
-
     private func appEnvironmentSource() throws -> String {
         let testFile = URL(fileURLWithPath: #filePath)
         let appEnvironmentURL = testFile
@@ -174,17 +140,6 @@ final class CorpusReviewQueueCompositionUITests: XCTestCase {
             .deletingLastPathComponent()
             .appendingPathComponent("SupraAI/AppEnvironment.swift")
         return try String(contentsOf: appEnvironmentURL, encoding: .utf8)
-    }
-
-    private func appSource(relativePath: String) throws -> String {
-        let testFile = URL(fileURLWithPath: #filePath)
-        let appRoot = testFile
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-        return try String(
-            contentsOf: appRoot.appendingPathComponent(relativePath),
-            encoding: .utf8
-        )
     }
 
     private func appSwiftSourceURLs() throws -> [URL] {
