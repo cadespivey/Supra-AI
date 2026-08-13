@@ -119,9 +119,10 @@ final class ArchitectureUXTDataMatterLifecycleTests: XCTestCase {
         }
     }
 
-    /// Expected RED: a newly created matter with no court is currently labeled
-    /// unresolved, yet the queue silently drops it because there is no court text.
-    func testCreateWithoutCourtIsExplicitlyNotApplicableAndStillHasSourceEvidence() throws {
+    /// Expected RED: a newly created matter with no court is correctly unresolved,
+    /// but the queue silently drops it because there is no court text. Missing is
+    /// not the same as the explicit attorney choice `not_applicable`.
+    func testCreateWithoutCourtRemainsVisibleAsUnresolvedAndHasSourceEvidence() throws {
         let queue = try migratedQueue()
         let matters = MattersRepository(writer: queue)
         let legacyJurisdiction = "Transactional synthetic scope 751"
@@ -139,7 +140,7 @@ final class ArchitectureUXTDataMatterLifecycleTests: XCTestCase {
             XCTAssertNil(identity["court"] as String?)
             XCTAssertNil(identity["canonical_jurisdiction_id"] as String?)
             XCTAssertNil(identity["canonical_court_id"] as String?)
-            XCTAssertEqual(identity["court_resolution_state"] as String, "not_applicable")
+            XCTAssertEqual(identity["court_resolution_state"] as String, "unresolved")
             XCTAssertEqual(identity["identity_revision"] as Int, 1)
 
             let receipts = try sourceReceipts(db, matterID: matter.id)
@@ -151,8 +152,8 @@ final class ArchitectureUXTDataMatterLifecycleTests: XCTestCase {
                     sourceKind: "create",
                     sourceMigration: nil,
                     revision: 1,
-                    state: "not_applicable",
-                    reason: "not_applicable",
+                    state: "unresolved",
+                    reason: "unknown",
                     legacyJurisdiction: legacyJurisdiction,
                     legacyCourt: nil,
                     legacyPerspective: "neutral",
@@ -161,10 +162,10 @@ final class ArchitectureUXTDataMatterLifecycleTests: XCTestCase {
             }
         }
 
-        XCTAssertFalse(
-            try matters.fetchUnresolvedCourtResolutionQueue().map(\.matterID).contains(matter.id),
-            "not-applicable identity must not masquerade as a lost unresolved queue item"
-        )
+        let queueItems = try matters.fetchUnresolvedCourtResolutionQueue()
+        XCTAssertEqual(queueItems.map(\.matterID), [matter.id])
+        XCTAssertEqual(queueItems.first?.legacyCourtText, nil)
+        XCTAssertEqual(queueItems.first?.identityRevision, 1)
     }
 
     /// Expected RED: `updateMatter` changes the legacy court/jurisdiction only;
