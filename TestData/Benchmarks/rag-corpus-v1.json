@@ -1,0 +1,293 @@
+{
+  "schemaVersion": 1,
+  "corpusID": "supra-rag-synthetic-legal",
+  "corpusVersion": "1.0.0",
+  "dataClassification": "synthetic_fictional_nonprivileged",
+  "containsRealClientData": false,
+  "artifactRoot": "TestData/Synthetic Document Intelligence Benchmark",
+  "requiredSlices": [
+    "ocr",
+    "table",
+    "document_type",
+    "revision",
+    "supersession",
+    "contrary_evidence",
+    "duplicate",
+    "no_answer",
+    "corpus_small",
+    "corpus_medium",
+    "corpus_large"
+  ],
+  "artifacts": [
+    {
+      "artifactID": "amendment-01",
+      "path": "Contracts/amendment-01.docx",
+      "sha256": "f76006e1c41dad816d366648b6313ef2e2d4694bc538f10a19f5aa37a671b469",
+      "documentType": "docx"
+    },
+    {
+      "artifactID": "msa-executed",
+      "path": "Contracts/master-services-executed.docx",
+      "sha256": "b987e468dce71e687f9edf6b3894ff1cf7556a3f16b447e0f7968f396bbab5df",
+      "documentType": "docx"
+    },
+    {
+      "artifactID": "msa-superseded",
+      "path": "Contracts/master-services-superseded.docx",
+      "sha256": "72be376c8d95418dafdc10217f4b984cf0f50e05db2e75d35044cac517c8a828",
+      "documentType": "docx"
+    },
+    {
+      "artifactID": "msa-executed-copy",
+      "path": "Duplicates/master-services-executed-copy.docx",
+      "sha256": "b987e468dce71e687f9edf6b3894ff1cf7556a3f16b447e0f7968f396bbab5df",
+      "documentType": "docx",
+      "duplicateOfArtifactID": "msa-executed"
+    },
+    {
+      "artifactID": "negotiation-thread",
+      "path": "Correspondence/negotiation-thread.eml",
+      "sha256": "e8e75eab43853fff7892959b2093986a1f60baa33e3d4b680db74140325c862e",
+      "documentType": "eml"
+    },
+    {
+      "artifactID": "responses-to-production",
+      "path": "Discovery/responses-to-production.docx",
+      "sha256": "6e0a7f53495b6d4bd6677ad5b2b98ac75f0b0a0704d1420f6b08950ac15df1b7",
+      "documentType": "docx"
+    },
+    {
+      "artifactID": "scanned-exhibit-f",
+      "path": "Evidence/scanned-exhibit-f.pdf",
+      "sha256": "69263660b46380f95afbc0c01897fa9e1b350855925636f8c4e4838b05c2136a",
+      "documentType": "scanned_pdf"
+    },
+    {
+      "artifactID": "damages-model",
+      "path": "Structured/damages-model.xlsx",
+      "sha256": "b0c059cc30058abd467c89274d6f10265f7f25a57fbcad75233024d3bdf17952",
+      "documentType": "xlsx"
+    }
+  ],
+  "queries": [
+    {
+      "queryID": "rag-ocr-exhibit-f-tracking",
+      "prompt": "What tracking code appears on scanned Exhibit F?",
+      "expectedAnswer": "OCR-F-8842.",
+      "queryType": "fact_lookup",
+      "corpusSize": "small",
+      "slices": [
+        "ocr",
+        "document_type",
+        "corpus_small"
+      ],
+      "scopeArtifactIDs": [
+        "scanned-exhibit-f"
+      ],
+      "expectedNoResult": false,
+      "humanReview": {
+        "status": "pending_owner_review",
+        "reviewerRole": "repository_owner_attorney",
+        "reviewBasis": "Existing synthetic answer key and fixed locator; owner validation pending.",
+        "reviewedBy": null,
+        "reviewedAt": null
+      },
+      "judgments": [
+        {
+          "evidenceID": "scanned-exhibit-f.raster-page-1.tracking-code",
+          "artifactID": "scanned-exhibit-f",
+          "locator": "Raster-only page 1 tracking-code line",
+          "grade": 3
+        }
+      ],
+      "claims": [
+        {
+          "claimID": "exhibit-f-tracking-code",
+          "expectedEvidenceIDs": [
+            "scanned-exhibit-f.raster-page-1.tracking-code"
+          ]
+        }
+      ]
+    },
+    {
+      "queryID": "rag-table-damages-total",
+      "prompt": "What cached total appears in the damages workbook?",
+      "expectedAnswer": "$275,000 in Damages Summary cell B5.",
+      "queryType": "table_lookup",
+      "corpusSize": "small",
+      "slices": [
+        "table",
+        "document_type",
+        "corpus_small"
+      ],
+      "scopeArtifactIDs": [
+        "damages-model"
+      ],
+      "expectedNoResult": false,
+      "humanReview": {
+        "status": "pending_owner_review",
+        "reviewerRole": "repository_owner_attorney",
+        "reviewBasis": "Existing synthetic answer key and fixed locator; owner validation pending.",
+        "reviewedBy": null,
+        "reviewedAt": null
+      },
+      "judgments": [
+        {
+          "evidenceID": "damages-model.summary-b5",
+          "artifactID": "damages-model",
+          "locator": "Damages Summary!B5 with TOTAL row and Amount column",
+          "grade": 3
+        }
+      ],
+      "claims": [
+        {
+          "claimID": "damages-cached-total",
+          "expectedEvidenceIDs": [
+            "damages-model.summary-b5"
+          ]
+        }
+      ]
+    },
+    {
+      "queryID": "rag-version-final-liability-cap",
+      "prompt": "What is the final liability cap after Amendment 01?",
+      "expectedAnswer": "$275,000 under Amendment 01 effective February 1, 2026.",
+      "queryType": "version_resolution",
+      "corpusSize": "medium",
+      "slices": [
+        "revision",
+        "supersession",
+        "duplicate",
+        "document_type",
+        "corpus_medium"
+      ],
+      "scopeArtifactIDs": [
+        "amendment-01",
+        "msa-executed",
+        "msa-superseded",
+        "msa-executed-copy"
+      ],
+      "expectedNoResult": false,
+      "humanReview": {
+        "status": "pending_owner_review",
+        "reviewerRole": "repository_owner_attorney",
+        "reviewBasis": "Existing synthetic version answer key and fixed locators; owner validation pending.",
+        "reviewedBy": null,
+        "reviewedAt": null
+      },
+      "judgments": [
+        {
+          "evidenceID": "amendment-01.section-2",
+          "artifactID": "amendment-01",
+          "locator": "Section 2 liability-cap amendment and effective date",
+          "grade": 3
+        },
+        {
+          "evidenceID": "msa-executed.section-8.2",
+          "artifactID": "msa-executed",
+          "locator": "Execution block and Section 8.2 base liability cap",
+          "grade": 2
+        },
+        {
+          "evidenceID": "msa-superseded.liability-cap-line",
+          "artifactID": "msa-superseded",
+          "locator": "Superseded liability-cap line",
+          "grade": 1
+        }
+      ],
+      "claims": [
+        {
+          "claimID": "controlling-liability-cap",
+          "expectedEvidenceIDs": [
+            "amendment-01.section-2"
+          ]
+        },
+        {
+          "claimID": "base-agreement-lineage",
+          "expectedEvidenceIDs": [
+            "msa-executed.section-8.2",
+            "amendment-01.section-2"
+          ]
+        }
+      ]
+    },
+    {
+      "queryID": "rag-contrary-exhibit-g",
+      "prompt": "Can the corpus establish the contents of Exhibit G?",
+      "expectedAnswer": "No. Exhibit G is absent; its contents cannot be established and completeness must not be claimed.",
+      "queryType": "contradiction",
+      "corpusSize": "medium",
+      "slices": [
+        "contrary_evidence",
+        "document_type",
+        "corpus_medium"
+      ],
+      "scopeArtifactIDs": [
+        "negotiation-thread",
+        "responses-to-production"
+      ],
+      "expectedNoResult": false,
+      "humanReview": {
+        "status": "pending_owner_review",
+        "reviewerRole": "repository_owner_attorney",
+        "reviewBasis": "Existing synthetic negative answer key and fixed locators; owner validation pending.",
+        "reviewedBy": null,
+        "reviewedAt": null
+      },
+      "judgments": [
+        {
+          "evidenceID": "negotiation-thread.production-index.exhibit-g",
+          "artifactID": "negotiation-thread",
+          "locator": "Newest message and production-index attachment",
+          "grade": 3
+        },
+        {
+          "evidenceID": "responses-to-production.response-12",
+          "artifactID": "responses-to-production",
+          "locator": "Response to Request No. 12",
+          "grade": 3
+        }
+      ],
+      "claims": [
+        {
+          "claimID": "exhibit-g-intentionally-absent",
+          "expectedEvidenceIDs": [
+            "negotiation-thread.production-index.exhibit-g",
+            "responses-to-production.response-12"
+          ]
+        }
+      ]
+    },
+    {
+      "queryID": "rag-no-answer-settlement-release",
+      "prompt": "How much was paid under a signed settlement release?",
+      "expectedAnswer": null,
+      "queryType": "no_answer",
+      "corpusSize": "large",
+      "slices": [
+        "no_answer",
+        "corpus_large"
+      ],
+      "scopeArtifactIDs": [
+        "amendment-01",
+        "msa-executed",
+        "msa-superseded",
+        "msa-executed-copy",
+        "negotiation-thread",
+        "responses-to-production",
+        "scanned-exhibit-f",
+        "damages-model"
+      ],
+      "expectedNoResult": true,
+      "humanReview": {
+        "status": "pending_owner_review",
+        "reviewerRole": "repository_owner_attorney",
+        "reviewBasis": "No signed settlement release exists in the exact synthetic scope; owner validation pending.",
+        "reviewedBy": null,
+        "reviewedAt": null
+      },
+      "judgments": [],
+      "claims": []
+    }
+  ]
+}
