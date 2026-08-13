@@ -201,6 +201,26 @@ run_case \
   'retired capability remains [guided-review job identity]' \
   env SUPRA_REPO_ROOT="$stale_queue_identity_fixture" bash "$verifier"
 
+# DR-CORPUS-OWNER-01 expected RED: the post-removal audit must reject a
+# shipping AppEnvironment that silently composes the retained package-only
+# corpus runner, even when it contains no retired Review identifier.
+stale_corpus_owner_fixture="${temporary_dir}/stale-corpus-owner"
+mkdir -p "$stale_corpus_owner_fixture"
+cp -R "${base_fixture}/." "$stale_corpus_owner_fixture"
+write_file \
+  "${stale_corpus_owner_fixture}/Apps/SupraAI/SupraAI/AppEnvironment.swift" \
+  'struct AppEnvironment {' \
+  '    let corpusRunner = CorpusAnalysisQueueRunner.live' \
+  '    func makeQueue() {' \
+  '        _ = DocumentProcessingQueue(corpusAnalysisRunner: corpusRunner.run)' \
+  '    }' \
+  '}'
+run_case \
+  'shipping generic corpus runner composition fails closed' \
+  1 \
+  'shipping app composes package-only corpus execution' \
+  env SUPRA_REPO_ROOT="$stale_corpus_owner_fixture" bash "$verifier"
+
 # The migration endpoint is allowlisted only as STORE-MIGRATION-SEQUENCE's
 # exact expected value. A duplicate endpoint under another claim fails closed.
 stale_claim_endpoint_fixture="${temporary_dir}/stale-claim-endpoint"
