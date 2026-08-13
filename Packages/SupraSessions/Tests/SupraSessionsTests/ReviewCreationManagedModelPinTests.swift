@@ -391,7 +391,7 @@ final class ReviewCreationManagedModelPinTests: XCTestCase {
         }
     }
 
-    private func thrownError<T>(
+    private func thrownError<T: Sendable>(
         _ operation: () async throws -> T
     ) async -> Error? {
         do {
