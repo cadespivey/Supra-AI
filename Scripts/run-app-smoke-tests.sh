@@ -6,7 +6,7 @@ xpc_test="${SUPRA_XPC_INTEGRATION_TEST_FILE:-${repo_root}/Apps/SupraAI/SupraAIUI
 accessibility_test="${SUPRA_ACCESSIBILITY_SMOKE_TEST_FILE:-${repo_root}/Apps/SupraAI/SupraAIUITests/ResearchAuthoritiesUITests.swift}"
 recovery_test="${SUPRA_DRAFT_RECOVERY_UI_TEST_FILE:-${accessibility_test}}"
 restore_test="${SUPRA_RESTORE_UI_TEST_FILE:-${repo_root}/Apps/SupraAI/SupraAIUITests/RestoreSettingsUITests.swift}"
-review_test="${SUPRA_CASE_FILE_REVIEW_UI_TEST_FILE:-${repo_root}/Apps/SupraAI/SupraAIUITests/CaseFileReviewUITests.swift}"
+retirement_test="${SUPRA_ARCHITECTURE_UX_RETIREMENT_UI_TEST_FILE:-${repo_root}/Apps/SupraAI/SupraAIUITests/ArchitectureUXRetirementUITests.swift}"
 check_only=0
 if [[ "${1:-}" == "--check" ]]; then
   check_only=1
@@ -71,30 +71,12 @@ if [[ ! -f "$restore_test" ]] \
   printf '%s\n' 'ERROR: restore Settings/recovery accessibility smoke tests are missing' >&2
   exit 1
 fi
-if [[ ! -f "$review_test" ]] \
-    || ! class_contains_test "$review_test" CaseFileReviewCompositionUITests testTRPUI13WorkflowControlsPinAccessibleFiltersProgressAndGuardedNavigation \
-    || ! class_contains_test "$review_test" CaseFileReviewHostedUITests testTRPUI14ProgressAndAttentionFiltersReconcileHiddenSourcesAndExplicitEmptyState \
-    || ! class_contains_test "$review_test" CaseFileReviewHostedUITests testTRPUI15DirtyDraftCancelKeepsProjectAndDiscardSwitchesWithoutCrossProjectLeak \
-    || ! class_contains_test "$review_test" CaseFileReviewHostedUITests testTRPUI16FailedProjectSwitchRetainsExactDraftForResume \
-    || ! class_contains_test "$review_test" CaseFileReviewHostedUITests testTRPUI17FailedOpenReviewRetainsExactDraftForResume \
-    || ! class_contains_test "$review_test" CaseFileReviewHostedUITests testTRPUI18MinimumWidthSourcesKeepsProgressAndCompactFilterUsable \
-    || ! class_contains_test "$review_test" CaseFileReviewHostedUITests testTRPUI19DirtyDraftAndFilteredMinimumWidthExportFullSavedSnapshot \
-    || ! class_contains_test "$review_test" CaseFileReviewCompositionUITests testTRPUI20FullSnapshotExportUsesPermanentLedgerStrip; then
-  printf '%s\n' 'ERROR: claimed Review workflow smoke tests are missing' >&2
-  exit 1
-fi
-if [[ ! -f "$review_test" ]] \
-    || ! class_contains_test "$review_test" CaseFileReviewHostedUITests testTRPCREATEUI01NewReviewSetupUsesExactSelectedScopeAndDurableSubmission \
-    || ! class_contains_test "$review_test" CaseFileReviewHostedUITests testTRPCREATEUI02PausedRunSurvivesRelaunchThenResumesAndCancels \
-    || ! class_contains_test "$review_test" CaseFileReviewCompositionUITests testTRPCREATEUI03ProductionCompositionUsesAtomicPinnedQueueAndExactHandoff \
-    || ! class_contains_test "$review_test" CaseFileReviewHostedUITests testTRPCREATEUI04SelectedScopeRejectsEveryExcludedSource \
-    || ! class_contains_test "$review_test" CaseFileReviewHostedUITests testTRPCREATEUI05ClosingDuringModelVerificationCancelsWithoutCreatingAJob \
-    || ! class_contains_test "$review_test" CaseFileReviewHostedUITests testTRPCREATEUI06ScopeDriftRefreshesReceiptAndRequiresSecondStart \
-    || ! class_contains_test "$review_test" CaseFileReviewHostedUITests testTRPHWUI01NinetySixGBReviewShowsRecommendedQwen32BAdvisory \
-    || ! class_contains_test "$review_test" CaseFileReviewHostedUITests testTRPHWUI02OneHundredTwentyEightGBReviewShowsRecommendedQwen32BAdvisory \
-    || ! class_contains_test "$review_test" CaseFileReviewHostedUITests testTRPHWUI03UnknownManagedModelWarnsWithoutBlockingStart \
-    || ! class_contains_test "$review_test" CaseFileReviewCompositionUITests testTRPHWUI04ProductionCompositionGatesFixtureAndKeepsFitAdvisory; then
-  printf '%s\n' 'ERROR: claimed Guided New Review smoke tests are missing' >&2
+if [[ ! -f "$retirement_test" ]] \
+    || ! class_contains_test "$retirement_test" ArchitectureUXRetirementUITests testTReviewRetireUI01MatterWorkspaceHasExactRemainingDestinations \
+    || ! class_contains_test "$retirement_test" ArchitectureUXRetirementUITests testTReviewTerms01OrdinaryReviewWorkflowsRemainOwned \
+    || ! class_contains_test "$retirement_test" ArchitectureUXRetirementUITests testTReviewRetireUI01RemainingTabsReflowAtSupportedWidths \
+    || ! class_contains_test "$retirement_test" ArchitectureUXRetirementUITests testTDELUI01BothDocumentTrashSurfacesShareConfirmationAndRenderFailure; then
+  printf '%s\n' 'ERROR: architecture and Review-retirement smoke tests are missing' >&2
   exit 1
 fi
 if (( $# != 0 )); then
@@ -176,24 +158,9 @@ xcodebuild \
   -only-testing:SupraAIUITests/RestoreSettingsUITests \
   -only-testing:SupraAIUITests/InterruptedDraftRecoveryUITests \
   -only-testing:SupraAIUITests/MotionToDismissWorkspaceUITests \
-  -only-testing:SupraAIUITests/CorpusReviewQueueCompositionUITests \
-  -only-testing:SupraAIUITests/CaseFileReviewCompositionUITests/testTRPUI13WorkflowControlsPinAccessibleFiltersProgressAndGuardedNavigation \
-  -only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPUI14ProgressAndAttentionFiltersReconcileHiddenSourcesAndExplicitEmptyState \
-  -only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPUI15DirtyDraftCancelKeepsProjectAndDiscardSwitchesWithoutCrossProjectLeak \
-  -only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPUI16FailedProjectSwitchRetainsExactDraftForResume \
-  -only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPUI17FailedOpenReviewRetainsExactDraftForResume \
-  -only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPUI18MinimumWidthSourcesKeepsProgressAndCompactFilterUsable \
-  -only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPUI19DirtyDraftAndFilteredMinimumWidthExportFullSavedSnapshot \
-  -only-testing:SupraAIUITests/CaseFileReviewCompositionUITests/testTRPUI20FullSnapshotExportUsesPermanentLedgerStrip \
-  -only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPCREATEUI01NewReviewSetupUsesExactSelectedScopeAndDurableSubmission \
-  -only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPCREATEUI02PausedRunSurvivesRelaunchThenResumesAndCancels \
-  -only-testing:SupraAIUITests/CaseFileReviewCompositionUITests/testTRPCREATEUI03ProductionCompositionUsesAtomicPinnedQueueAndExactHandoff \
-  -only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPCREATEUI04SelectedScopeRejectsEveryExcludedSource \
-  -only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPCREATEUI05ClosingDuringModelVerificationCancelsWithoutCreatingAJob \
-  -only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPCREATEUI06ScopeDriftRefreshesReceiptAndRequiresSecondStart \
-  -only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPHWUI01NinetySixGBReviewShowsRecommendedQwen32BAdvisory \
-  -only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPHWUI02OneHundredTwentyEightGBReviewShowsRecommendedQwen32BAdvisory \
-  -only-testing:SupraAIUITests/CaseFileReviewHostedUITests/testTRPHWUI03UnknownManagedModelWarnsWithoutBlockingStart \
-  -only-testing:SupraAIUITests/CaseFileReviewCompositionUITests/testTRPHWUI04ProductionCompositionGatesFixtureAndKeepsFitAdvisory \
+  -only-testing:SupraAIUITests/ArchitectureUXRetirementUITests/testTReviewRetireUI01MatterWorkspaceHasExactRemainingDestinations \
+  -only-testing:SupraAIUITests/ArchitectureUXRetirementUITests/testTReviewTerms01OrdinaryReviewWorkflowsRemainOwned \
+  -only-testing:SupraAIUITests/ArchitectureUXRetirementUITests/testTReviewRetireUI01RemainingTabsReflowAtSupportedWidths \
+  -only-testing:SupraAIUITests/ArchitectureUXRetirementUITests/testTDELUI01BothDocumentTrashSurfacesShareConfirmationAndRenderFailure \
   -only-testing:SupraAIUITests/RuntimeXPCIntegrationTests \
   test
