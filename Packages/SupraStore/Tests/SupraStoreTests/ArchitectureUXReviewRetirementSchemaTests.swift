@@ -8,8 +8,8 @@ import XCTest
 /// Standing compatibility guards for WP-1.5 Case File Review retirement.
 ///
 /// These tests intentionally keep the already-shared v073 migration while the
-/// product capability is removed. They do not use CaseFileReviewRepository,
-/// Review record types, or any other feature API that retirement will delete.
+/// product capability is removed. They use no retired repository, record, or
+/// export type that the feature retirement deletes.
 final class ArchitectureUXReviewRetirementSchemaTests: XCTestCase {
     func testRRSchema01V072AndV073SourceClosuresRemainByteIdenticalAndOrdered() throws {
         // Standing guard: the intended pre-retirement result is GREEN. The
@@ -186,6 +186,345 @@ final class ArchitectureUXReviewRetirementSchemaTests: XCTestCase {
         }
     }
 
+    func testRRSchema03DormantV073SchemaContractSurvivesWithoutFeatureAPI() throws {
+        // Standing compatibility guard expected GREEN before and after product
+        // retirement. It owns the persisted schema contract using raw SQL only.
+        let migrator = SupraMigrator.makeMigrator()
+        let queue = try DatabaseQueue()
+        try migrator.migrate(queue, upTo: "v072_harden_corpus_review_integrity")
+        let matter = try MattersRepository(writer: queue).createMatter(
+            name: "Synthetic dormant v073 compatibility matter"
+        )
+
+        try migrator.migrate(queue)
+        try migrator.migrate(queue)
+
+        try queue.read { db in
+            XCTAssertEqual(
+                try String.fetchAll(
+                    db,
+                    sql: "SELECT identifier FROM grdb_migrations ORDER BY rowid"
+                ).last,
+                "v073_create_case_file_review_projects"
+            )
+            XCTAssertEqual(Set(try db.columns(in: "case_file_review_projects").map(\.name)), Set([
+                "id", "matter_id", "title", "status", "stale_reason", "source_run_id",
+                "source_output_id", "source_output_version_id", "source_request_digest",
+                "frozen_scope_json", "frozen_corpus_snapshot_json", "frozen_reconciliation_json",
+                "active_table_id", "created_at", "updated_at",
+            ]))
+            XCTAssertEqual(Set(try db.columns(in: "case_file_review_tables").map(\.name)), Set([
+                "id", "project_id", "title", "version_index", "created_at", "updated_at",
+            ]))
+            XCTAssertEqual(Set(try db.columns(in: "case_file_review_columns").map(\.name)), Set([
+                "id", "table_id", "column_key", "title", "ordinal", "created_at",
+            ]))
+            XCTAssertEqual(Set(try db.columns(in: "case_file_review_rows").map(\.name)), Set([
+                "id", "table_id", "row_key", "ordinal", "created_at",
+            ]))
+            XCTAssertEqual(Set(try db.columns(in: "case_file_review_cells").map(\.name)), Set([
+                "id", "table_id", "row_id", "column_id", "current_generation_id",
+                "attorney_value", "review_state", "value_state", "support_state",
+                "reviewed_by", "reviewed_at", "created_at", "updated_at",
+            ]))
+            XCTAssertEqual(
+                Set(try db.columns(in: "case_file_review_cell_generations").map(\.name)),
+                Set([
+                    "id", "cell_id", "generation_index", "source_run_id",
+                    "generated_values_json", "created_at",
+                ])
+            )
+            XCTAssertEqual(
+                Set(try db.columns(in: "case_file_review_evidence_edges").map(\.name)),
+                Set([
+                    "id", "generation_id", "kind", "ordinal", "frozen_output_source_id",
+                    "frozen_document_id", "frozen_revision_id", "frozen_document_name",
+                    "citation_label", "char_start", "char_end", "locator_json", "excerpt",
+                    "excerpt_sha256", "live_output_source_id", "live_document_id",
+                    "live_revision_id", "availability", "unavailable_reason", "created_at",
+                    "updated_at",
+                ])
+            )
+
+            XCTAssertEqual(try foreignKeyContracts(db, table: "case_file_review_projects"), Set([
+                "matter_id->matters:id:CASCADE",
+                "active_table_id->case_file_review_tables:id:SET NULL",
+            ]))
+            XCTAssertEqual(try foreignKeyContracts(db, table: "case_file_review_tables"), Set([
+                "project_id->case_file_review_projects:id:CASCADE",
+            ]))
+            XCTAssertEqual(try foreignKeyContracts(db, table: "case_file_review_columns"), Set([
+                "table_id->case_file_review_tables:id:CASCADE",
+            ]))
+            XCTAssertEqual(try foreignKeyContracts(db, table: "case_file_review_rows"), Set([
+                "table_id->case_file_review_tables:id:CASCADE",
+            ]))
+            XCTAssertEqual(try foreignKeyContracts(db, table: "case_file_review_cells"), Set([
+                "table_id->case_file_review_tables:id:CASCADE",
+                "row_id,table_id->case_file_review_rows:id,table_id:CASCADE",
+                "column_id,table_id->case_file_review_columns:id,table_id:CASCADE",
+            ]))
+            XCTAssertEqual(
+                try foreignKeyContracts(db, table: "case_file_review_cell_generations"),
+                Set(["cell_id->case_file_review_cells:id:CASCADE"])
+            )
+            XCTAssertEqual(
+                try foreignKeyContracts(db, table: "case_file_review_evidence_edges"),
+                Set([
+                    "generation_id->case_file_review_cell_generations:id:CASCADE",
+                    "live_output_source_id->document_output_sources:id:SET NULL",
+                    "live_document_id->matter_documents:id:SET NULL",
+                    "live_revision_id->document_part_revisions:id:SET NULL",
+                ])
+            )
+
+            XCTAssertTrue(
+                try uniqueIndexColumnSets(db, table: "case_file_review_projects")
+                    .contains(["source_output_version_id"])
+            )
+            XCTAssertTrue(
+                try uniqueIndexColumnSets(db, table: "case_file_review_tables")
+                    .contains(["project_id", "version_index"])
+            )
+            XCTAssertTrue(
+                try uniqueIndexColumnSets(db, table: "case_file_review_columns")
+                    .isSuperset(of: [
+                        ["table_id", "column_key"], ["table_id", "ordinal"],
+                        ["id", "table_id"],
+                    ])
+            )
+            XCTAssertTrue(
+                try uniqueIndexColumnSets(db, table: "case_file_review_rows")
+                    .isSuperset(of: [
+                        ["table_id", "row_key"], ["table_id", "ordinal"],
+                        ["id", "table_id"],
+                    ])
+            )
+            XCTAssertTrue(
+                try uniqueIndexColumnSets(db, table: "case_file_review_cells")
+                    .contains(["row_id", "column_id"])
+            )
+            XCTAssertTrue(
+                try uniqueIndexColumnSets(db, table: "case_file_review_cell_generations")
+                    .contains(["cell_id", "generation_index"])
+            )
+            XCTAssertTrue(
+                try uniqueIndexColumnSets(db, table: "case_file_review_evidence_edges")
+                    .contains(["generation_id", "kind", "ordinal"])
+            )
+
+            for table in dormantV073Tables {
+                XCTAssertEqual(
+                    try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM \(table)"),
+                    0,
+                    "v073 must remain create-only for preexisting matter \(matter.id)"
+                )
+            }
+        }
+    }
+
+    func testRRSchema04PermanentDocumentDeletionDegradesDormantV073Evidence() throws {
+        // Standing compatibility guard: predecessor code already passed this
+        // invariant through the retired repository hook. Retirement must keep
+        // the ordinary document-deletion path usable without restoring any
+        // public Review repository, record, controller, or rendering API.
+        let store = try SupraStore.inMemory()
+        let matter = try store.matters.createMatter(name: "Dormant evidence matter 811")
+        let blob = try store.documentLibrary.upsertBlob(DocumentBlobRecord(
+            id: "rr-schema-blob-813",
+            sha256: String(repeating: "8", count: 64),
+            byteSize: 821,
+            originalExtension: "txt",
+            managedRelativePath: "documents/rr-schema-dormant-823.txt"
+        )).blob
+        let document = try store.documentLibrary.insertDocument(MatterDocumentRecord(
+            id: "rr-schema-document-827",
+            matterID: matter.id,
+            blobID: blob.id,
+            displayName: "Dormant source 829.txt"
+        ))
+        let revision = try store.documentRevisions.appendRevision(DocumentPartRevisionRecord(
+            id: "rr-schema-revision-839",
+            documentID: document.id,
+            partIndex: 7,
+            derivationKey: "rr-schema-derivation-853",
+            origin: "parser",
+            method: "synthetic_dormant_compatibility",
+            text: "Dormant exact evidence 857",
+            charCount: 26
+        ))
+        let sourceSet = try store.documentSources.createSourceSet(
+            matterID: matter.id,
+            mode: .guided,
+            scopeJSON: #"{"document_ids":["rr-schema-document-827"],"schema_version":7}"#
+        )
+        let source = DocumentOutputSourceRecord(
+            id: "rr-schema-source-859",
+            sourceSetID: sourceSet.id,
+            documentID: document.id,
+            revisionID: revision.id,
+            citationLabel: "S863",
+            locatorJSON: #"{"char_end":26,"char_start":0,"part_index":7,"source_kind":"text"}"#,
+            excerpt: "Dormant exact evidence 857",
+            rank: 7
+        )
+        try store.documentSources.addOutputSource(source)
+
+        let projectID = "rr-schema-project-877"
+        let tableID = "rr-schema-table-881"
+        let columnID = "rr-schema-column-883"
+        let rowID = "rr-schema-row-887"
+        let cellID = "rr-schema-cell-907"
+        let generationID = "rr-schema-generation-911"
+        let edgeID = "rr-schema-edge-919"
+        let frozenDigest = String(repeating: "9", count: 64)
+        try store.database.writer.write { db in
+            try db.execute(
+                sql: """
+                    INSERT INTO case_file_review_projects (
+                        id, matter_id, title, status, stale_reason,
+                        source_run_id, source_output_id, source_output_version_id,
+                        source_request_digest, frozen_scope_json,
+                        frozen_corpus_snapshot_json, frozen_reconciliation_json,
+                        active_table_id, created_at, updated_at
+                    ) VALUES (?, ?, ?, 'active', NULL, ?, ?, ?, ?, '{}', '{}', '{}', NULL, ?, ?)
+                    """,
+                arguments: [
+                    projectID, matter.id, "Dormant project 929", "rr-schema-run-937",
+                    "rr-schema-output-941", "rr-schema-version-947",
+                    String(repeating: "7", count: 64), Wire.timestamp, Wire.timestamp,
+                ]
+            )
+            try db.execute(
+                sql: """
+                    INSERT INTO case_file_review_tables
+                        (id, project_id, title, version_index, created_at, updated_at)
+                    VALUES (?, ?, 'Dormant table 953', 7, ?, ?)
+                    """,
+                arguments: [tableID, projectID, Wire.timestamp, Wire.timestamp]
+            )
+            try db.execute(
+                sql: "UPDATE case_file_review_projects SET active_table_id = ? WHERE id = ?",
+                arguments: [tableID, projectID]
+            )
+            try db.execute(
+                sql: """
+                    INSERT INTO case_file_review_columns
+                        (id, table_id, column_key, title, ordinal, created_at)
+                    VALUES (?, ?, 'generated_value', 'Generated value 967', 7, ?)
+                    """,
+                arguments: [columnID, tableID, Wire.timestamp]
+            )
+            try db.execute(
+                sql: """
+                    INSERT INTO case_file_review_rows
+                        (id, table_id, row_key, ordinal, created_at)
+                    VALUES (?, ?, 'dormant-row-971', 7, ?)
+                    """,
+                arguments: [rowID, tableID, Wire.timestamp]
+            )
+            try db.execute(
+                sql: """
+                    INSERT INTO case_file_review_cells (
+                        id, table_id, row_id, column_id, current_generation_id,
+                        attorney_value, review_state, value_state, support_state,
+                        reviewed_by, reviewed_at, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, NULL, NULL, 'needs_review', 'generated',
+                              'supported', NULL, NULL, ?, ?)
+                    """,
+                arguments: [cellID, tableID, rowID, columnID, Wire.timestamp, Wire.timestamp]
+            )
+            try db.execute(
+                sql: """
+                    INSERT INTO case_file_review_cell_generations (
+                        id, cell_id, generation_index, source_run_id,
+                        generated_values_json, created_at
+                    ) VALUES (?, ?, 7, 'rr-schema-run-937', '["dormant-value-977"]', ?)
+                    """,
+                arguments: [generationID, cellID, Wire.timestamp]
+            )
+            try db.execute(
+                sql: "UPDATE case_file_review_cells SET current_generation_id = ? WHERE id = ?",
+                arguments: [generationID, cellID]
+            )
+            try db.execute(
+                sql: """
+                    INSERT INTO case_file_review_evidence_edges (
+                        id, generation_id, kind, ordinal,
+                        frozen_output_source_id, frozen_document_id, frozen_revision_id,
+                        frozen_document_name, citation_label, char_start, char_end,
+                        locator_json, excerpt, excerpt_sha256,
+                        live_output_source_id, live_document_id, live_revision_id,
+                        availability, unavailable_reason, created_at, updated_at
+                    ) VALUES (?, ?, 'supporting', 7, ?, ?, ?, ?, 'S863', 0, 26,
+                              ?, ?, ?, ?, ?, ?, 'available', NULL, ?, ?)
+                    """,
+                arguments: [
+                    edgeID, generationID, source.id, document.id, revision.id,
+                    document.displayName, source.locatorJSON, source.excerpt, frozenDigest,
+                    source.id, document.id, revision.id, Wire.timestamp, Wire.timestamp,
+                ]
+            )
+        }
+
+        let frozenBefore = try store.database.writer.read { db in
+            try XCTUnwrap(Row.fetchOne(
+                db,
+                sql: """
+                    SELECT frozen_output_source_id, frozen_document_id,
+                           frozen_revision_id, frozen_document_name, citation_label,
+                           locator_json, excerpt, excerpt_sha256
+                    FROM case_file_review_evidence_edges WHERE id = ?
+                    """,
+                arguments: [edgeID]
+            ))
+        }
+
+        _ = try store.documentLibrary.permanentlyDeleteDocument(
+            id: document.id,
+            actor: "synthetic-attorney-983",
+            at: Date(timeIntervalSince1970: 1_799_009_983)
+        )
+
+        try store.database.writer.read { db in
+            XCTAssertEqual(
+                try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM matter_documents WHERE id = ?", arguments: [document.id]),
+                0
+            )
+            let edge = try XCTUnwrap(Row.fetchOne(
+                db,
+                sql: """
+                    SELECT availability, unavailable_reason, live_output_source_id,
+                           live_document_id, live_revision_id,
+                           frozen_output_source_id, frozen_document_id,
+                           frozen_revision_id, frozen_document_name, citation_label,
+                           locator_json, excerpt, excerpt_sha256
+                    FROM case_file_review_evidence_edges WHERE id = ?
+                    """,
+                arguments: [edgeID]
+            ))
+            XCTAssertEqual(edge["availability"] as String, "unavailable")
+            XCTAssertEqual(edge["unavailable_reason"] as String, "source_permanently_deleted")
+            XCTAssertNil(edge["live_output_source_id"] as String?)
+            XCTAssertNil(edge["live_document_id"] as String?)
+            XCTAssertNil(edge["live_revision_id"] as String?)
+            XCTAssertEqual(edge["frozen_output_source_id"] as String, frozenBefore["frozen_output_source_id"] as String)
+            XCTAssertEqual(edge["frozen_document_id"] as String, frozenBefore["frozen_document_id"] as String)
+            XCTAssertEqual(edge["frozen_revision_id"] as String, frozenBefore["frozen_revision_id"] as String)
+            XCTAssertEqual(edge["excerpt_sha256"] as String, frozenBefore["excerpt_sha256"] as String)
+            XCTAssertEqual(
+                try String.fetchOne(db, sql: "SELECT support_state FROM case_file_review_cells WHERE id = ?", arguments: [cellID]),
+                "stale"
+            )
+            XCTAssertEqual(
+                try String.fetchOne(db, sql: "SELECT status FROM case_file_review_projects WHERE id = ?", arguments: [projectID]),
+                "stale"
+            )
+            XCTAssertEqual(try String.fetchOne(db, sql: "PRAGMA integrity_check"), "ok")
+            XCTAssertEqual(try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM pragma_foreign_key_check"), 0)
+        }
+    }
+
     // TODO(WP-1.5 process evidence): the authenticated public v069 fixture has
     // no matter/document/output/audit business rows, and this source-only slice
     // must not impersonate the owner's observed v072 profile. Add a separately
@@ -314,6 +653,40 @@ final class ArchitectureUXReviewRetirementSchemaTests: XCTestCase {
             XCTAssertFalse(values.contains("DEFAULT-000"))
             return sha256(Data(values.joined(separator: "\u{1f}").utf8))
         }
+    }
+
+    private var dormantV073Tables: [String] {
+        [
+            "case_file_review_projects",
+            "case_file_review_tables",
+            "case_file_review_columns",
+            "case_file_review_rows",
+            "case_file_review_cells",
+            "case_file_review_cell_generations",
+            "case_file_review_evidence_edges",
+        ]
+    }
+
+    private func foreignKeyContracts(_ db: Database, table: String) throws -> Set<String> {
+        let rows = try Row.fetchAll(db, sql: "PRAGMA foreign_key_list(\(table))")
+        return Set(Dictionary(grouping: rows) { $0["id"] as Int }.values.map { group in
+            let ordered = group.sorted { ($0["seq"] as Int) < ($1["seq"] as Int) }
+            return "\(ordered.map { $0["from"] as String }.joined(separator: ","))->\(ordered[0]["table"] as String):\(ordered.map { $0["to"] as String }.joined(separator: ",")):\(ordered[0]["on_delete"] as String)"
+        })
+    }
+
+    private func uniqueIndexColumnSets(_ db: Database, table: String) throws -> Set<[String]> {
+        var result = Set<[String]>()
+        for index in try Row.fetchAll(db, sql: "PRAGMA index_list(\(table))")
+        where (index["unique"] as Int) == 1 {
+            let name = index["name"] as String
+            result.insert(
+                try Row.fetchAll(db, sql: "PRAGMA index_info(\(name))")
+                    .sorted { ($0["seqno"] as Int) < ($1["seqno"] as Int) }
+                    .map { $0["name"] as String }
+            )
+        }
+        return result
     }
 
     private func linesData(_ values: [String]) -> Data {
