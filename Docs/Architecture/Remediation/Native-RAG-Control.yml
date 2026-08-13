@@ -144,6 +144,8 @@ resource_ceiling_contract:
   status: pending_owner_approval_after_instruments_control
 
 comparison_matrix:
+  validator_status: green
+  validator_test: Packages/SupraTestKit/Tests/SupraTestKitTests/RAGControlComparisonContractTests.swift
   hardware:
     model_identifier: Mac16,7
     chip: Apple_M4_Pro
