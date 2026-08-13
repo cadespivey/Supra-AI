@@ -68,6 +68,52 @@ public struct ResumableDocumentImport: Sendable, Equatable, Identifiable {
     }
 }
 
+/// Typed result for a corpus submission that targets a capability removed from
+/// the product. Callers can distinguish retirement from storage or validation
+/// failures without relying on display text.
+public enum CorpusAnalysisQueueAdmissionError: Error, LocalizedError, Equatable, Sendable {
+    case retiredCapability
+
+    public var errorDescription: String? {
+        switch self {
+        case .retiredCapability:
+            "This corpus-analysis capability has been retired."
+        }
+    }
+}
+
+/// Typed, mutation-aware result for an attempted corpus-job resume.
+public enum CorpusAnalysisQueueResumeResult: Equatable, Sendable {
+    case resumed
+    case retiredCapability
+    case unavailable
+}
+
+/// Compatibility policy for durable Case File Review work left by older app
+/// versions. The current persisted identity is the exhaustive request run key;
+/// an older job-ID shape is also recognized. No generic corpus-analysis task is
+/// classified by words such as "review" alone.
+enum RetiredCorpusAnalysisPolicy {
+    static let identityPrefix = "guided-review:"
+
+    static func isRetired(_ payload: CorpusAnalysisJobPayload) -> Bool {
+        guard payload.schemaVersion == 2,
+              case .exhaustiveList(let request) = payload.task else { return false }
+        return request.runKey.hasPrefix(identityPrefix)
+    }
+
+    static func isRetired(_ job: DocumentProcessingJobRecord) -> Bool {
+        guard job.kind == DocumentProcessingJobKind.corpusAnalysis.rawValue else { return false }
+        if job.id.hasPrefix(identityPrefix) { return true }
+        guard let payloadJSON = job.payloadJSON,
+              let payload = try? JSONDecoder().decode(
+                  CorpusAnalysisJobPayload.self,
+                  from: Data(payloadJSON.utf8)
+              ) else { return false }
+        return isRetired(payload)
+    }
+}
+
 /// App-wide document processing queue (plan §5.2–§5.6). Exactly one job runs at a
 /// time; others queue FIFO. Jobs run import → indexing, report phase progress,
 /// fire completion/failure notifications, and reconcile safely after an
@@ -155,9 +201,16 @@ public final class DocumentProcessingQueue: ObservableObject {
     }
 
     public func refresh() {
-        activeJob = try? store.documentJobs.fetchActiveJob()
-        queuedJobs = (try? store.documentJobs.fetchQueuedJobs()) ?? []
-        resumableJobs = (try? store.documentJobs.fetchPausedJobs()) ?? []
+        let persistedActive = try? store.documentJobs.fetchActiveJob()
+        activeJob = persistedActive.flatMap {
+            RetiredCorpusAnalysisPolicy.isRetired($0) ? nil : $0
+        }
+        queuedJobs = ((try? store.documentJobs.fetchQueuedJobs()) ?? []).filter {
+            !RetiredCorpusAnalysisPolicy.isRetired($0)
+        }
+        resumableJobs = ((try? store.documentJobs.fetchPausedJobs()) ?? []).filter {
+            !RetiredCorpusAnalysisPolicy.isRetired($0)
+        }
         resumableImports = resumableJobs.compactMap { job in
             guard let batchID = job.importBatchID,
                   let summary = try? store.documentJobs.sourcesSummary(batchID: batchID),
@@ -311,6 +364,10 @@ public final class DocumentProcessingQueue: ObservableObject {
         startImmediately: Bool = true
     ) throws -> (runID: String, jobID: String)? {
         do {
+            guard !submission.jobID.hasPrefix(RetiredCorpusAnalysisPolicy.identityPrefix),
+                  !RetiredCorpusAnalysisPolicy.isRetired(submission.payload) else {
+                throw CorpusAnalysisQueueAdmissionError.retiredCapability
+            }
             let payloadJSON = String(
                 decoding: try JSONEncoder().encode(submission.payload),
                 as: UTF8.self
@@ -338,26 +395,44 @@ public final class DocumentProcessingQueue: ObservableObject {
     }
 
     /// Enqueues a fully reconstructible corpus-analysis request whose exact inputs
-    /// were already persisted. Retained for prepared-ledger resume/tests; new
-    /// Review creation must use the atomic prepared-submission overload above.
+    /// were already persisted. The typed overload makes retirement and storage
+    /// failure distinguishable to new callers.
+    @discardableResult
+    public func submitCorpusAnalysis(
+        matterID: String,
+        payload: CorpusAnalysisJobPayload,
+        startImmediately: Bool = true
+    ) throws -> String {
+        guard !RetiredCorpusAnalysisPolicy.isRetired(payload) else {
+            throw CorpusAnalysisQueueAdmissionError.retiredCapability
+        }
+        let payloadJSON = String(
+            decoding: try JSONEncoder().encode(payload),
+            as: UTF8.self
+        )
+        let job = try store.documentJobs.enqueueJob(
+            matterID: matterID,
+            kind: DocumentProcessingJobKind.corpusAnalysis.rawValue,
+            payloadJSON: payloadJSON
+        )
+        refresh()
+        if startImmediately { pump() }
+        return job.id
+    }
+
+    /// Source-compatible wrapper for retained callers. New code should use the
+    /// throwing overload above so a retired request is never collapsed into nil.
     @discardableResult
     public func enqueueCorpusAnalysis(
         matterID: String,
         payload: CorpusAnalysisJobPayload
     ) -> String? {
         do {
-            let payloadJSON = String(
-                data: try JSONEncoder().encode(payload),
-                encoding: .utf8
-            )
-            let job = try store.documentJobs.enqueueJob(
+            return try submitCorpusAnalysis(
                 matterID: matterID,
-                kind: DocumentProcessingJobKind.corpusAnalysis.rawValue,
-                payloadJSON: payloadJSON
+                payload: payload,
+                startImmediately: true
             )
-            refresh()
-            pump()
-            return job.id
         } catch {
             lastError = error.localizedDescription
             return nil
@@ -422,6 +497,7 @@ public final class DocumentProcessingQueue: ObservableObject {
               pausingCorpusJobID != jobID,
               let corpusAnalysisPauseRequester,
               let job = try? store.documentJobs.fetchJob(id: jobID),
+              !RetiredCorpusAnalysisPolicy.isRetired(job),
               let json = job.payloadJSON,
               let payload = try? JSONDecoder().decode(
                   CorpusAnalysisJobPayload.self,
@@ -434,11 +510,40 @@ public final class DocumentProcessingQueue: ObservableObject {
     /// Resumes a paused job. Sources from the original session are reused if still
     /// held; otherwise the job reconciles by re-indexing already-imported docs.
     public func resume(jobID: String) {
+        if let job = try? store.documentJobs.fetchJob(id: jobID),
+           job.kind == DocumentProcessingJobKind.corpusAnalysis.rawValue {
+            _ = resumeCorpusAnalysis(jobID: jobID)
+            return
+        }
         // Re-queue rather than force-active so the single-active scheduler promotes
         // it only when no other job is running.
         try? store.documentJobs.requeueJob(id: jobID)
         refresh()
         pump()
+    }
+
+    /// Re-enters a retained paused corpus job without making legacy Review work
+    /// runnable. A retired result performs no write and does not start the pump.
+    @discardableResult
+    public func resumeCorpusAnalysis(jobID: String) -> CorpusAnalysisQueueResumeResult {
+        do {
+            guard let job = try store.documentJobs.fetchJob(id: jobID),
+                  job.kind == DocumentProcessingJobKind.corpusAnalysis.rawValue,
+                  job.status == DocumentProcessingJobStatus.paused.rawValue else {
+                return .unavailable
+            }
+            guard !RetiredCorpusAnalysisPolicy.isRetired(job) else {
+                return .retiredCapability
+            }
+            try store.documentJobs.requeueJob(id: jobID)
+            refresh()
+            pump()
+            return .resumed
+        } catch {
+            lastError = error.localizedDescription
+            refresh()
+            return .unavailable
+        }
     }
 
     /// Discards a paused post-v059 import without touching rows that already
@@ -514,7 +619,7 @@ public final class DocumentProcessingQueue: ObservableObject {
 
     private func runLoop() async {
         defer { runTask = nil }
-        while let job = try? store.documentJobs.activateNextJobIfIdle() {
+        while let job = try? activateNextEligibleJobIfIdle() {
             // Avoid re-running a job we already finished in this loop.
             if job.status == DocumentProcessingJobStatus.complete.rawValue
                 || job.status == DocumentProcessingJobStatus.failed.rawValue
@@ -525,6 +630,25 @@ public final class DocumentProcessingQueue: ObservableObject {
             refresh()
             if Task.isCancelled { break }
         }
+    }
+
+    /// Chooses an eligible FIFO row before activation. This preserves an inert
+    /// retired head row byte-for-byte while allowing unrelated work behind it to
+    /// acquire the one active slot.
+    private func activateNextEligibleJobIfIdle() throws -> DocumentProcessingJobRecord? {
+        if let active = try store.documentJobs.fetchActiveJob() {
+            return RetiredCorpusAnalysisPolicy.isRetired(active) ? nil : active
+        }
+        for queued in try store.documentJobs.fetchQueuedJobs() {
+            guard !RetiredCorpusAnalysisPolicy.isRetired(queued) else { continue }
+            if let activated = try store.documentJobs.activateQueuedJobIfIdle(id: queued.id) {
+                return activated
+            }
+            if let active = try store.documentJobs.fetchActiveJob() {
+                return RetiredCorpusAnalysisPolicy.isRetired(active) ? nil : active
+            }
+        }
+        return nil
     }
 
     private func run(_ job: DocumentProcessingJobRecord) async {

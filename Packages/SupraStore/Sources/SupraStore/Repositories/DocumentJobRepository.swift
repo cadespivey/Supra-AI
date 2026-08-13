@@ -509,6 +509,31 @@ public final class DocumentJobRepository: @unchecked Sendable {
         }
     }
 
+    /// Atomically promotes one exact queued identity only when the global job
+    /// slot is idle. Selection policy remains with the caller; Store enforces
+    /// only status and single-owner compare-and-set semantics.
+    @discardableResult
+    public func activateQueuedJobIfIdle(id: String) throws -> DocumentProcessingJobRecord? {
+        try writer.write { db in
+            let activeCount = try Int.fetchOne(
+                db,
+                sql: "SELECT COUNT(*) FROM document_processing_jobs WHERE status = ?",
+                arguments: [DocumentProcessingJobStatus.active.rawValue]
+            ) ?? 0
+            guard activeCount == 0,
+                  var selected = try DocumentProcessingJobRecord.fetchOne(db, key: id),
+                  selected.status == DocumentProcessingJobStatus.queued.rawValue else {
+                return nil
+            }
+            let now = Date()
+            selected.status = DocumentProcessingJobStatus.active.rawValue
+            selected.startedAt = selected.startedAt ?? now
+            selected.updatedAt = now
+            try selected.update(db)
+            return selected
+        }
+    }
+
     public func updateJobProgress(
         id: String,
         phase: DocumentProcessingPhase,
