@@ -55,4 +55,45 @@ final class ArchitectureUXTDataCourt02Tests: XCTestCase {
         XCTAssertFalse(scopedOutputElements.contains("flsd"))
         XCTAssertFalse(scopedOutputElements.contains("DEFAULT-000"))
     }
+
+    /// Expected RED: exact identifiers that are individually valid must still
+    /// fail closed when the persisted jurisdiction and court do not belong to
+    /// one coherent authority scope.
+    func testExactCourtPairedWithWrongCircuitDoesNotBecomeResolved() {
+        let snapshot = MatterIdentitySnapshot(
+            matterID: "matter-733",
+            identityRevision: 7,
+            courtResolutionState: .court,
+            canonicalCatalogVersion: JurisdictionCatalog.shared.catalogVersion,
+            canonicalCatalogDigestSHA256: JurisdictionCatalog.shared.identityDigestSHA256,
+            canonicalJurisdictionID: CanonicalJurisdictionID(
+                rawValue: "federal-united-states-court-of-appeals-for-the-fifth-circuit"
+            ),
+            canonicalCourtID: CanonicalCourtID(
+                rawValue:
+                    "federal-florida-united-states-district-court-for-the-southern-district-of-florida"
+            ),
+            legacyJurisdictionText: "Synthetic mismatched circuit 733",
+            legacyCourtText: "S.D. Fla.",
+            parties: [],
+            representations: []
+        )
+
+        let presentation = MatterCourtPresentationBuilder(
+            catalog: JurisdictionCatalog.shared
+        ).makePresentation(for: snapshot)
+
+        XCTAssertEqual(presentation.matterID, "matter-733")
+        XCTAssertEqual(presentation.savedCourtText, "S.D. Fla.")
+        XCTAssertEqual(presentation.actionTitle, "Choose Court")
+        XCTAssertNil(presentation.resolvedCourtName)
+        XCTAssertNil(presentation.resolvedJurisdictionName)
+        XCTAssertNil(presentation.authorityScope)
+        XCTAssertEqual(presentation.courtListenerIDs, [])
+        XCTAssertFalse(presentation.canRunCourtScopedResearch)
+        XCTAssertFalse(presentation.canDraftCourtFiling)
+        XCTAssertFalse(presentation.courtListenerIDs.contains("ca5"))
+        XCTAssertFalse(presentation.courtListenerIDs.contains("flsd"))
+        XCTAssertFalse(String(describing: presentation).contains("DEFAULT-000"))
+    }
 }
