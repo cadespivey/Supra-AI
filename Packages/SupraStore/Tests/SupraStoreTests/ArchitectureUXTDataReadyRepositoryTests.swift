@@ -598,6 +598,113 @@ final class ArchitectureUXTDataReadyRepositoryTests: XCTestCase {
         }
     }
 
+    /// Expected RED refinement: the first repository draft exposes only flat IDs
+    /// and accepts incomplete extraction evidence. The canonical receipt must keep
+    /// typed, content-free component facts so every consumer can explain the same
+    /// base result without rereading raw Store rows.
+    func testReceiptExposesTypedComponentFactsAndRequiresCompleteExtractionEvidence() throws {
+        let fixture = try makeReadyFixture()
+        let ready = try fixture.store.documentReadiness.fetchReceipt(documentID: Wire.documentID)
+
+        XCTAssertEqual(ready.extractionStatus, .extracted)
+        XCTAssertEqual(ready.extractionMethod, "T_DATA_READY_01_EXTRACTOR_7")
+        XCTAssertEqual(ready.reviewConditions, [])
+        XCTAssertEqual(ready.partBindings.count, 1)
+        XCTAssertEqual(ready.partBindings[0].partIndex, 0)
+        XCTAssertEqual(ready.partBindings[0].partID, Wire.partID)
+        XCTAssertEqual(ready.partBindings[0].currentRevisionID, Wire.revisionID)
+        XCTAssertEqual(ready.partBindings[0].currentSelectionID, Wire.selectionID)
+
+        let activeModel = try XCTUnwrap(ready.activeEmbeddingModel)
+        XCTAssertEqual(activeModel.id, Wire.modelID)
+        XCTAssertEqual(activeModel.repoID, "synthetic/T_DATA_READY_01_MODEL_A_731")
+        XCTAssertEqual(activeModel.revision, Wire.modelRevision)
+        XCTAssertEqual(activeModel.dimension, Wire.modelDimension)
+        XCTAssertEqual(ready.selectedEmbeddingModelFlagIDs, [Wire.modelID])
+        XCTAssertEqual(ready.availableEmbeddingModelIDs, [Wire.modelID])
+
+        let missingEvidenceSQL = [
+            "UPDATE matter_documents SET extraction_method = NULL WHERE id = ?",
+            "UPDATE matter_documents SET extracted_text_checksum = NULL WHERE id = ?",
+            "UPDATE matter_documents SET page_part_count = NULL WHERE id = ?",
+            "UPDATE matter_documents SET page_part_count = 2 WHERE id = ?",
+        ]
+        for sql in missingEvidenceSQL {
+            let candidate = try makeReadyFixture()
+            try candidate.store.database.writer.write { database in
+                try database.execute(sql: sql, arguments: [Wire.documentID])
+            }
+            let receipt = try candidate.store.documentReadiness.fetchReceipt(
+                documentID: Wire.documentID
+            )
+            XCTAssertEqual(receipt.primaryExclusion, .extractionIncomplete, sql)
+        }
+    }
+
+    func testConvertedLossyAndActiveChunkerMismatchFailClosedDespiteGreenFlags() throws {
+        do {
+            let fixture = try makeReadyFixture()
+            try fixture.store.database.writer.write { database in
+                try database.execute(
+                    sql: "UPDATE matter_documents SET extraction_method = 'converted_lossy@toolchain:T_DATA_READY_01_7' WHERE id = ?",
+                    arguments: [Wire.documentID]
+                )
+            }
+            let receipt = try fixture.store.documentReadiness.fetchReceipt(
+                documentID: Wire.documentID
+            )
+            XCTAssertEqual(receipt.primaryExclusion, .reviewRequired)
+            XCTAssertEqual(receipt.reviewConditions, [.convertedLossyExtraction])
+        }
+
+        do {
+            let fixture = try makeReadyFixture()
+            try fixture.store.database.writer.write { database in
+                try database.execute(
+                    sql: "UPDATE document_chunks SET chunker_version = 1 WHERE id = ?",
+                    arguments: [Wire.chunkID]
+                )
+            }
+            let receipt = try fixture.store.documentReadiness.fetchReceipt(
+                documentID: Wire.documentID
+            )
+            XCTAssertEqual(receipt.primaryExclusion, .staleRevision)
+            XCTAssertTrue(receipt.exclusions.contains(.textIndexIncomplete))
+        }
+    }
+
+    func testTextIndexRejectsDuplicateNullAndCrossDocumentRows() throws {
+        let corruptions: [(String, String, StatementArguments)] = [
+            (
+                "duplicate row",
+                "INSERT INTO document_chunk_fts(text, chunk_id, document_id) VALUES (?, ?, ?)",
+                [Wire.text, Wire.chunkID, Wire.documentID]
+            ),
+            (
+                "null chunk identity",
+                "INSERT INTO document_chunk_fts(text, chunk_id, document_id) VALUES (?, NULL, ?)",
+                [Wire.text, Wire.documentID]
+            ),
+            (
+                "current chunk attributed to another document",
+                "UPDATE document_chunk_fts SET document_id = 'record-733' WHERE chunk_id = ?",
+                [Wire.chunkID]
+            ),
+        ]
+
+        for (label, sql, arguments) in corruptions {
+            let fixture = try makeReadyFixture()
+            try fixture.store.database.writer.write { database in
+                try database.execute(sql: sql, arguments: arguments)
+            }
+            let receipt = try fixture.store.documentReadiness.fetchReceipt(
+                documentID: Wire.documentID
+            )
+            XCTAssertEqual(receipt.primaryExclusion, .textIndexIncomplete, label)
+            XCTAssertEqual(receipt.textIndexedChunkCount, 0, label)
+        }
+    }
+
     private func makeReadyFixture() throws -> ReadyFixture {
         let store = try SupraStore.inMemory()
         let matter = try store.matters.createMatter(name: "T-DATA-READY-01 matter 709")
