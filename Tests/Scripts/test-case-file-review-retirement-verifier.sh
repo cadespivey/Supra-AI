@@ -56,6 +56,10 @@ make_shipping_fixture() {
     '}'
   write_file "${fixture_root}/Packages/SupraSessions/Sources/SupraSessions/DocumentRelationReviewController.swift" \
     'public final class DocumentRelationReviewController {}'
+  write_file "${fixture_root}/Packages/SupraSessions/Sources/SupraSessions/CorpusAnalysisQueueRunner.swift" \
+    'public final class CorpusAnalysisQueueRunner: @unchecked Sendable {}'
+  write_file "${fixture_root}/Packages/SupraSessions/Sources/SupraSessions/ExhaustiveListTask.swift" \
+    'public final class ExhaustiveListTask: @unchecked Sendable {}'
   write_file "${fixture_root}/Packages/SupraSessions/Sources/SupraSessions/MatterDraftingController.swift" \
     'public struct DraftArtifact {' \
     '    public var reviewNotes: [String] { [] }' \

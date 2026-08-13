@@ -44,9 +44,9 @@ public struct ExhaustiveListGenerationInput: Sendable {
     public var prompt: String
 }
 
-/// Versioned runtime behavior for one exhaustive-list prompt builder. Shipping
-/// composition uses the same value for XPC generation and persisted audit
-/// lineage; changing it requires a promptBuilderVersion bump.
+/// Versioned runtime behavior for one exhaustive-list prompt builder. A future
+/// composing owner must use the same value for XPC generation and persisted
+/// audit lineage; changing it requires a promptBuilderVersion bump.
 public struct ExhaustiveListGenerationConfiguration: Equatable, Sendable {
     public var systemPrompt: String?
     public var options: GenerationOptions

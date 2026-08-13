@@ -229,6 +229,68 @@ final class RetiredCorpusQueueCompatibilityTests: XCTestCase {
         XCTAssertEqual(recordedRunKeys, [])
     }
 
+    func testTReviewRetireArtifact01BootstrapPreservesExistingExportsAndSharedModelBytes() async throws {
+        // T-REVIEW-RETIRE-ARTIFACT-01 standing guard: the only legacy-job
+        // reconciliation performed during retirement cannot become an export/model cleanup.
+        let artifactRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "RetiredCorpusArtifacts-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer { try? FileManager.default.removeItem(at: artifactRoot) }
+
+        let exportRoot = artifactRoot.appendingPathComponent("Existing Review Exports", isDirectory: true)
+        let modelRoot = artifactRoot.appendingPathComponent(
+            "Models/shared-model-719/revision-7",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: exportRoot, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: modelRoot, withIntermediateDirectories: true)
+
+        let csvURL = exportRoot.appendingPathComponent("review-export-713.csv")
+        let xlsxURL = exportRoot.appendingPathComponent("review-export-719.xlsx")
+        let modelURL = modelRoot.appendingPathComponent("model-727.safetensors")
+        let expectedArtifacts: [(URL, Data)] = [
+            (csvURL, Data("CSV-EXISTING-713\ncell,NONDEFAULT-719\n".utf8)),
+            (xlsxURL, Data([0x50, 0x4b, 0x03, 0x04, 0x07, 0x13, 0x19, 0x27])),
+            (modelURL, Data("SHARED-MODEL-BYTES-727-REVISION-7".utf8)),
+        ]
+        for (url, bytes) in expectedArtifacts {
+            try bytes.write(to: url, options: .withoutOverwriting)
+        }
+
+        let store = try makeStore(testName: "artifact-preservation")
+        let matter = try store.matters.createMatter(name: "Synthetic artifact retirement 733")
+        let queued = try persistJob(
+            store: store,
+            matterID: matter.id,
+            payload: makePayload(
+                matterID: matter.id,
+                runKey: "guided-review:artifact-preservation-739"
+            )
+        )
+        let active = try XCTUnwrap(store.documentJobs.activateNextJobIfIdle())
+        XCTAssertEqual(active.id, queued.id)
+        let recorder = CorpusRunKeyRecorder()
+        let queue = makeQueue(store: store, recorder: recorder)
+
+        queue.bootstrap()
+        await queue.waitUntilIdle()
+
+        let reconciled = try XCTUnwrap(store.documentJobs.fetchJob(id: active.id))
+        XCTAssertEqual(reconciled.status, DocumentProcessingJobStatus.paused.rawValue)
+        let recordedRunKeys = await recorder.snapshot()
+        XCTAssertEqual(recordedRunKeys, [])
+        for (url, expectedBytes) in expectedArtifacts {
+            XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
+            XCTAssertEqual(try Data(contentsOf: url), expectedBytes)
+        }
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: artifactRoot.appendingPathComponent("DEFAULT-000").path
+            )
+        )
+    }
+
     private func makePayload(matterID: String, runKey: String) -> CorpusAnalysisJobPayload {
         CorpusAnalysisJobPayload(
             schemaVersion: 2,

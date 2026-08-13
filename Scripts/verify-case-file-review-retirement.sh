@@ -90,6 +90,21 @@ if (( app_source_count == 0 )); then
 fi
 append_source_file "$project_file"
 
+# DR-CORPUS-OWNER-01: after Review removal the retained corpus/exhaustive
+# implementation is package-only substrate. A shipping app reference would
+# create a real consumer and invalidate the recorded no-extraction decision.
+shipping_corpus_composition="${temporary_dir}/shipping-corpus-composition.txt"
+grep -REn --include='*.swift' \
+  'CorpusAnalysisQueueRunner|ExhaustiveListTask|corpusAnalysisRunner[[:space:]]*:' \
+  "$app_sources" >"$shipping_corpus_composition" 2>/dev/null || true
+grep -En \
+  'CorpusAnalysisQueueRunner|ExhaustiveListTask|corpusAnalysisRunner[[:space:]]*:' \
+  "$project_file" >>"$shipping_corpus_composition" 2>/dev/null || true
+if [[ -s "$shipping_corpus_composition" ]]; then
+  fail 'shipping app composes package-only corpus execution; corpus ownership decision must be revisited'
+  sed -n '1,8{s/^/  - /;p;}' "$shipping_corpus_composition" >&2
+fi
+
 package_source_count=0
 while IFS= read -r -d '' file; do
   if [[ "$file" == "$migrator" \
@@ -461,6 +476,14 @@ require_retained \
   'generic needsReview' \
   'Packages/SupraCore/Sources/SupraCore/PropositionSupport.swift' \
   'case needsReview = "needs_review"'
+require_retained \
+  'generic corpus queue substrate' \
+  'Packages/SupraSessions/Sources/SupraSessions/CorpusAnalysisQueueRunner.swift' \
+  'public final class CorpusAnalysisQueueRunner: @unchecked Sendable'
+require_retained \
+  'generic exhaustive-list substrate' \
+  'Packages/SupraSessions/Sources/SupraSessions/ExhaustiveListTask.swift' \
+  'public final class ExhaustiveListTask: @unchecked Sendable'
 
 if (( status != 0 )); then
   printf 'Case File Review retirement verification failed: %d retired finding(s), %d gate error(s).\n' \
