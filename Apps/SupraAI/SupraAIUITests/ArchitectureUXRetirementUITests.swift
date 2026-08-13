@@ -112,7 +112,11 @@ final class ArchitectureUXRetirementUITests: XCTestCase {
         XCTAssertTrue(recycleBin.contains("item.presentation.actionTitle"))
         XCTAssertTrue(recycleBin.contains("item.presentation.message"))
         XCTAssertTrue(matterDocuments.contains("RecycleBinNavigationPresentation.standard.title"))
-        XCTAssertTrue(matterDocuments.contains("Button(\"Delete Permanently\", role: .destructive)"))
+        XCTAssertTrue(matterDocuments.contains("target.presentation.actionTitle"))
+        XCTAssertTrue(matterDocuments.contains("softDeletePresentation"))
+        XCTAssertFalse(matterDocuments.contains("Button(\"Delete Permanently\", role: .destructive)"))
+        XCTAssertFalse(matterDocuments.contains("Label(\"Move to Recycle Bin\", systemImage: \"trash\")"))
+        XCTAssertTrue(deletionPresentation.contains("case folder"))
         XCTAssertFalse(matterDocuments.contains("SupraToolbarIconButton(\"Trash\", systemImage: \"trash\", role: .destructive)"))
         XCTAssertTrue(
             deletionPresentation.contains(

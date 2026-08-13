@@ -11,6 +11,24 @@ final class ArchitectureUXTDeleteSemanticsTests: XCTestCase {
     private let wireName = "T_UX_DELETE_01_WIRE_731"
     private let forbiddenDefault = "DEFAULT-000"
 
+    func testEveryShippingDeletionAggregateHasOneTypedPresentationOwner() {
+        XCTAssertEqual(
+            DeletionTargetKind.allCases.map(\.rawValue),
+            ["matter", "chat", "document", "folder"]
+        )
+
+        let folder = DeletionActionPresentation.make(
+            action: .moveToRecycleBin,
+            target: .folder,
+            displayName: wireName
+        )
+        XCTAssertEqual(folder.actionTitle, "Move to Recycle Bin")
+        XCTAssertEqual(folder.tone, .neutral)
+        XCTAssertTrue(folder.message.contains("folder"))
+        XCTAssertTrue(folder.message.contains("restore"))
+        XCTAssertFalse(folder.message.contains(forbiddenDefault))
+    }
+
     func testSoftDeletionIsNeutralAndNamesRecycleBinRestore() {
         for target in DeletionTargetKind.allCases {
             let presentation = DeletionActionPresentation.make(

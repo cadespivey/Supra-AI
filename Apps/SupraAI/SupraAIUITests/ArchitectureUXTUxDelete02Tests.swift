@@ -58,7 +58,19 @@ final class ArchitectureUXTUxDelete02Tests: XCTestCase {
         XCTAssertTrue(details.exists)
         XCTAssertFalse(app.descendants(matching: .any)["restore.recovery.technicalFacts"].exists)
         details.click()
-        XCTAssertTrue(app.descendants(matching: .any)["restore.recovery.technicalFacts"].waitForExistence(timeout: 5))
+        let facts = app.descendants(matching: .any)["restore.recovery.technicalFacts"]
+        XCTAssertTrue(facts.waitForExistence(timeout: 5))
+        let factText = [facts.label, facts.value as? String].compactMap { $0 }.joined(separator: " ")
+        XCTAssertTrue(factText.contains("restore-safety.sqlite"))
+        XCTAssertTrue(factText.contains("blobs"))
+        XCTAssertTrue(factText.contains("Recovery database:"))
+        XCTAssertTrue(factText.contains("Managed-document blobs:"))
+        XCTAssertFalse(factText.contains("DEFAULT-000"))
+
+        app.buttons["Copy Diagnostic Report"].click()
+        let actionStatus = app.descendants(matching: .any)["restore.recovery.actionStatus"]
+        XCTAssertTrue(actionStatus.waitForExistence(timeout: 5))
+        XCTAssertEqual(actionStatus.label, "Diagnostic report copied.")
     }
 
     private func launchDeletionFixture() -> XCUIApplication {
