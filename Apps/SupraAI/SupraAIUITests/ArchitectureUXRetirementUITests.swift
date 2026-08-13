@@ -95,6 +95,10 @@ final class ArchitectureUXRetirementUITests: XCTestCase {
         // test file before that obsolete composition is removed.
         let matterDocuments = try appSource(relativePath: "SupraAI/Documents/MatterDocumentsView.swift")
         let recycleBin = try appSource(relativePath: "SupraAI/RecycleBinView.swift")
+        let deletionPresentation = try source(
+            at: packageRoot("SupraSessions")
+                .appendingPathComponent("Sources/SupraSessions/DeletionPresentation.swift")
+        )
 
         XCTAssertTrue(matterDocuments.contains(".permanentDeletionConfirmation("))
         XCTAssertTrue(recycleBin.contains(".permanentDeletionConfirmation("))
@@ -105,12 +109,17 @@ final class ArchitectureUXRetirementUITests: XCTestCase {
                 "Button(\"Delete Permanently\", role: .destructive) { controller.permanentlyDelete"
             )
         )
-        XCTAssertTrue(recycleBin.contains("Remove “\\(name)” permanently?"))
+        XCTAssertTrue(recycleBin.contains("item.presentation.actionTitle"))
+        XCTAssertTrue(recycleBin.contains("item.presentation.message"))
+        XCTAssertTrue(matterDocuments.contains("RecycleBinNavigationPresentation.standard.title"))
+        XCTAssertTrue(matterDocuments.contains("Button(\"Delete Permanently\", role: .destructive)"))
+        XCTAssertFalse(matterDocuments.contains("SupraToolbarIconButton(\"Trash\", systemImage: \"trash\", role: .destructive)"))
         XCTAssertTrue(
-            recycleBin.contains(
-                "Saved output text, citation display excerpts and locators, and retained corpus-analysis proof records"
+            deletionPresentation.contains(
+                "Saved output text, citation display excerpts and locators, and retained proof records"
             )
         )
+        XCTAssertFalse(deletionPresentation.contains("corpus-analysis"))
         XCTAssertFalse(recycleBin.contains("Saved analysis"))
     }
 
