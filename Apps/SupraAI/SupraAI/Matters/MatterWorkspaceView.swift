@@ -2,9 +2,8 @@ import Foundation
 import SupraSessions
 import SwiftUI
 
-/// The workspace for a single matter: a detail header plus the matter tab set
-/// (Chat, Research, Authorities, Outputs, Review, Documents, and Audit). Audit is placed
-/// last as the least frequently used tab.
+/// The workspace for a single matter: a detail header plus the matter tab set.
+/// Audit is placed last as the least frequently used tab.
 struct MatterWorkspaceView: View {
     @ObservedObject var controller: MattersController
     @ObservedObject var library: ModelLibrary
@@ -26,7 +25,6 @@ struct MatterWorkspaceView: View {
         case research = "Research"
         case authorities = "Authorities"
         case outputs = "Outputs"
-        case review = "Review"
         case documents = "Documents"
         case billing = "Billing"
         case audit = "Audit"
@@ -243,21 +241,6 @@ struct MatterWorkspaceView: View {
                     systemImage: "doc.text"
                 )
             }
-        case .review:
-            if let review = controller.caseFileReviewController,
-               let creation = controller.caseFileReviewCreationController {
-                CaseFileReviewView(
-                    controller: review,
-                    creationController: creation,
-                    library: library
-                )
-            } else {
-                placeholder(
-                    "Review unavailable",
-                    "Select the matter again to load its Review Projects.",
-                    systemImage: "tablecells"
-                )
-            }
         case .billing:
             if let billingProfile = controller.billingProfileController {
                 MatterBillingView(controller: billingProfile)
@@ -293,6 +276,7 @@ struct MatterWorkspaceView: View {
     private var auditTab: some View {
         MatterTabScaffold("Activity Log") {
             let entries = controller.auditEntries(forMatter: matter.id)
+                .filter { !isRetiredCapabilityAuditEvent($0.eventType) }
             if entries.isEmpty {
                 placeholder("No Activity Yet", "Matter, research, authority, and output actions are logged here.", systemImage: "list.bullet.rectangle")
             } else {
@@ -348,15 +332,19 @@ struct MatterWorkspaceView: View {
         case "export_completed": "Export Completed"
         case "billing_draft_generated": "Billing Draft Generated"
         case "legal_model_route": "Model Route Used"
-        case "case_file_review_cell_value_edited": "Review Value Edited"
-        case "case_file_review_cell_value_restored": "Generated Review Value Restored"
-        case "case_file_review_snapshot_exported": "Review Snapshot Exported"
         default:
             eventType
                 .split(separator: "_")
                 .map { $0.capitalized }
                 .joined(separator: " ")
         }
+    }
+
+    /// Shared-main databases can retain historical audit rows for the retired
+    /// capability. Keep those rows intact in Store while omitting them from the
+    /// active product presentation.
+    private func isRetiredCapabilityAuditEvent(_ eventType: String) -> Bool {
+        Array(eventType.split(separator: "_").prefix(3)) == ["case", "file", "review"]
     }
 }
 
