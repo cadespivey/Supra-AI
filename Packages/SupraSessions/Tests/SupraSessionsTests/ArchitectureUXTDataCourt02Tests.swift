@@ -96,4 +96,49 @@ final class ArchitectureUXTDataCourt02Tests: XCTestCase {
         XCTAssertFalse(presentation.courtListenerIDs.contains("flsd"))
         XCTAssertFalse(String(describing: presentation).contains("DEFAULT-000"))
     }
+
+    func testExactCourtPairedWithItsGoverningCircuitBecomesResolved() throws {
+        let snapshot = MatterIdentitySnapshot(
+            matterID: "matter-739",
+            identityRevision: 7,
+            courtResolutionState: .court,
+            canonicalCatalogVersion: JurisdictionCatalog.shared.catalogVersion,
+            canonicalCatalogDigestSHA256: JurisdictionCatalog.shared.identityDigestSHA256,
+            canonicalJurisdictionID: CanonicalJurisdictionID(
+                rawValue: "federal-united-states-court-of-appeals-for-the-eleventh-circuit"
+            ),
+            canonicalCourtID: CanonicalCourtID(
+                rawValue:
+                    "federal-florida-united-states-district-court-for-the-southern-district-of-florida"
+            ),
+            legacyJurisdictionText: "Florida",
+            legacyCourtText: "S.D. Fla.",
+            parties: [],
+            representations: []
+        )
+
+        let presentation = MatterCourtPresentationBuilder(
+            catalog: JurisdictionCatalog.shared
+        ).makePresentation(for: snapshot)
+
+        XCTAssertEqual(presentation.matterID, "matter-739")
+        XCTAssertEqual(presentation.actionTitle, "Change Court")
+        XCTAssertEqual(
+            presentation.resolvedCourtName,
+            "United States District Court for the Southern District of Florida"
+        )
+        XCTAssertEqual(
+            presentation.resolvedJurisdictionName,
+            "United States Court of Appeals for the Eleventh Circuit"
+        )
+        XCTAssertEqual(
+            try XCTUnwrap(presentation.authorityScope).selectedCourtName,
+            presentation.resolvedCourtName
+        )
+        XCTAssertEqual(presentation.courtListenerIDs, ["flsd", "ca11", "scotus"])
+        XCTAssertTrue(presentation.canRunCourtScopedResearch)
+        XCTAssertTrue(presentation.canDraftCourtFiling)
+        XCTAssertFalse(presentation.courtListenerIDs.contains("flsb"))
+        XCTAssertFalse(String(describing: presentation).contains("DEFAULT-000"))
+    }
 }

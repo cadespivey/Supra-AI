@@ -410,12 +410,7 @@ final class MotionToDismissControllerTests: XCTestCase {
     // T-MTD-21 — jurisdiction never substitutes for a missing filing court.
     func testTMTD21MissingExplicitCourtNeverFallsBackToJurisdiction() async throws {
         let fixture = try makeFixture()
-        try await fixture.store.database.writer.write { db in
-            try db.execute(
-                sql: "UPDATE matters SET court = NULL WHERE id = ?",
-                arguments: [fixture.matterID]
-            )
-        }
+        try await setCourt(nil, fixture: fixture)
         let controller = MatterDraftingController(store: fixture.store, storage: fixture.storage)
 
         let result = await controller.draft(
@@ -1927,13 +1922,29 @@ final class MotionToDismissControllerTests: XCTestCase {
         )
     }
 
-    private func setCourt(_ court: String, fixture: Fixture) async throws {
-        try await fixture.store.database.writer.write { db in
-            try db.execute(
-                sql: "UPDATE matters SET court = ? WHERE id = ?",
-                arguments: [court, fixture.matterID]
-            )
-        }
+    private func setCourt(_ court: String?, fixture: Fixture) async throws {
+        let matter = try XCTUnwrap(
+            fixture.store.matters.fetchMatter(id: fixture.matterID)
+        )
+        let perspective = try XCTUnwrap(
+            PartyPerspective(rawValue: matter.partyPerspective)
+        )
+        try fixture.store.matters.updateMatter(
+            id: matter.id,
+            name: matter.name,
+            jurisdiction: matter.jurisdiction,
+            partyPerspective: perspective,
+            court: court,
+            judge: matter.judge,
+            docketNumber: matter.docketNumber,
+            practiceArea: matter.practiceArea,
+            clientNames: matter.clientNames,
+            matterDescription: matter.matterDescription,
+            internalMatterID: matter.internalMatterID,
+            clientID: matter.clientID,
+            clientMatterID: matter.clientMatterID,
+            notes: matter.notes
+        )
     }
 
     private func isSHA256(_ value: String) -> Bool {
