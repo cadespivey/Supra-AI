@@ -117,6 +117,12 @@ final class ArchitectureUXTDataCourt01Tests: XCTestCase {
         XCTAssertEqual(fixture.catalogVersion, "unversioned-fixture")
         XCTAssertTrue(fixture.explicitPersistedCourtAliasKeys.isEmpty)
         XCTAssertNil(fixture.resolvePersistedCourtIdentity("S.D. Fla."))
+        XCTAssertNil(fixture.resolvePersistedCourtIdentity(districtOptionID))
+        XCTAssertNil(
+            fixture.resolvePersistedCourtIdentity(
+                "United States District Court for the Southern District of Florida"
+            )
+        )
         XCTAssertNotEqual(fixture.sourceResourceSHA256, catalog.sourceResourceSHA256)
         XCTAssertNotEqual(fixture.identityDigestSHA256, catalog.identityDigestSHA256)
     }
