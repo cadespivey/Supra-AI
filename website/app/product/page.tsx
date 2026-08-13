@@ -30,7 +30,7 @@ const steps = [
   {
     id: "answers",
     title: "Review grounded answers",
-    body: "Document questions search the most relevant passages first with a full-file pass one click away, and research answers ground in your saved authorities before reaching for CourtListener. Every [S#] and [A#] citation is clickable — sources open beside the chat at the supporting passage, and opinions open in a built-in reader with the cited holding highlighted.",
+    body: "Document questions search the most relevant passages first with a full-file pass one click away, and research answers ground in your saved authorities before broader provider research moves to exact-query review. Every [S#] and [A#] citation is clickable — sources open beside the chat at the supporting passage, and opinions open in a built-in reader with the cited holding highlighted.",
   },
   {
     id: "scratchpad",

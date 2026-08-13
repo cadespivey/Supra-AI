@@ -433,6 +433,14 @@ public final class StructuredOutputController: ObservableObject {
             message = "Document Q&A and chronologies are generated from the Documents tab."
             return false
         }
+        // R0 containment: this controller accepts free-form notes/documents and an
+        // optional research-session ID, neither of which proves a reviewed,
+        // immutable authority packet. Until governed creation supplies that typed
+        // packet, authority-asserting work must stop before model or Store effects.
+        guard !type.assertsLegalAuthority else {
+            message = "This work product requires reviewed authorities and a retained authority packet. Use Research to review the supporting authorities; this creation path is unavailable until it can attach that packet."
+            return false
+        }
         var effectiveRoute = route ?? ModelRouter().route(forStructuredOutput: type)
         // Multi-section contracts (8–11 headings) need output room; raise the budget so
         // a long memo isn't truncated mid-structure (which previously read as "missing

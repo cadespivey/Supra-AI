@@ -44,6 +44,7 @@ need an explicit, documented justification.
 - Model **generation**, document **processing/OCR/embeddings**, **search**, and **source
   selection** run locally. No prompt, document, or query leaves the device for generation.
 - Network egress is limited to user-initiated legal-data searches, opinion downloads, and model metadata or artifact downloads, plus Sparkle update checks and signed update downloads when enabled.
+- Automatic matter-chat legal-data egress is limited to one deterministic public reporter citation query; broader matter-derived and unknown queries are blocked before provider transport and directed to Research for exact-query review.
 - User-initiated product-data paths are:
   - **Legal research / legal-data lookups** against a fixed allow-list — CourtListener,
     plus free government sources (eCFR, Federal Register, Open Legal Codes) and key'd APIs

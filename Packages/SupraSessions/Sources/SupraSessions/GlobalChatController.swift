@@ -1539,6 +1539,33 @@ public final class GlobalChatController: ObservableObject {
         var researchSessionID: String?
     }
 
+    /// R0 containment until provider-bound `EgressGrant` preview/approval lands.
+    /// Global chat retains its existing behavior because it has no matter scope;
+    /// a matter chat may either stay entirely local or send one deterministic
+    /// public reporter-citation lookup. Everything else must move through reviewed Research.
+    private enum AutomaticLegalEgressDisposition: Equatable {
+        case unrestricted
+        case deterministicPublicCaseLookup(citation: String)
+        case blockedMatterQuery
+    }
+
+    private static let matterResearchReviewRequiredMessage = """
+    No legal-data query was sent. Automatic research from a matter chat is limited to a deterministic public case citation lookup. Use Research to review the exact provider query before running a broader search.
+    """
+
+    private func automaticLegalEgressDisposition(
+        for classification: LegalQueryClassification
+    ) -> AutomaticLegalEgressDisposition {
+        guard scopedMatterID != nil else { return .unrestricted }
+        guard classification.desiredAuthorityType == .case,
+              let lookup = classification.citationLookup?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !lookup.isEmpty,
+              let publicCitation = Self.deterministicPublicCaseCitation(from: lookup) else {
+            return .blockedMatterQuery
+        }
+        return .deterministicPublicCaseLookup(citation: publicCitation)
+    }
+
     private func legalWorkflowOutput(
         prompt: String,
         classificationText: String? = nil,
@@ -1755,6 +1782,15 @@ public final class GlobalChatController: ObservableObject {
         // legal-authority question — answer it from RECAP dockets, with no jurisdiction gate
         // and no citation verifier (dockets are filings, not authority).
         if scopedClassification.desiredAuthorityType == .docket {
+            if automaticLegalEgressDisposition(for: scopedClassification) == .blockedMatterQuery {
+                return LegalWorkflowResult(
+                    output: Self.matterResearchReviewRequiredMessage,
+                    queryTerms: [],
+                    authorities: [],
+                    verification: nil,
+                    researchSessionID: nil
+                )
+            }
             return await caseFinderOutput(for: scopedClassification)
         }
 
@@ -1763,6 +1799,7 @@ public final class GlobalChatController: ObservableObject {
             target: legalSourceTarget(for: scopedClassification)
         )
         let classification = sourcePlan.effectiveClassification
+        let egressDisposition = automaticLegalEgressDisposition(for: classification)
         if route.requiresJurisdiction, !sourcePlan.satisfiesJurisdictionRequirement {
             let message = """
             I need the jurisdiction before I can give source-grounded legal authority. Please specify the state, federal circuit, court, or other governing jurisdiction. If you didn't mean to ask a legal question — or want a general, non-authoritative answer — resend it starting with `/ask` to skip legal grounding, or use `/draft` for attorney-editable drafting.
@@ -1777,12 +1814,33 @@ public final class GlobalChatController: ObservableObject {
             return LegalWorkflowResult(output: message, queryTerms: [], authorities: [], verification: nil, researchSessionID: nil)
         }
 
+        // Resolve the local tier before deciding whether provider egress is needed.
+        // A matter's saved opinion text remains usable without approval because it
+        // stays on the Mac; metadata-only or missing local coverage cannot trigger
+        // an automatic topical provider fallback.
+        let localRetrieval = researchDepth == .fast || egressDisposition == .blockedMatterQuery
+            ? localAuthorityRetrieval(for: classification)
+            : nil
+        if egressDisposition == .blockedMatterQuery, localRetrieval == nil {
+            return LegalWorkflowResult(
+                output: Self.matterResearchReviewRequiredMessage,
+                queryTerms: [],
+                authorities: [],
+                verification: nil,
+                researchSessionID: nil
+            )
+        }
+
         guard let modelID else {
             let message = "Load or register a local MLX model in the Models tab before running source-grounded legal research."
             return LegalWorkflowResult(output: message, queryTerms: [], authorities: [], verification: nil, researchSessionID: nil)
         }
 
+        // Statutory/developments providers do not yet expose the exact deterministic
+        // request proof required for a matter-chat exception, so R0 keeps them on
+        // the reviewed Research side of the boundary.
         let statutoryLookup: (provisions: [StatutoryProvision], notes: [String]) = sourcePlan.shouldRetrievePrimaryLaw
+            && egressDisposition == .unrestricted
             ? await statutoryProvisions(for: sourcePlan)
             : ([], [])
         let citableStatutoryProvisions = statutoryLookup.provisions.filter(\.isCitableAuthority)
@@ -1822,12 +1880,18 @@ public final class GlobalChatController: ObservableObject {
         // skips this branch and searches the network.
         let retrieval: (queryTerms: [String], authorities: [LegalAuthority], researchSessionID: String?)
         var answeredFromSavedAuthorities = false
-        if researchDepth == .fast, let local = localAuthorityRetrieval(for: classification) {
+        if let local = localRetrieval {
             retrieval = local
             answeredFromSavedAuthorities = true
         } else {
             do {
-                retrieval = try await retrieveAuthorities(for: classification, route: route, modelID: modelID, matterID: scopedMatterID)
+                retrieval = try await retrieveAuthorities(
+                    for: classification,
+                    route: route,
+                    modelID: modelID,
+                    matterID: scopedMatterID,
+                    egressDisposition: egressDisposition
+                )
             } catch {
                 // Network down or rate-limited: the matter's own library is still
                 // a grounded source — better a local answer than a dead send,
@@ -2004,7 +2068,9 @@ public final class GlobalChatController: ObservableObject {
 
         // Append a NON-citable "Legal developments" section (pending bills / rulemaking) when there
         // is relevant tracking context. Never enters the citable packet — best-effort, never blocks.
-        if sourcePlan.shouldRetrieveDevelopments, let developments = await legalDevelopmentsSection(for: classification) {
+        if sourcePlan.shouldRetrieveDevelopments,
+           egressDisposition == .unrestricted,
+           let developments = await legalDevelopmentsSection(for: classification) {
             output += "\n\n---\n\n" + developments
         }
 
@@ -2012,8 +2078,13 @@ public final class GlobalChatController: ObservableObject {
         // the network search — never silently pass saved-library coverage off as a
         // full CourtListener pass.
         if answeredFromSavedAuthorities {
-            output += "\n\n_Preliminary — answered from this matter's saved authorities. Use “Search CourtListener” below for a wider search._"
-            deeperSearchOffer = DeeperSearchOffer(kind: .research, chatID: chatID, question: prompt)
+            if egressDisposition == .blockedMatterQuery {
+                output += "\n\n_Preliminary — answered from this matter's saved authorities. Use Research to review the exact provider query before a wider search._"
+                deeperSearchOffer = nil
+            } else {
+                output += "\n\n_Preliminary — answered from this matter's saved authorities. Use “Search CourtListener” below for a wider search._"
+                deeperSearchOffer = DeeperSearchOffer(kind: .research, chatID: chatID, question: prompt)
+            }
         }
 
         // The caveat leads the answer — the reader must see "no primary law was
@@ -2273,30 +2344,56 @@ public final class GlobalChatController: ObservableObject {
         for classification: LegalQueryClassification,
         route: ModelRoute,
         modelID: ModelID,
-        matterID: String?
+        matterID: String?,
+        egressDisposition: AutomaticLegalEgressDisposition
     ) async throws -> (queryTerms: [String], authorities: [LegalAuthority], researchSessionID: String?) {
-        // Prefer planner-generated queries (same planner the Research tab uses); fall back
-        // to the single deterministic query when the model is unavailable or returns none.
-        let plannedQueries = await planCourtListenerQueries(for: classification, route: route, modelID: modelID)
-        var primaryRequests: [CourtListenerSearchRequest] = []
-        // Citation-first: when the prompt cites a specific authority, look it up directly
-        // (via CourtListener's citation filter) so the cited case is retrieved even if the
-        // planner's keyword queries wouldn't surface it.
-        if let citation = classification.citationLookup?.trimmingCharacters(in: .whitespacesAndNewlines), !citation.isEmpty {
-            primaryRequests.append(courtListenerRequest(for: classification, adverse: false))
-        }
-        if plannedQueries.isEmpty {
-            if primaryRequests.isEmpty {
+        let requests: [(request: CourtListenerSearchRequest, adverse: Bool)]
+        switch egressDisposition {
+        case .blockedMatterQuery:
+            // Defense in depth: the caller returns the user-facing containment
+            // result before this boundary. If that routing changes, remain closed.
+            return ([], [], nil)
+        case .deterministicPublicCaseLookup(let citation):
+            // Exactly one request built from the public reporter citation. Never ask
+            // the model to invent additional provider query terms for a matter.
+            requests = [(
+                CourtListenerSearchRequest(
+                    query: citation,
+                    orderBy: "score desc",
+                    citation: citation
+                ),
+                false
+            )]
+        case .unrestricted:
+            // Global quick research retains its current planner behavior. Formal
+            // matter Research separately runs only queries the user approved.
+            let plannedQueries = await planCourtListenerQueries(
+                for: classification,
+                route: route,
+                modelID: modelID
+            )
+            var primaryRequests: [CourtListenerSearchRequest] = []
+            // Citation-first: when the prompt cites a specific authority, look it up directly
+            // (via CourtListener's citation filter) so the cited case is retrieved even if the
+            // planner's keyword queries wouldn't surface it.
+            if let citation = classification.citationLookup?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !citation.isEmpty {
                 primaryRequests.append(courtListenerRequest(for: classification, adverse: false))
             }
-        } else {
-            primaryRequests.append(contentsOf: plannedQueries.prefix(Self.maxChatPlannerQueries).map {
-                plannerRequest(query: $0, classification: classification)
-            })
-        }
-        var requests = primaryRequests.map { (request: $0, adverse: false) }
-        if classification.adverseAuthorityRequested {
-            requests.append((courtListenerRequest(for: classification, adverse: true), true))
+            if plannedQueries.isEmpty {
+                if primaryRequests.isEmpty {
+                    primaryRequests.append(courtListenerRequest(for: classification, adverse: false))
+                }
+            } else {
+                primaryRequests.append(contentsOf: plannedQueries.prefix(Self.maxChatPlannerQueries).map {
+                    plannerRequest(query: $0, classification: classification)
+                })
+            }
+            var expanded = primaryRequests.map { (request: $0, adverse: false) }
+            if classification.adverseAuthorityRequested {
+                expanded.append((courtListenerRequest(for: classification, adverse: true), true))
+            }
+            requests = expanded
         }
 
         let researchSession = try matterID.map {
@@ -2692,6 +2789,19 @@ public final class GlobalChatController: ObservableObject {
         guard let citation else { return nil }
         let lower = citation.lowercased()
         if lower.contains("§") || lower.contains(" v. ") || lower.contains(" v ") {
+            return nil
+        }
+        return citation
+    }
+
+    /// Extract the only R0 automatic matter-chat exception: a public reporter
+    /// citation. A caption may accompany the citation in the user's text, but
+    /// only the citation bytes are allowed into the provider request.
+    private static func deterministicPublicCaseCitation(from lookup: String) -> String? {
+        guard let citation = LegalQueryClassifier.firstCitation(in: lookup),
+              !LegalCitationMatch.isCaseNameLookup(citation),
+              courtListenerCitationParameter(citation) != nil,
+              isCaseShapedLookup(citation) else {
             return nil
         }
         return citation
@@ -3168,7 +3278,7 @@ public final class GlobalChatController: ObservableObject {
             || lower.contains("stat") || lower.contains("code") {
             return false
         }
-        return cite.range(of: #"^\d{1,4}\s+[A-Za-z. ]{1,30}\s+\d{1,5}$"#, options: .regularExpression) != nil
+        return cite.range(of: #"^\d{1,4}\s+[A-Za-z0-9. ]{1,30}\s+\d{1,5}$"#, options: .regularExpression) != nil
     }
 
     /// Anaphors that only make sense about a specific, already-named decision.

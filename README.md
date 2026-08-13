@@ -35,6 +35,7 @@ new release is published.
   authority is ranked and retained as a source packet that constrains the model. Fabricated,
   unresolved, or unsupported citations and propositions are flagged or blocked; the checks do not
   determine subsequent history or whether authority remains good law.
+  The generic authority-asserting work-product creation path is temporarily unavailable and stops before model generation or persistence; use Research to review supporting authorities.
 - **Public-records research.** Search SEC EDGAR filings, CFPB consumer complaints, and NLRB
   labor-case records in a dedicated workspace. Results remain labeled as filings, complaints, or
   allegations from the source—not adjudicated facts—and do not silently become model-grounding facts.
