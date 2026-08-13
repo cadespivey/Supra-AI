@@ -1,0 +1,172 @@
+schema_version: 1
+control_id: native-rag-control-v1
+status: frozen_configuration_metrics_pending
+owner: documents-runtime-assurance
+approved_decision_date: "2026-08-13"
+
+scope:
+  purpose: >-
+    Freeze the shipping native Swift SQLite MLX retrieval configuration and deterministic
+    comparison contract before bounded paging, caching, receipt, parser, reranker, embedding,
+    or index challengers change behavior.
+  client_data_allowed: false
+  authoritative_evaluator: deterministic_human_reviewed
+  advisory_llm_evaluator_may_override: false
+  one_independent_variable_per_challenger: true
+
+control_configuration:
+  chunker:
+    version: 2
+    decision: Docs/Decisions/Document-Chunker-v2-Flip.md
+  embedding:
+    catalog_role: document_search
+    repository: Qwen/Qwen3-Embedding-0.6B
+    artifact_revision: pending_exact_installed_artifact
+    artifact_fingerprint: pending_exact_installed_artifact
+  retriever:
+    lexical: sqlite_fts5
+    semantic: exact_cosine
+    semantic_candidate_ceiling: 60
+    reciprocal_rank_fusion_k: 60
+    current_vector_access: matter_model_wide_fetch_then_in_memory_filter
+  reranker:
+    mode: current_native_control
+    candidate_pool: 40
+    exact_artifact: none
+  packer:
+    excerpt_character_ceiling: 600
+    version: pending_inventory
+  tokenizer:
+    fingerprint: pending_installed_chat_artifact
+  prompt:
+    version: pending_inventory
+  generation_model:
+    repository: pending_installed_chat_artifact
+    revision: pending_installed_chat_artifact
+    fingerprint: pending_installed_chat_artifact
+
+synthetic_corpus:
+  version: pending_T_RAG_CORPUS_01
+  root: TestData
+  zero_real_client_data: required
+  digest_manifest: pending
+  required_slices:
+    - native_text
+    - ocr
+    - table
+    - docx
+    - pdf
+    - xlsx
+    - email
+    - revision_and_supersession
+    - contrary_evidence
+    - no_answer
+    - small_corpus
+    - medium_corpus
+    - large_corpus
+  judgments:
+    owner: attorney_reviewed_synthetic_expectations
+    status: pending
+
+metric_contract:
+  stable_order: score_descending_then_chunk_id_ascending
+  duplicate_policy: collapse_same_evidence_identity_before_final_k
+  empty_golden:
+    recall: not_applicable
+    ndcg: not_applicable
+    mrr: not_applicable
+    zero_result_accuracy: applicable
+  no_returned_context:
+    context_precision: not_applicable
+    context_recall: 0_when_golden_nonempty
+  no_answer_query:
+    correct: no_evidence_and_no_supported_answer
+  required_metrics:
+    quality:
+      - recall_at_k
+      - full_evidence_set_recall_at_k
+      - ndcg_at_k
+      - mean_reciprocal_rank
+      - context_precision
+      - context_recall
+      - citation_precision
+      - citation_recall
+      - citation_coverage
+      - zero_result_accuracy
+    latency:
+      - time_to_first_token
+      - p50_total_latency
+      - p95_total_latency
+    resource:
+      - vectors_scanned
+      - vector_bytes_scanned
+      - maximum_live_page_rows
+      - maximum_live_heap_rows
+      - maximum_live_cache_bytes
+      - app_current_and_peak_phys_footprint
+      - xpc_current_and_peak_phys_footprint
+      - combined_current_and_peak_phys_footprint
+  hand_calculated_fixture_status: pending_T_RAG_EVAL_01
+
+noninferiority:
+  rule: >-
+    Every deterministic critical slice must be noninferior to this frozen control for recall,
+    full-evidence recall, nDCG, MRR, context precision/recall, and citation precision/recall;
+    zero-result accuracy may not regress. A declared targeted slice must additionally improve
+    its predeclared metric enough to justify its resource and deployment cost.
+  numeric_thresholds: pending_owner_approval_after_control_run
+  ties: control_wins_when_quality_is_equal_and_candidate_adds_cost_or_dependency
+
+resource_ceiling_contract:
+  asymptotic_scan_state: O(page_plus_candidate_k_plus_embedding_dimension)
+  embedding_host_batches: bounded_and_released_before_next_request
+  final_answer_semantic_cache_allowed: false
+  app_bytes: pending_measured_control
+  xpc_bytes: pending_measured_control
+  combined_bytes: pending_measured_control
+  live_page_rows: pending_measured_control
+  heap_rows: 60
+  cache_bytes: pending_measured_control
+  status: pending_owner_approval_after_instruments_control
+
+comparison_matrix:
+  hardware:
+    model_identifier: Mac16,7
+    chip: Apple_M4_Pro
+    unified_memory_bytes: 51539607552
+  corpus_and_config_must_match: true
+  states: [cold, warm, model_switch]
+  contexts: [8192, 16384, 32768, 65536]
+  chat_models: [8B, 14B, 32B]
+  embedding_models: [0.6B, 4B, 8B]
+  unsupported_cells_must_be_explicit_na: true
+
+challenger_policy:
+  allowed_dispositions: [adopt, port_narrow_native_primitive, no_change]
+  prohibited_without_new_owner_decision_and_adr:
+    - python_runtime
+    - server_daemon
+    - hosted_vector_store
+    - hosted_trace_or_guardrail_service
+    - redis
+    - mandatory_auxiliary_model
+    - second_orchestration_stack
+  conditional_challengers:
+    - reranker
+    - parser
+    - chunker
+    - embedding_artifact
+    - embedded_ann
+
+gates:
+  - T-RAG-CORPUS-01
+  - T-RAG-EVAL-01
+  - T-RAG-BASELINE-01
+  - T-EMBED-STREAM-01
+  - T-RAG-SCAN-01
+  - T-RAG-SCAN-02
+  - T-RAG-CACHE-01
+  - T-RAG-CACHE-02
+  - T-RAG-TRACE-01
+  - T-RAG-TRACE-02
+  - T-RAG-DEPENDENCY-01
