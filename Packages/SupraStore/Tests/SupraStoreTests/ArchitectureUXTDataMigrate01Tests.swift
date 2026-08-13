@@ -405,7 +405,7 @@ final class ArchitectureUXTDataMigrate01Tests: XCTestCase {
             try assertReceipt(
                 db,
                 matterID: Wire.aliasMatterID,
-                courtResolutionState: "resolved",
+                courtResolutionState: "court",
                 resolutionReason: "explicit_alias",
                 legacyJurisdiction: "Florida",
                 legacyCourt: Wire.aliasCourtText,
@@ -455,7 +455,7 @@ final class ArchitectureUXTDataMigrate01Tests: XCTestCase {
                 Wire.eleventhCircuitJurisdictionID
             )
             XCTAssertEqual(aliasMatter["canonical_court_id"] as String, Wire.southernDistrictCourtID)
-            XCTAssertEqual(aliasMatter["court_resolution_state"] as String, "resolved")
+            XCTAssertEqual(aliasMatter["court_resolution_state"] as String, "court")
             XCTAssertEqual(aliasMatter["canonical_catalog_version"] as String, Wire.catalogVersion)
             XCTAssertEqual(
                 aliasMatter["canonical_catalog_digest_sha256"] as String,
