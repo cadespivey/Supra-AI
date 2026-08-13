@@ -115,7 +115,7 @@ final class ArchitectureUXTDataMatterLifecycleTests: XCTestCase {
             XCTAssertEqual(item.legacyCourtText, legacyCourt)
             XCTAssertEqual(item.identityRevision, 1)
             XCTAssertFalse(item.conversionReceiptID.isEmpty)
-            XCTAssertFalse(item.legacyCourtText.contains("DEFAULT-000"))
+            XCTAssertFalse(try XCTUnwrap(item.legacyCourtText).contains("DEFAULT-000"))
         }
     }
 
@@ -284,7 +284,58 @@ final class ArchitectureUXTDataMatterLifecycleTests: XCTestCase {
             XCTAssertEqual(item.legacyCourtText, replacementCourt)
             XCTAssertEqual(item.identityRevision, 2)
             XCTAssertEqual(item.conversionReceiptID, replacementReceiptID)
-            XCTAssertFalse(item.legacyCourtText.contains("DEFAULT-000"))
+            XCTAssertFalse(try XCTUnwrap(item.legacyCourtText).contains("DEFAULT-000"))
+        }
+    }
+
+    /// Expected RED: v074's update trigger currently checks only that the new
+    /// columns form a valid shape. A direct writer can change legal identity and
+    /// revision without the source/decision receipt that is supposed to explain
+    /// the transition.
+    func testDirectCanonicalIdentityTransitionRequiresMatchingReceipt() throws {
+        let queue = try DatabaseQueue()
+        let migrator = SupraMigrator.makeMigrator()
+        try migrator.migrate(queue, upTo: v073)
+        let matterID = "matter-transition-guard-779"
+        try queue.write { db in
+            try db.execute(
+                sql: """
+                    INSERT INTO matters (
+                        id, name, jurisdiction, party_perspective, court,
+                        created_at, updated_at
+                    ) VALUES (?, 'Transition guard wire 779', 'Florida',
+                              'plaintiff', 'S.D. Fla.', ?, ?)
+                    """,
+                arguments: [
+                    matterID, "2031-09-05T20:18:27.779Z",
+                    "2031-09-05T20:18:27.779Z",
+                ]
+            )
+        }
+        try migrator.migrate(queue)
+
+        try queue.write { db in
+            XCTAssertThrowsError(
+                try db.execute(
+                    sql: """
+                        UPDATE matters
+                        SET canonical_jurisdiction_id = NULL,
+                            canonical_court_id = NULL,
+                            court_resolution_state = 'unresolved',
+                            identity_revision = 2
+                        WHERE id = ?
+                        """,
+                    arguments: [matterID]
+                )
+            )
+            let row = try XCTUnwrap(identityRow(db, matterID: matterID))
+            XCTAssertEqual(row["identity_revision"] as Int, 1)
+            XCTAssertEqual(row["court_resolution_state"] as String, "court")
+            XCTAssertEqual(
+                row["canonical_court_id"] as String?,
+                southernDistrictCourtID
+            )
+            XCTAssertEqual(try sourceReceipts(db, matterID: matterID).count, 1)
         }
     }
 
