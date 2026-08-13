@@ -265,7 +265,8 @@ struct FixedPerformanceWorkload {
         revisions: [(MatterDocumentRecord, DocumentPagePartRecord, String)]
     ) throws -> IncrementalPerformanceMeasurement {
         var dependentVersions: [(documentID: String, versionID: String)] = []
-        for (document, _, revisionID) in revisions {
+        for (document, part, revisionID) in revisions {
+            let excerpt = String(part.normalizedText.prefix(220))
             let output = try store.structuredOutputs.createOutput(
                 matterID: matterID,
                 title: "Performance dependency \(document.displayName)",
@@ -280,8 +281,12 @@ struct FixedPerformanceWorkload {
                 documentID: document.id,
                 revisionID: revisionID,
                 citationLabel: "S1",
-                locatorJSON: DocumentSourceLocator(sourceKind: .text).encodedJSON(),
-                excerpt: "Synthetic performance dependency",
+                locatorJSON: DocumentSourceLocator(
+                    sourceKind: .text,
+                    charStart: 0,
+                    charEnd: excerpt.count
+                ).encodedJSON(),
+                excerpt: excerpt,
                 rank: 0
             ))
             let version = try store.structuredOutputs.createVersion(
