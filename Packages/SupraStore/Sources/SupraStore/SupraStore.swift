@@ -22,6 +22,7 @@ public final class SupraStore: @unchecked Sendable {
     public let documentSettings: DocumentSettingsRepository
     public let documentLibrary: DocumentLibraryRepository
     public let documentIndex: DocumentIndexRepository
+    public let documentReadiness: DocumentReadinessRepository
     public let documentRevisions: DocumentRevisionRepository
     public let documentStructure: StructureRepository
     public let documentJobs: DocumentJobRepository
@@ -55,6 +56,7 @@ public final class SupraStore: @unchecked Sendable {
         self.documentSettings = DocumentSettingsRepository(writer: database.writer)
         self.documentLibrary = DocumentLibraryRepository(writer: database.writer)
         self.documentIndex = DocumentIndexRepository(writer: database.writer)
+        self.documentReadiness = DocumentReadinessRepository(writer: database.writer)
         self.documentRevisions = DocumentRevisionRepository(writer: database.writer)
         self.documentStructure = StructureRepository(writer: database.writer)
         self.documentJobs = DocumentJobRepository(writer: database.writer)
