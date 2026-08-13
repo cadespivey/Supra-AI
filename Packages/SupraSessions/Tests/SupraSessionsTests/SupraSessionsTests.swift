@@ -1086,7 +1086,7 @@ final class SupraSessionsTests: XCTestCase {
         controller.loadChats()
 
         await controller.performSend(
-            prompt: "Research California contract unenforceability.",
+            prompt: "What did Foo v. Bar, 123 Cal. App. 5th 456 hold?",
             modelID: ModelID(),
             systemPrompt: researchRoute.systemPrompt,
             options: researchRoute.options,
@@ -1145,7 +1145,6 @@ final class SupraSessionsTests: XCTestCase {
 
     func testLegalResearchHydratesTopAuthorityWithFullOpinionText() async throws {
         let store = try makeStore()
-        let matter = try store.matters.createMatter(name: "Acme", jurisdiction: "California")
         let researchRoute = ModelRouter(configuration: LegalModelConfiguration()).route(for: .legalResearch)
         let fullBody = "FULL OPINION BODY — the indemnification clause was held unenforceable as against public policy."
         let court = HydratingCourtListenerClient(
@@ -1177,12 +1176,12 @@ final class SupraSessionsTests: XCTestCase {
             ])
         }
         let controller = makeGlobalChatController(
-            store: store, runtimeClient: stub, scope: .matter(id: matter.id), courtListenerClient: court
+            store: store, runtimeClient: stub, courtListenerClient: court
         )
         controller.loadChats()
 
         await controller.performSend(
-            prompt: "Research California contract unenforceability.",
+            prompt: "What did Foo v. Bar, 123 Cal. App. 5th 456 hold?",
             modelID: ModelID(), systemPrompt: researchRoute.systemPrompt,
             options: researchRoute.options, route: researchRoute
         )
@@ -1193,7 +1192,6 @@ final class SupraSessionsTests: XCTestCase {
 
     func testLegalFollowUpCarriesPriorTurnsAsHistory() async throws {
         let store = try makeStore()
-        let matter = try store.matters.createMatter(name: "Acme", jurisdiction: "California")
         let researchRoute = ModelRouter(configuration: LegalModelConfiguration()).route(for: .legalResearch)
         let court = HydratingCourtListenerClient(
             response: CourtListenerSearchResponse(
@@ -1222,17 +1220,17 @@ final class SupraSessionsTests: XCTestCase {
             ])
         }
         let controller = makeGlobalChatController(
-            store: store, runtimeClient: stub, scope: .matter(id: matter.id), courtListenerClient: court
+            store: store, runtimeClient: stub, courtListenerClient: court
         )
         controller.loadChats()
 
         await controller.performSend(
-            prompt: "Is the indemnity clause enforceable?",
+            prompt: "Under Foo v. Bar, 123 Cal. App. 5th 456, is the indemnity clause enforceable?",
             modelID: ModelID(), systemPrompt: researchRoute.systemPrompt,
             options: researchRoute.options, route: researchRoute
         )
         await controller.performSend(
-            prompt: "Now narrow that to the 9th Circuit.",
+            prompt: "In California, how does Foo v. Bar, 123 Cal. App. 5th 456 narrow that rule?",
             modelID: ModelID(), systemPrompt: researchRoute.systemPrompt,
             options: researchRoute.options, route: researchRoute
         )
@@ -1241,15 +1239,18 @@ final class SupraSessionsTests: XCTestCase {
         // answer generation; only the follow-up answer replays the prior user turn.
         let answersWithHistory = box.histories.filter { !$0.isEmpty }
         XCTAssertEqual(answersWithHistory.count, 1, "only the follow-up answer carries prior turns")
+        let followUpHistory = try XCTUnwrap(
+            answersWithHistory.first,
+            controller.messages.map(\.content).joined(separator: "\n---\n")
+        )
         XCTAssertTrue(
-            answersWithHistory[0].contains { $0.role == .user && $0.content.contains("indemnity clause enforceable") },
+            followUpHistory.contains { $0.role == .user && $0.content.contains("indemnity clause enforceable") },
             "the follow-up should replay the prior user turn so the model can resolve \"narrow that\""
         )
     }
 
     func testLegalAnswerSelfRepairsOnHardVerificationFailure() async throws {
         let store = try makeStore()
-        let matter = try store.matters.createMatter(name: "Acme", jurisdiction: "California")
         let researchRoute = ModelRouter(configuration: LegalModelConfiguration()).route(for: .legalResearch)
         let court = HydratingCourtListenerClient(
             response: CourtListenerSearchResponse(
@@ -1280,12 +1281,12 @@ final class SupraSessionsTests: XCTestCase {
             return .events([.event(request, 1, .token, token: token), .event(request, 2, .generationCompleted)])
         }
         let controller = makeGlobalChatController(
-            store: store, runtimeClient: stub, scope: .matter(id: matter.id), courtListenerClient: court
+            store: store, runtimeClient: stub, courtListenerClient: court
         )
         controller.loadChats()
 
         await controller.performSend(
-            prompt: "Is the rule applicable?",
+            prompt: "Under Foo v. Bar, 123 Cal. App. 5th 456, is the rule applicable?",
             modelID: ModelID(), systemPrompt: researchRoute.systemPrompt,
             options: researchRoute.options, route: researchRoute
         )
@@ -1331,7 +1332,7 @@ final class SupraSessionsTests: XCTestCase {
         controller.loadChats()
 
         await controller.performSend(
-            prompt: "Research California contract unenforceability.",
+            prompt: "What did Foo v. Bar, 123 Cal. App. 5th 456 hold?",
             modelID: ModelID(),
             systemPrompt: researchRoute.systemPrompt,
             options: researchRoute.options,
@@ -1585,7 +1586,7 @@ final class SupraSessionsTests: XCTestCase {
         controller.loadChats()
 
         await controller.performSend(
-            prompt: "Research California buyer revocation authority.",
+            prompt: "What did Full Text v. Case, 321 Cal. App. 5th 654 hold?",
             modelID: ModelID(),
             systemPrompt: researchRoute.systemPrompt,
             options: researchRoute.options,
@@ -1618,11 +1619,13 @@ final class SupraSessionsTests: XCTestCase {
         XCTAssertFalse(output.contains("unsupported_quote"), output)
     }
 
-    func testAutomaticAdverseResultsRemainUnreviewed() async throws {
+    /// Expected RED: matter-derived adverse research currently creates automatic
+    /// queries and results instead of routing through reviewed Research.
+    func testMatterQuickResearchDoesNotCreateAutomaticAdverseResults() async throws {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "Acme", jurisdiction: "California")
         let route = ModelRouter(configuration: LegalModelConfiguration()).route(for: .legalResearch)
-        let court = StubCourtListenerClient(
+        let court = CapturingCourtListenerClient(
             response: CourtListenerSearchResponse(
                 count: 1,
                 results: [
@@ -1657,21 +1660,13 @@ final class SupraSessionsTests: XCTestCase {
             route: route
         )
 
-        let session = try XCTUnwrap(try store.research.fetchSessions(matterID: matter.id).first)
-        let queries = try store.research.fetchQueries(sessionID: session.id)
-        XCTAssertEqual(queries.count, 2)
-        let reviewStates = try queries.flatMap { query in
-            try store.research.fetchResults(queryID: query.id).map(\.reviewState)
-        }
-        XCTAssertEqual(reviewStates, [
-            ResearchResultReviewState.unreviewed.rawValue,
-            ResearchResultReviewState.unreviewed.rawValue
-        ])
+        XCTAssertTrue(court.requests.isEmpty)
+        XCTAssertTrue(try store.research.fetchSessions(matterID: matter.id).isEmpty)
+        XCTAssertTrue(controller.messages.last?.content.contains("No legal-data query was sent") == true)
     }
 
     func testLegalResearchUsesCourtAndDateFilters() async throws {
         let store = try makeStore()
-        let matter = try store.matters.createMatter(name: "Acme", jurisdiction: "California")
         let route = ModelRouter(configuration: LegalModelConfiguration()).route(for: .legalResearch)
         let court = CapturingCourtListenerClient(
             response: CourtListenerSearchResponse(
@@ -1692,7 +1687,6 @@ final class SupraSessionsTests: XCTestCase {
         let controller = makeGlobalChatController(
             store: store,
             runtimeClient: stub,
-            scope: .matter(id: matter.id),
             courtListenerClient: court
         )
         controller.loadChats()
@@ -1710,12 +1704,11 @@ final class SupraSessionsTests: XCTestCase {
         XCTAssertTrue(request.courtIDs.contains("cand"))
         XCTAssertEqual(request.dateFiledAfter, "2020-01-01")
         XCTAssertFalse(request.query.localizedCaseInsensitiveContains("after 2020"))
-        XCTAssertNotNil(court.relatedSessionIDs.first ?? nil)
+        XCTAssertNil(court.relatedSessionIDs.first ?? nil)
     }
 
     func testCritiqueUsesPriorAssistantDraftAndLatestSourcePacket() async throws {
         let store = try makeStore()
-        let matter = try store.matters.createMatter(name: "Acme", jurisdiction: "California")
         let router = ModelRouter(configuration: LegalModelConfiguration())
         let researchRoute = router.route(for: .legalResearch)
         let critiqueRoute = router.route(for: .legalCritique)
@@ -1746,13 +1739,12 @@ final class SupraSessionsTests: XCTestCase {
         let controller = makeGlobalChatController(
             store: store,
             runtimeClient: stub,
-            scope: .matter(id: matter.id),
             courtListenerClient: court
         )
         controller.loadChats()
 
         await controller.performSend(
-            prompt: "Research California contract unenforceability.",
+            prompt: "Research Foo v. Bar, 123 Cal. App. 5th 456.",
             modelID: ModelID(),
             systemPrompt: researchRoute.systemPrompt,
             options: researchRoute.options,
@@ -2809,7 +2801,9 @@ final class SupraSessionsTests: XCTestCase {
 
     // MARK: - Local-first research (tiered retrieval spec §4)
 
-    func testLocalFirstResearchAnswersFromSavedAuthoritiesAndOffersNetwork() async throws {
+    /// Expected RED: the local-first footer currently offers a direct deep network
+    /// search, and the deep send automatically transmits the matter-derived topic.
+    func testLocalFirstResearchAnswersLocallyAndDirectsReviewedNetworkSearch() async throws {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "Acme", jurisdiction: "Florida")
         let session = try store.research.createSession(matterID: matter.id, title: "S", issueText: "I", jurisdiction: "FL", status: .approved)
@@ -2846,17 +2840,18 @@ final class SupraSessionsTests: XCTestCase {
         XCTAssertTrue(box.prompt.contains("Smith v. Jones"), "the saved authority grounds the packet")
         let answer = try XCTUnwrap(controller.messages.last?.content)
         XCTAssertTrue(answer.contains("Preliminary — answered from this matter's saved authorities"), answer)
-        XCTAssertEqual(controller.deeperSearchOffer?.kind, .research)
+        XCTAssertTrue(answer.contains("Use Research to review the exact provider query"), answer)
+        XCTAssertNil(controller.deeperSearchOffer)
 
-        // The deeper tier skips the local pass and searches CourtListener (which is
-        // empty here), and the offer is retired by the new send.
+        // A direct deep invocation cannot force network egress; because the saved
+        // authority is sufficient, it remains a local-only answer.
         await controller.performSend(
             prompt: "Are liquidated damages clauses enforceable in Florida?",
             modelID: ModelID(), systemPrompt: route.systemPrompt, options: route.options, route: route,
             researchDepth: .deep
         )
         let deepAnswer = try XCTUnwrap(controller.messages.last?.content)
-        XCTAssertFalse(deepAnswer.contains("Preliminary — answered from this matter's saved authorities"), deepAnswer)
+        XCTAssertTrue(deepAnswer.contains("answered from this matter's saved authorities"), deepAnswer)
         XCTAssertNil(controller.deeperSearchOffer)
     }
 
@@ -2900,7 +2895,9 @@ final class SupraSessionsTests: XCTestCase {
         XCTAssertEqual(controller.messages.last?.status, .completed)
     }
 
-    func testLocalFirstSkippedWhenSavedAuthoritiesHaveNoText() async throws {
+    /// Expected RED: a matter with only metadata currently falls through to an
+    /// automatic topical provider search instead of the reviewed Research path.
+    func testTextlessSavedAuthorityCannotTriggerAutomaticMatterProviderFallback() async throws {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "Acme", jurisdiction: "Florida")
         let session = try store.research.createSession(matterID: matter.id, title: "S", issueText: "I", jurisdiction: "FL", status: .approved)
@@ -2927,11 +2924,13 @@ final class SupraSessionsTests: XCTestCase {
             modelID: ModelID(), systemPrompt: route.systemPrompt, options: route.options, route: route
         )
         let answer = try XCTUnwrap(controller.messages.last?.content)
-        XCTAssertFalse(answer.contains("answered from this matter's saved authorities"), answer)
+        XCTAssertTrue(answer.contains("No legal-data query was sent"), answer)
         XCTAssertNil(controller.deeperSearchOffer)
     }
 
-    func testNamedCaseSavedWithoutTextGoesToNetworkNotLocalTier() async throws {
+    /// Expected RED: a caption-only matter lookup currently goes to the network
+    /// when the saved named authority lacks opinion text.
+    func testNamedCaseSavedWithoutTextRequiresReviewedResearchNotNetworkOrLocalTier() async throws {
         // Regression: a saved-but-TEXTLESS named case passed the holds-the-cite
         // gate, then the grounded filter silently dropped it — the local tier
         // answered "from the library" without the very case the user asked about.
@@ -2975,14 +2974,10 @@ final class SupraSessionsTests: XCTestCase {
             modelID: ModelID(), systemPrompt: route.systemPrompt, options: route.options, route: route
         )
 
-        // The send must fall through to the network (which retrieves + hydrates
-        // the named case) instead of answering locally without it.
-        XCTAssertFalse(court.requests.isEmpty, "expected a network search, got a local-tier answer")
-        // And the citation-first request must target the named case, unbounded.
-        let named = try XCTUnwrap(court.requests.first { $0.caseName?.contains("Peacock") == true })
-        XCTAssertTrue(named.courtIDs.isEmpty)
-        XCTAssertNil(named.dateFiledAfter)
-        XCTAssertNil(named.dateFiledBefore)
+        XCTAssertTrue(court.requests.isEmpty)
+        let answer = try XCTUnwrap(controller.messages.last?.content)
+        XCTAssertTrue(answer.contains("No legal-data query was sent"), answer)
+        XCTAssertNil(controller.deeperSearchOffer)
     }
 
     func testNamedCaseHeldWithTextStillAnswersLocally() async throws {
@@ -3843,7 +3838,9 @@ final class SupraSessionsTests: XCTestCase {
     func testCreateOutputWithUngroundedCitationIsForcedToNeedsReviewWithBanner() async throws {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "Acme")
-        let contract = StructuredOutputContracts.contract(for: .ruleSynthesis)!
+        // Citation guarding remains relevant for the non-authority drafting
+        // scaffold; authority-asserting templates are blocked earlier by R0.
+        let contract = StructuredOutputContracts.contract(for: .draftingSkeleton)!
         // All required sections present (would otherwise be `.complete`), but the
         // body contains a legal citation this path never retrieved or verified.
         let markdown = contract.requiredHeadings.joined(separator: "\n\nThe rule derives from Brown v. Board, 347 U.S. 483.\n\n")
@@ -3852,7 +3849,7 @@ final class SupraSessionsTests: XCTestCase {
         }
         let controller = StructuredOutputController(store: store, runtimeClient: stub, matterID: matter.id)
 
-        let ok = await controller.createOutput(type: .ruleSynthesis, context: "x", modelID: ModelID())
+        let ok = await controller.createOutput(type: .draftingSkeleton, context: "x", modelID: ModelID())
         XCTAssertTrue(ok)
         XCTAssertEqual(controller.outputs[0].status, StructuredOutputStatus.needsReview.rawValue, "an ungrounded legal citation must force review, never complete")
         let output = try XCTUnwrap(try store.structuredOutputs.fetchOutputs(matterID: matter.id).first)
@@ -3860,25 +3857,17 @@ final class SupraSessionsTests: XCTestCase {
         XCTAssertTrue(version.contentMarkdown.contains("UNVERIFIED CITATIONS"), "must carry the unverified-citations banner")
     }
 
-    func testAuthorityAssertingOutputAlwaysFlaggedEvenWithNoRecognizedCitation() async throws {
-        let store = try makeStore()
-        let matter = try store.matters.createMatter(name: "Acme")
-        // ruleSynthesis asserts authority. All sections present, but the body uses
-        // prose authority references with NO recognized citation format — it must
-        // still be flagged so an unrecognized/fabricated authority can't read as
-        // a finished, verified output.
-        let contract = StructuredOutputContracts.contract(for: .ruleSynthesis)!
-        let markdown = contract.requiredHeadings.joined(separator: "\n\nThe controlling authority establishes the rule.\n\n")
-        let stub = StubRuntimeClient { request in
-            .events([.event(request, 1, .token, token: markdown), .event(request, 2, .generationCompleted)])
-        }
-        let controller = StructuredOutputController(store: store, runtimeClient: stub, matterID: matter.id)
-        let ok = await controller.createOutput(type: .ruleSynthesis, context: "x", modelID: ModelID())
-        XCTAssertTrue(ok)
-        XCTAssertEqual(controller.outputs[0].status, StructuredOutputStatus.needsReview.rawValue)
-        let output = try XCTUnwrap(try store.structuredOutputs.fetchOutputs(matterID: matter.id).first)
-        let version = try XCTUnwrap(try store.structuredOutputs.fetchVersions(structuredOutputID: output.id).first)
-        XCTAssertTrue(version.contentMarkdown.contains("UNVERIFIED CITATIONS"))
+    func testAuthorityAssertingOutputGuardStillFlagsLegacyContentWithoutRecognizedCitation() {
+        // The R0 creation block prevents new unpacketized authority work. Keep the
+        // lower-level guard pinned for legacy/repair content that already exists.
+        let result = StructuredOutputController.guardUnverifiedCitations(
+            in: "The controlling authority establishes the rule.",
+            type: .ruleSynthesis,
+            status: .complete
+        )
+
+        XCTAssertEqual(result.status, .needsReview)
+        XCTAssertTrue(result.markdown.contains("UNVERIFIED CITATIONS"))
     }
 
     func testNonAuthorityScaffoldWithoutCitationStaysComplete() async throws {
@@ -3900,11 +3889,11 @@ final class SupraSessionsTests: XCTestCase {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "Acme")
         let stub = StubRuntimeClient { request in
-            .events([.event(request, 1, .token, token: "# Rule Synthesis\n## Rule Statement\nonly one section"), .event(request, 2, .generationCompleted)])
+            .events([.event(request, 1, .token, token: "# Drafting Skeleton\n## Caption / Context\nonly one section"), .event(request, 2, .generationCompleted)])
         }
         let controller = StructuredOutputController(store: store, runtimeClient: stub, matterID: matter.id)
 
-        _ = await controller.createOutput(type: .ruleSynthesis, context: "x", modelID: ModelID())
+        _ = await controller.createOutput(type: .draftingSkeleton, context: "x", modelID: ModelID())
         XCTAssertEqual(controller.outputs[0].status, StructuredOutputStatus.needsReview.rawValue)
         XCTAssertGreaterThan(controller.outputs[0].missingCount, 0)
         // version 1 stored with the missing sections
@@ -4010,10 +3999,14 @@ final class SupraSessionsTests: XCTestCase {
         let matter = try store.matters.createMatter(name: "Acme")
         let stub = StubRuntimeClient { _ in .events([]) }
         let controller = StructuredOutputController(store: store, runtimeClient: stub, matterID: matter.id)
-        let ok = await controller.createOutput(type: .ruleSynthesis, context: "x", modelID: nil)
+        let ok = await controller.createOutput(type: .draftingSkeleton, context: "x", modelID: nil)
         XCTAssertFalse(ok)
         XCTAssertTrue(controller.outputs.isEmpty)
-        XCTAssertEqual(controller.message, "Assign a High-quality legal reasoning model in the Models tab to generate Rule Synthesis.")
+        let route = try XCTUnwrap(ModelRouter().route(forStructuredOutput: .draftingSkeleton))
+        XCTAssertEqual(
+            controller.message,
+            "Assign a \(route.role.displayName) model in the Models tab to generate Drafting Skeleton."
+        )
     }
 
     // MARK: - Structure repair (WO 29)
@@ -4053,9 +4046,9 @@ final class SupraSessionsTests: XCTestCase {
     func testStructureRepairUsesCritiqueRouteOptionsAndSystemPrompt() async throws {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "Acme")
-        let contract = StructuredOutputContracts.contract(for: .ruleSynthesis)!
+        let contract = StructuredOutputContracts.contract(for: .draftingSkeleton)!
         let fullMarkdown = contract.requiredHeadings.joined(separator: "\n\nbody\n\n")
-        let partialMarkdown = "# Rule Synthesis\n## Rule Statement\npartial"
+        let partialMarkdown = "# Drafting Skeleton\n## Caption / Context\npartial"
         let stub = StubRuntimeClient { request in
             if request.prompt.contains("repairing the structure") {
                 XCTAssertEqual(request.options.preset, .legalCritique)
@@ -4065,7 +4058,7 @@ final class SupraSessionsTests: XCTestCase {
             return .events([.event(request, 1, .token, token: partialMarkdown), .event(request, 2, .generationCompleted)])
         }
         let controller = StructuredOutputController(store: store, runtimeClient: stub, matterID: matter.id)
-        _ = await controller.createOutput(type: .ruleSynthesis, context: "x", modelID: ModelID())
+        _ = await controller.createOutput(type: .draftingSkeleton, context: "x", modelID: ModelID())
         let outputID = controller.outputs[0].id
 
         let repaired = await controller.repairOutput(outputID, modelID: ModelID())

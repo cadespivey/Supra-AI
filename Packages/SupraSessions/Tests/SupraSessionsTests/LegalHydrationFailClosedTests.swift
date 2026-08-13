@@ -102,7 +102,6 @@ final class LegalHydrationFailClosedTests: XCTestCase {
         // ACR-HYDRATE-01 expected RED: only opinion IDs 1...4 are currently
         // hydrated; the cited lower-ranked [A12] remains a short snippet.
         let store = try makeStore()
-        let matter = try store.matters.createMatter(name: "Synthetic Hydration Matter", jurisdiction: "California")
         let client = LegalHydrationClient(response: response(count: 12))
         let script = LegalAnswerScript(answers: [
             "The court requires meaningful notice before entering default judgment [A12]."
@@ -110,7 +109,6 @@ final class LegalHydrationFailClosedTests: XCTestCase {
         let controller = makeGlobalChatController(
             store: store,
             runtimeClient: StubRuntimeClient(outcome: script.outcome(for:)),
-            scope: .matter(id: matter.id),
             courtListenerClient: client
         )
         controller.loadChats()
@@ -128,7 +126,6 @@ final class LegalHydrationFailClosedTests: XCTestCase {
         // ACR-HYDRATE-02 expected RED: the fixed top-four loop never fetches A5...A12
         // and performs its work sequentially.
         let store = try makeStore()
-        let matter = try store.matters.createMatter(name: "Synthetic Concurrency Matter", jurisdiction: "California")
         let client = LegalHydrationClient(response: response(count: 12), concurrencyProbe: true)
         let labels = (1...12).map { "[A\($0)]" }.joined(separator: " ")
         let script = LegalAnswerScript(answers: [
@@ -137,7 +134,6 @@ final class LegalHydrationFailClosedTests: XCTestCase {
         let controller = makeGlobalChatController(
             store: store,
             runtimeClient: StubRuntimeClient(outcome: script.outcome(for:)),
-            scope: .matter(id: matter.id),
             courtListenerClient: client
         )
         controller.loadChats()
@@ -153,7 +149,6 @@ final class LegalHydrationFailClosedTests: XCTestCase {
         // ACR-HYDRATE-03 / ACR-REPAIR-01 expected RED: the short snippet under A1
         // currently passes, so no repair occurs and the first rejected prose is shown.
         let store = try makeStore()
-        let matter = try store.matters.createMatter(name: "Synthetic Failure Matter", jurisdiction: "California")
         let client = LegalHydrationClient(response: response(count: 1), failingIDs: [1])
         let firstCanary = "FIRST_UNVERIFIABLE_RULE"
         let secondCanary = "SECOND_UNVERIFIABLE_RULE"
@@ -164,7 +159,6 @@ final class LegalHydrationFailClosedTests: XCTestCase {
         let controller = makeGlobalChatController(
             store: store,
             runtimeClient: StubRuntimeClient(outcome: script.outcome(for:)),
-            scope: .matter(id: matter.id),
             courtListenerClient: client
         )
         controller.loadChats()
@@ -183,7 +177,6 @@ final class LegalHydrationFailClosedTests: XCTestCase {
         // ACR-HYDRATE-03 expected RED: an authority without a fetchable opinion ID
         // currently becomes clean solely because its packet label is in range.
         let store = try makeStore()
-        let matter = try store.matters.createMatter(name: "Synthetic Missing ID Matter", jurisdiction: "California")
         let missingIDResult = CourtListenerSearchResultDTO(
             absoluteURL: "/opinion/missing/synthetic/",
             caseName: "Synthetic Missing v. Identifier",
@@ -205,7 +198,6 @@ final class LegalHydrationFailClosedTests: XCTestCase {
         let controller = makeGlobalChatController(
             store: store,
             runtimeClient: StubRuntimeClient(outcome: script.outcome(for:)),
-            scope: .matter(id: matter.id),
             courtListenerClient: client
         )
         controller.loadChats()
