@@ -332,16 +332,16 @@ private struct StoredSourceLocator {
     let canonicalJSON: String
 
     var isMetadataDateLocator: Bool {
-        sourceKind == DocumentSourceKind.convertedDocument.rawValue
-            && partIndex == nil
-            && pageIndex == nil
-            && pageLabel == nil
-            && sheetName == nil
-            && cellRange == nil
-            && emailPartPath == nil
-            && charStart == nil
-            && charEnd == nil
-            && boundingBoxesJSON == nil
+        guard sourceKind == DocumentSourceKind.convertedDocument.rawValue else { return false }
+        guard partIndex == nil else { return false }
+        guard pageIndex == nil else { return false }
+        guard pageLabel == nil else { return false }
+        guard sheetName == nil else { return false }
+        guard cellRange == nil else { return false }
+        guard emailPartPath == nil else { return false }
+        guard charStart == nil else { return false }
+        guard charEnd == nil else { return false }
+        return boundingBoxesJSON == nil
     }
 
     static func decode(_ json: String) -> Self? {
