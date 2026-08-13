@@ -251,10 +251,18 @@ public final class DocumentLibraryRepository: @unchecked Sendable {
                 try db.execute(
                     sql: """
                     UPDATE matter_documents
-                    SET deleted_at = NULL, status = ?, updated_at = ?
+                    SET deleted_at = NULL,
+                        status = CASE WHEN status = ? THEN ? ELSE status END,
+                        updated_at = ?
                     WHERE folder_id = ? AND deleted_at = ?
                     """,
-                    arguments: [MatterDocumentStatus.ready.rawValue, now, folderID, folderDeletedAt]
+                    arguments: [
+                        MatterDocumentStatus.deleted.rawValue,
+                        MatterDocumentStatus.needsReview.rawValue,
+                        now,
+                        folderID,
+                        folderDeletedAt,
+                    ]
                 )
             }
         }
@@ -455,10 +463,17 @@ public final class DocumentLibraryRepository: @unchecked Sendable {
             try db.execute(
                 sql: """
                 UPDATE matter_documents
-                SET deleted_at = NULL, status = ?, updated_at = ?
+                SET deleted_at = NULL,
+                    status = CASE WHEN status = ? THEN ? ELSE status END,
+                    updated_at = ?
                 WHERE id = ?
                 """,
-                arguments: [MatterDocumentStatus.ready.rawValue, Date(), id]
+                arguments: [
+                    MatterDocumentStatus.deleted.rawValue,
+                    MatterDocumentStatus.needsReview.rawValue,
+                    Date(),
+                    id,
+                ]
             )
         }
     }
@@ -1053,10 +1068,10 @@ public final class DocumentLibraryRepository: @unchecked Sendable {
             try db.execute(
                 sql: """
                 UPDATE matter_documents
-                SET deleted_at = ?, status = ?, updated_at = ?
-                WHERE id = ?
+                SET deleted_at = ?, updated_at = ?
+                WHERE id = ? AND deleted_at IS NULL
                 """,
-                arguments: [date, MatterDocumentStatus.deleted.rawValue, date, id]
+                arguments: [date, date, id]
             )
         }
     }
@@ -1064,12 +1079,12 @@ public final class DocumentLibraryRepository: @unchecked Sendable {
     private static func softDeleteDocuments(_ db: Database, inFolders folderIDs: [String], at date: Date) throws {
         guard !folderIDs.isEmpty else { return }
         let placeholders = databaseQuestionMarks(count: folderIDs.count)
-        var arguments: [DatabaseValueConvertible] = [date, MatterDocumentStatus.deleted.rawValue, date]
+        var arguments: [DatabaseValueConvertible] = [date, date]
         arguments.append(contentsOf: folderIDs)
         try db.execute(
             sql: """
             UPDATE matter_documents
-            SET deleted_at = ?, status = ?, updated_at = ?
+            SET deleted_at = ?, updated_at = ?
             WHERE folder_id IN (\(placeholders)) AND deleted_at IS NULL
             """,
             arguments: StatementArguments(arguments)

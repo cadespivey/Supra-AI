@@ -93,7 +93,11 @@ final class Milestone3SchemaTests: XCTestCase {
         XCTAssertEqual(try store.documentLibrary.fetchDocuments(matterID: matter.id).count, 0)
         let deletedDoc = try XCTUnwrap(try store.documentLibrary.fetchDocument(id: doc.id))
         XCTAssertNotNil(deletedDoc.deletedAt)
-        XCTAssertEqual(deletedDoc.status, MatterDocumentStatus.deleted.rawValue)
+        XCTAssertEqual(
+            deletedDoc.status,
+            MatterDocumentStatus.ready.rawValue,
+            "soft deletion must preserve the document's processing state"
+        )
 
         try store.documentLibrary.restoreFolder(id: parent.id)
         XCTAssertEqual(try store.documentLibrary.fetchFolders(matterID: matter.id).count, 2)
