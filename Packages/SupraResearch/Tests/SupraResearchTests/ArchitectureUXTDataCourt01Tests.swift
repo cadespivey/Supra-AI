@@ -96,9 +96,28 @@ final class ArchitectureUXTDataCourt01Tests: XCTestCase {
         XCTAssertEqual(catalog.catalogVersion, "jurisdiction-courts-v1")
         XCTAssertNotEqual(catalog.catalogVersion, "default")
         XCTAssertEqual(
-            catalog.identityDigestSHA256,
+            catalog.sourceResourceSHA256,
             "41ea70e290a002b966506c4359c5c8f89caef19cb153b64430d56e189ab07d98"
         )
+        XCTAssertEqual(
+            catalog.identityDigestSHA256,
+            "0393b9dc507ea91ebbf939e3b7620c3e6555dd01cfdbcdc00d5298d89e14adf3"
+        )
         XCTAssertNotEqual(catalog.identityDigestSHA256, String(repeating: "0", count: 64))
+    }
+
+    func testFixtureCatalogCannotImpersonateVersionedBundledIdentity() {
+        let fixture = JurisdictionCatalog(text: """
+        Federal and State Courts
+        FEDERAL COURTS AND TRIBUNALS
+        United States District Court for the Southern District of Florida
+        STATE, COUNTY, AND MUNICIPAL COURTS
+        """)
+
+        XCTAssertEqual(fixture.catalogVersion, "unversioned-fixture")
+        XCTAssertTrue(fixture.explicitPersistedCourtAliasKeys.isEmpty)
+        XCTAssertNil(fixture.resolvePersistedCourtIdentity("S.D. Fla."))
+        XCTAssertNotEqual(fixture.sourceResourceSHA256, catalog.sourceResourceSHA256)
+        XCTAssertNotEqual(fixture.identityDigestSHA256, catalog.identityDigestSHA256)
     }
 }
