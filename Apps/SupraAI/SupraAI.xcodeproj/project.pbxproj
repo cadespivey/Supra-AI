@@ -78,6 +78,8 @@
 		D75FC07E8CB2C15E194220DE /* WindowChromeLayoutUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0762F779C5E28BCDE5295FBA /* WindowChromeLayoutUITests.swift */; };
 		E4A400010000000000000001 /* RestoreSettingsUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4A400010000000000000101 /* RestoreSettingsUITests.swift */; };
 		A0B120260813000000000001 /* ArchitectureUXRetirementUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0B120260813000000000101 /* ArchitectureUXRetirementUITests.swift */; };
+		D1E701010000000000000001 /* ArchitectureUXTUxDelete01Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1E701010000000000000101 /* ArchitectureUXTUxDelete01Tests.swift */; };
+		D1E702020000000000000002 /* ArchitectureUXTUxDelete02Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1E702020000000000000102 /* ArchitectureUXTUxDelete02Tests.swift */; };
 		D8049735424078FD470EAD6B /* RecycleBinView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF9D6D522EA0F7997D75B63B /* RecycleBinView.swift */; };
 		F56264303FD9BE608870FB9F /* MultilineField.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E06DCE8DB8B78E41F939F2C /* MultilineField.swift */; };
 /* End PBXBuildFile section */
@@ -118,6 +120,8 @@
 		0762F779C5E28BCDE5295FBA /* WindowChromeLayoutUITests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WindowChromeLayoutUITests.swift; sourceTree = "<group>"; };
 		E4A400010000000000000101 /* RestoreSettingsUITests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RestoreSettingsUITests.swift; sourceTree = "<group>"; };
 		A0B120260813000000000101 /* ArchitectureUXRetirementUITests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ArchitectureUXRetirementUITests.swift; sourceTree = "<group>"; };
+		D1E701010000000000000101 /* ArchitectureUXTUxDelete01Tests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ArchitectureUXTUxDelete01Tests.swift; sourceTree = "<group>"; };
+		D1E702020000000000000102 /* ArchitectureUXTUxDelete02Tests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ArchitectureUXTUxDelete02Tests.swift; sourceTree = "<group>"; };
 		45DF0346474345DA98F88B95 /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/Cocoa.framework; sourceTree = DEVELOPER_DIR; };
 		5A0000000000000000000101 /* SupraAIApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupraAIApp.swift; sourceTree = "<group>"; };
 		5A0000000000000000000102 /* AppEnvironment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppEnvironment.swift; sourceTree = "<group>"; };
@@ -365,6 +369,8 @@
 				0762F779C5E28BCDE5295FBA /* WindowChromeLayoutUITests.swift */,
 				E4A400010000000000000101 /* RestoreSettingsUITests.swift */,
 				A0B120260813000000000101 /* ArchitectureUXRetirementUITests.swift */,
+				D1E701010000000000000101 /* ArchitectureUXTUxDelete01Tests.swift */,
+				D1E702020000000000000102 /* ArchitectureUXTUxDelete02Tests.swift */,
 			);
 			path = SupraAIUITests;
 			sourceTree = "<group>";
@@ -657,6 +663,8 @@
 				D75FC07E8CB2C15E194220DE /* WindowChromeLayoutUITests.swift in Sources */,
 				E4A400010000000000000001 /* RestoreSettingsUITests.swift in Sources */,
 				A0B120260813000000000001 /* ArchitectureUXRetirementUITests.swift in Sources */,
+				D1E701010000000000000001 /* ArchitectureUXTUxDelete01Tests.swift in Sources */,
+				D1E702020000000000000002 /* ArchitectureUXTUxDelete02Tests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

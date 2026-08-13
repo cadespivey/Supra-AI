@@ -104,7 +104,7 @@ final class RestoreSettingsUITests: XCTestCase {
         let instructionText = renderedText(of: instructions)
         XCTAssertTrue(instructionText.localizedCaseInsensitiveContains("entire safety folder"))
         XCTAssertTrue(instructionText.localizedCaseInsensitiveContains("managed-document blobs"))
-        XCTAssertTrue(app.buttons["Show Recovery Safety Copy"].exists)
+        XCTAssertTrue(app.buttons["Show Recovery Folder"].exists)
         XCTAssertFalse(app.buttons["Show Recovery Snapshot"].exists)
         XCTAssertTrue(app.buttons["Quit Without Changes"].exists)
     }
