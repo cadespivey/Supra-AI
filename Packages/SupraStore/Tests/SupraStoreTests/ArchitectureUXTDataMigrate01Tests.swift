@@ -379,6 +379,20 @@ final class ArchitectureUXTDataMigrate01Tests: XCTestCase {
                 "canonical_catalog_digest_sha256", "created_at",
             ]))
 
+            let partyColumns = Set(try db.columns(in: "matter_parties").map(\.name))
+            XCTAssertEqual(partyColumns, Set([
+                "id", "matter_id", "display_name", "caption_name", "base_role",
+                "caption_order", "client_status", "created_at", "updated_at",
+            ]))
+            let representationColumns = Set(
+                try db.columns(in: "matter_representations").map(\.name)
+            )
+            XCTAssertEqual(representationColumns, Set([
+                "id", "matter_id", "represented_party_id", "relationship_kind",
+                "representative_name", "firm_name", "service_address_json",
+                "service_emails_json", "service_order", "created_at", "updated_at",
+            ]))
+
             XCTAssertEqual(
                 try Int.fetchOne(
                     db,
