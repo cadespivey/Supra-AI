@@ -51,6 +51,41 @@ final class ArchitectureUXTDataCourt01Tests: XCTestCase {
         XCTAssertNil(unknown)
     }
 
+    func testPersistedIdentityAcceptsOnlyLiteralIDNameOrExplicitAliasKey() throws {
+        let canonicalName =
+            "United States District Court for the Southern District of Florida"
+
+        XCTAssertEqual(
+            catalog.resolvePersistedCourtIdentity(districtOptionID)?.id,
+            districtOptionID
+        )
+        XCTAssertEqual(
+            catalog.resolvePersistedCourtIdentity(canonicalName)?.id,
+            districtOptionID
+        )
+
+        // These are plausible interactive-search inputs, but none is an exact
+        // persisted ID/name or a reviewed alias key. Admitting them would turn
+        // normalization into a hidden, unversioned legal-identity alias map.
+        for forbiddenImplicitAlias in [
+            "s.d. fla.",
+            " S.D. Fla. ",
+            "S D Fla",
+            "United States District Court for the Southern District of Florida ",
+            "Southern District of Florida",
+        ] {
+            XCTAssertNil(
+                catalog.resolvePersistedCourtIdentity(forbiddenImplicitAlias),
+                "Implicit alias was not explicitly reviewed: \(forbiddenImplicitAlias)"
+            )
+        }
+
+        XCTAssertNotEqual(
+            try XCTUnwrap(catalog.resolvePersistedCourtIdentity(canonicalName)).id,
+            bankruptcyOptionID
+        )
+    }
+
     func testExplicitAliasCatalogHasUniqueKeysAndPinnedIdentity() {
         let aliasKeys = catalog.explicitPersistedCourtAliasKeys
 
