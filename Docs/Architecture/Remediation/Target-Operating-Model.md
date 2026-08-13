@@ -29,7 +29,7 @@ manual entry. The context carries only applicable nonoptional identities:
 ```text
 matterID
 intent (groundedQuestion | research | draft | checkSources | addPublicRecord | savedWork | billing)
-sourceScopeID/sourceSetID
+sourceScopeID/sourceSetVersionID
 authorityPacketVersionID
 workProductID/versionID
 returnDestination
@@ -42,9 +42,11 @@ surface an explicit corrective/expired state with a working return action.
 
 ## Shared model-work controls
 
-One feature-owned task uses one physical GPU admission lane. Feature contracts may perform a
-fixed bounded sequence of retrieval, sequential model calls, validation, and publication. They
-do not expose agents, roles, teams, handoffs, recursion, or concurrent generative workers.
+All feature-owned tasks share one process-wide physical GPU admission lane. At most one
+GPU-backed operation is active across generation, embedding, reranking, model load, and prewarm;
+CPU, Store, and approved network work may overlap. A feature contract may perform a fixed bounded
+sequence of retrieval, sequential model calls, validation, and publication, but it does not own a
+private lane or expose agents, roles, teams, handoffs, recursion, or concurrent generative workers.
 
 Every model task declares a hard budget for sequential model calls, typed tool calls,
 input/generated tokens, wall time, retries, repeated actions, egress bytes, working-set bytes,

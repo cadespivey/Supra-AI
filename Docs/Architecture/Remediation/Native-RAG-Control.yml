@@ -1,8 +1,9 @@
 schema_version: 1
 control_id: native-rag-control-v1
-status: frozen_configuration_metrics_pending
+status: source_inventory_recorded_full_control_freeze_pending
 owner: documents-runtime-assurance
-approved_decision_date: "2026-08-13"
+recorded_date: "2026-08-13"
+configuration_freeze_status: pending_exact_installed_artifacts_prompts_owner_judgment_review_and_control_run
 
 scope:
   purpose: >-
@@ -10,7 +11,8 @@ scope:
     comparison contract before bounded paging, caching, receipt, parser, reranker, embedding,
     or index challengers change behavior.
   client_data_allowed: false
-  authoritative_evaluator: deterministic_human_reviewed
+  intended_authoritative_evaluator: deterministic_human_reviewed
+  authoritative_evaluator_status: pending_owner_judgment_review
   advisory_llm_evaluator_may_override: false
   one_independent_variable_per_challenger: true
 
@@ -20,7 +22,7 @@ control_configuration:
     decision: Docs/Decisions/Document-Chunker-v2-Flip.md
   embedding:
     catalog_role: document_search
-    repository: Qwen/Qwen3-Embedding-0.6B
+    catalog_default_repository: mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ
     artifact_revision: pending_exact_installed_artifact
     artifact_fingerprint: pending_exact_installed_artifact
   retriever:
@@ -30,11 +32,16 @@ control_configuration:
     reciprocal_rank_fusion_k: 60
     current_vector_access: matter_model_wide_fetch_then_in_memory_filter
   reranker:
-    mode: current_native_control
+    mode: deep_retrieval_shared_generation_model
     candidate_pool: 40
-    exact_artifact: none
+    candidate_snippet_character_ceiling: 600
+    artifact_binding: request_generation_model
+    exact_artifact: pending_installed_chat_artifact
+    failure_fallback: retrieval_order_prefix
   packer:
-    excerpt_character_ceiling: 600
+    mode: runtime_token_budgeted_source_packet
+    fixed_excerpt_character_ceiling: none
+    callsite_limit_inventory: pending
     version: pending_inventory
   tokenizer:
     fingerprint: pending_installed_chat_artifact
@@ -46,27 +53,29 @@ control_configuration:
     fingerprint: pending_installed_chat_artifact
 
 synthetic_corpus:
-  version: pending_T_RAG_CORPUS_01
-  root: TestData
-  zero_real_client_data: required
-  digest_manifest: pending
+  id: supra-rag-synthetic-legal
+  version: 1.0.0
+  root: TestData/Synthetic Document Intelligence Benchmark
+  zero_real_client_data: true
+  digest_manifest: TestData/Benchmarks/rag-corpus-v1.json
+  digest_manifest_sha256: 6fa99ce95733c4d0af62035393ea7b5d3635f7cc47e5580547bfdfaee5aca598
+  artifact_count: 8
+  query_count: 5
   required_slices:
-    - native_text
     - ocr
     - table
-    - docx
-    - pdf
-    - xlsx
-    - email
-    - revision_and_supersession
+    - document_type
+    - revision
+    - supersession
     - contrary_evidence
+    - duplicate
     - no_answer
-    - small_corpus
-    - medium_corpus
-    - large_corpus
+    - corpus_small
+    - corpus_medium
+    - corpus_large
   judgments:
-    owner: attorney_reviewed_synthetic_expectations
-    status: pending
+    required_owner_role: repository_owner_attorney
+    status: pending_owner_review
 
 metric_contract:
   stable_order: score_descending_then_chunk_id_ascending
@@ -106,7 +115,11 @@ metric_contract:
       - app_current_and_peak_phys_footprint
       - xpc_current_and_peak_phys_footprint
       - combined_current_and_peak_phys_footprint
-  hand_calculated_fixture_status: pending_T_RAG_EVAL_01
+  hand_calculated_fixture_status: green
+  hand_calculated_fixture: Packages/SupraTestKit/Tests/SupraTestKitTests/RAGMetricContractTests.swift
+  selected_test_command: >-
+    DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer swift test
+    --package-path Packages/SupraTestKit --filter RAGMetricContractTests
 
 noninferiority:
   rule: >-
@@ -125,7 +138,8 @@ resource_ceiling_contract:
   xpc_bytes: pending_measured_control
   combined_bytes: pending_measured_control
   live_page_rows: pending_measured_control
-  heap_rows: 60
+  maximum_live_heap_rows: pending_measured_control
+  future_bounded_candidate_heap_capacity: 60
   cache_bytes: pending_measured_control
   status: pending_owner_approval_after_instruments_control
 
