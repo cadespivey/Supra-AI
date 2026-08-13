@@ -235,17 +235,24 @@ struct GlobalChatsView: View {
             .disabled(renameText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
         .confirmationDialog(
-            pendingDeleteChat.map { "Delete “\($0.title)”?" } ?? "Delete chat?",
+            pendingDeleteChatPresentation.confirmationTitle,
             isPresented: deleteConfirmBinding,
             titleVisibility: .visible
         ) {
-            Button("Delete Chat", role: .destructive) {
+            Button(
+                pendingDeleteChatPresentation.actionTitle,
+                role: pendingDeleteChatPresentation.tone.buttonRole
+            ) {
                 if let chat = pendingDeleteChat { controller.deleteChat(chatID: chat.id) }
                 pendingDeleteChat = nil
             }
+            .accessibilityIdentifier("chat.moveToRecycleBin.confirm")
             Button("Cancel", role: .cancel) { pendingDeleteChat = nil }
         } message: {
-            Text("This removes the chat from your history. This can't be undone from the app.")
+            Text(
+                pendingDeleteChatPresentation.message
+            )
+            .accessibilityIdentifier("chat.moveToRecycleBin.message")
         }
     }
 
@@ -334,11 +341,13 @@ struct GlobalChatsView: View {
 
         Divider()
 
-        Button(role: .destructive) {
+        let presentation = moveToRecycleBinPresentation(for: chat)
+        Button(role: presentation.tone.buttonRole) {
             pendingDeleteChat = chat
         } label: {
-            Label("Delete", systemImage: "trash")
+            Label(presentation.actionTitle, systemImage: "trash")
         }
+        .accessibilityIdentifier("chat.moveToRecycleBin.\(chat.title)")
     }
 
     /// Saves the full conversation as a Markdown file via a save panel, then reveals
@@ -453,6 +462,17 @@ struct GlobalChatsView: View {
 
     private var deleteConfirmBinding: Binding<Bool> {
         Binding(get: { pendingDeleteChat != nil }, set: { if !$0 { pendingDeleteChat = nil } })
+    }
+
+    private func moveToRecycleBinPresentation(for chat: ChatSummary) -> DeletionActionPresentation {
+        .make(action: .moveToRecycleBin, target: .chat, displayName: chat.title)
+    }
+
+    private var pendingDeleteChatPresentation: DeletionActionPresentation {
+        if let pendingDeleteChat {
+            return moveToRecycleBinPresentation(for: pendingDeleteChat)
+        }
+        return .make(action: .moveToRecycleBin, target: .chat, displayName: "chat")
     }
 
     // MARK: - Messages

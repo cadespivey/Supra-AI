@@ -1,6 +1,24 @@
 import SupraSessions
 import SwiftUI
 
+extension DeletionPresentationTone {
+    var buttonRole: ButtonRole? {
+        self == .destructive ? .destructive : nil
+    }
+}
+
+extension View {
+    @ViewBuilder
+    func deletionButtonStyle(_ tone: DeletionPresentationTone) -> some View {
+        switch tone {
+        case .neutral:
+            buttonStyle(.ghost)
+        case .destructive:
+            buttonStyle(.ghostDanger)
+        }
+    }
+}
+
 enum PermanentDeletionTarget: Identifiable {
     case matter(id: String, name: String)
     case chat(id: String, name: String)
@@ -14,31 +32,22 @@ enum PermanentDeletionTarget: Identifiable {
         }
     }
 
-    var confirmationTitle: String {
+    var kind: DeletionTargetKind {
         switch self {
-        case let .matter(_, name): "Delete “\(name)” permanently?"
-        case let .chat(_, name): "Delete “\(name)” permanently?"
-        case let .document(_, name): "Remove “\(name)” permanently?"
+        case .matter: .matter
+        case .chat: .chat
+        case .document: .document
         }
     }
 
-    var actionTitle: String {
+    var name: String {
         switch self {
-        case .matter: "Delete Matter"
-        case .chat: "Delete Chat"
-        case .document: "Remove Source"
+        case let .matter(_, name), let .chat(_, name), let .document(_, name): name
         }
     }
 
-    var confirmationMessage: String {
-        switch self {
-        case .matter:
-            "This removes the matter’s source data, chats, saved in-app outputs, and export records. Prior audit history and previously written export files remain. This cannot be undone."
-        case .document:
-            "Removing this source invalidates dependent work. Saved output text, citation display excerpts and locators, and retained corpus-analysis proof records remain. Document classifications and relations are removed. Audit history and previously written export files remain. This cannot be undone."
-        case .chat:
-            "This permanently deletes the chat. This cannot be undone."
-        }
+    var presentation: DeletionActionPresentation {
+        .make(action: .deletePermanently, target: kind, displayName: name)
     }
 }
 
@@ -48,7 +57,7 @@ private struct PermanentDeletionConfirmationModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         content.confirmationDialog(
-            target?.confirmationTitle ?? "Delete permanently?",
+            target?.presentation.confirmationTitle ?? "Delete permanently?",
             isPresented: Binding(
                 get: { target != nil },
                 set: { if !$0 { target = nil } }
@@ -56,13 +65,15 @@ private struct PermanentDeletionConfirmationModifier: ViewModifier {
             titleVisibility: .visible,
             presenting: target
         ) { item in
-            Button(item.actionTitle, role: .destructive) {
+            Button(item.presentation.actionTitle, role: item.presentation.tone.buttonRole) {
                 perform(item)
                 target = nil
             }
+            .accessibilityIdentifier("recycleBin.deletePermanently.confirm")
             Button("Cancel", role: .cancel) { target = nil }
         } message: { item in
-            Text(item.confirmationMessage)
+            Text(item.presentation.message)
+                .accessibilityIdentifier("recycleBin.deletePermanently.message")
         }
     }
 }
@@ -127,7 +138,7 @@ struct RecycleBinView: View {
             if !controller.matters.isEmpty {
                 Section("Matters") {
                     ForEach(controller.matters) { matter in
-                        row(icon: "folder", title: matter.name, subtitle: "Matter", deletedAt: matter.deletedAt,
+                        row(kind: .matter, icon: "folder", title: matter.name, subtitle: "Matter", deletedAt: matter.deletedAt,
                             restore: { controller.restoreMatter(id: matter.id); matters.loadMatters() },
                             delete: { pendingDelete = .matter(id: matter.id, name: matter.name) })
                     }
@@ -137,7 +148,7 @@ struct RecycleBinView: View {
                 Section("Chats") {
                     ForEach(controller.chats) { chat in
                         let title = chat.title.isEmpty ? "Untitled chat" : chat.title
-                        row(icon: "bubble.left.and.bubble.right", title: title, subtitle: chat.context, deletedAt: chat.deletedAt,
+                        row(kind: .chat, icon: "bubble.left.and.bubble.right", title: title, subtitle: chat.context, deletedAt: chat.deletedAt,
                             restore: { controller.restoreChat(id: chat.id); chats.loadChats() },
                             delete: { pendingDelete = .chat(id: chat.id, name: title) })
                     }
@@ -146,7 +157,7 @@ struct RecycleBinView: View {
             if !controller.documents.isEmpty {
                 Section("Documents") {
                     ForEach(controller.documents) { doc in
-                        row(icon: "doc", title: doc.name, subtitle: doc.matterName, deletedAt: doc.deletedAt,
+                        row(kind: .document, icon: "doc", title: doc.name, subtitle: doc.matterName, deletedAt: doc.deletedAt,
                             restore: { controller.restoreDocument(id: doc.id) },
                             delete: { pendingDelete = .document(id: doc.id, name: doc.name) })
                     }
@@ -157,9 +168,14 @@ struct RecycleBinView: View {
 
     @ViewBuilder
     private func row(
-        icon: String, title: String, subtitle: String, deletedAt: Date?,
+        kind: DeletionTargetKind, icon: String, title: String, subtitle: String, deletedAt: Date?,
         restore: @escaping () -> Void, delete: @escaping () -> Void
     ) -> some View {
+        let permanentPresentation = DeletionActionPresentation.make(
+            action: .deletePermanently,
+            target: kind,
+            displayName: title
+        )
         HStack(spacing: 10) {
             Image(systemName: icon).foregroundStyle(.secondary).frame(width: 18)
             VStack(alignment: .leading, spacing: 2) {
@@ -174,11 +190,20 @@ struct RecycleBinView: View {
                 .font(.supraCaption).foregroundStyle(.secondary)
             }
             Spacer()
-            Button("Restore", action: restore).buttonStyle(.ghost).controlSize(.small)
-            Button(action: delete) { Image(systemName: "trash") }
-                .buttonStyle(.ghostDanger).help("Delete permanently")
+            Button("Restore", action: restore)
+                .buttonStyle(.ghost)
+                .controlSize(.small)
+                .accessibilityIdentifier("recycleBin.restore.\(kind.rawValue).\(title)")
+            Button(role: permanentPresentation.tone.buttonRole, action: delete) {
+                Image(systemName: "trash")
+            }
+                .deletionButtonStyle(permanentPresentation.tone)
+                .help(permanentPresentation.actionTitle)
+                .accessibilityLabel(permanentPresentation.actionTitle)
+                .accessibilityIdentifier("recycleBin.deletePermanently.\(kind.rawValue).\(title)")
         }
         .padding(.vertical, 2)
+        .accessibilityIdentifier("recycleBin.item.\(kind.rawValue).\(title)")
     }
 
     private func performDelete(_ item: PermanentDeletionTarget) {

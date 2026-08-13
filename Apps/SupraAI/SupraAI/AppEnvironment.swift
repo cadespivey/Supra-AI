@@ -22,6 +22,14 @@ struct DatabaseRecoveryState: Sendable {
     let failure: Failure
     let recoveryItemURL: URL?
 
+    private var liveDatabaseURL: URL? {
+        try? DatabasePath.appSupportDatabaseURL()
+    }
+
+    private var liveBlobsDirectoryURL: URL {
+        DocumentStorage.makeDefault().blobsDirectory
+    }
+
     var title: String {
         switch failure {
         case .snapshot: "Database upgrade paused"
@@ -41,20 +49,102 @@ struct DatabaseRecoveryState: Sendable {
         }
     }
 
-    var recoveryActionTitle: String {
-        switch failure {
-        case .restore: "Show Recovery Safety Copy"
-        case .snapshot, .migration: "Show Recovery Snapshot"
+    var recoveryFolderURL: URL? {
+        return switch failure {
+        case .restore:
+            recoveryItemURL
+        case .migration:
+            recoveryItemURL.map {
+                $0.hasDirectoryPath ? $0 : $0.deletingLastPathComponent()
+            }
+        case .snapshot:
+            liveDatabaseURL?.deletingLastPathComponent()
         }
     }
+
+    var recoveryDatabaseURL: URL? {
+        switch failure {
+        case .restore:
+            recoveryItemURL?.appendingPathComponent(
+                "restore-safety.sqlite",
+                isDirectory: false
+            )
+        case .migration:
+            recoveryItemURL.map {
+                $0.hasDirectoryPath
+                    ? $0.appendingPathComponent("SupraAI.sqlite", isDirectory: false)
+                    : $0
+            }
+        case .snapshot:
+            liveDatabaseURL
+        }
+    }
+
+    var recoveryBlobsDirectoryURL: URL? {
+        switch failure {
+        case .restore:
+            recoveryItemURL?.appendingPathComponent("blobs", isDirectory: true)
+        case .snapshot, .migration:
+            liveBlobsDirectoryURL
+        }
+    }
+
+    var recoveryActionTitle: String { "Show Recovery Folder" }
 
     var recoveryActionHint: String {
         switch failure {
         case .restore:
             "Opens Finder with the complete verified safety folder selected."
         case .snapshot, .migration:
-            "Opens Finder with the verified recovery database selected."
+            "Opens Finder with the folder containing the recovery database selected."
         }
+    }
+
+    var supportDetails: String {
+        let databaseLabel: String
+        switch failure {
+        case .snapshot: databaseLabel = "Existing database"
+        case .migration, .restore: databaseLabel = "Recovery database"
+        }
+        let databasePath = recoveryDatabaseURL?.path ?? "unavailable"
+        let blobPath = recoveryBlobsDirectoryURL?.path ?? "unavailable"
+        let outcome: String
+        switch failure {
+        case .snapshot:
+            outcome = "No pre-upgrade recovery database was created. The existing database and managed-document blobs were not changed."
+        case .migration:
+            outcome = "The existing database was not replaced. The pre-upgrade database copy and existing managed-document blobs must be preserved together."
+        case .restore:
+            outcome = "Preserve the entire safety folder so the recovery database and managed-document blobs remain together."
+        }
+        return """
+        \(databaseLabel): \(databasePath)
+        Managed-document blobs: \(blobPath)
+        Recovery folder: \(recoveryFolderURL?.path ?? "unavailable")
+
+        \(outcome)
+        """
+    }
+
+    var diagnosticReport: String {
+        let stage: String
+        switch failure {
+        case .snapshot: stage = "pre-upgrade snapshot"
+        case .migration: stage = "database migration"
+        case .restore: stage = "restore activation"
+        }
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString")
+            as? String ?? "unknown"
+        return """
+        Supra AI recovery diagnostic
+        Failure stage: \(stage)
+        Normal work enabled: no
+        Recovery folder available: \(recoveryFolderURL == nil ? "no" : "yes")
+        Application version: \(version)
+        Operating system: \(ProcessInfo.processInfo.operatingSystemVersionString)
+
+        This diagnostic contains no document text, matter names, prompts, or generated output.
+        """
     }
 }
 

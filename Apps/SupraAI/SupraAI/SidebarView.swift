@@ -92,11 +92,8 @@ struct SidebarView: View {
                 Button {
                     selection = .recycleBin
                 } label: {
-                    // Centered and destructive-tinted, mirroring the matter view's Delete
-                    // button (red with a red hover wash) — sized as an inset pill for the bar.
-                    Label("Recycle Bin", systemImage: "trash")
+                    Label(RecycleBinNavigationPresentation.standard.title, systemImage: "trash")
                         .frame(maxWidth: .infinity, alignment: .center)
-                        .foregroundStyle(.red)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 6)
                         .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
@@ -110,6 +107,10 @@ struct SidebarView: View {
                 .animation(.easeOut(duration: 0.12), value: recycleBinHovering)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 6)
+                .help(RecycleBinNavigationPresentation.standard.accessibilityDescription)
+                .accessibilityValue(
+                    RecycleBinNavigationPresentation.standard.accessibilityDescription
+                )
                 .accessibilityIdentifier("sidebar.recycleBin")
             }
             .background(.bar)
@@ -223,10 +224,10 @@ struct SidebarView: View {
         (hoveredRow == row && selection != row) ? Color.primary.opacity(0.09) : .clear
     }
 
-    /// Recycle Bin fill: a stronger red when it's the active view, a lighter red on
-    /// hover (matching the matter Delete button's danger wash), clear otherwise.
+    /// Recycle Bin is a restorable destination, so its selection and hover treatment
+    /// matches ordinary navigation rather than a destructive action.
     private var recycleBinFill: Color {
-        if selection == .recycleBin { return Color.red.opacity(0.18) }
-        return recycleBinHovering ? Color.red.opacity(0.14) : .clear
+        if selection == .recycleBin { return Color.accentColor.opacity(0.16) }
+        return recycleBinHovering ? Color.primary.opacity(0.09) : .clear
     }
 }

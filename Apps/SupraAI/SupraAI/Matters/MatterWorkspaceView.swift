@@ -58,14 +58,21 @@ struct MatterWorkspaceView: View {
             }
         }
         .confirmationDialog(
-            "Delete “\(matter.name)”?",
+            moveToRecycleBinPresentation.confirmationTitle,
             isPresented: $confirmingDelete,
             titleVisibility: .visible
         ) {
-            Button("Delete Matter", role: .destructive) { controller.deleteMatter(id: matter.id) }
+            Button(
+                moveToRecycleBinPresentation.actionTitle,
+                role: moveToRecycleBinPresentation.tone.buttonRole
+            ) {
+                controller.deleteMatter(id: matter.id)
+            }
+            .accessibilityIdentifier("matter.moveToRecycleBin.confirm")
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This hides the matter and its chats. You can't undo this from the app.")
+            Text(moveToRecycleBinPresentation.message)
+                .accessibilityIdentifier("matter.moveToRecycleBin.message")
         }
         .task {
             applyUITestInitialTab()
@@ -106,12 +113,19 @@ struct MatterWorkspaceView: View {
             }
             Button { showEditor = true } label: { Label("Edit", systemImage: "pencil") }
                 .buttonStyle(.ghost)
-            Button(role: .destructive) { confirmingDelete = true } label: {
-                Label("Delete", systemImage: "trash")
+            Button(role: moveToRecycleBinPresentation.tone.buttonRole) {
+                confirmingDelete = true
+            } label: {
+                Label(moveToRecycleBinPresentation.actionTitle, systemImage: "trash")
             }
-            .buttonStyle(.ghostDanger)
+            .deletionButtonStyle(moveToRecycleBinPresentation.tone)
+            .accessibilityIdentifier("matter.moveToRecycleBin")
         }
         .padding()
+    }
+
+    private var moveToRecycleBinPresentation: DeletionActionPresentation {
+        .make(action: .moveToRecycleBin, target: .matter, displayName: matter.name)
     }
 
     private var matterSubtitle: String {
@@ -320,9 +334,9 @@ struct MatterWorkspaceView: View {
         case "document_ocr_failed": "Document OCR Failed"
         case "semantic_indexing_completed": "Semantic Indexing Completed"
         case "text_indexing_completed": "Text Indexing Completed"
-        case "folder_soft_deleted": "Folder Moved to Trash"
+        case "folder_soft_deleted": "Folder Moved to Recycle Bin"
         case "folder_restored": "Folder Restored"
-        case "document_soft_deleted": "Document Moved to Trash"
+        case "document_soft_deleted": "Document Moved to Recycle Bin"
         case "document_restored": "Document Restored"
         case "document_permanently_deleted": "Document Permanently Deleted"
         case "document_intelligence_setup_changed": "Document Intelligence Setup Changed"

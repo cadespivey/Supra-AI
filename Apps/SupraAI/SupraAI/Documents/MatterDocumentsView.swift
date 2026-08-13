@@ -207,7 +207,10 @@ struct MatterDocumentsView: View {
 
             Spacer()
 
-            SupraToolbarIconButton("Trash", systemImage: "trash", role: .destructive) {
+            SupraToolbarIconButton(
+                RecycleBinNavigationPresentation.standard.title,
+                systemImage: "trash"
+            ) {
                 showTrash = true
             }
         }
@@ -259,8 +262,14 @@ struct MatterDocumentsView: View {
                             } label: {
                                 Label("New Subfolder", systemImage: "folder.badge.plus")
                             }
-                            Button(role: .destructive) { controller.deleteFolder(id: item.folder.id) } label: {
-                                Label("Delete Folder", systemImage: "trash")
+                            let presentation = softDeletePresentation(
+                                target: .folder,
+                                displayName: item.folder.name
+                            )
+                            Button(role: presentation.tone.buttonRole) {
+                                controller.deleteFolder(id: item.folder.id)
+                            } label: {
+                                Label(presentation.actionTitle, systemImage: "trash")
                             }
                         }
                 }
@@ -452,14 +461,20 @@ struct MatterDocumentsView: View {
             }
             .menuStyle(.borderlessButton).fixedSize().help("Move to folder")
         }
-        Button(role: .destructive) {
+        let presentation = softDeletePresentation(
+            target: .document,
+            displayName: doc.displayName
+        )
+        Button(role: presentation.tone.buttonRole) {
             controller.softDelete(documentID: doc.id)
             checkedDocIDs.remove(doc.id)
             if selectedDocID == doc.id { selectedDocID = nil }
         } label: {
             Image(systemName: "trash")
         }
-        .buttonStyle(.ghostDanger).help("Move to trash")
+        .deletionButtonStyle(presentation.tone)
+        .help(presentation.actionTitle)
+        .accessibilityLabel(presentation.actionTitle)
     }
 
     private func toggleChecked(_ id: String) {
@@ -760,9 +775,16 @@ struct MatterDocumentsView: View {
     }
 
     private var trashSheet: some View {
-        SupraSheetScaffold("Trash", onClose: { showTrash = false }) {
+        SupraSheetScaffold(
+            RecycleBinNavigationPresentation.standard.title,
+            onClose: { showTrash = false }
+        ) {
             if controller.trashedDocuments.isEmpty && controller.trashedFolders.isEmpty {
-                ContentUnavailableView("Trash is Empty", systemImage: "trash", description: Text("Soft-deleted documents and folders appear here."))
+                ContentUnavailableView(
+                    "Recycle Bin is Empty",
+                    systemImage: "trash",
+                    description: Text("Restorable documents and folders appear here.")
+                )
                     .frame(minWidth: 460, minHeight: 240)
             } else {
                 List {
@@ -785,13 +807,17 @@ struct MatterDocumentsView: View {
                                 Spacer()
                                 Button("Restore") { controller.restore(documentID: doc.id) }
                                     .buttonStyle(.ghost)
-                                Button("Remove Source", role: .destructive) {
-                                    pendingPermanentDeletion = .document(
-                                        id: doc.id,
-                                        name: doc.displayName
-                                    )
+                                let target = PermanentDeletionTarget.document(
+                                    id: doc.id,
+                                    name: doc.displayName
+                                )
+                                Button(
+                                    target.presentation.actionTitle,
+                                    role: target.presentation.tone.buttonRole
+                                ) {
+                                    pendingPermanentDeletion = target
                                 }
-                                    .buttonStyle(.ghostDanger)
+                                    .deletionButtonStyle(target.presentation.tone)
                             }
                         }
                     }
@@ -804,6 +830,13 @@ struct MatterDocumentsView: View {
     private func performPermanentDeletion(_ target: PermanentDeletionTarget) {
         guard case let .document(id, _) = target else { return }
         controller.permanentlyDelete(documentID: id)
+    }
+
+    private func softDeletePresentation(
+        target: DeletionTargetKind,
+        displayName: String
+    ) -> DeletionActionPresentation {
+        .make(action: .moveToRecycleBin, target: target, displayName: displayName)
     }
 
     private func statusBadge(_ document: MatterDocumentRecord) -> some View {

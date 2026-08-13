@@ -415,7 +415,7 @@ public final class MatterDocumentsController: ObservableObject {
         try? store.documentLibrary.softDeleteFolder(id: id)
         _ = try? store.auditEvents.recordEvent(
             matterID: matterID, eventType: "folder_soft_deleted", actor: "user",
-            summary: "Moved a folder and its documents to trash",
+            summary: "Moved a folder and its documents to the Recycle Bin",
             relatedTable: "document_folders", relatedID: id
         )
         if selectedSidebarID == id { selectedSidebarID = Self.allDocumentsTag }
@@ -476,7 +476,7 @@ public final class MatterDocumentsController: ObservableObject {
         try? store.documentLibrary.softDeleteDocument(id: documentID)
         _ = try? store.auditEvents.recordEvent(
             matterID: matterID, eventType: "document_soft_deleted", actor: "user",
-            summary: "Moved a document to trash", relatedTable: "matter_documents", relatedID: documentID
+            summary: "Moved a document to the Recycle Bin", relatedTable: "matter_documents", relatedID: documentID
         )
         reload()
     }
