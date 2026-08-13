@@ -994,12 +994,14 @@ private struct DeterministicCorpusWorkload: Sendable {
         let storage = DocumentStorage(root: temporaryRoot.appendingPathComponent("recovery-blobs", isDirectory: true))
         let importer = DocumentImportService(store: store, storage: storage, ocr: nil)
         let embedder = DeterministicBagOfWordsEmbedder()
-        let queue = DocumentProcessingQueue(
-            store: store,
-            importService: importer,
-            makeIndexingService: { DocumentIndexingService(store: store, embedder: embedder) },
-            notifier: BenchmarkDocumentNotifier()
-        )
+        let makeRelaunchedQueue = {
+            DocumentProcessingQueue(
+                store: store,
+                importService: importer,
+                makeIndexingService: { DocumentIndexingService(store: store, embedder: embedder) },
+                notifier: BenchmarkDocumentNotifier()
+            )
+        }
         let matter = try store.matters.createMatter(name: "Synthetic recovery benchmark")
         let sourceRoot = temporaryRoot.appendingPathComponent("recovery-sources", isDirectory: true)
         try FileManager.default.createDirectory(at: sourceRoot, withIntermediateDirectories: true)
@@ -1050,9 +1052,10 @@ private struct DeterministicCorpusWorkload: Sendable {
         try store.documentJobs.updateBatchProgress(id: resumeBatch.id, discoveredCount: 2, importedCount: 1)
         let resumeJob = try store.documentJobs.enqueueJob(matterID: matter.id, importBatchID: resumeBatch.id)
         _ = try store.documentJobs.activateNextJobIfIdle()
-        queue.bootstrap()
-        queue.resume(jobID: resumeJob.id)
-        await queue.waitUntilIdle()
+        let resumeQueue = makeRelaunchedQueue()
+        resumeQueue.bootstrap()
+        resumeQueue.resume(jobID: resumeJob.id)
+        await resumeQueue.waitUntilIdle()
         let resumeSummary = try store.documentJobs.sourcesSummary(batchID: resumeBatch.id)
         let documentsAfterResume = try store.documentLibrary.fetchDocuments(matterID: matter.id)
         let resumedCopies = documentsAfterResume.filter { $0.displayName == resumableURL.lastPathComponent }.count
@@ -1080,9 +1083,10 @@ private struct DeterministicCorpusWorkload: Sendable {
         try store.documentJobs.updateBatchProgress(id: lostBatch.id, discoveredCount: 1)
         let lostJob = try store.documentJobs.enqueueJob(matterID: matter.id, importBatchID: lostBatch.id)
         _ = try store.documentJobs.activateNextJobIfIdle()
-        queue.bootstrap()
-        queue.resume(jobID: lostJob.id)
-        await queue.waitUntilIdle()
+        let lostQueue = makeRelaunchedQueue()
+        lostQueue.bootstrap()
+        lostQueue.resume(jobID: lostJob.id)
+        await lostQueue.waitUntilIdle()
         let lostAfter = try store.documentJobs.fetchSources(batchID: lostBatch.id).first { $0.id == lostSource.id }
         let lostSummary = try store.documentJobs.sourcesSummary(batchID: lostBatch.id)
         if lostAfter?.state == DocumentImportSourceState.failed.rawValue,
@@ -1110,8 +1114,9 @@ private struct DeterministicCorpusWorkload: Sendable {
         try store.documentJobs.updateBatchProgress(id: discardBatch.id, discoveredCount: 1)
         let discardJob = try store.documentJobs.enqueueJob(matterID: matter.id, importBatchID: discardBatch.id)
         _ = try store.documentJobs.activateNextJobIfIdle()
-        queue.bootstrap()
-        queue.discard(jobID: discardJob.id)
+        let discardQueue = makeRelaunchedQueue()
+        discardQueue.bootstrap()
+        discardQueue.discard(jobID: discardJob.id)
         let discardAfter = try store.documentJobs.fetchSources(batchID: discardBatch.id).first { $0.id == discardSource.id }
         let discardSummary = try store.documentJobs.sourcesSummary(batchID: discardBatch.id)
         if discardAfter?.state == DocumentImportSourceState.cancelled.rawValue,
