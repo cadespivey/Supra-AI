@@ -104,23 +104,23 @@ public struct ExhaustiveListMetrics: Codable, Equatable, Sendable {
 }
 
 /// Stable, public projection of the exact reconciliation payload persisted for an
-/// exhaustive-list run. Review Projects decode this envelope instead of inferring
-/// rows or evidence from rendered Markdown.
-public struct ExhaustiveListReviewSnapshot: Codable, Equatable, Sendable {
+/// exhaustive-list run. Consumers decode this envelope instead of inferring rows
+/// or evidence from rendered Markdown.
+public struct ExhaustiveListReconciliationSnapshot: Codable, Equatable, Sendable {
     public var schemaVersion: Int
     public var items: [ExhaustiveListItem]
     public var omissions: [ExhaustiveListOmission]
     public var metrics: ExhaustiveListMetrics
-    public var failedPartitions: [ExhaustiveListReviewFailedPartition]
-    public var excludedMembers: [ExhaustiveListReviewExcludedMember]
+    public var failedPartitions: [ExhaustiveListFailedPartition]
+    public var excludedMembers: [ExhaustiveListExcludedMember]
 
     public init(
         schemaVersion: Int = 1,
         items: [ExhaustiveListItem],
         omissions: [ExhaustiveListOmission],
         metrics: ExhaustiveListMetrics,
-        failedPartitions: [ExhaustiveListReviewFailedPartition],
-        excludedMembers: [ExhaustiveListReviewExcludedMember]
+        failedPartitions: [ExhaustiveListFailedPartition],
+        excludedMembers: [ExhaustiveListExcludedMember]
     ) {
         self.schemaVersion = schemaVersion
         self.items = items
@@ -140,7 +140,7 @@ public struct ExhaustiveListReviewSnapshot: Codable, Equatable, Sendable {
     }
 }
 
-public struct ExhaustiveListReviewFailedPartition: Codable, Equatable, Sendable {
+public struct ExhaustiveListFailedPartition: Codable, Equatable, Sendable {
     public var partitionKey: String
     public var documentNames: [String]
     public var reason: String
@@ -166,7 +166,7 @@ public struct ExhaustiveListReviewFailedPartition: Codable, Equatable, Sendable 
     }
 }
 
-public struct ExhaustiveListReviewExcludedMember: Codable, Equatable, Sendable {
+public struct ExhaustiveListExcludedMember: Codable, Equatable, Sendable {
     public var name: String
     public var reason: String
 
@@ -506,12 +506,12 @@ public final class ExhaustiveListTask: @unchecked Sendable {
         let excludedMembers = engineResult.snapshot.members
             .filter { $0.disposition == .excluded }
             .map {
-                ExhaustiveListReviewExcludedMember(
+                ExhaustiveListExcludedMember(
                     name: $0.displayName,
                     reason: $0.reason ?? "excluded"
                 )
             }
-        let reconciliationRecord = ExhaustiveListReviewSnapshot(
+        let reconciliationRecord = ExhaustiveListReconciliationSnapshot(
             items: reconciliation.items,
             omissions: reconciliation.omissions,
             metrics: reconciliation.metrics,
@@ -852,7 +852,7 @@ public final class ExhaustiveListTask: @unchecked Sendable {
     private func failedPartitionDisclosures(
         partitions: [CorpusAnalysisPartitionRecord],
         snapshot: CorpusAnalysisSnapshot
-    ) throws -> [ExhaustiveListReviewFailedPartition] {
+    ) throws -> [ExhaustiveListFailedPartition] {
         let nameByRevision = Dictionary(uniqueKeysWithValues: snapshot.members.flatMap { member in
             member.revisionIDs.map { ($0, member.displayName) }
         })
@@ -864,7 +864,7 @@ public final class ExhaustiveListTask: @unchecked Sendable {
                 from: Data(partition.inputRevisionIDsJSON.utf8)
             )
             let names = Array(Set(revisionIDs.compactMap { nameByRevision[$0] })).sorted()
-            return ExhaustiveListReviewFailedPartition(
+            return ExhaustiveListFailedPartition(
                 partitionKey: partition.partitionKey,
                 documentNames: names,
                 reason: partition.dispositionReason ?? "failed",
@@ -875,8 +875,8 @@ public final class ExhaustiveListTask: @unchecked Sendable {
 
     private static func coverageFailures(
         coverage: CorpusAnalysisCoverage,
-        disclosures: [ExhaustiveListReviewFailedPartition],
-        excludedMembers: [ExhaustiveListReviewExcludedMember]
+        disclosures: [ExhaustiveListFailedPartition],
+        excludedMembers: [ExhaustiveListExcludedMember]
     ) -> [String] {
         var failures = disclosures.map { disclosure in
             let name = disclosure.documentNames.isEmpty
@@ -894,8 +894,8 @@ public final class ExhaustiveListTask: @unchecked Sendable {
 
     private static func listFailures(
         reconciliation: ExhaustiveListReconciliation,
-        disclosures: [ExhaustiveListReviewFailedPartition],
-        excludedMembers: [ExhaustiveListReviewExcludedMember]
+        disclosures: [ExhaustiveListFailedPartition],
+        excludedMembers: [ExhaustiveListExcludedMember]
     ) -> [String] {
         var failures = reconciliation.omissions.map {
             "Omitted evaluation item \($0.itemKey): \($0.reason)."
@@ -1094,7 +1094,7 @@ public final class ExhaustiveListTask: @unchecked Sendable {
         title: String,
         assuranceState: OutputAssuranceState,
         coverage: CorpusAnalysisCoverage,
-        reconciliation: ExhaustiveListReviewSnapshot,
+        reconciliation: ExhaustiveListReconciliationSnapshot,
         labels: [CorpusAnalysisEvidenceReference: String]
     ) -> String {
         var lines = [

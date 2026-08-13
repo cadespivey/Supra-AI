@@ -772,18 +772,13 @@ public final class DocumentLibraryRepository: @unchecked Sendable {
                 )
             }
 
-            // Review evidence retains its frozen source snapshot, but every
-            // live preview pointer and dependent support projection must be
-            // degraded before document/revision FK actions set live IDs null.
-            let impactedReviewProjectIDs = try CaseFileReviewRepository
-                .degradeForPermanentSourceDeletion(
-                    matterID: root.matterID,
-                    documentIDs: subtreeIDs,
-                    revisionIDs: revisionIDs.sorted(),
-                    actor: normalizedActor,
-                    at: timestamp,
-                    db: db
-                )
+            try Self.degradeDormantV073EvidenceForPermanentSourceDeletion(
+                matterID: root.matterID,
+                documentIDs: subtreeIDs,
+                revisionIDs: revisionIDs.sorted(),
+                at: timestamp,
+                db: db
+            )
 
             // Capture blob ids and clear the standalone FTS5 index (no FK cascade)
             // for every document in the subtree BEFORE deleting any rows, so a FK
@@ -822,7 +817,6 @@ public final class DocumentLibraryRepository: @unchecked Sendable {
                 "removed_document_ids": subtreeIDs.sorted(),
                 "invalidated_output_version_ids": impactedVersions,
                 "invalidated_corpus_run_ids": impactedRuns,
-                "invalidated_case_file_review_project_ids": impactedReviewProjectIDs,
             ])
             try AuditEventRecord(
                 matterID: root.matterID,
@@ -840,6 +834,92 @@ public final class DocumentLibraryRepository: @unchecked Sendable {
             )
         }
     }
+
+    // BEGIN hash-pinned dormant v073 evidence compatibility.
+    /// Keeps ordinary permanent document deletion usable for a database that
+    /// already contains v073 rows. This private transaction-local shim exposes
+    /// no retired repository/API and changes only the mutable availability and
+    /// staleness projections required by v073's immutable trigger contract.
+    private static func degradeDormantV073EvidenceForPermanentSourceDeletion(
+        matterID: String,
+        documentIDs: [String],
+        revisionIDs: [String],
+        at timestamp: Date,
+        db: Database
+    ) throws {
+        guard !documentIDs.isEmpty,
+              try db.tableExists("case_file_review_evidence_edges") else {
+            return
+        }
+        var predicates = [
+            "edge.live_document_id IN (\(databaseQuestionMarks(count: documentIDs.count)))",
+        ]
+        var arguments: [DatabaseValueConvertible] = documentIDs
+        if !revisionIDs.isEmpty {
+            predicates.append(
+                "edge.live_revision_id IN (\(databaseQuestionMarks(count: revisionIDs.count)))"
+            )
+            arguments.append(contentsOf: revisionIDs)
+        }
+        let impacted = try Row.fetchAll(
+            db,
+            sql: """
+                SELECT DISTINCT edge.id AS edge_id, cell.id AS cell_id,
+                                project.id AS project_id
+                FROM case_file_review_evidence_edges AS edge
+                JOIN case_file_review_cell_generations AS generation
+                  ON generation.id = edge.generation_id
+                JOIN case_file_review_cells AS cell ON cell.id = generation.cell_id
+                JOIN case_file_review_tables AS review_table ON review_table.id = cell.table_id
+                JOIN case_file_review_projects AS project ON project.id = review_table.project_id
+                WHERE project.matter_id = ? AND (\(predicates.joined(separator: " OR ")))
+                ORDER BY project.id, cell.id, edge.id
+                """,
+            arguments: StatementArguments([matterID] + arguments)
+        )
+        guard !impacted.isEmpty else { return }
+
+        let edgeIDs = Array(Set(impacted.map { $0["edge_id"] as String })).sorted()
+        let cellIDs = Array(Set(impacted.map { $0["cell_id"] as String })).sorted()
+        let projectIDs = Array(Set(impacted.map { $0["project_id"] as String })).sorted()
+        let reason = "source_permanently_deleted"
+
+        var edgeArguments: [DatabaseValueConvertible] = [reason, timestamp]
+        edgeArguments.append(contentsOf: edgeIDs)
+        try db.execute(
+            sql: """
+                UPDATE case_file_review_evidence_edges
+                SET availability = 'unavailable', unavailable_reason = ?,
+                    live_output_source_id = NULL, live_document_id = NULL,
+                    live_revision_id = NULL, updated_at = ?
+                WHERE id IN (\(databaseQuestionMarks(count: edgeIDs.count)))
+                """,
+            arguments: StatementArguments(edgeArguments)
+        )
+
+        var cellArguments: [DatabaseValueConvertible] = [timestamp]
+        cellArguments.append(contentsOf: cellIDs)
+        try db.execute(
+            sql: """
+                UPDATE case_file_review_cells
+                SET support_state = 'stale', updated_at = ?
+                WHERE id IN (\(databaseQuestionMarks(count: cellIDs.count)))
+                """,
+            arguments: StatementArguments(cellArguments)
+        )
+
+        var projectArguments: [DatabaseValueConvertible] = [reason, timestamp]
+        projectArguments.append(contentsOf: projectIDs)
+        try db.execute(
+            sql: """
+                UPDATE case_file_review_projects
+                SET status = 'stale', stale_reason = ?, updated_at = ?
+                WHERE id IN (\(databaseQuestionMarks(count: projectIDs.count)))
+                """,
+            arguments: StatementArguments(projectArguments)
+        )
+    }
+    // END hash-pinned dormant v073 evidence compatibility.
 
     // MARK: - Tags
 

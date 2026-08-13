@@ -37,64 +37,6 @@ public enum ContentBoundModelLoadError: Error, LocalizedError, Equatable, Sendab
     }
 }
 
-public enum CorpusAnalysisModelPinError: Error, LocalizedError, Equatable, Sendable {
-    case cancelled
-    case modelRegistryUnavailable
-    case modelUnavailable(String)
-    case modelNotManaged(String)
-    case verificationFailed(String)
-
-    public var errorDescription: String? {
-        switch self {
-        case .cancelled:
-            "Model verification was cancelled."
-        case .modelRegistryUnavailable:
-            "The registered model library could not be read."
-        case .modelUnavailable:
-            "The selected local model is no longer registered."
-        case .modelNotManaged:
-            "Review creation requires a model downloaded and managed by Supra AI."
-        case .verificationFailed:
-            "The selected app-managed model did not pass fresh content verification."
-        }
-    }
-}
-
-/// Executes the expensive exact-tree and byte inspection used to create a
-/// durable corpus-analysis pin. The executor is deliberately independent of
-/// runtime loading and runs outside the MainActor.
-struct ManagedModelPinningExecutor: Sendable {
-    typealias Inspect = @Sendable (URL, URL) throws -> RuntimeModelContentBinding
-
-    let inspect: Inspect
-
-    static let live = ManagedModelPinningExecutor { modelDirectory, managedRoot in
-        try SignedReleaseModelAuthorization.inspectContentBinding(
-            modelDirectory: modelDirectory,
-            managedRoot: managedRoot
-        )
-    }
-
-    func run(
-        modelDirectory: URL,
-        managedRoot: URL
-    ) async throws -> RuntimeModelContentBinding {
-        try Task.checkCancellation()
-        let inspect = inspect
-        let worker = Task.detached(priority: .userInitiated) {
-            try Task.checkCancellation()
-            let binding = try inspect(modelDirectory, managedRoot)
-            try Task.checkCancellation()
-            return binding
-        }
-        return try await withTaskCancellationHandler {
-            try await worker.value
-        } onCancel: {
-            worker.cancel()
-        }
-    }
-}
-
 struct ContentBoundAuthorizationExecutor: Sendable {
     struct PreparedLoad: @unchecked Sendable {
         var authorization: SignedReleaseModelAuthorization
@@ -174,22 +116,15 @@ public final class ModelLibrary: ObservableObject {
     /// lifetime. Tests and doubly gated app fixtures may inject an exact profile.
     public let hardwareProfile: MacHardwareProfile
     static let forcedChatModelSettingsKey = "chat.forced_model_id"
-    private static let runtimeReservedMessage = "Case File Review is using the local runtime. Try this model change after the Review pauses or finishes."
-
     private let store: SupraStore
     private let runtimeClient: any RuntimeClientProtocol
     private let managedModelRoots: [URL]
     private let authorizationExecutor: ContentBoundAuthorizationExecutor
-    private let modelPinningExecutor: ManagedModelPinningExecutor
     private var hasPersistedRoleAssignments: Bool
     /// Whether the runtime is mid-generation. Speculative pre-warms consult this so
     /// they never evict the model out from under an in-flight generation; wired by the
     /// app to the runtime status (defaults to "not generating" for tests/headless).
     public var isRuntimeGenerating: () -> Bool = { false }
-    /// True while process-wide admission is waiting for, owned by, or recovering
-    /// from exclusive Review work. Speculative and manual model mutation must not
-    /// race that owner even when the XPC service is idle between partitions.
-    public var isRuntimeReserved: () -> Bool = { false }
 
     public convenience init(
         store: SupraStore,
@@ -211,14 +146,12 @@ public final class ModelLibrary: ObservableObject {
         runtimeClient: any RuntimeClientProtocol,
         managedModelRoots: [URL],
         authorizationExecutor: ContentBoundAuthorizationExecutor,
-        modelPinningExecutor: ManagedModelPinningExecutor = .live,
         hardwareProfile: MacHardwareProfile? = nil
     ) {
         self.store = store
         self.runtimeClient = runtimeClient
         self.managedModelRoots = managedModelRoots
         self.authorizationExecutor = authorizationExecutor
-        self.modelPinningExecutor = modelPinningExecutor
         self.hardwareProfile = hardwareProfile ?? MacHardwareProfileProbe.current(
             modelsDirectory: managedModelRoots.first ?? ManagedModelStorage.modelsDirectory()
         )
@@ -369,7 +302,6 @@ public final class ModelLibrary: ObservableObject {
     public func prewarmChatModel(configuration: LegalModelConfiguration = .fromEnvironment()) {
         if case .loading = loadState { return }
         if isRuntimeGenerating() { return }
-        if isRuntimeReserved() { return }
         Task { _ = await ensureLoadedChatModelID(for: .legalReasoning, configuration: configuration) }
     }
 
@@ -380,7 +312,6 @@ public final class ModelLibrary: ObservableObject {
     public func prewarm(role: ModelRole, configuration: LegalModelConfiguration = .fromEnvironment()) {
         if case .loading = loadState { return }
         if isRuntimeGenerating() { return }
-        if isRuntimeReserved() { return }
         Task { _ = await ensureLoadedRoutedModelID(for: role, configuration: configuration) }
     }
 
@@ -502,35 +433,8 @@ public final class ModelLibrary: ObservableObject {
 
     /// Reloads the registered models from the store.
     public func refresh() {
-        models = (try? store.models.fetchModels())?.map { record in
-            ModelSummary(
-                record: record,
-                managedRepositoryID: managedRepositoryID(for: record)
-            )
-        } ?? []
+        models = (try? store.models.fetchModels())?.map(ModelSummary.init(record:)) ?? []
         bootstrapRoleAssignmentsIfNeeded(configuration: .fromEnvironment())
-    }
-
-    /// Reads only validated manifest structure for managed-model fit metadata.
-    /// Exact tree and byte verification remains the later pinning/load boundary.
-    private func managedRepositoryID(for record: ModelRecord) -> String? {
-        guard record.bookmarkData == nil else { return nil }
-        let directory = URL(fileURLWithPath: record.path, isDirectory: true)
-            .standardizedFileURL
-            .resolvingSymlinksInPath()
-        guard managedModelRoots.contains(where: { root in
-            let standardizedRoot = root.standardizedFileURL.resolvingSymlinksInPath()
-            return directory.path != standardizedRoot.path
-                && ManagedModelStorage.isManaged(
-                    path: directory.path,
-                    roots: [standardizedRoot]
-                )
-        }) else {
-            return nil
-        }
-        return try? ManagedModelStorage.readManifest(
-            at: ManagedModelStorage.manifestURL(in: directory)
-        ).repositoryID
     }
 
     /// Reconciles the published load state with a model the runtime already holds
@@ -574,9 +478,6 @@ public final class ModelLibrary: ObservableObject {
     /// assignments pointing at it are cleared so no "Missing model" ghost remains.
     @discardableResult
     public func deleteModel(modelID: String) async -> DeleteModelResult {
-        guard !isRuntimeReserved() else {
-            return .blocked(message: Self.runtimeReservedMessage)
-        }
         if case let .loading(id) = loadState, id == modelID {
             return .blocked(message: "This model is still loading. Wait for it to finish before deleting it.")
         }
@@ -669,70 +570,6 @@ public final class ModelLibrary: ObservableObject {
         // footer) stop reporting a model the runtime does not hold.
         if case .loaded = loadState { loadState = .idle }
         return false
-    }
-
-    /// Creates a fresh, durable pin for exactly the registered app-managed model
-    /// selected by the caller. This path never resolves a role, falls back to a
-    /// preferred model, or contacts the runtime. Every call re-inspects the
-    /// manifest, exclusive tree, and declared artifact bytes off the MainActor.
-    public func makeCorpusAnalysisPinnedModel(
-        modelID: ModelID
-    ) async throws -> CorpusAnalysisPinnedModel {
-        guard !Task.isCancelled else {
-            throw CorpusAnalysisModelPinError.cancelled
-        }
-
-        let registeredID = modelID.rawValue.uuidString
-        let record: ModelRecord
-        do {
-            guard let registered = try store.models.fetchModel(id: registeredID) else {
-                throw CorpusAnalysisModelPinError.modelUnavailable(registeredID)
-            }
-            record = registered
-        } catch let error as CorpusAnalysisModelPinError {
-            throw error
-        } catch {
-            throw CorpusAnalysisModelPinError.modelRegistryUnavailable
-        }
-
-        let modelDirectory = URL(
-            fileURLWithPath: record.path,
-            isDirectory: true
-        ).standardizedFileURL
-        guard record.bookmarkData == nil,
-              let managedRoot = managedModelRoots.first(where: { root in
-                  let standardizedRoot = root.standardizedFileURL
-                  return modelDirectory.path != standardizedRoot.path
-                      && ManagedModelStorage.isManaged(
-                          path: modelDirectory.path,
-                          roots: [standardizedRoot]
-                      )
-              }) else {
-            throw CorpusAnalysisModelPinError.modelNotManaged(registeredID)
-        }
-
-        do {
-            let binding = try await modelPinningExecutor.run(
-                modelDirectory: modelDirectory,
-                managedRoot: managedRoot.standardizedFileURL
-            )
-            try Task.checkCancellation()
-            let pinnedModel = CorpusAnalysisPinnedModel(
-                modelRepository: binding.repositoryID,
-                modelRevision: binding.revision,
-                contentBindingAlgorithm: binding.algorithm,
-                contentBindingSchemaVersion: binding.schemaVersion,
-                artifactFingerprintSHA256: binding.fingerprintSHA256
-            )
-            try pinnedModel.validate()
-            return pinnedModel
-        } catch is CancellationError {
-            throw CorpusAnalysisModelPinError.cancelled
-        } catch let error as CorpusAnalysisModelPinError {
-            throw error
-        } catch {
-            throw CorpusAnalysisModelPinError.verificationFailed(registeredID)
-        }
     }
 
     /// Loads the one app-managed model whose manifest identity and independently
@@ -895,10 +732,6 @@ public final class ModelLibrary: ObservableObject {
     /// Marks the given model active in the store and loads it into the runtime service.
     public func activateAndLoad(modelID modelIDString: String) async {
         guard !Task.isCancelled else { return }
-        guard !isRuntimeReserved() else {
-            loadState = .failed(message: Self.runtimeReservedMessage)
-            return
-        }
         // Ignore overlapping loads so concurrent taps cannot leave the published
         // load state and the runtime out of sync.
         if case .loading = loadState { return }

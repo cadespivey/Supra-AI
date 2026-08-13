@@ -196,8 +196,6 @@ public final class MattersController: ObservableObject {
     @Published public private(set) var researchController: ResearchSessionController?
     @Published public private(set) var authoritiesController: AuthoritiesController?
     @Published public private(set) var outputsController: StructuredOutputController?
-    @Published public private(set) var caseFileReviewController: CaseFileReviewController?
-    @Published public private(set) var caseFileReviewCreationController: CaseFileReviewCreationController?
     @Published public private(set) var documentsController: MatterDocumentsController?
     @Published public private(set) var documentQAController: DocumentQAController?
     @Published public private(set) var documentChronologyController: DocumentChronologyController?
@@ -208,9 +206,6 @@ public final class MattersController: ObservableObject {
     private let runtimeClient: any RuntimeClientProtocol
     private let defaultSystemPrompt: String?
     private let documentQueue: DocumentProcessingQueue?
-    private let caseFileReviewExportService: CaseFileReviewExportService?
-    private let submitCorpusAnalysis: CaseFileReviewCreationController.SubmitCorpusAnalysis?
-    private let makeCorpusAnalysisPinnedModel: CaseFileReviewCreationController.ManagedModelPinProvider?
     private let isImportReady: (@MainActor () -> Bool)?
     private let defaults: UserDefaults
     private let draftingStorage: DocumentStorage?
@@ -223,9 +218,6 @@ public final class MattersController: ObservableObject {
         runtimeClient: any RuntimeClientProtocol,
         defaultSystemPrompt: String? = nil,
         documentQueue: DocumentProcessingQueue? = nil,
-        caseFileReviewExportService: CaseFileReviewExportService? = nil,
-        submitCorpusAnalysis: CaseFileReviewCreationController.SubmitCorpusAnalysis? = nil,
-        makeCorpusAnalysisPinnedModel: CaseFileReviewCreationController.ManagedModelPinProvider? = nil,
         isImportReady: (@MainActor () -> Bool)? = nil,
         draftingStorage: DocumentStorage? = nil,
         beforeMotionPersistence: MatterDraftingController.AsyncDraftCheckpoint? = nil,
@@ -235,9 +227,6 @@ public final class MattersController: ObservableObject {
         self.runtimeClient = runtimeClient
         self.defaultSystemPrompt = defaultSystemPrompt
         self.documentQueue = documentQueue
-        self.caseFileReviewExportService = caseFileReviewExportService
-        self.submitCorpusAnalysis = submitCorpusAnalysis
-        self.makeCorpusAnalysisPinnedModel = makeCorpusAnalysisPinnedModel
         self.isImportReady = isImportReady
         self.draftingStorage = draftingStorage
         self.beforeMotionPersistence = beforeMotionPersistence
@@ -395,8 +384,6 @@ public final class MattersController: ObservableObject {
             researchController = nil
             authoritiesController = nil
             outputsController = nil
-            caseFileReviewController = nil
-            caseFileReviewCreationController = nil
             documentsController = nil
             documentQAController = nil
             documentChronologyController = nil
@@ -451,39 +438,6 @@ public final class MattersController: ObservableObject {
         )
         outputs.loadOutputs()
         outputsController = outputs
-
-        let caseFileReview = CaseFileReviewController(
-            matterID: matterID,
-            store: store,
-            exportService: caseFileReviewExportService
-        )
-        caseFileReview.load()
-        caseFileReviewController = caseFileReview
-
-        if let submitCorpusAnalysis {
-            let creation = CaseFileReviewCreationController(
-                matterID: matterID,
-                store: store,
-                makeCorpusAnalysisPinnedModel: makeCorpusAnalysisPinnedModel,
-                submitCorpusAnalysis: submitCorpusAnalysis,
-                pauseCorpusAnalysis: { [weak queue = documentQueue] jobID in
-                    queue?.pause(jobID: jobID)
-                },
-                resumeCorpusAnalysis: { [weak queue = documentQueue] jobID in
-                    queue?.resume(jobID: jobID)
-                },
-                cancelCorpusAnalysis: { [weak queue = documentQueue] jobID in
-                    queue?.cancel(jobID: jobID) ?? false
-                },
-                pausingCorpusJobID: { [weak queue = documentQueue] in
-                    queue?.pausingCorpusJobID
-                }
-            )
-            creation.load()
-            caseFileReviewCreationController = creation
-        } else {
-            caseFileReviewCreationController = nil
-        }
 
         if let documentQueue {
             documentsController = MatterDocumentsController(

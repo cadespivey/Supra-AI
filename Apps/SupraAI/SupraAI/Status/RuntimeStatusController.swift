@@ -8,33 +8,36 @@ final class RuntimeStatusController: ObservableObject {
     @Published private(set) var serviceState: RuntimeServiceState = .disconnected
     @Published private(set) var loadedModelID: ModelID?
     @Published private(set) var statusMessage = "Checking runtime"
-    @Published private(set) var admissionSnapshot: RuntimeAdmissionSnapshot = .available
+    @Published private(set) var recoverySnapshot: RuntimeRecoverySnapshot = .available
 
-    private let runtimeClient: any RuntimeClientProtocol
-    private var admissionObservationTask: Task<Void, Never>?
+    private let runtimeClient: RuntimeSafetyClient
 
-    init(runtimeClient: any RuntimeClientProtocol) {
+    init(runtimeClient: RuntimeSafetyClient) {
         self.runtimeClient = runtimeClient
-        guard let exclusiveClient = runtimeClient as? ExclusiveRuntimeClient else { return }
-        admissionObservationTask = Task { [weak self] in
-            for await snapshot in exclusiveClient.admissionSnapshots() {
-                guard !Task.isCancelled else { return }
-                self?.admissionSnapshot = snapshot
-            }
-        }
-    }
-
-    deinit {
-        admissionObservationTask?.cancel()
     }
 
     func refresh() async {
+        recoverySnapshot = runtimeClient.currentRecoverySnapshot()
         do {
             let status = try await runtimeClient.runtimeStatus()
             apply(status)
         } catch {
             serviceState = .disconnected
             loadedModelID = nil
+            statusMessage = error.localizedDescription
+        }
+    }
+
+    func recoverRuntime() async {
+        recoverySnapshot = RuntimeRecoverySnapshot(
+            phase: .recovering,
+            message: recoverySnapshot.message
+        )
+        do {
+            try await runtimeClient.recoverRuntime()
+            await refresh()
+        } catch {
+            recoverySnapshot = runtimeClient.currentRecoverySnapshot()
             statusMessage = error.localizedDescription
         }
     }

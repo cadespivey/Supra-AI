@@ -50,6 +50,10 @@ make_shipping_fixture() {
     'enum ChatSuggestions {' \
     '    static let retained = (title: "Review a Draft", prompt: "Review this draft.")' \
     '}'
+  write_file "${fixture_root}/Packages/SupraSessions/Sources/SupraSessions/DocumentProcessingQueue.swift" \
+    'enum RetiredCorpusAnalysisPolicy {' \
+    '    static let identityPrefix = "guided-review:"' \
+    '}'
   write_file "${fixture_root}/Packages/SupraSessions/Sources/SupraSessions/DocumentRelationReviewController.swift" \
     'public final class DocumentRelationReviewController {}'
   write_file "${fixture_root}/Packages/SupraSessions/Sources/SupraSessions/MatterDraftingController.swift" \
@@ -58,6 +62,10 @@ make_shipping_fixture() {
     '}'
   write_file "${fixture_root}/Packages/SupraStore/Sources/SupraStore/Records/AuthorityReviewedProposition.swift" \
     'public struct AuthorityReviewedProposition {}'
+  mkdir -p "${fixture_root}/Packages/SupraStore/Sources/SupraStore/Repositories"
+  cp \
+    "${repo_root}/Packages/SupraStore/Sources/SupraStore/Repositories/DocumentLibraryRepository.swift" \
+    "${fixture_root}/Packages/SupraStore/Sources/SupraStore/Repositories/DocumentLibraryRepository.swift"
   write_file "${fixture_root}/Packages/SupraCore/Sources/SupraCore/LegalDomainTypes.swift" \
     'public enum ResearchResultReviewState: String {' \
     '    case unreviewed' \
@@ -81,6 +89,9 @@ make_shipping_fixture() {
     'xcodebuild -only-testing:SupraAIUITests/ResearchAuthoritiesUITests/testReviewedProposition'
   write_file "${fixture_root}/Docs/Verified-Product-Claims.yml" \
     'claims:' \
+    '  - id: "STORE-MIGRATION-SEQUENCE"' \
+    '    topic: "migration-count"' \
+    '    expected: "v073_create_case_file_review_projects"' \
     '  - id: "RETAINED-ATTORNEY-REVIEW"' \
     '    wording: "Research results and reviewed authorities remain available for attorney review."'
   write_file "${fixture_root}/ARCHITECTURE.md" \
@@ -100,6 +111,21 @@ make_shipping_fixture "$base_fixture"
 if ! grep -Fq 'case_file_review_projects' \
     "${base_fixture}/Packages/SupraStore/Sources/SupraStore/Database/SupraMigrator.swift"; then
   printf '%s\n' 'FAIL: migration fixture does not exercise the compatibility allowlist' >&2
+  failures=$((failures + 1))
+fi
+if ! grep -Fq 'static let identityPrefix = "guided-review:"' \
+    "${base_fixture}/Packages/SupraSessions/Sources/SupraSessions/DocumentProcessingQueue.swift"; then
+  printf '%s\n' 'FAIL: fixture does not exercise the exact retired-queue discriminator allowlist' >&2
+  failures=$((failures + 1))
+fi
+if ! grep -Fq 'expected: "v073_create_case_file_review_projects"' \
+    "${base_fixture}/Docs/Verified-Product-Claims.yml"; then
+  printf '%s\n' 'FAIL: fixture does not exercise the dormant v073 claim endpoint allowlist' >&2
+  failures=$((failures + 1))
+fi
+if ! grep -Fq 'BEGIN hash-pinned dormant v073 evidence compatibility' \
+    "${base_fixture}/Packages/SupraStore/Sources/SupraStore/Repositories/DocumentLibraryRepository.swift"; then
+  printf '%s\n' 'FAIL: fixture does not exercise dormant v073 deletion compatibility' >&2
   failures=$((failures + 1))
 fi
 run_case \
@@ -144,6 +170,51 @@ run_case \
   1 \
   'retired capability remains [case_file_review storage identifier]' \
   env SUPRA_REPO_ROOT="$stale_migrator_fixture" bash "$verifier"
+
+# The dormant deletion exception is also one hash-pinned body, not a
+# repository-file exemption. A second storage use outside the markers fails.
+stale_deletion_compatibility_fixture="${temporary_dir}/stale-deletion-compatibility"
+mkdir -p "$stale_deletion_compatibility_fixture"
+cp -R "${base_fixture}/." "$stale_deletion_compatibility_fixture"
+printf '%s\n' \
+  'extension DocumentLibraryRepository { static let staleBackdoor = "case_file_review_backdoor" }' \
+  >>"${stale_deletion_compatibility_fixture}/Packages/SupraStore/Sources/SupraStore/Repositories/DocumentLibraryRepository.swift"
+run_case \
+  'retired capability outside dormant deletion compatibility fails closed' \
+  1 \
+  'retired capability remains [case_file_review storage identifier]' \
+  env SUPRA_REPO_ROOT="$stale_deletion_compatibility_fixture" bash "$verifier"
+
+# The durable queue discriminator exception is one exact line in one exact
+# policy. A second shipping use of the same persisted prefix remains stale.
+stale_queue_identity_fixture="${temporary_dir}/stale-queue-identity"
+mkdir -p "$stale_queue_identity_fixture"
+cp -R "${base_fixture}/." "$stale_queue_identity_fixture"
+write_file \
+  "${stale_queue_identity_fixture}/Packages/SupraSessions/Sources/SupraSessions/LegacyQueueEntryPoint.swift" \
+  'enum LegacyQueueEntryPoint {' \
+  '    static let identityPrefix = "guided-review:"' \
+  '}'
+run_case \
+  'guided-review identity outside the exact compatibility policy fails closed' \
+  1 \
+  'retired capability remains [guided-review job identity]' \
+  env SUPRA_REPO_ROOT="$stale_queue_identity_fixture" bash "$verifier"
+
+# The migration endpoint is allowlisted only as STORE-MIGRATION-SEQUENCE's
+# exact expected value. A duplicate endpoint under another claim fails closed.
+stale_claim_endpoint_fixture="${temporary_dir}/stale-claim-endpoint"
+mkdir -p "$stale_claim_endpoint_fixture"
+cp -R "${base_fixture}/." "$stale_claim_endpoint_fixture"
+printf '%s\n' \
+  '  - id: "STALE-REVIEW-CLAIM"' \
+  '    expected: "v073_create_case_file_review_projects"' \
+  >>"${stale_claim_endpoint_fixture}/Docs/Verified-Product-Claims.yml"
+run_case \
+  'dormant v073 endpoint outside the exact migration-sequence claim fails closed' \
+  1 \
+  'exact dormant v073 claim endpoint is missing, duplicated, or outside STORE-MIGRATION-SEQUENCE' \
+  env SUPRA_REPO_ROOT="$stale_claim_endpoint_fixture" bash "$verifier"
 
 # T-REVIEW-TERMS-01 expected RED for the missing fixture: retirement cannot
 # silently erase Chat's ordinary draft-review affordance.

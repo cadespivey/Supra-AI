@@ -2,8 +2,8 @@ import Foundation
 import GRDB
 import SupraCore
 
-/// An app-managed export artifact. Structured Output identifiers are nil for
-/// artifacts, such as Review snapshots, that own a separate eligibility path.
+/// An app-managed export artifact. Structured Output identifiers can be nil for
+/// compatibility artifacts that historically owned a separate eligibility path.
 public struct DocumentExportRecord: Codable, FetchableRecord, PersistableRecord, Sendable, Identifiable {
     public static let databaseTableName = "document_exports"
 

@@ -10,7 +10,7 @@ import XCTest
 /// Compile-contract REDs are isolated here so queue execution can stay focused
 /// on FIFO, cancellation, and relaunch behavior.
 @MainActor
-final class CorpusReviewQueueContractTests: XCTestCase {
+final class CorpusAnalysisQueueContractTests: XCTestCase {
     func testTQUEUE01V2PayloadRoundTripPreservesVersionedTaskAndContentBoundModel() throws {
         // T-QUEUE-01 expected RED: the durable payload contains only run_id;
         // the reconstructible request, explicit task/prompt versions, canonical
@@ -573,7 +573,7 @@ final class CorpusReviewQueueContractTests: XCTestCase {
 
     private func makeStore(testName: String) throws -> SupraStore {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
-            "CorpusReviewQueueContract-\(testName)-\(UUID().uuidString)",
+            "CorpusAnalysisQueueContract-\(testName)-\(UUID().uuidString)",
             isDirectory: true
         )
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -586,7 +586,7 @@ final class CorpusReviewQueueContractTests: XCTestCase {
     ) -> DocumentProcessingQueue {
         let storage = DocumentStorage(
             root: FileManager.default.temporaryDirectory.appendingPathComponent(
-                "CorpusReviewQueueContractStorage-\(UUID().uuidString)",
+                "CorpusAnalysisQueueContractStorage-\(UUID().uuidString)",
                 isDirectory: true
             )
         )

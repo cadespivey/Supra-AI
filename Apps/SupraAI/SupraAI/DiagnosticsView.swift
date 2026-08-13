@@ -1,4 +1,5 @@
 import SupraCore
+import SupraRuntimeClient
 import SupraRuntimeInterface
 import SupraSessions
 import SupraStore
@@ -39,8 +40,28 @@ struct DiagnosticsView: View {
                     "Registered models",
                     value: "\(environment.modelLibrary.models.count)"
                 )
+
+                if environment.runtimeRecoverySnapshot.phase != .available {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Local runtime recovery required")
+                            .font(.supraBody.weight(.semibold))
+                        if let message = environment.runtimeRecoverySnapshot.message {
+                            Text(message)
+                                .font(.supraCaption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Button("Recover Local Runtime") {
+                            Task { await environment.recoverRuntime() }
+                        }
+                        .disabled(environment.runtimeRecoverySnapshot.phase == .recovering)
+                        .accessibilityIdentifier("runtime.recovery.action")
+                    }
+                    .accessibilityIdentifier("runtime.recovery.required")
+                }
             } header: {
                 Text("Runtime").font(.supraHeadline).textCase(nil).foregroundStyle(.primary)
+            } footer: {
+                Text("Recovery waits for admitted work, restarts the local runtime connection, and confirms it is idle before new model work can begin.")
             }
 
             if !timings.isEmpty {
@@ -276,7 +297,13 @@ struct DiagnosticsView: View {
     }
 
     private var nextStep: String {
-        switch environment.runtimeServiceState {
+        if environment.runtimeRecoverySnapshot.phase == .recoveryRequired {
+            return "Use Recover Local Runtime above before starting another model-backed task."
+        }
+        if environment.runtimeRecoverySnapshot.phase == .recovering {
+            return "Local runtime recovery is in progress."
+        }
+        return switch environment.runtimeServiceState {
         case .modelUnloaded, .connected:
             "Load or assign a model from the Models tab before running model-backed tasks."
         case .disconnected:

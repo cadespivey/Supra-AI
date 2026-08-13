@@ -54,7 +54,6 @@ public final class CorpusAnalysisQueueRunner: @unchecked Sendable {
     private let exhaustiveListGenerator: ExhaustiveListTask.Generator
     private let generationConfiguration: ExhaustiveListGenerationConfiguration?
     private let progressHandler: ProgressHandler
-    private let exclusiveRuntimeClient: ExclusiveRuntimeClient?
     private let pauseRequests = CorpusAnalysisPauseRequests()
 
     public init(
@@ -62,45 +61,19 @@ public final class CorpusAnalysisQueueRunner: @unchecked Sendable {
         resolvePinnedModel: @escaping PinnedModelResolver,
         exhaustiveListGenerator: @escaping ExhaustiveListTask.Generator,
         generationConfiguration: ExhaustiveListGenerationConfiguration? = nil,
-        progressHandler: @escaping ProgressHandler = { _, _ in },
-        exclusiveRuntimeClient: ExclusiveRuntimeClient? = nil
+        progressHandler: @escaping ProgressHandler = { _, _ in }
     ) {
         self.store = store
         self.resolvePinnedModel = resolvePinnedModel
         self.exhaustiveListGenerator = exhaustiveListGenerator
         self.generationConfiguration = generationConfiguration
         self.progressHandler = progressHandler
-        self.exclusiveRuntimeClient = exclusiveRuntimeClient
     }
 
     public func run(_ payload: CorpusAnalysisJobPayload) async throws {
         let request = try validatePreparedRequest(payload)
         defer { pauseRequests.clear(runID: payload.runID) }
-        if let exclusiveRuntimeClient {
-            try await exclusiveRuntimeClient.withExclusiveLease(
-                purpose: .caseFileReview(runID: payload.runID)
-            ) { lease in
-                do {
-                    try await self.runValidated(
-                        payload,
-                        request: request,
-                        lease: lease
-                    )
-                } catch is CancellationError {
-                    throw CancellationError()
-                } catch {
-                    if Task.isCancelled
-                        || (error as? CorpusAnalysisQueueRunnerError) == .runtimeCancellationUnconfirmed {
-                        await lease.markRecoveryRequired(
-                            message: "Review cancellation did not confirm runtime quiescence: \(error.localizedDescription)"
-                        )
-                    }
-                    throw error
-                }
-            }
-        } else {
-            try await runValidated(payload, request: request, lease: nil)
-        }
+        try await runValidated(payload, request: request)
     }
 
     /// Thread-safe, non-cancelling signal consumed only after a partition has
@@ -111,8 +84,7 @@ public final class CorpusAnalysisQueueRunner: @unchecked Sendable {
 
     private func runValidated(
         _ payload: CorpusAnalysisJobPayload,
-        request: ExhaustiveListQueuedRequest,
-        lease: ExclusiveRuntimeLease?
+        request: ExhaustiveListQueuedRequest
     ) async throws {
         let resolved: CorpusAnalysisPinnedModel?
         do {
@@ -150,9 +122,6 @@ public final class CorpusAnalysisQueueRunner: @unchecked Sendable {
                     if pauseRequests.consume(runID: payload.runID) {
                         throw CorpusAnalysisExecutionInterruption.pauseRequested
                     }
-                },
-                modelPhaseDidComplete: {
-                    await lease?.release()
                 },
                 generator: exhaustiveListGenerator
             )
@@ -334,8 +303,7 @@ extension CorpusAnalysisQueueRunner {
                 }
             },
             generationConfiguration: generationConfiguration,
-            progressHandler: progressHandler,
-            exclusiveRuntimeClient: runtimeClient as? ExclusiveRuntimeClient
+            progressHandler: progressHandler
         )
     }
 }

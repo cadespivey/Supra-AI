@@ -8,7 +8,7 @@ import SupraStore
 import XCTest
 
 @MainActor
-final class CorpusReviewQueueExecutionTests: XCTestCase {
+final class CorpusAnalysisQueueExecutionTests: XCTestCase {
     func testTQUEUE02BootstrapPumpsV2JobAndDoesNotRedispatchCompletedWork() async throws {
         // T-QUEUE-02 expected RED: bootstrap refreshes persisted jobs but never
         // starts the FIFO pump, leaving a reconstructible v2 job queued.
@@ -156,19 +156,18 @@ final class CorpusReviewQueueExecutionTests: XCTestCase {
         XCTAssertEqual(persistedFollowerRun.status, CorpusAnalysisRunStatus.persisted.rawValue)
     }
 
-    func testTRPCREATEQUEUE01QueuedCancelAtomicallyBalancesExactRunAndPreservesPausedCanary() throws {
-        // T-RP-CREATE-QUEUE-01 queued expected RED: cancel(jobID:) cancels only
-        // the queued job row. The exact prepared corpus run and its four frozen
-        // partitions remain planning/pending instead of becoming cancelled.
-        let store = try makeStore(testName: "TRPCREATEQUEUE01-queued")
+    func testQueuedCorpusCancellationAtomicallyBalancesExactRunAndPreservesPausedCanary() throws {
+        // Standing guard: cancellation must balance the queued job and its exact
+        // prepared corpus ledger without mutating an unrelated paused canary.
+        let store = try makeStore(testName: "queued-corpus-cancel")
         let target = try prepareFixture(
             store: store,
-            caseName: "guided-review-queued-cancel-target",
+            caseName: "retained-exhaustive:queued-cancel-target",
             partCount: 4
         )
         let pausedCanary = try prepareFixture(
             store: store,
-            caseName: "guided-review-paused-unrelated-canary",
+            caseName: "retained-exhaustive:paused-unrelated-canary",
             partCount: 2
         )
         let targetJob = try enqueuePersistedJob(
@@ -199,7 +198,7 @@ final class CorpusReviewQueueExecutionTests: XCTestCase {
 
         XCTAssertTrue(
             queue.cancel(jobID: targetJob.id),
-            "queued Review cancellation must report a durable state transition"
+            "queued corpus cancellation must report a durable state transition"
         )
 
         let cancelledJob = try XCTUnwrap(store.documentJobs.fetchJob(id: targetJob.id))
@@ -232,20 +231,18 @@ final class CorpusReviewQueueExecutionTests: XCTestCase {
         )
     }
 
-    func testTRPCREATEQUEUE02PausedCancelAtomicallyBalancesExactRunAndPreservesQueuedCanary() throws {
-        // T-RP-CREATE-QUEUE-02 paused expected RED: cancel(jobID:) delegates to
-        // the queued-only row helper when no Swift child task owns the job. A
-        // durably paused Review therefore remains paused and its exact run stays
-        // running, rather than cancelling only its three unfinished partitions.
-        let store = try makeStore(testName: "TRPCREATEQUEUE02-paused")
+    func testPausedCorpusCancellationBalancesOnlyUnfinishedWorkAndPreservesQueuedCanary() throws {
+        // Standing guard: a durably paused corpus run cancels only its unfinished
+        // partitions and leaves an unrelated queued canary byte-identical.
+        let store = try makeStore(testName: "paused-corpus-cancel")
         let target = try prepareFixture(
             store: store,
-            caseName: "guided-review-paused-cancel-target",
+            caseName: "retained-exhaustive:paused-cancel-target",
             partCount: 4
         )
         let queuedCanary = try prepareFixture(
             store: store,
-            caseName: "guided-review-queued-unrelated-canary",
+            caseName: "retained-exhaustive:queued-unrelated-canary",
             partCount: 2
         )
         let targetJob = try enqueuePersistedJob(
@@ -277,7 +274,7 @@ final class CorpusReviewQueueExecutionTests: XCTestCase {
 
         XCTAssertTrue(
             queue.cancel(jobID: targetJob.id),
-            "paused Review cancellation must report a durable state transition"
+            "paused corpus cancellation must report a durable state transition"
         )
 
         let cancelledJob = try XCTUnwrap(store.documentJobs.fetchJob(id: targetJob.id))
@@ -598,7 +595,7 @@ final class CorpusReviewQueueExecutionTests: XCTestCase {
 
     func testTPAUSE01PauseFinishesCurrentPartitionAndResumeRunsOnlyRemainingWork() async throws {
         // T-PAUSE-01 expected RED: DocumentProcessingQueue exposes cancellation
-        // but no cooperative Review pause. The runner has no boundary hook, so it
+        // but no cooperative corpus pause. The runner has no boundary hook, so it
         // cannot stop after one successful partition without cancelling or
         // failing the frozen ledger.
         let store = try makeStore(testName: "TPAUSE01")
@@ -914,7 +911,7 @@ final class CorpusReviewQueueExecutionTests: XCTestCase {
         store: SupraStore,
         caseName: String,
         partCount: Int,
-        pinnedModel: CorpusAnalysisPinnedModel = CorpusReviewQueueExecutionTests.pinnedModel
+        pinnedModel: CorpusAnalysisPinnedModel = CorpusAnalysisQueueExecutionTests.pinnedModel
     ) throws -> QueueExecutionFixture {
         let matter = try store.matters.createMatter(name: "Synthetic queue \(caseName)")
         let documentID = try insertDocument(
@@ -945,7 +942,7 @@ final class CorpusReviewQueueExecutionTests: XCTestCase {
         store: SupraStore
     ) throws -> LiveContentBoundModelFixture {
         let base = FileManager.default.temporaryDirectory.appendingPathComponent(
-            "CorpusReviewLiveModel-\(UUID().uuidString)",
+            "CorpusAnalysisLiveModel-\(UUID().uuidString)",
             isDirectory: true
         )
         let managedRoot = base.appendingPathComponent("Models", isDirectory: true)
@@ -1135,7 +1132,7 @@ final class CorpusReviewQueueExecutionTests: XCTestCase {
 
     private func makeStore(testName: String) throws -> SupraStore {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
-            "CorpusReviewQueueExecution-\(testName)-\(UUID().uuidString)",
+            "CorpusAnalysisQueueExecution-\(testName)-\(UUID().uuidString)",
             isDirectory: true
         )
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -1149,7 +1146,7 @@ final class CorpusReviewQueueExecutionTests: XCTestCase {
     ) -> DocumentProcessingQueue {
         let storage = DocumentStorage(
             root: FileManager.default.temporaryDirectory.appendingPathComponent(
-                "CorpusReviewQueueExecutionStorage-\(UUID().uuidString)",
+                "CorpusAnalysisQueueExecutionStorage-\(UUID().uuidString)",
                 isDirectory: true
             )
         )

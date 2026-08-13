@@ -1,6 +1,6 @@
 # D-19 — Case File Review Retirement and Immutable v073 Compatibility
 
-Status: **approved by the repo owner on 2026-08-13; implementation gates pending**
+Status: **approved by the repo owner on 2026-08-13; retirement implemented, final release qualification pending**
 
 ## Context
 
@@ -59,3 +59,17 @@ Required gates: `T-REVIEW-RETIRE-UI-01`, `T-REVIEW-RETIRE-JOB-01`,
 `T-REVIEW-TERMS-01`, `T-REVIEW-RETIRE-ARTIFACT-01`, `T-XPC-REVIEW-REMOVE-01`,
 `T-REVIEW-RETIRE-CAP-01`, `T-REVIEW-RETIRE-SCHEMA-01`,
 `T-REVIEW-RETIRE-CLAIMS-01`, `T-REVIEW-RETIRE-SMOKE-01`, and `DR-CORPUS-OWNER-01`.
+
+## Post-removal corpus-owner audit
+
+The 2026-08-13 Release-composition audit found zero shipping consumers of
+`CorpusAnalysisQueueRunner`: `AppEnvironment` constructs `DocumentProcessingQueue` without a
+corpus runner, so any encountered corpus-analysis job terminates as unavailable before model
+work. `ExhaustiveListTask` remains used by package tests and the synthetic `SupraBench` harness,
+not by an app route. The exact-slice Store and Sessions substrate remains for compatibility and
+separate owner review; this retirement does not silently broaden into its deletion.
+
+Because there are fewer than two concrete non-Review shipping consumers, the decision is **no
+coordinator extraction**. The unowned durable-queue, production-model-binding, and production
+generation-audit claims are removed. Re-composing or retiring the generic substrate requires a
+separate product-owner decision and new RED/GREEN gates.

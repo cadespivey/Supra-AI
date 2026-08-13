@@ -60,6 +60,8 @@ claims_file="${repo_root}/Docs/Verified-Product-Claims.yml"
 architecture_file="${repo_root}/ARCHITECTURE.md"
 help_file="${repo_root}/Docs/local-legal-model-setup.md"
 migrator="${repo_root}/Packages/SupraStore/Sources/SupraStore/Database/SupraMigrator.swift"
+retired_queue_policy="${repo_root}/Packages/SupraSessions/Sources/SupraSessions/DocumentProcessingQueue.swift"
+dormant_v073_deletion_compatibility="${repo_root}/Packages/SupraStore/Sources/SupraStore/Repositories/DocumentLibraryRepository.swift"
 
 require_path 'shipping App Swift' "$app_sources"
 require_path 'shipping App project' "$project_file"
@@ -69,6 +71,8 @@ require_path 'verified product claims' "$claims_file"
 require_path 'current architecture' "$architecture_file"
 require_path 'current local-model help' "$help_file"
 require_path 'immutable migration compatibility' "$migrator"
+require_path 'retired queue compatibility policy' "$retired_queue_policy"
+require_path 'dormant v073 deletion compatibility' "$dormant_v073_deletion_compatibility"
 
 if (( status != 0 )); then
   printf 'Case File Review retirement verification failed: %d required scope error(s).\n' \
@@ -88,15 +92,119 @@ append_source_file "$project_file"
 
 package_source_count=0
 while IFS= read -r -d '' file; do
-  if [[ "$file" == "$migrator" ]]; then
+  if [[ "$file" == "$migrator" \
+      || "$file" == "$retired_queue_policy" \
+      || "$file" == "$dormant_v073_deletion_compatibility" ]]; then
     continue
   fi
   append_source_file "$file"
   package_source_count=$((package_source_count + 1))
 done < <(find "$packages_root" -type f -path '*/Sources/*' -print0)
 if (( package_source_count == 0 )); then
-  fail 'package Sources scope contains no files outside the migration compatibility source'
+  fail 'package Sources scope contains no files outside the compatibility sources'
 fi
+
+# Older durable Case File Review work is recognized by one exact persisted
+# run-key prefix so the retired job can remain inert. Allow only that literal,
+# immediately inside the named compatibility policy; any duplicate or use in
+# another source remains a retirement failure.
+readonly retired_queue_policy_declaration='enum RetiredCorpusAnalysisPolicy {'
+readonly retired_queue_identity='    static let identityPrefix = "guided-review:"'
+retired_queue_policy_line="$(awk -v declaration="$retired_queue_policy_declaration" '
+  $0 == declaration {
+    print NR
+    exit
+  }
+' "$retired_queue_policy")"
+retired_queue_identity_line=''
+retired_queue_identity_count="$(grep -Fxc -- "$retired_queue_identity" "$retired_queue_policy" || true)"
+if [[ -n "$retired_queue_policy_line" ]]; then
+  retired_queue_identity_line="$(awk \
+    -v declaration_line="$retired_queue_policy_line" \
+    -v identity="$retired_queue_identity" '
+      NR == declaration_line + 1 && $0 == identity {
+        print NR
+        exit
+      }
+    ' "$retired_queue_policy")"
+fi
+retired_queue_identity_allowed=0
+if [[ "$retired_queue_identity_count" != '1' || -z "$retired_queue_identity_line" ]]; then
+  fail 'exact RetiredCorpusAnalysisPolicy guided-review discriminator is missing, duplicated, or misplaced'
+else
+  retired_queue_identity_allowed=1
+fi
+
+retired_queue_policy_relative="${retired_queue_policy#${repo_root}/}"
+printf '%s:0:%s\n' \
+  "$retired_queue_policy_relative" \
+  "$retired_queue_policy_relative" >>"$scoped_corpus"
+LC_ALL=C awk \
+  -v source="$retired_queue_policy_relative" \
+  -v allowed_line="${retired_queue_identity_line:-0}" \
+  -v allowed="$retired_queue_identity_allowed" '
+    allowed == 1 && NR == allowed_line { next }
+    {
+      sub(/\r$/, "")
+      printf "%s:%d:%s\n", source, NR, $0
+    }
+  ' "$retired_queue_policy" >>"$scoped_corpus"
+file_count=$((file_count + 1))
+
+# An already-main v073 database can contain a frozen evidence edge whose live
+# document/revision FKs must degrade atomically before ordinary permanent source
+# deletion. Keep exactly one private, hash-pinned compatibility block; scan the
+# rest of the repository source normally so this cannot become a path exemption.
+readonly expected_dormant_v073_deletion_sha256='3f97fccbd5460be418d67551b92d85a47bc047de303b4e6bc267300e516fced7'
+readonly dormant_v073_deletion_start_marker='    // BEGIN hash-pinned dormant v073 evidence compatibility.'
+readonly dormant_v073_deletion_end_marker='    // END hash-pinned dormant v073 evidence compatibility.'
+dormant_v073_deletion_start="$(awk -v marker="$dormant_v073_deletion_start_marker" '
+  $0 == marker {
+    print NR
+    exit
+  }
+' "$dormant_v073_deletion_compatibility")"
+dormant_v073_deletion_end="$(awk -v marker="$dormant_v073_deletion_end_marker" '
+  $0 == marker {
+    print NR
+    exit
+  }
+' "$dormant_v073_deletion_compatibility")"
+dormant_v073_deletion_allowed=0
+if [[ -z "$dormant_v073_deletion_start" \
+    || -z "$dormant_v073_deletion_end" \
+    || "$dormant_v073_deletion_start" -ge "$dormant_v073_deletion_end" \
+    || "$(grep -Fxc -- "$dormant_v073_deletion_start_marker" "$dormant_v073_deletion_compatibility" || true)" != '1' \
+    || "$(grep -Fxc -- "$dormant_v073_deletion_end_marker" "$dormant_v073_deletion_compatibility" || true)" != '1' ]]; then
+  fail 'dormant v073 deletion compatibility block is missing, duplicated, or cannot be delimited'
+else
+  dormant_v073_deletion_body="${temporary_dir}/dormant-v073-deletion-compatibility.swift"
+  sed -n "${dormant_v073_deletion_start},${dormant_v073_deletion_end}p" \
+    "$dormant_v073_deletion_compatibility" >"$dormant_v073_deletion_body"
+  dormant_v073_deletion_actual_sha256="$(sha256_file "$dormant_v073_deletion_body")"
+  if [[ "$dormant_v073_deletion_actual_sha256" != "$expected_dormant_v073_deletion_sha256" ]]; then
+    fail "dormant v073 deletion compatibility drifted: expected ${expected_dormant_v073_deletion_sha256}, found ${dormant_v073_deletion_actual_sha256}"
+  else
+    dormant_v073_deletion_allowed=1
+  fi
+fi
+
+dormant_v073_deletion_relative="${dormant_v073_deletion_compatibility#${repo_root}/}"
+printf '%s:0:%s\n' \
+  "$dormant_v073_deletion_relative" \
+  "$dormant_v073_deletion_relative" >>"$scoped_corpus"
+LC_ALL=C awk \
+  -v source="$dormant_v073_deletion_relative" \
+  -v allowed_start="${dormant_v073_deletion_start:-0}" \
+  -v allowed_end="${dormant_v073_deletion_end:-0}" \
+  -v allowed="$dormant_v073_deletion_allowed" '
+    allowed == 1 && NR >= allowed_start && NR <= allowed_end { next }
+    {
+      sub(/\r$/, "")
+      printf "%s:%d:%s\n", source, NR, $0
+    }
+  ' "$dormant_v073_deletion_compatibility" >>"$scoped_corpus"
+file_count=$((file_count + 1))
 
 # v073 is already on shared main and must remain byte-identical even though its
 # product capability is retired. Only its exact frozen closure is excluded; the
@@ -186,7 +294,49 @@ LC_ALL=C awk \
 file_count=$((file_count + 1))
 
 append_source_file "$smoke_script"
-append_source_file "$claims_file"
+
+# The migration-sequence claim must continue to name the exact dormant v073
+# endpoint while the immutable migration remains registered. This one endpoint
+# is compatibility evidence, not a live Case File Review product claim.
+readonly migration_sequence_claim='  - id: "STORE-MIGRATION-SEQUENCE"'
+readonly dormant_v073_claim_endpoint='    expected: "v073_create_case_file_review_projects"'
+dormant_v073_claim_endpoint_count="$(grep -Fxc -- "$dormant_v073_claim_endpoint" "$claims_file" || true)"
+dormant_v073_claim_endpoint_line="$(awk \
+  -v claim="$migration_sequence_claim" \
+  -v endpoint="$dormant_v073_claim_endpoint" '
+    $0 == claim {
+      in_claim = 1
+      next
+    }
+    /^  - id: / {
+      in_claim = 0
+    }
+    in_claim == 1 && $0 == endpoint {
+      print NR
+      exit
+    }
+  ' "$claims_file")"
+dormant_v073_claim_endpoint_allowed=0
+if [[ "$dormant_v073_claim_endpoint_count" != '1' || -z "$dormant_v073_claim_endpoint_line" ]]; then
+  fail 'exact dormant v073 claim endpoint is missing, duplicated, or outside STORE-MIGRATION-SEQUENCE'
+else
+  dormant_v073_claim_endpoint_allowed=1
+fi
+
+claims_relative="${claims_file#${repo_root}/}"
+printf '%s:0:%s\n' "$claims_relative" "$claims_relative" >>"$scoped_corpus"
+LC_ALL=C awk \
+  -v source="$claims_relative" \
+  -v allowed_line="${dormant_v073_claim_endpoint_line:-0}" \
+  -v allowed="$dormant_v073_claim_endpoint_allowed" '
+    allowed == 1 && NR == allowed_line { next }
+    {
+      sub(/\r$/, "")
+      printf "%s:%d:%s\n", source, NR, $0
+    }
+  ' "$claims_file" >>"$scoped_corpus"
+file_count=$((file_count + 1))
+
 append_source_file "$architecture_file"
 append_source_file "$help_file"
 
@@ -318,5 +468,5 @@ if (( status != 0 )); then
   exit 1
 fi
 
-printf 'Case File Review retirement verification passed: %d shipping files scanned, %d retained concepts confirmed; immutable v073 compatibility allowlisted.\n' \
+printf 'Case File Review retirement verification passed: %d shipping files scanned, %d retained concepts confirmed; exact retired-queue and dormant-v073 compatibility allowlisted.\n' \
   "$file_count" "$retained_count"

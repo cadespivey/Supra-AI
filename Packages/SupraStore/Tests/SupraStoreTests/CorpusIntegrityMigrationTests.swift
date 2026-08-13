@@ -4,7 +4,7 @@ import GRDB
 import SupraCore
 @testable import SupraStore
 import XCTest
-final class CaseFileReviewIntegrityMigrationTests: XCTestCase {
+final class CorpusIntegrityMigrationTests: XCTestCase {
     func testTSTORE01V072CreatesNormalizedExactSliceSchemaAndConstraints() throws {
         // T-STORE-01 expected RED: v072 and the normalized exact-slice table do
         // not exist, so persisted corpus partitions still prove only revision
@@ -959,7 +959,7 @@ final class CaseFileReviewIntegrityMigrationTests: XCTestCase {
         }
     }
 
-    func testTSTORE02V072DoesNotExpandCaseFileReviewEnforcementIntoChronology() throws {
+    func testTSTORE02V072DoesNotExpandExactCorpusEnforcementIntoChronology() throws {
         // T-STORE-02 compatibility guard expected RED: v072 does not yet exist.
         // When it lands, its exact-slice upgrade must not revoke or block the
         // separate chronology path, which still owns a v1 revision ledger and
@@ -1026,7 +1026,7 @@ final class CaseFileReviewIntegrityMigrationTests: XCTestCase {
             XCTAssertEqual(
                 legacy.assuranceState,
                 OutputAssuranceState.corpusComplete.rawValue,
-                "the Case File Review migration must not revoke chronology assurance"
+                "the exact-corpus integrity migration must not revoke chronology assurance"
             )
 
             try db.execute(
@@ -3038,7 +3038,7 @@ final class CaseFileReviewIntegrityMigrationTests: XCTestCase {
         let outputs = StructuredOutputRepository(writer: queue)
         let weakVersion = try outputs.createVersion(
             structuredOutputID: linked.output.id,
-            contentMarkdown: "# WEAK-ACTIVE-2347\n\nReview-only candidate [S97].",
+            contentMarkdown: "# WEAK-ACTIVE-2347\n\nSupport-needs-review candidate [S97].",
             requiredSections: ["WEAK-ACTIVE-2347"],
             presentSections: ["WEAK-ACTIVE-2347"],
             missingSections: [],

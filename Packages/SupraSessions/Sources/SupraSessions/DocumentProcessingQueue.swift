@@ -89,8 +89,8 @@ public enum CorpusAnalysisQueueResumeResult: Equatable, Sendable {
     case unavailable
 }
 
-/// Compatibility policy for durable Case File Review work left by older app
-/// versions. The current persisted identity is the exhaustive request run key;
+/// Compatibility policy for durable work left by older app versions after its
+/// originating capability was retired. The current persisted identity is the exhaustive request run key;
 /// an older job-ID shape is also recognized. No generic corpus-analysis task is
 /// classified by words such as "review" alone.
 enum RetiredCorpusAnalysisPolicy {
@@ -126,7 +126,7 @@ public final class DocumentProcessingQueue: ObservableObject {
     @Published public private(set) var resumableJobs: [DocumentProcessingJobRecord] = []
     @Published public private(set) var resumableImports: [ResumableDocumentImport] = []
     @Published public private(set) var lastError: String?
-    /// Active Review job that has received a cooperative pause request and is
+    /// Active corpus job that has received a cooperative pause request and is
     /// finishing its current partition before the durable job becomes paused.
     @Published public private(set) var pausingCorpusJobID: String?
     /// The most recent import that completed with per-file failures, for in-app

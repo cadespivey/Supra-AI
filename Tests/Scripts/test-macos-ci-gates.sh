@@ -585,6 +585,7 @@ printf '%s\n' \
   '  // func testTReviewTerms01OrdinaryReviewWorkflowsRemainOwned() {}' \
   '  // func testTReviewRetireUI01RemainingTabsReflowAtSupportedWidths() {}' \
   '  // func testTDELUI01BothDocumentTrashSurfacesShareConfirmationAndRenderFailure() {}' \
+  '  // func testTXPCReviewRemove01OrdinaryRuntimeRecoveryHasAnOwnedAppSurface() {}' \
   '}' >"$commented_review_tests"
 run_case \
   "commented retirement methods fail the app-smoke presence guard" \
@@ -618,6 +619,7 @@ retirement_selectors=(
   '-only-testing:SupraAIUITests/ArchitectureUXRetirementUITests/testTReviewTerms01OrdinaryReviewWorkflowsRemainOwned'
   '-only-testing:SupraAIUITests/ArchitectureUXRetirementUITests/testTReviewRetireUI01RemainingTabsReflowAtSupportedWidths'
   '-only-testing:SupraAIUITests/ArchitectureUXRetirementUITests/testTDELUI01BothDocumentTrashSurfacesShareConfirmationAndRenderFailure'
+  '-only-testing:SupraAIUITests/ArchitectureUXRetirementUITests/testTXPCReviewRemove01OrdinaryRuntimeRecoveryHasAnOwnedAppSurface'
 )
 retirement_selector_missing=0
 for selector in "${retirement_selectors[@]}"; do
@@ -732,7 +734,7 @@ if grep -Eq 'guidedQAUITestAuthorized[[:space:]]*=[[:space:]]*Self\.isUITestMode
     && grep -Fq 'let baseRuntimeClient: any RuntimeClientProtocol = guidedQAUITestAuthorized' <<<"$guided_qa_runtime_composition" \
     && grep -Fq '? GuidedQAUITestRuntimeClient()' <<<"$guided_qa_runtime_composition" \
     && grep -Fq ': RuntimeClient()' <<<"$guided_qa_runtime_composition" \
-    && grep -Fq 'let runtimeClient = ExclusiveRuntimeClient(base: baseRuntimeClient)' <<<"$guided_qa_runtime_composition"; then
+    && grep -Fq 'let runtimeClient = RuntimeSafetyClient(base: baseRuntimeClient)' <<<"$guided_qa_runtime_composition"; then
   printf '%s\n' 'PASS: guided Q&A synthetic runtime requires hermetic UI-test authority'
 else
   record_failure 'guided Q&A synthetic runtime is not gated by hermetic UI-test authority'

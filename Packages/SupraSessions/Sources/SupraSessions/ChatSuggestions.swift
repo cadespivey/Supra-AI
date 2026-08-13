@@ -109,6 +109,12 @@ public enum ChatSuggestions {
             prompt: "Draft a first set of interrogatories for a plaintiff in a breach-of-contract dispute over a software development agreement.",
             systemImage: "questionmark.folder"
         ),
+        ChatSuggestion(
+            id: "review-draft",
+            title: "Review a Draft",
+            prompt: "/critique Review this draft for legal and factual weaknesses, missing support, internal inconsistencies, and unclear language.",
+            systemImage: "checkmark.bubble"
+        ),
 
         // MARK: Analysis & strategy
         ChatSuggestion(
