@@ -45,6 +45,7 @@ final class Milestone3ValidationTests: XCTestCase {
         let storage = DocumentStorage(root: storageRoot)
         let ocr = ValidationOCR()
         let embedder = ValidationEmbedder()
+        try configureCanonicalReadiness(store: store, embedder: embedder)
 
         // --- Import (continue-on-failure) ---
         let importer = DocumentImportService(store: store, storage: storage, ocr: ocr)
@@ -117,13 +118,13 @@ final class Milestone3ValidationTests: XCTestCase {
         // not a corpus-complete or negative claim. Terminal import failures and
         // review-required sources remain visible in whole-matter readiness, so use
         // the explicitly ready subset for the artifact pipeline below.
-        let readyScope = RetrievalScope(documentIDs: try store.documentLibrary
+        let readyDocumentIDs = try store.documentLibrary
             .fetchDocuments(matterID: matter.id)
-            .compactMap { document in
-                document.status == MatterDocumentStatus.ready.rawValue
-                    && document.indexStatus == DocumentIndexStatus.ready.rawValue
-                    ? document.id : nil
-            })
+            .map(\.id)
+        let readyScope = RetrievalScope(documentIDs: try store.documentReadiness
+            .fetchReceipts(matterID: matter.id, documentIDs: readyDocumentIDs)
+            .filter(\.isBaseReady)
+            .map(\.documentID))
 
         // --- Q&A (stub model, cited) ---
         let runtime = StubRuntimeClient(outcome: { request in
@@ -254,6 +255,36 @@ final class Milestone3ValidationTests: XCTestCase {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return try SupraStore(url: dir.appendingPathComponent("test.sqlite"))
     }
+
+    private func configureCanonicalReadiness(
+        store: SupraStore,
+        embedder: ValidationEmbedder
+    ) throws {
+        let testedAt = Date(timeIntervalSince1970: 1_946_250_983)
+        _ = try store.documentSettings.loadSettings()
+        try store.documentSettings.upsertEmbeddingModel(
+            DocumentEmbeddingModelRecord(
+                id: embedder.modelID,
+                repoID: embedder.modelRepoID,
+                localPath: "/synthetic/milestone3/\(embedder.modelID)",
+                displayName: embedder.modelDisplayName,
+                dimension: embedder.dimension,
+                runtimeFamily: "milestone3-validation-readiness-31",
+                revision: embedder.modelRevision,
+                isDefault: false,
+                isSelected: false,
+                lastTestLoadAt: testedAt,
+                lastTestLoadResult: "passed",
+                createdAt: testedAt,
+                updatedAt: testedAt
+            )
+        )
+        try store.documentSettings.selectEmbeddingModel(id: embedder.modelID)
+        try store.documentSettings.updateSettings {
+            $0.embeddingModelLastTestedAt = testedAt
+            $0.chunkerVersion = 2
+        }
+    }
 }
 
 /// Mocked OCR returning deterministic text + low-ish confidence for validation.
@@ -268,10 +299,10 @@ private struct ValidationOCR: DocumentOCRService {
 
 /// Deterministic bag-of-words embedder for validation retrieval.
 private struct ValidationEmbedder: TextEmbedder {
-    let modelID = "val-bow"
-    let modelRepoID = "val-bow"
-    let modelDisplayName = "Validation BoW"
-    let modelRevision: String? = nil
+    let modelID = "milestone3-validation-bow-983"
+    let modelRepoID = "synthetic/milestone3-validation-bow-983"
+    let modelDisplayName = "Milestone 3 Validation BoW 983"
+    let modelRevision: String? = "milestone3-validation-bow-revision-31"
     let dimension = 64
     func embed(_ texts: [String]) async throws -> [[Float]] {
         texts.map { text in
