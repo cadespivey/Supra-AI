@@ -70,6 +70,7 @@ final class RuntimeClientTests: XCTestCase {
                 modelID: modelID,
                 prompt: "Hello",
                 systemPrompt: nil,
+                contextWorkload: .ordinaryConversation,
                 options: GenerationOptions(maxOutputTokens: 8)
             )
         )
@@ -95,6 +96,7 @@ final class RuntimeClientTests: XCTestCase {
                 modelID: ModelID(),
                 prompt: "Hello",
                 systemPrompt: nil,
+                contextWorkload: .ordinaryConversation,
                 options: GenerationOptions()
             )
         )

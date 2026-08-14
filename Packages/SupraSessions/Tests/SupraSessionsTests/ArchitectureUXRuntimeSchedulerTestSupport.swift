@@ -67,6 +67,7 @@ enum ArchitectureUXRuntimeWire {
             expectedModelSHA256: fingerprintSHA256,
             prompt: prompt,
             systemPrompt: "runtime-binding-system-733",
+            contextWorkload: .ordinaryConversation,
             options: GenerationOptions(
                 temperature: 0.17,
                 topP: 0.73,

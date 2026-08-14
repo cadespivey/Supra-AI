@@ -200,6 +200,7 @@ final class RuntimeModelContentBindingTests: XCTestCase {
             expectedModelSHA256: Self.expectedFingerprint,
             prompt: "Return the synthetic lifecycle canary.",
             systemPrompt: "Return only the canary.",
+            contextWorkload: .ordinaryConversation,
             options: GenerationOptions(maxOutputTokens: 17)
         )
 

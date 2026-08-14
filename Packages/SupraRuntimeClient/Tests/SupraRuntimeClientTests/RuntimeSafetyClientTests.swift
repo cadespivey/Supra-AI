@@ -295,6 +295,7 @@ final class RuntimeSafetyClientTests: XCTestCase {
             modelID: ModelID(),
             prompt: prompt,
             systemPrompt: nil,
+            contextWorkload: .ordinaryConversation,
             options: GenerationOptions(maxOutputTokens: 32)
         )
     }
@@ -321,6 +322,7 @@ private func cancelRuntimeSafetyGeneration(
         modelID: ModelID(),
         prompt: prompt,
         systemPrompt: nil,
+        contextWorkload: .ordinaryConversation,
         options: GenerationOptions(maxOutputTokens: 17)
     ))
     let consumer = Task { try await drainRuntimeSafetyStream(stream) }

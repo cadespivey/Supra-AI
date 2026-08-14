@@ -221,6 +221,7 @@ final class ArchitectureUXTXpcBudget02Tests: XCTestCase {
             prompt: "GENERATION-PROMPT-WIRE-757",
             systemPrompt: "GENERATION-SYSTEM-WIRE-761",
             history: history,
+            contextWorkload: .ordinaryConversation,
             options: GenerationOptions(maxContextTokens: 1_031, maxOutputTokens: 37)
         )
     }
