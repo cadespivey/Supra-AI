@@ -150,6 +150,7 @@ Supra's local-AI policy conservatively maps detected unified memory to 16, 32, 6
 
 `SupraStore` uses [GRDB](https://github.com/groue/GRDB.swift) over SQLite with an ordered
 migration list. The shipping database schema registers a contiguous migration sequence from v001 through v078; v073 remains immutable, dormant compatibility history for databases that may already have applied it and does not represent an available product capability.
+`SupraMigrator.makeMigrator()` remains the single public registry, while immutable migration closures live in versioned or cohesive source files and are invoked in exact version order. A frozen registration and schema snapshot pins all 78 names plus the resulting 82 tables, 101 indexes, 89 triggers, integrity check, and foreign-key check; the source split adds no migration and changes no schema behavior.
 Each feature area adds migrations and a repository:
 
 - Milestone 1 established chats, messages, models, and validation runs.
