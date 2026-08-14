@@ -48,9 +48,14 @@ final class ArchitectureUXTUxDelete01Tests: XCTestCase {
         let menu = app.descendants(matching: .any)["chat.menu.\(chatName)"]
         XCTAssertTrue(menu.waitForExistence(timeout: 20))
         menu.click()
-        let action = app.menuItems["chat.moveToRecycleBin.\(chatName)"]
+        let action = app.menuItems.matching(
+            NSPredicate(
+                format: "identifier == %@ AND title == %@",
+                "chat.moveToRecycleBin.\(chatName)",
+                "Move to Recycle Bin"
+            )
+        ).firstMatch
         XCTAssertTrue(action.waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["Move to Recycle Bin"].exists)
         action.click()
 
         assertRestorableDialog(

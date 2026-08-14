@@ -83,7 +83,11 @@ final class ArchitectureUXTUxDelete02Tests: XCTestCase {
         app.buttons["Copy Diagnostic Report"].click()
         let actionStatus = app.descendants(matching: .any)["restore.recovery.actionStatus"]
         XCTAssertTrue(actionStatus.waitForExistence(timeout: 5))
-        XCTAssertEqual(actionStatus.label, "Diagnostic report copied.")
+        let statusText = [actionStatus.label, actionStatus.value as? String]
+            .compactMap { $0 }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+        XCTAssertEqual(statusText, "Diagnostic report copied.")
     }
 
     private func launchDeletionFixture() -> XCUIApplication {
