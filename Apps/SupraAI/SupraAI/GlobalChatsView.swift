@@ -359,6 +359,7 @@ struct GlobalChatsView: View {
         } label: {
             Label(presentation.actionTitle, systemImage: "trash")
         }
+        .accessibilityLabel(presentation.actionTitle)
         .accessibilityIdentifier("chat.moveToRecycleBin.\(chat.title)")
     }
 
