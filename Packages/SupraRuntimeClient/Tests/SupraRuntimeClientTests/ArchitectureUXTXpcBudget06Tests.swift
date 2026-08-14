@@ -142,6 +142,66 @@ final class ArchitectureUXTXpcBudget06Tests: XCTestCase {
         XCTAssertFalse(client.contains(forbiddenDefault))
     }
 
+    func testEmbeddingLoadDimensionRejectsNPlusOneBeforeHostProfileArithmetic() throws {
+        // Expected RED: RuntimeRequestBudgetValidator has no embedding-load
+        // semantic validator, and the host multiplies expectedDimension before
+        // any bounded check.
+        var policy = responsePolicy()
+        policy.maxEmbeddingDimension = 7
+        let validator = RuntimeRequestBudgetValidator(policy: policy)
+        let modelID = ArchitectureUXRuntimeBudgetWire.embeddingModelID
+
+        XCTAssertNoThrow(try validator.validate(LoadEmbeddingModelRequest(
+            embeddingModelID: modelID,
+            modelPath: "/synthetic/T_XPC_BUDGET_06_WIRE_731",
+            displayName: "Embedding model-wire-713",
+            revision: "rev-7",
+            expectedDimension: 7
+        )))
+        assertArchitectureUXBudgetViolation(
+            .embeddingDimension,
+            limit: 7,
+            actual: 8
+        ) {
+            try validator.validate(LoadEmbeddingModelRequest(
+                embeddingModelID: modelID,
+                modelPath: "/synthetic/T_XPC_BUDGET_06_WIRE_731_N_PLUS_1",
+                displayName: "Embedding model-wire-713 N+1",
+                revision: "rev-7",
+                expectedDimension: 8
+            ))
+        }
+        assertArchitectureUXBudgetViolation(
+            .embeddingDimension,
+            limit: 7,
+            actual: Int.max
+        ) {
+            try validator.validate(LoadEmbeddingModelRequest(
+                embeddingModelID: modelID,
+                modelPath: "/synthetic/T_XPC_BUDGET_06_WIRE_731_INT_MAX",
+                displayName: "Embedding model-wire-713 Int.max",
+                revision: "rev-7",
+                expectedDimension: Int.max
+            ))
+        }
+
+        let host = try ArchitectureUXRuntimeBudgetWire.source(
+            "Apps/SupraAI/SupraRuntimeService/SupraRuntimeService.swift"
+        )
+        let loadMethod = try XCTUnwrap(host.range(of: "func loadEmbeddingModel(\n        _ request:"))
+        let profile = try XCTUnwrap(
+            host.range(of: "Self.embeddingResourceProfile(for: request)", range: loadMethod.lowerBound..<host.endIndex)
+        )
+        let validation = try XCTUnwrap(
+            host.range(of: "requestBudgetValidator.validate(request)", range: loadMethod.lowerBound..<profile.lowerBound)
+        )
+        XCTAssertLessThan(
+            host.distance(from: host.startIndex, to: validation.lowerBound),
+            host.distance(from: host.startIndex, to: profile.lowerBound)
+        )
+        XCTAssertFalse(host.contains(forbiddenDefault))
+    }
+
     private func responsePolicy() -> RuntimeBudgetPolicy {
         var policy = RuntimeBudgetPolicy.production
         policy.maxTokenCountResponseCount = 3
