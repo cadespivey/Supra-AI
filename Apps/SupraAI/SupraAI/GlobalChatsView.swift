@@ -358,8 +358,8 @@ struct GlobalChatsView: View {
             pendingDeleteChat = chat
         } label: {
             Label(presentation.actionTitle, systemImage: "trash")
+                .accessibilityLabel(presentation.actionTitle)
         }
-        .accessibilityLabel(presentation.actionTitle)
         .accessibilityIdentifier("chat.moveToRecycleBin.\(chat.title)")
     }
 
