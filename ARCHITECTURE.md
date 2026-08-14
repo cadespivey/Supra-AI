@@ -99,6 +99,11 @@ higher-layer package dependencies are reviewed test-harness exceptions beyond `S
 an eighth exception fails closed. The same policy rejects inventory drift, undeclared or missing
 edges, cycles, and direct Store/network capability edges from packages that must remain isolated.
 
+`SupraCore.CanonicalJSON` owns the explicit version-one compact and pretty-printed JSON byte
+contracts, and `SHA256Digest` owns lowercase SHA-256 formatting. Only the three TestKit report
+encoders proven byte-identical use that shared contract today; different date strategies,
+streaming file hashes, presentation JSON, and unordered values remain with their domain owners.
+
 ## The runtime boundary
 
 `SupraRuntimeService` is a Swift-only XPC service that owns MLX model loading and execution.
