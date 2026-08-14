@@ -200,10 +200,12 @@ final class ArchitectureUXImmediateRuntimeClient: RuntimeClientProtocol, @unchec
     private let lock = NSLock()
     private var storedCountModelIDs: [ModelID] = []
     private var storedGenerateRequests: [GenerateRequest] = []
+    private var storedModelLoadRequests: [LoadModelRequest] = []
     private var storedEmbeddingLoadRequests: [LoadEmbeddingModelRequest] = []
 
     var countModelIDs: [ModelID] { lock.withLock { storedCountModelIDs } }
     var generateRequests: [GenerateRequest] { lock.withLock { storedGenerateRequests } }
+    var modelLoadRequests: [LoadModelRequest] { lock.withLock { storedModelLoadRequests } }
     var embeddingLoadRequests: [LoadEmbeddingModelRequest] {
         lock.withLock { storedEmbeddingLoadRequests }
     }
@@ -211,6 +213,7 @@ final class ArchitectureUXImmediateRuntimeClient: RuntimeClientProtocol, @unchec
     func connect() async throws {}
 
     func loadModel(_ request: LoadModelRequest) async throws -> LoadModelResponse {
+        lock.withLock { storedModelLoadRequests.append(request) }
         LoadModelResponse(status: .loaded, modelID: request.modelID)
     }
 

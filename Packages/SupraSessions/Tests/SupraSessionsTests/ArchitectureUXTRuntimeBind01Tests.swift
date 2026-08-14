@@ -251,6 +251,59 @@ final class ArchitectureUXTRuntimeBind01Tests: XCTestCase {
         )
     }
 
+    func testBoundPermitRejectsAnUnboundChatLoadBeforeXPC() async throws {
+        // Expected RED: a bound permit currently validates chat artifact facts
+        // only when the optional request binding happens to be present.
+        let contentBinding = try embeddingContentBinding()
+        let executionBinding = ModelExecutionModelBinding(
+            modelID: ArchitectureUXRuntimeWire.modelID,
+            repositoryID: contentBinding.repositoryID,
+            revision: contentBinding.revision,
+            artifactFingerprintSHA256: contentBinding.fingerprintSHA256
+        )
+        let base = ArchitectureUXImmediateRuntimeClient()
+        let coordinator = architectureUXRuntimeCoordinator(base: base)
+        let request = ArchitectureUXRuntimeWire.request(
+            "binding-chat-load-1401",
+            operation: .modelLoad,
+            priority: .foregroundInteractive,
+            binding: executionBinding
+        )
+
+        _ = try await coordinator.execute(request) { permit in
+            do {
+                _ = try await permit.loadModel(LoadModelRequest(
+                    modelID: ArchitectureUXRuntimeWire.modelID,
+                    modelPath: "/synthetic/unbound-chat-1409",
+                    displayName: "Unbound chat load"
+                ))
+                XCTFail("a model-bound permit must reject an unbound chat load")
+            } catch {
+                XCTAssertEqual(error as? ModelExecutionError, .modelBindingMismatch)
+            }
+
+            let accepted = try await permit.loadModel(LoadModelRequest(
+                modelID: ArchitectureUXRuntimeWire.modelID,
+                modelPath: "/synthetic/T_RUNTIME_BIND_01_WIRE_731",
+                displayName: "Bound chat model-wire-713",
+                contentBinding: contentBinding
+            ))
+            XCTAssertEqual(accepted.status, .loaded)
+            return accepted
+        }
+
+        XCTAssertEqual(base.modelLoadRequests.count, 1)
+        XCTAssertEqual(
+            base.modelLoadRequests.only?.contentBinding?.fingerprintSHA256,
+            contentBinding.fingerprintSHA256
+        )
+        XCTAssertFalse(
+            String(describing: base.modelLoadRequests).contains(
+                ArchitectureUXRuntimeWire.forbiddenDefault
+            )
+        )
+    }
+
     private func embeddingContentBinding(
         repositoryID: String = "model-wire-713"
     ) throws -> RuntimeModelContentBinding {
