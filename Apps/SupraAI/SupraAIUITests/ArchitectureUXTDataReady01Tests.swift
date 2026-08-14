@@ -3,7 +3,7 @@ import XCTest
 
 /// Native Documents boundary for T-DATA-READY-01, -02, and -03.
 ///
-/// Expected RED: the Documents badge still reads `MatterDocumentRecord.status`,
+/// Expected RED: the Documents badge still reads `MatterDocumentSummary.status`,
 /// the DEBUG app has no canonical ready/stale/model-missing fixture, and the
 /// production demo seeder writes three raw `ready` rows without revision, FTS,
 /// semantic-index, active-model, or derived-receipt evidence. Every live test
@@ -33,7 +33,7 @@ final class ArchitectureUXTDataReady01Tests: XCTestCase {
     func test00ShippingDocumentsBadgeUsesCanonicalProjectionNotRawStatus() throws {
         let view = try appSource(relativePath: "SupraAI/Documents/MatterDocumentsView.swift")
         let badgeBody = try functionBody(
-            containing: "private func statusBadge(_ document: MatterDocumentRecord)",
+            containing: "private func statusBadge(_ document: MatterDocumentSummary)",
             in: view
         )
 
@@ -172,7 +172,7 @@ final class ArchitectureUXTDataReady01Tests: XCTestCase {
     private func requireImplementedLiveSourceContract(includeDemo: Bool = false) throws {
         let view = try appSource(relativePath: "SupraAI/Documents/MatterDocumentsView.swift")
         let badgeBody = try functionBody(
-            containing: "private func statusBadge(_ document: MatterDocumentRecord)",
+            containing: "private func statusBadge(_ document: MatterDocumentSummary)",
             in: view
         )
         _ = try XCTUnwrap(
@@ -201,16 +201,17 @@ final class ArchitectureUXTDataReady01Tests: XCTestCase {
             )
         }
 
-        guard includeDemo else { return }
-        _ = try XCTUnwrap(
-            environment.range(of: Wire.demoScenario),
-            "Expected RED: canonical production-demo DEBUG fixture is absent"
-        )
-        _ = try XCTUnwrap(
-            view.range(of: "readiness.demo.consumer."),
-            "Expected RED: downstream demo qualification summaries are absent"
-        )
-        try requireCanonicalDemoSeederContract()
+        if includeDemo {
+            _ = try XCTUnwrap(
+                environment.range(of: Wire.demoScenario),
+                "Expected RED: canonical production-demo DEBUG fixture is absent"
+            )
+            _ = try XCTUnwrap(
+                view.range(of: "readiness.demo.consumer."),
+                "Expected RED: downstream demo qualification summaries are absent"
+            )
+            try requireCanonicalDemoSeederContract()
+        }
     }
 
     private func launch(scenario: String) -> XCUIApplication {
