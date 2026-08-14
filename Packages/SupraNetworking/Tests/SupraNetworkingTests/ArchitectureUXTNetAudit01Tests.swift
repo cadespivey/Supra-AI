@@ -127,7 +127,7 @@ final class ArchitectureUXTNetAudit01Tests: XCTestCase {
             rateLimitTracker: RateLimitTracker(),
             queryFingerprinter: NetworkAuditFingerprinter(),
             transport: { request in
-                await transport.respond(to: request)
+                try await transport.respond(to: request)
             }
         )
     }
