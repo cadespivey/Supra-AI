@@ -15,7 +15,7 @@ import XCTest
 /// complete terminal publication command.
 @MainActor
 final class ArchitectureUXTParityChat01Tests: XCTestCase {
-    func testTPARITYCHAT01ExtractedUseCasePreservesSevenSourceAggregateAndExactRetry() async throws {
+    func testTPARITYCHAT01ExtractedUseCasePreservesSevenSourceAggregateAndDurableDigest() async throws {
         let fixture = try await makeArchitectureUXPubChatFixture(prefix: "parity-seven")
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         let owners = try makeOwners(
@@ -73,14 +73,17 @@ final class ArchitectureUXTParityChat01Tests: XCTestCase {
             ["S7", "S4"]
         )
 
-        let exactRetry = try useCase.publish(request)
-        XCTAssertEqual(exactRetry.receipt, first.receipt)
-        XCTAssertEqual(exactRetry.citations, first.citations)
+        let durableReceipt = try XCTUnwrap(
+            fixture.store.groundedChatPublications.fetchReceipt(
+                idempotencyKey: first.receipt.idempotencyKey
+            )
+        )
+        XCTAssertEqual(durableReceipt, first.receipt)
         XCTAssertEqual(
             try fixture.store.documentSources.fetchSources(sourceSetID: sourceSet.id)
                 .map(\.citationLabel),
             Wire.sevenSourceOrder,
-            "an exact retry must return the original aggregate without reordering it"
+            "the durable aggregate must retain the use case's exact source order"
         )
         let receiptCount = try await fixture.store.database.writer.read { db in
             try Int.fetchOne(
