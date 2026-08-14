@@ -1,4 +1,5 @@
 import Foundation
+import SupraCore
 
 public enum PerformanceBenchmarkError: Error, Equatable, Sendable {
     case invalidDocumentCount
@@ -177,9 +178,11 @@ public struct FixedPerformanceReport: Codable, Equatable, Sendable {
     }
 
     public func canonicalJSON() throws -> Data {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        return try encoder.encode(self)
+        try CanonicalJSON.encode(
+            self,
+            version: .v1,
+            presentation: .prettyPrinted
+        )
     }
 }
 
