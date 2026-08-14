@@ -31,7 +31,10 @@ final class ArchitectureUXTUxDelete01Tests: XCTestCase {
         openRecycleBin(in: app)
         let item = app.descendants(matching: .any)["recycleBin.item.matter.\(matterName)"]
         XCTAssertTrue(item.waitForExistence(timeout: 10))
-        let restore = app.buttons["recycleBin.restore.matter.\(matterName)"]
+        let restore = app.descendants(matching: .any)[
+            "recycleBin.restore.matter.\(matterName)"
+        ]
+        XCTAssertTrue(restore.waitForExistence(timeout: 5))
         XCTAssertEqual(restore.label, "Restore")
         restore.click()
         XCTAssertTrue(app.descendants(matching: .any)["matter.row.\(matterName)"].waitForExistence(timeout: 10))
@@ -60,7 +63,11 @@ final class ArchitectureUXTUxDelete01Tests: XCTestCase {
         openRecycleBin(in: app)
         let item = app.descendants(matching: .any)["recycleBin.item.chat.\(chatName)"]
         XCTAssertTrue(item.waitForExistence(timeout: 10))
-        app.buttons["recycleBin.restore.chat.\(chatName)"].click()
+        let restore = app.descendants(matching: .any)[
+            "recycleBin.restore.chat.\(chatName)"
+        ]
+        XCTAssertTrue(restore.waitForExistence(timeout: 5))
+        restore.click()
         let globalChats = app.buttons["sidebar.route.globalChats"]
         XCTAssertTrue(globalChats.waitForExistence(timeout: 10))
         globalChats.click()
