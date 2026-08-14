@@ -6,7 +6,7 @@ import SupraRuntimeInterface
 /// Feature-facing runtime surface. Shipping composition provides the one shared
 /// coordinator; the alias preserves lightweight transport doubles in package
 /// tests without granting raw transport ownership to production features.
-public typealias ModelExecutionGateway = RuntimeClientProtocol
+public typealias ModelExecutionGateway = RuntimeFeatureClientProtocol
 
 public enum ModelExecutionPriority: Int, CaseIterable, Equatable, Sendable {
     case speculative = 0
@@ -462,7 +462,7 @@ public actor ModelExecutionCoordinator {
     }
 }
 
-extension ModelExecutionCoordinator: RuntimeClientProtocol {
+extension ModelExecutionCoordinator: RuntimeFeatureClientProtocol {
     public func connect() async throws {
         try await runtimeClient.connect()
     }
@@ -574,10 +574,6 @@ extension ModelExecutionCoordinator: RuntimeClientProtocol {
 
     public func runtimeStatus() async throws -> RuntimeStatus {
         try await runtimeClient.runtimeStatus()
-    }
-
-    public func restartRuntimeService() async throws {
-        try await runtimeClient.restartRuntimeService()
     }
 
     public func loadEmbeddingModel(

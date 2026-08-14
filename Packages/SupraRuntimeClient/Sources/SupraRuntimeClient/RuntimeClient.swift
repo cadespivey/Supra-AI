@@ -28,7 +28,7 @@ public enum RuntimeClientError: Error, LocalizedError, Sendable {
     }
 }
 
-public final class RuntimeClient: RuntimeClientProtocol, RuntimeResidencyClientProtocol,
+public final class RuntimeClient: RuntimeClientProtocol, RuntimeRecoveryClientProtocol,
     @unchecked Sendable {
     private let serviceName: String
     private let injectedRemoteService: SupraRuntimeXPCServiceProtocol?
@@ -73,10 +73,12 @@ public final class RuntimeClient: RuntimeClientProtocol, RuntimeResidencyClientP
     }
 
     public func connect() async throws {
+        try RuntimeMethodPolicy.require(.independentlyAdmitted, for: .connect)
         _ = try remoteService()
     }
 
     public func loadModel(_ request: LoadModelRequest) async throws -> LoadModelResponse {
+        try RuntimeMethodPolicy.require(.ordinaryDataPlane, for: .loadChatModel)
         let requestData = try encode(request)
         return try await sendRequest(LoadModelResponse.self) { service, reply in
             service.loadChatModel(requestData, withReply: reply)
@@ -84,6 +86,7 @@ public final class RuntimeClient: RuntimeClientProtocol, RuntimeResidencyClientP
     }
 
     public func generate(_ request: GenerateRequest) throws -> AsyncThrowingStream<GenerationEvent, Error> {
+        try RuntimeMethodPolicy.require(.ordinaryDataPlane, for: .generate)
         let requestData = try encode(request)
 
         return AsyncThrowingStream { continuation in
@@ -183,6 +186,7 @@ public final class RuntimeClient: RuntimeClientProtocol, RuntimeResidencyClientP
     }
 
     public func countTokens(_ request: CountTokensRequest) async throws -> CountTokensResponse {
+        try RuntimeMethodPolicy.require(.ordinaryDataPlane, for: .countTokens)
         let requestData = try encode(request)
         let response = try await sendRequest(CountTokensResponse.self) { service, reply in
             service.countTokens(requestData, withReply: reply)
@@ -207,6 +211,7 @@ public final class RuntimeClient: RuntimeClientProtocol, RuntimeResidencyClientP
     }
 
     public func cancelGeneration(_ generationID: GenerationID) async throws -> CancelGenerationResponse {
+        try RuntimeMethodPolicy.require(.independentlyAdmitted, for: .cancelGeneration)
         let generationIDData = try encode(generationID)
         return try await sendRequest(CancelGenerationResponse.self) { service, reply in
             service.cancelGeneration(generationIDData, withReply: reply)
@@ -214,6 +219,7 @@ public final class RuntimeClient: RuntimeClientProtocol, RuntimeResidencyClientP
     }
 
     public func recentEvents(for generationID: GenerationID, after sequenceNumber: Int) async throws -> [GenerationEvent] {
+        try RuntimeMethodPolicy.require(.independentlyAdmitted, for: .recentEvents)
         let generationIDData = try encode(generationID)
         return try await sendRequest([GenerationEvent].self) { service, reply in
             service.recentEvents(for: generationIDData, after: sequenceNumber, withReply: reply)
@@ -221,25 +227,29 @@ public final class RuntimeClient: RuntimeClientProtocol, RuntimeResidencyClientP
     }
 
     public func unloadModel() async throws -> UnloadModelResponse {
-        try await sendRequest(UnloadModelResponse.self) { service, reply in
+        try RuntimeMethodPolicy.require(.ordinaryDataPlane, for: .unloadModel)
+        return try await sendRequest(UnloadModelResponse.self) { service, reply in
             service.unloadModel(withReply: reply)
         }
     }
 
     public func reloadCurrentModel() async throws -> LoadModelResponse {
-        try await sendRequest(LoadModelResponse.self) { service, reply in
+        try RuntimeMethodPolicy.require(.ordinaryDataPlane, for: .reloadCurrentModel)
+        return try await sendRequest(LoadModelResponse.self) { service, reply in
             service.reloadCurrentModel(withReply: reply)
         }
     }
 
     public func runtimeStatus() async throws -> RuntimeStatus {
-        try await sendRequest(RuntimeStatus.self) { service, reply in
+        try RuntimeMethodPolicy.require(.independentlyAdmitted, for: .runtimeStatus)
+        return try await sendRequest(RuntimeStatus.self) { service, reply in
             service.runtimeStatus(withReply: reply)
         }
     }
 
     public func runtimeResidencySnapshot() async throws -> RuntimeServiceResidencySnapshot {
-        try await sendRequest(RuntimeServiceResidencySnapshot.self) { service, reply in
+        try RuntimeMethodPolicy.require(.recoveryControlPlane, for: .runtimeResidencySnapshot)
+        return try await sendRequest(RuntimeServiceResidencySnapshot.self) { service, reply in
             service.runtimeResidencySnapshot(withReply: reply)
         }
     }
@@ -247,6 +257,7 @@ public final class RuntimeClient: RuntimeClientProtocol, RuntimeResidencyClientP
     public func evictRuntimeArtifact(
         _ request: RuntimeServiceArtifactEvictionRequest
     ) async throws -> RuntimeServiceArtifactEvictionResponse {
+        try RuntimeMethodPolicy.require(.recoveryControlPlane, for: .evictRuntimeArtifact)
         let requestData = try encode(request)
         let response = try await sendRequest(RuntimeServiceArtifactEvictionResponse.self) {
             service, reply in
@@ -266,6 +277,7 @@ public final class RuntimeClient: RuntimeClientProtocol, RuntimeResidencyClientP
     public func resetRuntime(
         _ request: RuntimeServiceResetRequest
     ) async throws -> RuntimeServiceResetReceipt {
+        try RuntimeMethodPolicy.require(.recoveryControlPlane, for: .resetRuntime)
         let requestData = try encode(request)
         let response = try await sendRequest(RuntimeServiceResetResponse.self) { service, reply in
             service.resetRuntime(requestData, withReply: reply)
@@ -285,12 +297,17 @@ public final class RuntimeClient: RuntimeClientProtocol, RuntimeResidencyClientP
 
 #if DEBUG
     public func runtimeLifecycleDebugStatus() async throws -> RuntimeLifecycleDebugStatus {
-        try await sendRequest(RuntimeLifecycleDebugStatus.self) { service, reply in
+        try RuntimeMethodPolicy.require(.independentlyAdmitted, for: .runtimeLifecycleDebugStatus)
+        return try await sendRequest(RuntimeLifecycleDebugStatus.self) { service, reply in
             service.runtimeLifecycleDebugStatus(withReply: reply)
         }
     }
 
     public func triggerReservationTerminationProbe(_ generationID: GenerationID) async throws -> Bool {
+        try RuntimeMethodPolicy.require(
+            .recoveryControlPlane,
+            for: .triggerReservationTerminationProbe
+        )
         let generationIDData = try encode(generationID)
         return try await sendRequest(Bool.self) { service, reply in
             service.triggerReservationTerminationProbe(generationIDData, withReply: reply)
@@ -299,6 +316,7 @@ public final class RuntimeClient: RuntimeClientProtocol, RuntimeResidencyClientP
 #endif
 
     public func loadEmbeddingModel(_ request: LoadEmbeddingModelRequest) async throws -> LoadEmbeddingModelResponse {
+        try RuntimeMethodPolicy.require(.ordinaryDataPlane, for: .loadEmbeddingModel)
         let requestData = try encode(request)
         return try await sendRequest(LoadEmbeddingModelResponse.self) { service, reply in
             service.loadEmbeddingModel(requestData, withReply: reply)
@@ -306,6 +324,7 @@ public final class RuntimeClient: RuntimeClientProtocol, RuntimeResidencyClientP
     }
 
     public func embedTexts(_ request: EmbedTextRequest) async throws -> EmbedTextResponse {
+        try RuntimeMethodPolicy.require(.ordinaryDataPlane, for: .embedTexts)
         let requestData = try encode(request)
         let response = try await sendRequest(EmbedTextResponse.self) { service, reply in
             service.embedTexts(requestData, withReply: reply)
@@ -320,12 +339,14 @@ public final class RuntimeClient: RuntimeClientProtocol, RuntimeResidencyClientP
     }
 
     public func embeddingStatus() async throws -> EmbeddingModelStatus {
-        try await sendRequest(EmbeddingModelStatus.self) { service, reply in
+        try RuntimeMethodPolicy.require(.independentlyAdmitted, for: .embeddingStatus)
+        return try await sendRequest(EmbeddingModelStatus.self) { service, reply in
             service.embeddingStatus(withReply: reply)
         }
     }
 
     public func restartRuntimeService() async throws {
+        try RuntimeMethodPolicy.require(.recoveryControlPlane, for: .restartRuntimeService)
         invalidateConnection()?.invalidate()
         try await connect()
     }
@@ -539,6 +560,10 @@ private final class RuntimeClientEventSink: NSObject, SupraGenerationEventXPCSin
 
     func receive(_ eventData: Data, withReply reply: @escaping () -> Void) {
         do {
+            try RuntimeMethodPolicy.require(
+                .independentlyAdmitted,
+                for: .receiveGenerationEvent
+            )
             let event = try RuntimeXPCCodec.decodeResponse(
                 GenerationEvent.self,
                 from: eventData,

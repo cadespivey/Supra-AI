@@ -9,7 +9,7 @@ import SupraRuntimeInterface
 /// generation, and its terminal flush. The coordinator remains the sole owner
 /// of physical-lane admission; the wrapped RuntimeSafetyClient remains the sole
 /// owner of cancellation confirmation and fail-closed quarantine.
-public final class ModelExecutionPermit: RuntimeClientProtocol, @unchecked Sendable {
+public final class ModelExecutionPermit: RuntimeFeatureClientProtocol, @unchecked Sendable {
     public let modelBinding: ModelExecutionModelBinding?
 
     private let taskID: ModelExecutionTaskID
@@ -104,10 +104,6 @@ public final class ModelExecutionPermit: RuntimeClientProtocol, @unchecked Senda
 
     public func runtimeStatus() async throws -> RuntimeStatus {
         try await runtimeClient.runtimeStatus()
-    }
-
-    public func restartRuntimeService() async throws {
-        try await runtimeClient.restartRuntimeService()
     }
 
     public func loadEmbeddingModel(

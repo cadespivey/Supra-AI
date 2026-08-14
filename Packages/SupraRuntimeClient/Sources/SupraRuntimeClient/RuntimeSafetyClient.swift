@@ -68,7 +68,7 @@ struct RuntimeCancellationConfirmationPolicy: Sendable {
 /// Observation and cancellation calls remain available during quarantine; every
 /// model/data-plane call fails closed until recovery restarts the service and
 /// observes an idle status.
-public final class RuntimeSafetyClient: RuntimeClientProtocol, RuntimeResidencyClientProtocol,
+public final class RuntimeSafetyClient: RuntimeClientProtocol, RuntimeRecoveryClientProtocol,
     @unchecked Sendable {
     private let base: any RuntimeClientProtocol
     private let residencyBase: (any RuntimeResidencyClientProtocol)?
