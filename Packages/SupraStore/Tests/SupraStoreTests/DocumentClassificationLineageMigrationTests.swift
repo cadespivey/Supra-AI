@@ -60,7 +60,7 @@ final class DocumentClassificationLineageMigrationTests: XCTestCase {
         try queue.read { db in
             XCTAssertEqual(
                 try String.fetchAll(db, sql: "SELECT identifier FROM grdb_migrations ORDER BY rowid").last,
-                "v077_create_accepted_research_packets"
+                "v078_govern_structured_work_publication"
             )
             XCTAssertEqual(Set(try db.columns(in: "document_classifications").map(\.name)), Set([
                 "id", "matter_id", "document_id", "classification_key",

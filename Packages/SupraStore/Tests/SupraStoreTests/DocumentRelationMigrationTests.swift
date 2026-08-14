@@ -69,7 +69,7 @@ final class DocumentRelationMigrationTests: XCTestCase {
         })
 
         try queue.read { db in
-            XCTAssertEqual(try appliedMigrations(db).last, "v077_create_accepted_research_packets")
+            XCTAssertEqual(try appliedMigrations(db).last, "v078_govern_structured_work_publication")
             XCTAssertEqual(Set(try db.columns(in: "document_relations").map(\.name)), Set([
                 "id", "matter_id", "relation_key", "from_document_id", "to_document_id",
                 "kind", "evidence_json", "confidence", "proposed_by", "review_state",

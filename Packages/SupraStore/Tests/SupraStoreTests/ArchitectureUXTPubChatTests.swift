@@ -33,7 +33,7 @@ final class ArchitectureUXTPubChatTests: XCTestCase {
         // receipt, while this assertion owns its durable, content-free shape
         // and proves the new endpoint is appended after immutable v074.
         let migrator = SupraMigrator.makeMigrator()
-        XCTAssertEqual(migrator.migrations.count, 77)
+        XCTAssertEqual(migrator.migrations.count, 78)
         let v074Index = try XCTUnwrap(
             migrator.migrations.firstIndex(of: "v074_create_canonical_matter_identity")
         )
@@ -61,7 +61,7 @@ final class ArchitectureUXTPubChatTests: XCTestCase {
                     db,
                     sql: "SELECT identifier FROM grdb_migrations ORDER BY rowid"
                 ).last,
-                "v077_create_accepted_research_packets"
+                "v078_govern_structured_work_publication"
             )
             let receiptColumns = Set(
                 try db.columns(in: "grounded_chat_publications").map(\.name)

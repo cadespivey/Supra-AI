@@ -33,6 +33,8 @@ final class ArchitectureUXReviewRetirementSchemaTests: XCTestCase {
             #"        migrator.registerMigration("v076_link_export_publication_intents") { db in"#
         let v077Anchor =
             #"        migrator.registerMigration("v077_create_accepted_research_packets") { db in"#
+        let v078Anchor =
+            #"        migrator.registerMigration("v078_govern_structured_work_publication") { db in"#
         let returnAnchor = "        return migrator"
         let resetAnchor =
             "            // Case File Review: children before project/matter ownership."
@@ -45,6 +47,7 @@ final class ArchitectureUXReviewRetirementSchemaTests: XCTestCase {
         let v075Start = try XCTUnwrap(source.range(of: v075Anchor)?.lowerBound)
         let v076Start = try XCTUnwrap(source.range(of: v076Anchor)?.lowerBound)
         let v077Start = try XCTUnwrap(source.range(of: v077Anchor)?.lowerBound)
+        let v078Start = try XCTUnwrap(source.range(of: v078Anchor)?.lowerBound)
         let migratorReturn = try XCTUnwrap(source.range(of: returnAnchor)?.lowerBound)
         let resetStart = try XCTUnwrap(source.range(of: resetAnchor)?.lowerBound)
         let resetEnd = try XCTUnwrap(source.range(of: resetEndAnchor)?.lowerBound)
@@ -54,7 +57,8 @@ final class ArchitectureUXReviewRetirementSchemaTests: XCTestCase {
         XCTAssertLessThan(v074Start, v075Start)
         XCTAssertLessThan(v075Start, v076Start)
         XCTAssertLessThan(v076Start, v077Start)
-        XCTAssertLessThan(v077Start, migratorReturn)
+        XCTAssertLessThan(v077Start, v078Start)
+        XCTAssertLessThan(v078Start, migratorReturn)
         XCTAssertLessThan(migratorReturn, resetStart)
         XCTAssertLessThan(resetStart, resetEnd)
 
@@ -95,8 +99,8 @@ final class ArchitectureUXReviewRetirementSchemaTests: XCTestCase {
         )
 
         let migrations = SupraMigrator.makeMigrator().migrations
-        XCTAssertEqual(migrations.count, 77)
-        XCTAssertEqual(Array(migrations.suffix(9)), [
+        XCTAssertEqual(migrations.count, 78)
+        XCTAssertEqual(Array(migrations.suffix(10)), [
             "v069_add_verification_dimensions",
             "v070_add_authority_reviewed_proposition",
             "v071_create_draft_artifact_intents",
@@ -106,14 +110,15 @@ final class ArchitectureUXReviewRetirementSchemaTests: XCTestCase {
             "v075_create_grounded_chat_publications",
             "v076_link_export_publication_intents",
             "v077_create_accepted_research_packets",
+            "v078_govern_structured_work_publication",
         ])
         XCTAssertEqual(
             sha256(linesData(migrations)),
-            "ba28974c075939fc8833032be6c9da70c42c0af6b1d79087c15f92dfef5ba427"
+            "7b96b940044d47fb76e092b6e269299fc3790c31e111e72deb61b4314bcc4f39"
         )
         XCTAssertEqual(
-            sha256(linesData(Array(migrations.suffix(9)))),
-            "155dacb17807e7685820b3f23163d9a394e72ff6a9dcb3502dc312a37a354699"
+            sha256(linesData(Array(migrations.suffix(10)))),
+            "f6aeb1385c107eb39aaa8e51ed568967d7684cca48e4eacbcb373dd6a20e3a37"
         )
 
         // v072 embeds these persisted raw values into its data upgrade. Freeze
@@ -226,7 +231,7 @@ final class ArchitectureUXReviewRetirementSchemaTests: XCTestCase {
                     db,
                     sql: "SELECT identifier FROM grdb_migrations ORDER BY rowid"
                 ).last,
-                "v077_create_accepted_research_packets"
+                "v078_govern_structured_work_publication"
             )
             XCTAssertEqual(Set(try db.columns(in: "case_file_review_projects").map(\.name)), Set([
                 "id", "matter_id", "title", "status", "stale_reason", "source_run_id",

@@ -15,15 +15,15 @@ claims:
 
   - id: "STORE-MIGRATION-SEQUENCE"
     topic: "migration-count"
-    wording: "The shipping database schema registers a contiguous migration sequence from v001 through v077; v073 remains immutable, dormant compatibility history for databases that may already have applied it and does not represent an available product capability."
+    wording: "The shipping database schema registers a contiguous migration sequence from v001 through v078; v073 remains immutable, dormant compatibility history for databases that may already have applied it and does not represent an available product capability."
     owner: "Persistence engineering"
     code_anchor: "Packages/SupraStore/Sources/SupraStore/Database/SupraMigrator.swift"
     verification: "Scripts/verify-migration-sequence.sh"
     ci_job: "macos-ci/inventory"
     applicable_version: "Next release after 2.3.4"
-    last_reviewed: "2026-08-13"
+    last_reviewed: "2026-08-14"
     publication_anchor: "ARCHITECTURE.md"
-    expected: "v077_create_accepted_research_packets"
+    expected: "v078_govern_structured_work_publication"
 
   - id: "LOCAL-AI-HARDWARE-RECOMMENDATION"
     topic: "local-ai-hardware-recommendation"

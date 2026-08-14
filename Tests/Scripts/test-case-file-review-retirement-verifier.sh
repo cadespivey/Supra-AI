@@ -95,7 +95,7 @@ make_shipping_fixture() {
     'claims:' \
     '  - id: "STORE-MIGRATION-SEQUENCE"' \
     '    topic: "migration-count"' \
-    '    expected: "v077_create_accepted_research_packets"' \
+    '    expected: "v078_govern_structured_work_publication"' \
     '  - id: "RETAINED-ATTORNEY-REVIEW"' \
     '    wording: "Research results and reviewed authorities remain available for attorney review."'
   write_file "${fixture_root}/ARCHITECTURE.md" \
@@ -122,9 +122,9 @@ if ! grep -Fq 'static let identityPrefix = "guided-review:"' \
   printf '%s\n' 'FAIL: fixture does not exercise the exact retired-queue discriminator allowlist' >&2
   failures=$((failures + 1))
 fi
-if ! grep -Fq 'expected: "v077_create_accepted_research_packets"' \
+if ! grep -Fq 'expected: "v078_govern_structured_work_publication"' \
     "${base_fixture}/Docs/Verified-Product-Claims.yml"; then
-  printf '%s\n' 'FAIL: fixture does not exercise the shipping v075 migration endpoint' >&2
+  printf '%s\n' 'FAIL: fixture does not exercise the shipping v078 migration endpoint' >&2
   failures=$((failures + 1))
 fi
 if ! grep -Fq 'BEGIN hash-pinned dormant v073 evidence compatibility' \

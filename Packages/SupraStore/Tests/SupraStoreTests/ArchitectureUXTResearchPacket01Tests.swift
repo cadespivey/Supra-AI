@@ -309,11 +309,12 @@ struct ArchitectureUXResearchPacketFixture: @unchecked Sendable {
 final class ArchitectureUXTResearchPacket01Tests: XCTestCase {
     func testV077AppendsAcceptedPacketSchemaAfterArtifactV076() throws {
         let migrator = SupraMigrator.makeMigrator()
-        XCTAssertEqual(migrator.migrations.count, 77)
-        XCTAssertEqual(Array(migrator.migrations.suffix(3)), [
+        XCTAssertEqual(migrator.migrations.count, 78)
+        XCTAssertEqual(Array(migrator.migrations.suffix(4)), [
             "v075_create_grounded_chat_publications",
             "v076_link_export_publication_intents",
             "v077_create_accepted_research_packets",
+            "v078_govern_structured_work_publication",
         ])
 
         let queue = try DatabaseQueue()
