@@ -68,7 +68,7 @@ Packages/
 ├─ SupraRuntimeInterface   XPC DTOs / protocols shared by app and runtime service
 ├─ SupraRuntimeClient      Typed client for the runtime XPC service
 ├─ SupraDiagnostics        Validation suites & diagnostic reports
-├─ SupraDesignSystem       Shared UI primitives (badges, empty states, inspectors)
+├─ SupraDesignSystem       Shared UI primitives plus explicit-mode, citation-aware Markdown presentation
 └─ SupraTestKit            Test fixtures / seed corpus
 ```
 
@@ -80,6 +80,10 @@ Dependency rules that are enforced by package boundaries:
   WordprocessingML models, serialization, package parts, relationships, and renderer-neutral
   styles. `SupraDocuments` consumes that product directly. Court/letterhead shells, house-style
   floors, and drafting policy remain in the separate `SupraExports` target.
+- `SupraDesignSystem.SupraMarkdownView` centralizes parsing, streaming refresh, citation-link
+  routing, tables, and inline presentation. Its explicit assistant-response and saved-output
+  modes preserve the two established visual contracts; chat containers continue to own reading
+  width, one-leaf accessibility grouping, and source-list actions.
 - Store persistence records stop at the Store/Sessions boundary. High-change app surfaces receive
   stable `SupraSessions` projections for document and folder summaries, billing lines, ScratchPad
   search hits, and diagnostic events; their controllers map once while preserving persisted
