@@ -83,6 +83,27 @@ final class ArchitectureUXTEgress03Tests: XCTestCase {
         XCTAssertTrue(calls.isEmpty)
     }
 
+    /// Citation resolution is a provider query too. Its canonical cleaned bytes
+    /// must equal the public-citation intent before the POST can occur.
+    func testAlteredCitationLookupBytesMakeZeroTransportCalls() async throws {
+        let (gate, recorder, _) = makeGate()
+        let intent = fixture.intent(
+            query: "516 U.S. 349",
+            classification: .publicCitation
+        )
+
+        await assertEgressError(.bindingMismatch(.query)) {
+            _ = try await gate.resolveCitations(
+                [" 410 U.S. 113 "],
+                intent: intent,
+                authorization: .automaticPublicCitation
+            )
+        }
+
+        let calls = await recorder.recordedCitationCalls()
+        XCTAssertTrue(calls.isEmpty)
+    }
+
     /// T-EGRESS-03-PURPOSE expected RED: the current provider call accepts no
     /// task purpose, so approval for one legal action is not narrowly reusable.
     func testPurposeMismatchMakesZeroTransportCalls() async throws {

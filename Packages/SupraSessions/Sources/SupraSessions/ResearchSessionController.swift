@@ -140,6 +140,7 @@ public final class ResearchSessionController: ObservableObject {
     private let planner = ResearchQueryPlanner()
     private let tokenStore: any APIKeyStoreProtocol
     private let courtListenerClient: any CourtListenerClientProtocol
+    private let legalQueryEgressGate: LegalQueryEgressGate
     private let logPrivilegedQueryTerms: Bool
     public let matterID: String
 
@@ -162,13 +163,18 @@ public final class ResearchSessionController: ObservableObject {
         // Build the default CourtListener stack from the store; every request is
         // allowlisted, rate-limited, and logged to network_requests by the client.
         // Privileged query terms are redacted from the log unless explicitly enabled.
-        self.courtListenerClient = courtListenerClient ?? CourtListenerClient(
+        let resolvedCourtListenerClient = courtListenerClient ?? CourtListenerClient(
             httpClient: AuthorizedHTTPClient(
                 keyStore: resolvedTokenStore,
                 policy: NetworkPolicyService(),
                 logger: NetworkRequestLogger(repository: store.networkRequests),
                 redactsQueryValues: !legalConfiguration.logPrivilegedQueryTerms
             )
+        )
+        self.courtListenerClient = resolvedCourtListenerClient
+        self.legalQueryEgressGate = LegalQueryEgressGate(
+            providerID: .courtListener,
+            courtListenerClient: resolvedCourtListenerClient
         )
     }
 
@@ -468,7 +474,18 @@ public final class ResearchSessionController: ObservableObject {
         let requestMeta = requestMeta(request)
         try? store.research.updateQueryExecution(queryID: query.id, status: .running, executedAt: nil)
         do {
-            let response = try await courtListenerClient.searchOpinions(request, relatedResearchSessionID: sessionID)
+            let egress = try await approvedFormalResearchEgress(
+                request: request,
+                queryID: query.id,
+                sessionID: sessionID,
+                purpose: "formal-research-run"
+            )
+            let response = try await legalQueryEgressGate.searchOpinions(
+                request,
+                intent: egress.intent,
+                authorization: egress.authorization,
+                relatedResearchSessionID: sessionID
+            )
             for dto in response.results {
                 _ = try? store.research.insertResult(makeResultRecord(dto, queryID: query.id))
             }
@@ -547,8 +564,17 @@ public final class ResearchSessionController: ObservableObject {
         isRunning = true
         runMessage = nil
         do {
-            let response = try await courtListenerClient.searchOpinions(
-                CourtListenerSearchRequest(query: query.text, cursorURL: cursorURL),
+            let request = CourtListenerSearchRequest(query: query.text, cursorURL: cursorURL)
+            let egress = try await approvedFormalResearchEgress(
+                request: request,
+                queryID: query.id,
+                sessionID: sessionID,
+                purpose: "formal-research-load-more"
+            )
+            let response = try await legalQueryEgressGate.searchOpinions(
+                request,
+                intent: egress.intent,
+                authorization: egress.authorization,
                 relatedResearchSessionID: sessionID
             )
             for dto in response.results {
@@ -567,6 +593,38 @@ public final class ResearchSessionController: ObservableObject {
         }
         isRunning = false
         reloadOpenSession()
+    }
+
+    /// The query is already visible in the saved Research session and this path
+    /// runs only from the user's Run/Rerun/Load More action. Mint a short-lived,
+    /// single-use grant for those exact UTF-8 bytes immediately before transport.
+    private func approvedFormalResearchEgress(
+        request: CourtListenerSearchRequest,
+        queryID: String,
+        sessionID: String,
+        purpose: String
+    ) async throws -> (
+        intent: LegalQueryEgressIntent,
+        authorization: LegalQueryEgressAuthorization
+    ) {
+        let intent = LegalQueryEgressIntent(
+            providerID: .courtListener,
+            origin: .formalResearch,
+            queryBytes: Data(request.query.utf8),
+            purpose: "\(purpose):\(queryID)",
+            matterID: matterID,
+            researchSessionID: sessionID,
+            sourceSetDigest: nil,
+            classification: .matterDerived
+        )
+        let preview = try await legalQueryEgressGate.preview(for: intent)
+        let approvedAt = Date()
+        let grant = try await legalQueryEgressGate.approve(
+            preview: preview,
+            approvedAt: approvedAt,
+            expiresAt: approvedAt.addingTimeInterval(60)
+        )
+        return (intent, .grant(grant))
     }
 
     /// Records a network/research diagnostic warning for policy/auth failures

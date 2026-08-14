@@ -59,6 +59,7 @@ actor ArchitectureUXEgressCourtListenerRecorder: CourtListenerClientProtocol {
     }
 
     private var calls: [Call] = []
+    private var citationCalls: [[String]] = []
     private let response: CourtListenerSearchResponse
 
     init(response: CourtListenerSearchResponse = .init(count: 0, results: [])) {
@@ -74,6 +75,13 @@ actor ArchitectureUXEgressCourtListenerRecorder: CourtListenerClientProtocol {
     }
 
     func recordedCalls() -> [Call] { calls }
+
+    func resolveCitations(_ citations: [String]) async throws -> [CourtListenerCitationLookupDTO] {
+        citationCalls.append(citations)
+        return []
+    }
+
+    func recordedCitationCalls() -> [[String]] { citationCalls }
 }
 
 final class ArchitectureUXEgressClock: @unchecked Sendable {

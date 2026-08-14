@@ -49,6 +49,7 @@ public final class GlobalChatController: ObservableObject {
     private let router: ModelRouter
     private let legalConfiguration: LegalModelConfiguration
     private let courtListenerClient: any CourtListenerClientProtocol
+    private let legalQueryEgressGate: LegalQueryEgressGate
     /// Pluggable statutory-source orchestration (Open Legal Codes today; govinfo / Openlaws /
     /// MCP-backed sources later). Best-effort and lowest-weight — it supplements case law for
     /// statutory questions and never blocks the answer if a source is unavailable.
@@ -159,7 +160,7 @@ public final class GlobalChatController: ObservableObject {
         self.legalConfiguration = legalConfiguration
         self.router = ModelRouter(configuration: legalConfiguration)
         let resolvedTokenStore = tokenStore ?? APIKeyStoreComposition.live()
-        self.courtListenerClient = courtListenerClient ?? CourtListenerClient(
+        let resolvedCourtListenerClient = courtListenerClient ?? CourtListenerClient(
             httpClient: AuthorizedHTTPClient(
                 keyStore: resolvedTokenStore,
                 policy: NetworkPolicyService(),
@@ -167,6 +168,11 @@ public final class GlobalChatController: ObservableObject {
                 redactsQueryValues: !legalConfiguration.logPrivilegedQueryTerms
             ),
             baseURLOverride: legalConfiguration.courtListenerBaseURL
+        )
+        self.courtListenerClient = resolvedCourtListenerClient
+        self.legalQueryEgressGate = LegalQueryEgressGate(
+            providerID: .courtListener,
+            courtListenerClient: resolvedCourtListenerClient
         )
         // Default statutory tier: eCFR (official federal regs, currency-verifiable) + Open Legal
         // Codes (free state/USC convenience). Each legal-data provider gets its OWN
@@ -1919,7 +1925,7 @@ public final class GlobalChatController: ObservableObject {
                     researchSessionID: nil
                 )
             }
-            return await caseFinderOutput(for: scopedClassification)
+            return await caseFinderOutput(for: scopedClassification, chatID: chatID)
         }
 
         let sourcePlan = LegalResearchSourcePlanner.plan(
@@ -2017,6 +2023,7 @@ public final class GlobalChatController: ObservableObject {
                     for: classification,
                     route: route,
                     modelID: modelID,
+                    chatID: chatID,
                     matterID: scopedMatterID,
                     egressDisposition: egressDisposition
                 )
@@ -2472,6 +2479,7 @@ public final class GlobalChatController: ObservableObject {
         for classification: LegalQueryClassification,
         route: ModelRoute,
         modelID: ModelID,
+        chatID: String,
         matterID: String?,
         egressDisposition: AutomaticLegalEgressDisposition
     ) async throws -> (queryTerms: [String], authorities: [LegalAuthority], researchSessionID: String?) {
@@ -2551,8 +2559,17 @@ public final class GlobalChatController: ObservableObject {
             }
 
             do {
-                let response = try await courtListenerClient.searchOpinions(
+                let egress = try await quickResearchEgress(
+                    request: item.request,
+                    disposition: egressDisposition,
+                    matterID: matterID,
+                    researchSessionID: researchSession?.id,
+                    purpose: "quick-research:\(chatID):\(index)"
+                )
+                let response = try await legalQueryEgressGate.searchOpinions(
                     item.request,
+                    intent: egress.intent,
+                    authorization: egress.authorization,
                     relatedResearchSessionID: researchSession?.id
                 )
                 authorities += LegalAuthorityNormalizer.normalize(response)
@@ -2631,7 +2648,10 @@ public final class GlobalChatController: ObservableObject {
     /// Answers a party/litigation-lookup question ("who has sued X") from CourtListener's
     /// RECAP dockets — a factual case list, not legal authority, so it skips the source
     /// packet and the citation verifier entirely.
-    private func caseFinderOutput(for classification: LegalQueryClassification) async -> LegalWorkflowResult {
+    private func caseFinderOutput(
+        for classification: LegalQueryClassification,
+        chatID: String
+    ) async -> LegalWorkflowResult {
         let party = classification.partyName?.trimmingCharacters(in: .whitespacesAndNewlines)
         let hasParty = (party?.isEmpty == false)
         let request = CourtListenerSearchRequest(
@@ -2645,7 +2665,19 @@ public final class GlobalChatController: ObservableObject {
         )
         let terms = [request.query]
         do {
-            let response = try await courtListenerClient.searchDockets(request)
+            let egress = try await quickResearchEgress(
+                request: request,
+                disposition: .unrestricted,
+                matterID: nil,
+                researchSessionID: nil,
+                purpose: "quick-docket-search:\(chatID)"
+            )
+            let response = try await legalQueryEgressGate.searchDockets(
+                request,
+                intent: egress.intent,
+                authorization: egress.authorization,
+                relatedResearchSessionID: nil
+            )
             let dockets = Array(response.results.prefix(Self.maxCaseFinderResults))
             let output = dockets.isEmpty
                 ? Self.caseFinderEmptyMessage(party: hasParty ? party : nil)
@@ -2658,6 +2690,54 @@ public final class GlobalChatController: ObservableObject {
 
     private static let maxCaseFinderResults = 15
 
+    /// Maps the already-contained quick-research decision onto the provider gate.
+    /// Matter-derived topical/docket work is stopped before reaching this helper.
+    /// The public-citation exception uses only its parsed reporter bytes. Global
+    /// chat has no matter/source body and runs only from an explicit Send action;
+    /// its exact provider query therefore receives a one-shot user-query grant.
+    private func quickResearchEgress(
+        request: CourtListenerSearchRequest,
+        disposition: AutomaticLegalEgressDisposition,
+        matterID: String?,
+        researchSessionID: String?,
+        purpose: String
+    ) async throws -> (
+        intent: LegalQueryEgressIntent,
+        authorization: LegalQueryEgressAuthorization
+    ) {
+        let classification: LegalQueryEgressClassification
+        switch disposition {
+        case .deterministicPublicCaseLookup:
+            classification = .publicCitation
+        case .unrestricted:
+            classification = .userApprovedQuery
+        case .blockedMatterQuery:
+            throw LegalQueryEgressError.approvalRequired
+        }
+        let intent = LegalQueryEgressIntent(
+            providerID: .courtListener,
+            origin: .quickResearch,
+            queryBytes: Data(request.query.utf8),
+            purpose: purpose,
+            matterID: matterID,
+            researchSessionID: researchSessionID,
+            sourceSetDigest: nil,
+            classification: classification
+        )
+        if classification == .publicCitation {
+            return (intent, .automaticPublicCitation)
+        }
+
+        let preview = try await legalQueryEgressGate.preview(for: intent)
+        let approvedAt = Date()
+        let grant = try await legalQueryEgressGate.approve(
+            preview: preview,
+            approvedAt: approvedAt,
+            expiresAt: approvedAt.addingTimeInterval(60)
+        )
+        return (intent, .grant(grant))
+    }
+
     /// ADDITIVE live-resolution check for `/verify`: extracts citation strings locally
     /// and asks CourtListener whether each resolves to a real, published opinion.
     /// PRIVACY: only the extracted cite strings leave the device — never the answer or
@@ -2668,7 +2748,21 @@ public final class GlobalChatController: ObservableObject {
         guard !citations.isEmpty else { return "" }
         let capped = Array(citations.prefix(Self.maxCitationResolutionLookups))
         do {
-            let results = try await courtListenerClient.resolveCitations(capped)
+            let intent = LegalQueryEgressIntent(
+                providerID: .courtListener,
+                origin: .quickResearch,
+                queryBytes: LegalQueryEgressGate.citationLookupQueryBytes(capped),
+                purpose: "quick-citation-resolution",
+                matterID: scopedMatterID,
+                researchSessionID: nil,
+                sourceSetDigest: nil,
+                classification: .publicCitation
+            )
+            let results = try await legalQueryEgressGate.resolveCitations(
+                capped,
+                intent: intent,
+                authorization: .automaticPublicCitation
+            )
             guard !results.isEmpty else { return "" }
             var lines = [
                 "",
