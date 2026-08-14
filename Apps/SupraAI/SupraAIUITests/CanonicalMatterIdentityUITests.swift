@@ -81,6 +81,36 @@ final class CanonicalMatterIdentityUITests: XCTestCase {
         }
     }
 
+    func test00MatterEditorOwnsMutableStructuredPartiesAndRepresentations() throws {
+        let source = try appSource(relativePath: "SupraAI/Matters/MatterEditorSheet.swift")
+        for contract in [
+            "@State private var parties: [MatterPartyIdentity]",
+            "@State private var representations: [MatterRepresentationIdentity]",
+            "MatterPartyClientStatus",
+            "MatterRepresentationRelationshipKind",
+            "MatterServiceAddress",
+            "matter.identity.party.add",
+            "matter.identity.representation.add",
+            "parties: parties",
+            "representations: representations",
+        ] {
+            XCTAssertTrue(
+                source.contains(contract),
+                "Expected RED: Matter Edit cannot create or repair structured identity: \(contract)"
+            )
+        }
+        for forbiddenInference in [
+            "draft.clientNames.split",
+            "draft.clientNames.components",
+            "switch draft.partyPerspective",
+        ] {
+            XCTAssertFalse(
+                source.contains(forbiddenInference),
+                "legacy matter strings cannot manufacture structured parties: \(forbiddenInference)"
+            )
+        }
+    }
+
     func testUnresolvedCourtRemainsVisibleAndBlocksCourtDependentDrafting() throws {
         try requireImplementedSourceContract()
         let app = launch(matterID: Wire.unresolvedMatterID)
@@ -142,6 +172,7 @@ final class CanonicalMatterIdentityUITests: XCTestCase {
     private func requireImplementedSourceContract() throws {
         try test00MatterEditorPersistsSelectedStableIdentityWithoutFuzzyFallback()
         try test00WorkspaceAndDraftSheetConsumeCanonicalIdentityProjections()
+        try test00MatterEditorOwnsMutableStructuredPartiesAndRepresentations()
         let environment = try appSource(relativePath: "SupraAI/AppEnvironment.swift")
         for wire in [
             Wire.scenario,
