@@ -40,14 +40,12 @@ public struct MatterCourtPresentationBuilder: Sendable {
             return unresolvedPresentation(for: snapshot)
         }
 
-        let scope = catalog.authorityScope(for: court)
-        let relationshipIsCoherent = court.id == jurisdiction.id
-            || scope.jurisdictionName == jurisdiction.displayName
-            || scope.jurisdictionName == jurisdiction.jurisdictionName
-            || scope.mandatoryAuthorities.contains(jurisdiction.displayName)
-        guard relationshipIsCoherent else {
+        guard catalog.canonicalJurisdictionOption(
+            forSelectedOptionID: court.id
+        )?.id == jurisdiction.id else {
             return unresolvedPresentation(for: snapshot)
         }
+        let scope = catalog.authorityScope(for: court)
         return MatterCourtPresentation(
             matterID: snapshot.matterID,
             identityRevision: snapshot.identityRevision,

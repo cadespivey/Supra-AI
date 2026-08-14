@@ -71,6 +71,7 @@ public final class MatterDocumentsController: ObservableObject {
     }
     @Published public private(set) var searchHits: [DocumentSearchHit] = []
     @Published public var message: String?
+    @Published public private(set) var lastMutationFailure: UserMutationFailure?
     @Published public private(set) var permanentDeletionNotice: PermanentDeletionNotice?
     /// Documents whose saved correction is waiting for its replacement index to
     /// become visible. Keep the transition on screen briefly even when a tiny
@@ -374,20 +375,58 @@ public final class MatterDocumentsController: ObservableObject {
     /// Imports into a specific folder (nil = root) regardless of the sidebar
     /// selection, if setup is complete.
     public func importItems(_ urls: [URL], targetFolderID: String?) {
+        _ = attemptImportItems(urls, targetFolderID: targetFolderID)
+    }
+
+    /// Attempts to persist all durable import-initiation rows. The selected
+    /// destination and source URLs remain owned by the caller on rejection.
+    @discardableResult
+    public func attemptImportItems(
+        _ urls: [URL],
+        targetFolderID: String?
+    ) -> UserMutationOutcome<String> {
         guard isImportReady() else {
-            message = "Finish Document Intelligence setup in Settings before importing."
-            return
+            return rejectImport(
+                "Finish Document Intelligence setup in Settings before importing.",
+                recoveryActions: [.correctInput]
+            )
         }
-        guard !urls.isEmpty else { return }
+        guard !urls.isEmpty else {
+            return rejectImport(
+                "Choose at least one file or folder to import.",
+                recoveryActions: [.correctInput]
+            )
+        }
         let display = urls.first?.deletingLastPathComponent().lastPathComponent
-        if queue.enqueueImport(matterID: matterID, sources: urls, sourceRootDisplay: display, targetFolderID: targetFolderID) == nil {
+        guard let jobID = queue.enqueueImport(
+            matterID: matterID,
+            sources: urls,
+            sourceRootDisplay: display,
+            targetFolderID: targetFolderID
+        ) else {
             // Enqueue failed (e.g. the batch/job could not be written) — surface it
             // instead of silently dropping the user's import.
-            message = queue.lastError.map { "Couldn't start the import: \($0)" }
+            let failureMessage = queue.lastError.map { "Couldn't start the import: \($0)" }
                 ?? "Couldn't start the document import. Please try again."
-        } else {
-            message = nil
+            return rejectImport(failureMessage)
         }
+        message = nil
+        lastMutationFailure = nil
+        return .committed(jobID)
+    }
+
+    private func rejectImport(
+        _ userMessage: String,
+        recoveryActions: Set<UserMutationRecoveryAction> = [.retry]
+    ) -> UserMutationOutcome<String> {
+        message = userMessage
+        let failure = UserMutationFailure(
+            operation: .importStart,
+            userMessage: userMessage,
+            recoveryActions: recoveryActions
+        )
+        lastMutationFailure = failure
+        return .failed(failure)
     }
 
     /// Imports research uploaded from the Authorities tab into a dedicated

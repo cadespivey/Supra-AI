@@ -207,6 +207,16 @@ public final class MatterDraftingController: ObservableObject {
             }
     }
 
+    /// Loads one Store-owned identity snapshot and derives every caption,
+    /// represented-side, opposing-side, and service default together. Legacy
+    /// clientNames and partyPerspective fields never participate.
+    public func draftPartyDefaults(matterID: String) throws -> DraftPartyDefaults {
+        guard let snapshot = try store.matterIdentity.fetchSnapshot(matterID: matterID) else {
+            throw DraftPartyDefaultsError.incoherentMatterOwnership
+        }
+        return try DraftPartyDefaultsBuilder().canonicalDefaults(for: snapshot)
+    }
+
     /// Explicitly acknowledges review of legacy file-only artifacts. The files
     /// remain untouched; each content-free recovery item receives an audit event.
     public func confirmLegacyDraftArtifactsReviewed(matterID: String) {

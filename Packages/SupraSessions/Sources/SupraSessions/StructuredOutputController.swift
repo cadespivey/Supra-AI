@@ -34,6 +34,8 @@ public enum ChatOutputPromotionError: Error, LocalizedError, Equatable, Sendable
 /// Structure repair (WO 29) and the Outputs tab UI (WO 30) build on this.
 @MainActor
 public final class StructuredOutputController: ObservableObject {
+    public typealias ExportAction = (String, DocumentExportFormat) throws -> URL
+
     public struct OutputItem: Identifiable, Sendable, Equatable {
         public let id: String
         public let title: String
@@ -66,11 +68,13 @@ public final class StructuredOutputController: ObservableObject {
     @Published public private(set) var outputs: [OutputItem] = []
     @Published public private(set) var isGenerating = false
     @Published public private(set) var message: String?
+    @Published public private(set) var lastMutationFailure: UserMutationFailure?
 
     private let store: SupraStore
     private let runtimeClient: any RuntimeClientProtocol
     private let retrieval: DocumentRetrievalService
     private let defaultSystemPrompt: String?
+    private let exportAction: ExportAction
     public let matterID: String
 
     public init(
@@ -78,13 +82,21 @@ public final class StructuredOutputController: ObservableObject {
         runtimeClient: any RuntimeClientProtocol,
         matterID: String,
         embedder: (any TextEmbedder)? = nil,
-        defaultSystemPrompt: String? = nil
+        defaultSystemPrompt: String? = nil,
+        exportAction: ExportAction? = nil
     ) {
         self.store = store
         self.runtimeClient = runtimeClient
         self.retrieval = DocumentRetrievalService(store: store, embedder: embedder)
         self.matterID = matterID
         self.defaultSystemPrompt = defaultSystemPrompt
+        self.exportAction = exportAction ?? { outputID, format in
+            try DocumentExportService(store: store).export(
+                matterID: matterID,
+                structuredOutputID: outputID,
+                format: format
+            )
+        }
     }
 
     /// Converts one completed grounded chat answer into an ordinary document-Q&A
@@ -254,20 +266,45 @@ public final class StructuredOutputController: ObservableObject {
     /// written file URL (plan §10.2). Applies to document Q&A/chronology outputs
     /// and any structured output.
     public func exportOutput(outputID: String, format: DocumentExportFormat) -> URL? {
+        attemptExportOutput(outputID: outputID, format: format).committedValue
+    }
+
+    public func attemptExportOutput(
+        outputID: String,
+        format: DocumentExportFormat
+    ) -> UserMutationOutcome<URL> {
         guard let record = outputRecord(outputID),
               let active = activeVersion(for: record),
               active.verificationStatus == OutputVerificationStatus.allSupported.rawValue,
               OutputAssurancePresentation.isExportEligible(Self.assurance(for: active))
         else {
-            message = "This output's assurance state does not permit export. Reverify or regenerate it from fresh sources."
-            return nil
+            return rejectExport(
+                "This output's assurance state does not permit export. Reverify or regenerate it from fresh sources.",
+                recoveryActions: [.correctInput]
+            )
         }
         do {
-            return try DocumentExportService(store: store).export(matterID: matterID, structuredOutputID: outputID, format: format)
+            let destination = try exportAction(outputID, format)
+            message = nil
+            lastMutationFailure = nil
+            return .committed(destination)
         } catch {
-            message = "Export failed: \(error.localizedDescription)"
-            return nil
+            return rejectExport("Export failed: \(error.localizedDescription)")
         }
+    }
+
+    private func rejectExport(
+        _ userMessage: String,
+        recoveryActions: Set<UserMutationRecoveryAction> = [.retry]
+    ) -> UserMutationOutcome<URL> {
+        message = userMessage
+        let failure = UserMutationFailure(
+            operation: .export,
+            userMessage: userMessage,
+            recoveryActions: recoveryActions
+        )
+        lastMutationFailure = failure
+        return .failed(failure)
     }
 
     public func loadOutputs() {

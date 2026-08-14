@@ -125,6 +125,7 @@ public final class ResearchSessionController: ObservableObject {
     @Published public private(set) var sessions: [ResearchSessionSummary] = []
     @Published public private(set) var planState: PlanState = .idle
     @Published public var plannedQueries: [PlannedQuery] = []
+    @Published public private(set) var lastMutationFailure: UserMutationFailure?
 
     // Open-session run/detail state (WO 25).
     @Published public private(set) var openSessionID: String?
@@ -319,7 +320,8 @@ public final class ResearchSessionController: ObservableObject {
         }
         guard !approved.isEmpty else { throw ResearchSessionError.noApprovedQueries }
 
-        let session = try store.research.createSession(
+        let courtFilter = JurisdictionCatalog.courtFilterString(draft.courtFilterIDs)
+        let result = try store.research.createApprovedSessionAtomically(
             matterID: matterID,
             title: draft.title,
             issueText: draft.issueText,
@@ -328,20 +330,17 @@ public final class ResearchSessionController: ObservableObject {
             excludedCourts: draft.excludedCourts,
             dateRangeStart: draft.dateRangeStart,
             dateRangeEnd: draft.dateRangeEnd,
-            status: .approved
+            queries: approved.enumerated().map { index, query in
+                ResearchRepository.ApprovedQueryInput(
+                    queryText: query.text,
+                    queryIndex: index,
+                    courtFilter: courtFilter,
+                    dateFiledAfter: draft.dateRangeStart,
+                    dateFiledBefore: draft.dateRangeEnd
+                )
+            }
         )
-        let courtFilter = JurisdictionCatalog.courtFilterString(draft.courtFilterIDs)
-        for (index, query) in approved.enumerated() {
-            _ = try store.research.createQuery(
-                researchSessionID: session.id,
-                queryText: query.text.trimmingCharacters(in: .whitespacesAndNewlines),
-                queryIndex: index,
-                courtFilter: courtFilter,
-                dateFiledAfter: draft.dateRangeStart,
-                dateFiledBefore: draft.dateRangeEnd,
-                status: .approved
-            )
-        }
+        let session = result.session
         _ = try? store.auditEvents.recordEvent(
             matterID: matterID,
             eventType: "research_queries_approved",
@@ -352,7 +351,27 @@ public final class ResearchSessionController: ObservableObject {
         )
         resetPlan()
         loadSessions()
+        lastMutationFailure = nil
         return session.id
+    }
+
+    /// Converts the route-dependent save into a presentation-safe commit
+    /// boundary. The draft and planned queries are reset only after the Store
+    /// atomically accepts the full session aggregate.
+    public func attemptSavePlan(
+        draft: ResearchPlanDraft
+    ) -> UserMutationOutcome<String> {
+        do {
+            return .committed(try savePlan(draft: draft))
+        } catch {
+            let failure = UserMutationFailure(
+                operation: .routeDependentSave,
+                userMessage: "Couldn’t save the research plan. \(error.localizedDescription)",
+                recoveryActions: [.retry]
+            )
+            lastMutationFailure = failure
+            return .failed(failure)
+        }
     }
 
     // MARK: - Run (WO 25)

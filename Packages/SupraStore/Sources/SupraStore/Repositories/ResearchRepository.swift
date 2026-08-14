@@ -3,10 +3,112 @@ import GRDB
 import SupraCore
 
 public final class ResearchRepository: @unchecked Sendable {
+    public struct ApprovedQueryInput: Sendable {
+        public let queryText: String
+        public let queryIndex: Int
+        public let courtFilter: String?
+        public let dateFiledAfter: Date?
+        public let dateFiledBefore: Date?
+
+        public init(
+            queryText: String,
+            queryIndex: Int,
+            courtFilter: String? = nil,
+            dateFiledAfter: Date? = nil,
+            dateFiledBefore: Date? = nil
+        ) {
+            self.queryText = queryText
+            self.queryIndex = queryIndex
+            self.courtFilter = courtFilter
+            self.dateFiledAfter = dateFiledAfter
+            self.dateFiledBefore = dateFiledBefore
+        }
+    }
+
+    public struct ApprovedSessionResult: Sendable {
+        public let session: ResearchSessionRecord
+        public let queries: [ResearchQueryRecord]
+
+        public init(session: ResearchSessionRecord, queries: [ResearchQueryRecord]) {
+            self.session = session
+            self.queries = queries
+        }
+    }
+
     private let writer: any DatabaseWriter
 
     public init(writer: any DatabaseWriter) {
         self.writer = writer
+    }
+
+    /// Persists an approved session and all of its approved queries within one
+    /// Store-owned transaction. If any query insert fails, the session insert
+    /// is rolled back with it and callers never observe a partial plan.
+    @discardableResult
+    public func createApprovedSessionAtomically(
+        matterID: String,
+        title: String,
+        issueText: String,
+        jurisdiction: String,
+        preferredCourts: [String] = [],
+        excludedCourts: [String] = [],
+        dateRangeStart: Date? = nil,
+        dateRangeEnd: Date? = nil,
+        queries: [ApprovedQueryInput]
+    ) throws -> ApprovedSessionResult {
+        let title = try Self.requireNonEmpty(title, fieldName: "title")
+        let issueText = try Self.requireNonEmpty(issueText, fieldName: "issue_text")
+        let jurisdiction = try Self.requireNonEmpty(jurisdiction, fieldName: "jurisdiction")
+        guard !queries.isEmpty else {
+            throw ResearchRepositoryError.requiredFieldMissing("queries")
+        }
+        let preparedQueries = try queries.map { input in
+            ApprovedQueryInput(
+                queryText: try Self.requireNonEmpty(input.queryText, fieldName: "query_text"),
+                queryIndex: input.queryIndex,
+                courtFilter: Self.trimOptional(input.courtFilter),
+                dateFiledAfter: input.dateFiledAfter,
+                dateFiledBefore: input.dateFiledBefore
+            )
+        }
+        let preferredCourtsJSON = try JSONCoding.encode(preferredCourts)
+        let excludedCourtsJSON = try JSONCoding.encode(excludedCourts)
+
+        return try writer.write { db in
+            let now = Date()
+            let session = ResearchSessionRecord(
+                matterID: matterID,
+                title: title,
+                issueText: issueText,
+                jurisdiction: jurisdiction,
+                preferredCourtsJSON: preferredCourtsJSON,
+                excludedCourtsJSON: excludedCourtsJSON,
+                dateRangeStart: dateRangeStart,
+                dateRangeEnd: dateRangeEnd,
+                status: ResearchSessionStatus.approved.rawValue,
+                createdAt: now,
+                updatedAt: now
+            )
+            try session.insert(db)
+
+            let records = preparedQueries.map { input in
+                ResearchQueryRecord(
+                    researchSessionID: session.id,
+                    queryText: input.queryText,
+                    queryIndex: input.queryIndex,
+                    courtFilter: input.courtFilter,
+                    dateFiledAfter: input.dateFiledAfter,
+                    dateFiledBefore: input.dateFiledBefore,
+                    status: ResearchQueryStatus.approved.rawValue,
+                    createdAt: now,
+                    updatedAt: now
+                )
+            }
+            for record in records {
+                try record.insert(db)
+            }
+            return ApprovedSessionResult(session: session, queries: records)
+        }
     }
 
     @discardableResult

@@ -1,5 +1,46 @@
 import SupraCore
 
+/// The non-identity fields that ship with a canonical matter create/edit.
+/// Supplying this value asks the identity repository to persist the complete
+/// workspace in the same transaction as the identity revision. `nil` retains
+/// the narrow identity-only command used by migrations and focused fixtures.
+public struct MatterIdentityWorkspaceDetails: Sendable, Equatable {
+  public let name: String
+  public let judge: String?
+  public let docketNumber: String?
+  public let practiceArea: String?
+  public let matterDescription: String?
+  public let internalMatterID: String?
+  public let clientID: String?
+  public let clientMatterID: String?
+  public let notes: String?
+  public let starterFolderNames: [String]
+
+  public init(
+    name: String,
+    judge: String?,
+    docketNumber: String?,
+    practiceArea: String?,
+    matterDescription: String?,
+    internalMatterID: String?,
+    clientID: String?,
+    clientMatterID: String?,
+    notes: String?,
+    starterFolderNames: [String] = []
+  ) {
+    self.name = name
+    self.judge = judge
+    self.docketNumber = docketNumber
+    self.practiceArea = practiceArea
+    self.matterDescription = matterDescription
+    self.internalMatterID = internalMatterID
+    self.clientID = clientID
+    self.clientMatterID = clientMatterID
+    self.notes = notes
+    self.starterFolderNames = starterFolderNames
+  }
+}
+
 /// One atomic request to create a matter and publish its canonical legal
 /// identity graph. Legacy strings remain source evidence; only the explicit
 /// party and representation values become structured identity.
@@ -17,6 +58,7 @@ public struct MatterIdentityCreateCommand: Sendable {
   public let canonicalCourtID: CanonicalCourtID?
   public let parties: [MatterPartyIdentity]
   public let representations: [MatterRepresentationIdentity]
+  public let workspaceDetails: MatterIdentityWorkspaceDetails?
 
   public init(
     matterID: String,
@@ -31,7 +73,8 @@ public struct MatterIdentityCreateCommand: Sendable {
     canonicalJurisdictionID: CanonicalJurisdictionID?,
     canonicalCourtID: CanonicalCourtID?,
     parties: [MatterPartyIdentity],
-    representations: [MatterRepresentationIdentity]
+    representations: [MatterRepresentationIdentity],
+    workspaceDetails: MatterIdentityWorkspaceDetails? = nil
   ) {
     self.matterID = matterID
     self.name = name
@@ -46,6 +89,7 @@ public struct MatterIdentityCreateCommand: Sendable {
     self.canonicalCourtID = canonicalCourtID
     self.parties = parties
     self.representations = representations
+    self.workspaceDetails = workspaceDetails
   }
 }
 
@@ -66,6 +110,7 @@ public struct MatterIdentityUpdateCommand: Sendable {
   public let canonicalCourtID: CanonicalCourtID?
   public let parties: [MatterPartyIdentity]
   public let representations: [MatterRepresentationIdentity]
+  public let workspaceDetails: MatterIdentityWorkspaceDetails?
 
   public init(
     matterID: String,
@@ -80,7 +125,8 @@ public struct MatterIdentityUpdateCommand: Sendable {
     canonicalJurisdictionID: CanonicalJurisdictionID?,
     canonicalCourtID: CanonicalCourtID?,
     parties: [MatterPartyIdentity],
-    representations: [MatterRepresentationIdentity]
+    representations: [MatterRepresentationIdentity],
+    workspaceDetails: MatterIdentityWorkspaceDetails? = nil
   ) {
     self.matterID = matterID
     self.expectedIdentityRevision = expectedIdentityRevision
@@ -95,5 +141,6 @@ public struct MatterIdentityUpdateCommand: Sendable {
     self.canonicalCourtID = canonicalCourtID
     self.parties = parties
     self.representations = representations
+    self.workspaceDetails = workspaceDetails
   }
 }

@@ -22,6 +22,7 @@ extension MatterIdentityRepository {
                     identityRevision: 1,
                     legacyPartyPerspective: command.legacyPartyPerspective,
                     legacyClientNames: command.legacyClientNames,
+                    workspaceDetails: command.workspaceDetails,
                     expectedSnapshot: expected
                 ) else {
                     throw MatterIdentityRepositoryError.conflictingWrite
@@ -32,11 +33,19 @@ extension MatterIdentityRepository {
             let timestamp = Date()
             try MatterRecord(
                 id: command.matterID,
-                name: command.name,
+                name: command.workspaceDetails?.name ?? command.name,
                 jurisdiction: command.legacyJurisdictionText,
                 partyPerspective: command.legacyPartyPerspective.rawValue,
                 court: command.legacyCourtText,
+                judge: command.workspaceDetails?.judge,
+                docketNumber: command.workspaceDetails?.docketNumber,
+                practiceArea: command.workspaceDetails?.practiceArea,
                 clientNames: command.legacyClientNames,
+                matterDescription: command.workspaceDetails?.matterDescription,
+                internalMatterID: command.workspaceDetails?.internalMatterID,
+                clientID: command.workspaceDetails?.clientID,
+                clientMatterID: command.workspaceDetails?.clientMatterID,
+                notes: command.workspaceDetails?.notes,
                 createdAt: timestamp,
                 updatedAt: timestamp
             ).insert(db)
@@ -83,10 +92,25 @@ extension MatterIdentityRepository {
                 representations: expected.representations,
                 timestamp: timestamp
             )
+            if let workspaceDetails = command.workspaceDetails {
+                try MatterIdentityWrite.insertCreatedWorkspaceRecords(
+                    db,
+                    matterID: command.matterID,
+                    details: workspaceDetails,
+                    timestamp: timestamp
+                )
+            }
             guard let snapshot = try MatterIdentityWrite.fetchSnapshot(
                 db,
                 matterID: command.matterID
-            ), snapshot == expected else {
+            ), snapshot == expected,
+                  try MatterIdentityWrite.workspaceMatches(
+                    db,
+                    matterID: command.matterID,
+                    sourceKind: "create",
+                    identityRevision: 1,
+                    details: command.workspaceDetails
+                  ) else {
                 throw MatterIdentityRepositoryError.identityIncoherent
             }
             return snapshot
@@ -125,6 +149,7 @@ extension MatterIdentityRepository {
                     identityRevision: resultRevision,
                     legacyPartyPerspective: command.legacyPartyPerspective,
                     legacyClientNames: command.legacyClientNames,
+                    workspaceDetails: command.workspaceDetails,
                     expectedSnapshot: expected
                 ) else {
                     throw MatterIdentityRepositoryError.conflictingWrite
@@ -152,32 +177,11 @@ extension MatterIdentityRepository {
                 canonicalCatalogDigestSHA256: command.canonicalCatalogDigestSHA256,
                 createdAt: timestamp
             )
-            try db.execute(
-                sql: """
-                    UPDATE matters
-                    SET jurisdiction = ?, court = ?, party_perspective = ?,
-                        client_names = ?, canonical_jurisdiction_id = ?,
-                        canonical_court_id = ?, court_resolution_state = ?,
-                        canonical_catalog_version = ?,
-                        canonical_catalog_digest_sha256 = ?,
-                        identity_revision = ?, updated_at = ?
-                    WHERE id = ? AND identity_revision = ? AND deleted_at IS NULL
-                    """,
-                arguments: [
-                    command.legacyJurisdictionText,
-                    command.legacyCourtText,
-                    command.legacyPartyPerspective.rawValue,
-                    command.legacyClientNames,
-                    command.canonicalJurisdictionID?.rawValue,
-                    command.canonicalCourtID?.rawValue,
-                    command.courtResolutionState.rawValue,
-                    command.canonicalCatalogVersion,
-                    command.canonicalCatalogDigestSHA256,
-                    resultRevision,
-                    timestamp,
-                    command.matterID,
-                    command.expectedIdentityRevision,
-                ]
+            try MatterIdentityWrite.updateMatterRow(
+                db,
+                command: command,
+                resultRevision: resultRevision,
+                timestamp: timestamp
             )
             guard db.changesCount == 1 else {
                 throw MatterIdentityRepositoryError.staleIdentityRevision
@@ -196,10 +200,26 @@ extension MatterIdentityRepository {
                 representations: expected.representations,
                 timestamp: timestamp
             )
+            if let workspaceDetails = command.workspaceDetails {
+                try MatterIdentityWrite.insertUpdatedWorkspaceAudit(
+                    db,
+                    matterID: command.matterID,
+                    identityRevision: resultRevision,
+                    details: workspaceDetails,
+                    timestamp: timestamp
+                )
+            }
             guard let snapshot = try MatterIdentityWrite.fetchSnapshot(
                 db,
                 matterID: command.matterID
-            ), snapshot == expected else {
+            ), snapshot == expected,
+                  try MatterIdentityWrite.workspaceMatches(
+                    db,
+                    matterID: command.matterID,
+                    sourceKind: "update",
+                    identityRevision: resultRevision,
+                    details: command.workspaceDetails
+                  ) else {
                 throw MatterIdentityRepositoryError.identityIncoherent
             }
             return snapshot
@@ -214,6 +234,11 @@ private enum MatterIdentityWrite {
 
     static func validate(_ command: MatterIdentityCreateCommand) throws {
         try requireExactNonempty(command.name, field: "name")
+        try validateWorkspaceDetails(command.workspaceDetails)
+        if let details = command.workspaceDetails,
+           details.name != command.name {
+            throw MatterIdentityRepositoryError.invalidField("workspace.name")
+        }
         try validateIdentity(
             matterID: command.matterID,
             legacyJurisdictionText: command.legacyJurisdictionText,
@@ -234,6 +259,7 @@ private enum MatterIdentityWrite {
               command.expectedIdentityRevision < Int.max else {
             throw MatterIdentityRepositoryError.staleIdentityRevision
         }
+        try validateWorkspaceDetails(command.workspaceDetails)
         try validateIdentity(
             matterID: command.matterID,
             legacyJurisdictionText: command.legacyJurisdictionText,
@@ -247,6 +273,34 @@ private enum MatterIdentityWrite {
             parties: command.parties,
             representations: command.representations
         )
+    }
+
+    private static func validateWorkspaceDetails(
+        _ details: MatterIdentityWorkspaceDetails?
+    ) throws {
+        guard let details else { return }
+        try requireExactNonempty(details.name, field: "workspace.name")
+        for (field, value) in [
+            ("workspace.judge", details.judge),
+            ("workspace.docketNumber", details.docketNumber),
+            ("workspace.practiceArea", details.practiceArea),
+            ("workspace.matterDescription", details.matterDescription),
+            ("workspace.internalMatterID", details.internalMatterID),
+            ("workspace.clientID", details.clientID),
+            ("workspace.clientMatterID", details.clientMatterID),
+            ("workspace.notes", details.notes),
+        ] {
+            try validateOptionalExactString(value, field: field)
+        }
+        var folderNames = Set<String>()
+        for name in details.starterFolderNames {
+            try requireExactNonempty(name, field: "workspace.starterFolderName")
+            guard folderNames.insert(name).inserted else {
+                throw MatterIdentityRepositoryError.invalidField(
+                    "workspace.starterFolderName"
+                )
+            }
+        }
     }
 
     private static func validateIdentity(
@@ -474,6 +528,7 @@ private enum MatterIdentityWrite {
         identityRevision: Int,
         legacyPartyPerspective: PartyPerspective,
         legacyClientNames: String?,
+        workspaceDetails: MatterIdentityWorkspaceDetails?,
         expectedSnapshot: MatterIdentitySnapshot
     ) throws -> Bool {
         guard let matter = try Row.fetchOne(
@@ -508,6 +563,13 @@ private enum MatterIdentityWrite {
         let sourceLegacyClientNames: String? = source["legacy_client_names"]
         let sourceCanonicalJurisdictionID: String? = source["canonical_jurisdiction_id"]
         let sourceCanonicalCourtID: String? = source["canonical_court_id"]
+        let workspaceIsMatch = try workspaceMatches(
+            db,
+            matterID: matterID,
+            sourceKind: sourceKind,
+            identityRevision: identityRevision,
+            details: workspaceDetails
+        )
 
         return (expectedName == nil || persistedName == expectedName)
             && persistedPartyPerspective == legacyPartyPerspective.rawValue
@@ -532,6 +594,218 @@ private enum MatterIdentityWrite {
             && source["canonical_catalog_digest_sha256"] as String
                 == expectedSnapshot.canonicalCatalogDigestSHA256
             && persisted == expectedSnapshot
+            && workspaceIsMatch
+    }
+
+    static func updateMatterRow(
+        _ db: Database,
+        command: MatterIdentityUpdateCommand,
+        resultRevision: Int,
+        timestamp: Date
+    ) throws {
+        if let details = command.workspaceDetails {
+            try db.execute(
+                sql: """
+                    UPDATE matters
+                    SET name = ?, jurisdiction = ?, court = ?,
+                        party_perspective = ?, client_names = ?, judge = ?,
+                        docket_number = ?, practice_area = ?,
+                        matter_description = ?, internal_matter_id = ?,
+                        client_id = ?, client_matter_id = ?, notes = ?,
+                        canonical_jurisdiction_id = ?, canonical_court_id = ?,
+                        court_resolution_state = ?, canonical_catalog_version = ?,
+                        canonical_catalog_digest_sha256 = ?,
+                        identity_revision = ?, updated_at = ?
+                    WHERE id = ? AND identity_revision = ? AND deleted_at IS NULL
+                    """,
+                arguments: [
+                    details.name,
+                    command.legacyJurisdictionText,
+                    command.legacyCourtText,
+                    command.legacyPartyPerspective.rawValue,
+                    command.legacyClientNames,
+                    details.judge,
+                    details.docketNumber,
+                    details.practiceArea,
+                    details.matterDescription,
+                    details.internalMatterID,
+                    details.clientID,
+                    details.clientMatterID,
+                    details.notes,
+                    command.canonicalJurisdictionID?.rawValue,
+                    command.canonicalCourtID?.rawValue,
+                    command.courtResolutionState.rawValue,
+                    command.canonicalCatalogVersion,
+                    command.canonicalCatalogDigestSHA256,
+                    resultRevision,
+                    timestamp,
+                    command.matterID,
+                    command.expectedIdentityRevision,
+                ]
+            )
+        } else {
+            try db.execute(
+                sql: """
+                    UPDATE matters
+                    SET jurisdiction = ?, court = ?, party_perspective = ?,
+                        client_names = ?, canonical_jurisdiction_id = ?,
+                        canonical_court_id = ?, court_resolution_state = ?,
+                        canonical_catalog_version = ?,
+                        canonical_catalog_digest_sha256 = ?,
+                        identity_revision = ?, updated_at = ?
+                    WHERE id = ? AND identity_revision = ? AND deleted_at IS NULL
+                    """,
+                arguments: [
+                    command.legacyJurisdictionText,
+                    command.legacyCourtText,
+                    command.legacyPartyPerspective.rawValue,
+                    command.legacyClientNames,
+                    command.canonicalJurisdictionID?.rawValue,
+                    command.canonicalCourtID?.rawValue,
+                    command.courtResolutionState.rawValue,
+                    command.canonicalCatalogVersion,
+                    command.canonicalCatalogDigestSHA256,
+                    resultRevision,
+                    timestamp,
+                    command.matterID,
+                    command.expectedIdentityRevision,
+                ]
+            )
+        }
+    }
+
+    static func insertCreatedWorkspaceRecords(
+        _ db: Database,
+        matterID: String,
+        details: MatterIdentityWorkspaceDetails,
+        timestamp: Date
+    ) throws {
+        try ChatRecord(
+            id: defaultChatID(matterID: matterID),
+            title: "General — \(details.name)",
+            scope: "matter",
+            matterID: matterID,
+            createdAt: timestamp,
+            updatedAt: timestamp
+        ).insert(db)
+        try AuditEventRecord(
+            id: createAuditID(matterID: matterID),
+            matterID: matterID,
+            timestamp: timestamp,
+            eventType: "matter_created",
+            actor: "user",
+            summary: "Created matter “\(details.name)”"
+        ).insert(db)
+        for (index, name) in details.starterFolderNames.enumerated() {
+            try DocumentFolderRecord(
+                id: starterFolderID(matterID: matterID, index: index),
+                matterID: matterID,
+                name: name,
+                createdAt: timestamp,
+                updatedAt: timestamp
+            ).insert(db)
+        }
+    }
+
+    static func insertUpdatedWorkspaceAudit(
+        _ db: Database,
+        matterID: String,
+        identityRevision: Int,
+        details: MatterIdentityWorkspaceDetails,
+        timestamp: Date
+    ) throws {
+        try AuditEventRecord(
+            id: updateAuditID(matterID: matterID, revision: identityRevision),
+            matterID: matterID,
+            timestamp: timestamp,
+            eventType: "matter_updated",
+            actor: "user",
+            summary: "Updated matter details (identity revision \(identityRevision))"
+        ).insert(db)
+    }
+
+    static func workspaceMatches(
+        _ db: Database,
+        matterID: String,
+        sourceKind: String,
+        identityRevision: Int,
+        details: MatterIdentityWorkspaceDetails?
+    ) throws -> Bool {
+        guard let details else { return true }
+        guard let matter = try MatterRecord.fetchOne(db, key: matterID) else {
+            return false
+        }
+        let matterMatches = matter.name == details.name
+            && matter.judge == details.judge
+            && matter.docketNumber == details.docketNumber
+            && matter.practiceArea == details.practiceArea
+            && matter.matterDescription == details.matterDescription
+            && matter.internalMatterID == details.internalMatterID
+            && matter.clientID == details.clientID
+            && matter.clientMatterID == details.clientMatterID
+            && matter.notes == details.notes
+        guard matterMatches else { return false }
+
+        let auditID: String
+        let auditType: String
+        let auditSummary: String
+        switch sourceKind {
+        case "create":
+            auditID = createAuditID(matterID: matterID)
+            auditType = "matter_created"
+            auditSummary = "Created matter “\(details.name)”"
+            guard let chat = try ChatRecord.fetchOne(
+                db,
+                key: defaultChatID(matterID: matterID)
+            ), chat.matterID == matterID,
+               chat.scope == "matter",
+               chat.title == "General — \(details.name)" else {
+                return false
+            }
+            let folderNames = try details.starterFolderNames.indices.map { index in
+                try String.fetchOne(
+                    db,
+                    sql: """
+                        SELECT name FROM document_folders
+                        WHERE id = ? AND matter_id = ? AND deleted_at IS NULL
+                        """,
+                    arguments: [starterFolderID(matterID: matterID, index: index), matterID]
+                )
+            }.compactMap { $0 }
+            guard folderNames == details.starterFolderNames else { return false }
+        case "update":
+            auditID = updateAuditID(
+                matterID: matterID,
+                revision: identityRevision
+            )
+            auditType = "matter_updated"
+            auditSummary = "Updated matter details (identity revision \(identityRevision))"
+        default:
+            return false
+        }
+        guard let audit = try AuditEventRecord.fetchOne(db, key: auditID) else {
+            return false
+        }
+        return audit.matterID == matterID
+            && audit.eventType == auditType
+            && audit.actor == "user"
+            && audit.summary == auditSummary
+    }
+
+    private static func defaultChatID(matterID: String) -> String {
+        "matter-default-chat:\(matterID)"
+    }
+
+    private static func createAuditID(matterID: String) -> String {
+        "matter-created:\(matterID)"
+    }
+
+    private static func updateAuditID(matterID: String, revision: Int) -> String {
+        "matter-updated:\(matterID):r\(revision)"
+    }
+
+    private static func starterFolderID(matterID: String, index: Int) -> String {
+        "\(matterID):starter-folder:\(String(format: "%04d", index))"
     }
 
     static func insertSourceReceipt(

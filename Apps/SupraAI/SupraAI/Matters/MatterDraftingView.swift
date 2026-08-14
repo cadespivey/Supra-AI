@@ -6,11 +6,9 @@ import SupraSessions
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// The chat-side drafting sheet: the attorney confirms the caption parties and the
-/// service recipients (opposing counsel) that the matter doesn't store as structured
-/// data, then generates a downloadable `.docx`. The firewall (no invented identity)
-/// lives in `MatterDraftingController`; this view surfaces its blocking messages and
-/// the resulting file for download/preview.
+/// The chat-side drafting sheet. Caption, represented-side, opposing-side, and
+/// service values are loaded from one Store-owned canonical identity snapshot;
+/// the view never invents them from legacy matter strings.
 struct MatterDraftingView: View {
     @ObservedObject var controller: MatterDraftingController
     @ObservedObject var library: ModelLibrary
@@ -19,15 +17,14 @@ struct MatterDraftingView: View {
     @Environment(\.dismiss) private var dismiss
 
     // Caption parties (e.g. "MCKERNON MOTORS, INC.," / "Plaintiff,").
-    @State private var parties: [PartyDraft] = [
-        PartyDraft(name: "", designation: "Plaintiff,"),
-        PartyDraft(name: "", designation: "Defendant.")
-    ]
-    @State private var partyRepresented = "Defendant"
+    @State private var parties: [PartyDraft] = []
+    @State private var partyRepresented = ""
     @State private var representedPartyName = ""
 
     // Service recipients (opposing counsel).
-    @State private var recipients: [RecipientDraft] = [RecipientDraft()]
+    @State private var recipients: [RecipientDraft] = []
+    @State private var canonicalPartyDefaults: DraftPartyDefaults?
+    @State private var partyDefaultsError: String?
 
     @State private var result: MatterDraftingController.DraftArtifact?
     @State private var errorText: String?
@@ -94,10 +91,10 @@ struct MatterDraftingView: View {
         var firm = ""
         var street = ""
         var city = ""
-        var state = "Florida"
+        var state = ""
         var zip = ""
         var emails = ""
-        var role = "Counsel for Plaintiff"
+        var role = ""
     }
 
     init(
@@ -111,26 +108,6 @@ struct MatterDraftingView: View {
         self.matterID = matterID
         self.matterName = matterName
 
-        // A complete fictional form lets the hermetic XCUITest exercise a real
-        // controller-side block without fragile typing and scrolling choreography.
-        if AppEnvironment.isUITestMode {
-            _parties = State(initialValue: [
-                PartyDraft(name: "MCKERNON MOTORS, INC.,", designation: "Plaintiff,"),
-                PartyDraft(name: "LIBERTY RAIL, LLC,", designation: "Defendant.")
-            ])
-            _partyRepresented = State(initialValue: "Defendant")
-            _representedPartyName = State(initialValue: "Liberty Rail, LLC")
-            var recipient = RecipientDraft()
-            recipient.name = "Daniel Hardman, Esq."
-            recipient.firm = "Hardman & Tanner, LLP"
-            recipient.street = "1 Independent Drive"
-            recipient.city = "Jacksonville"
-            recipient.state = "Florida"
-            recipient.zip = "32202"
-            recipient.emails = "dhardman@example.test"
-            recipient.role = "Counsel for Plaintiff"
-            _recipients = State(initialValue: [recipient])
-        }
     }
 
     var body: some View {
@@ -159,6 +136,7 @@ struct MatterDraftingView: View {
                 if controller.legacyDraftsNeedReviewCount > 0 {
                     legacyDraftReviewSection
                 }
+                canonicalIdentitySection
                 workProductSection
                     .disabled(isWorking)
                 selectedForm
@@ -188,6 +166,7 @@ struct MatterDraftingView: View {
         .onAppear {
             library.refresh()
             controller.refreshDraftReviewState(matterID: matterID)
+            loadCanonicalPartyDefaults()
 #if DEBUG
             captureInterruptedDraftRecoveryUITestURLIfNeeded()
 #endif
@@ -353,6 +332,80 @@ struct MatterDraftingView: View {
             .accessibilityLabel("Draft artifact review required")
             .accessibilityValue("\(controller.legacyDraftsNeedReviewCount) previous artifact(s) need review or regeneration before use.")
         }
+    }
+
+    @ViewBuilder
+    private var canonicalIdentitySection: some View {
+        Section {
+            if let defaults = canonicalPartyDefaults {
+                Text("\(defaults.representedClientName) — \(defaults.representedDesignation)")
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityIdentifier("drafting.identity.representedClient")
+                    .accessibilityLabel("Represented client")
+                    .accessibilityValue(
+                        "\(defaults.representedClientName)|\(defaults.representedDesignation)"
+                    )
+                Text("\(defaults.opposingPartyName) — \(defaults.opposingDesignation)")
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityIdentifier("drafting.identity.opponent")
+                    .accessibilityLabel("Opposing party")
+                    .accessibilityValue(defaults.opposingPartyName)
+                Text("\(defaults.serviceRecipient.name) — \(defaults.serviceRecipient.role)")
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityIdentifier("drafting.identity.serviceRecipient")
+                    .accessibilityLabel("Service recipient")
+                    .accessibilityValue(
+                        "\(defaults.serviceRecipient.name)|\(defaults.serviceRecipient.role)"
+                    )
+            } else {
+                Label(
+                    partyDefaultsError
+                        ?? "Canonical party and service identity is unavailable.",
+                    systemImage: "exclamationmark.triangle.fill"
+                )
+                .foregroundStyle(.orange)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("drafting.identity.blocked")
+            }
+        } header: {
+            Text("Matter identity")
+        } footer: {
+            Text("Court filings use the exact structured parties and service recipient saved with this matter. Edit the matter identity to correct them.")
+        }
+    }
+
+    private func loadCanonicalPartyDefaults() {
+        do {
+            let defaults = try controller.draftPartyDefaults(matterID: matterID)
+            canonicalPartyDefaults = defaults
+            partyDefaultsError = nil
+            parties = defaults.captionParties.map {
+                PartyDraft(name: $0.name, designation: $0.designation)
+            }
+            partyRepresented = defaults.representedDesignation
+            representedPartyName = defaults.representedClientName
+            recipients = [recipientDraft(from: defaults.serviceRecipient)]
+        } catch {
+            canonicalPartyDefaults = nil
+            parties = []
+            partyRepresented = ""
+            representedPartyName = ""
+            recipients = []
+            partyDefaultsError = "Choose coherent structured parties and opposing counsel in the matter before drafting a court filing."
+        }
+    }
+
+    private func recipientDraft(from recipient: ServiceRecipient) -> RecipientDraft {
+        var draft = RecipientDraft()
+        draft.name = recipient.name
+        draft.firm = recipient.firm
+        draft.street = recipient.address.street
+        draft.city = recipient.address.city
+        draft.state = recipient.address.state
+        draft.zip = recipient.address.zip
+        draft.emails = recipient.emails.joined(separator: ", ")
+        draft.role = recipient.role
+        return draft
     }
 
     private var header: some View {
@@ -698,13 +751,15 @@ struct MatterDraftingView: View {
         } footer: {
             Text("As they appear in the case caption. The court, judge where applicable, and case number come from the matter.")
         }
+        .disabled(canonicalPartyDefaults != nil)
     }
 
     private var representedSection: some View {
         Section("Your client") {
-            BoxedLeadingTextField(placeholder: "Party you represent (e.g. Defendant)", text: $partyRepresented)
-            BoxedLeadingTextField(placeholder: "Client's full name (e.g. Liberty Rail, LLC)", text: $representedPartyName)
+            BoxedLeadingTextField(placeholder: "Represented-side designation", text: $partyRepresented)
+            BoxedLeadingTextField(placeholder: "Represented client's full name", text: $representedPartyName)
         }
+        .disabled(canonicalPartyDefaults != nil)
     }
 
     private var recipientsSection: some View {
@@ -729,7 +784,7 @@ struct MatterDraftingView: View {
                         BoxedLeadingTextField(placeholder: "ZIP", text: $r.zip).frame(width: 80)
                     }
                     BoxedLeadingTextField(placeholder: "E-mails (comma-separated)", text: $r.emails)
-                    BoxedLeadingTextField(placeholder: "Role (e.g. Counsel for Plaintiff)", text: $r.role)
+                    BoxedLeadingTextField(placeholder: "Service role", text: $r.role)
                 }
                 .padding(.vertical, 2)
             }
@@ -739,8 +794,9 @@ struct MatterDraftingView: View {
         } header: {
             Text("Service recipients (opposing counsel)")
         } footer: {
-            Text("Everyone served under the certificate of service. Drafting never invents these — you enter who's actually on the case.")
+            Text("Everyone served under the certificate of service. These values come from the matter's structured representation graph.")
         }
+        .disabled(canonicalPartyDefaults != nil)
     }
 
     private func resultSection(_ artifact: MatterDraftingController.DraftArtifact) -> some View {
@@ -820,8 +876,9 @@ struct MatterDraftingView: View {
 
     private var isReady: Bool {
         switch selection {
-        case .kind(.noticeAppearance): return noticeReady
-        case .kind(.motionToDismiss): return currentMotionReadiness.canGenerate
+        case .kind(.noticeAppearance): return canonicalIdentityReady && noticeReady
+        case .kind(.motionToDismiss):
+            return canonicalIdentityReady && currentMotionReadiness.canGenerate
         case .kind(.letterDemand): return letterReady
         case .custom: return !trimmed(customDescription).isEmpty
         }
@@ -832,8 +889,10 @@ struct MatterDraftingView: View {
         guard !isReady else { return nil }
         switch selection {
         case .kind(.noticeAppearance):
+            if !canonicalIdentityReady { return canonicalIdentityBlockingMessage }
             return "Add the caption parties, your client, and at least one complete service recipient."
         case .kind(.motionToDismiss):
+            if !canonicalIdentityReady { return canonicalIdentityBlockingMessage }
             return currentMotionReadiness.blockingReasons.first
         case .kind(.letterDemand):
             return routeModel == nil
@@ -850,6 +909,27 @@ struct MatterDraftingView: View {
             && parties.filter { !trimmed($0.name).isEmpty && !trimmed($0.designation).isEmpty }.count >= 2
             && !completeRecipientDrafts.isEmpty
             && partialRecipientDrafts.isEmpty
+    }
+
+    private var canonicalIdentityReady: Bool {
+        guard let defaults = canonicalPartyDefaults else { return false }
+        let caption = parties.map {
+            PartyLine(name: trimmed($0.name), designation: trimmed($0.designation))
+        }
+        guard caption == defaults.captionParties,
+              trimmed(partyRepresented) == defaults.representedDesignation,
+              trimmed(representedPartyName) == defaults.representedClientName,
+              partialRecipientDrafts.isEmpty,
+              completeRecipientDrafts.count == 1,
+              let recipient = completeRecipientDrafts.first else {
+            return false
+        }
+        return serviceRecipient(from: recipient) == defaults.serviceRecipient
+    }
+
+    private var canonicalIdentityBlockingMessage: String {
+        partyDefaultsError
+            ?? "Restore the matter's exact structured party and service identity before generating a court filing."
     }
 
     private var letterReady: Bool {
@@ -1111,6 +1191,24 @@ struct MatterDraftingView: View {
             && !trimmed(recipient.zip).isEmpty
             && !splitEmails(recipient.emails).isEmpty
             && !trimmed(recipient.role).isEmpty
+    }
+
+    private func serviceRecipient(from recipient: RecipientDraft) -> ServiceRecipient {
+        ServiceRecipient(
+            name: trimmed(recipient.name),
+            firm: trimmed(recipient.firm),
+            address: OfficeBlock(
+                street: trimmed(recipient.street),
+                suite: nil,
+                city: trimmed(recipient.city),
+                state: trimmed(recipient.state),
+                zip: trimmed(recipient.zip),
+                phone: "",
+                fax: nil
+            ),
+            emails: splitEmails(recipient.emails),
+            role: trimmed(recipient.role)
+        )
     }
 
     private func recipientHasAnyValue(_ recipient: RecipientDraft) -> Bool {

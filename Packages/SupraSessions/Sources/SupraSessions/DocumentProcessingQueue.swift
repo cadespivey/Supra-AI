@@ -238,30 +238,23 @@ public final class DocumentProcessingQueue: ObservableObject {
     public func enqueueImport(matterID: String, sources: [URL], sourceRootDisplay: String? = nil, targetFolderID: String? = nil) -> String? {
         guard !sources.isEmpty else { return nil }
         do {
-            let batch = try store.documentJobs.createBatch(
+            let selections = sources.enumerated().map { selectionIndex, source in
+                DocumentJobRepository.SelectedImportSource(
+                    sourceKey: "selection:\(selectionIndex)",
+                    sourceDisplayPath: source.lastPathComponent,
+                    sourceBookmark: selectedSourceBookmark(for: source)
+                )
+            }
+            let result = try store.documentJobs.enqueueImportAtomically(
                 matterID: matterID,
                 sourceRootDisplay: sourceRootDisplay,
                 targetFolderID: targetFolderID,
-                targetFolderRequested: targetFolderID != nil
+                targetFolderRequested: targetFolderID != nil,
+                selections: selections
             )
-            for (selectionIndex, source) in sources.enumerated() {
-                _ = try store.documentJobs.recordDiscovered(
-                    batchID: batch.id,
-                    matterID: matterID,
-                    sourceKey: "selection:\(selectionIndex)",
-                    sourceDisplayPath: source.lastPathComponent,
-                    sourceBookmark: selectedSourceBookmark(for: source),
-                    state: .selected
-                )
-            }
-            try store.documentJobs.updateBatchProgress(
-                id: batch.id,
-                discoveredCount: sources.count,
-                importedCount: 0,
-                failedCount: 0
-            )
-            let job = try store.documentJobs.enqueueJob(matterID: matterID, importBatchID: batch.id)
+            let job = result.job
             pendingSources[job.id] = sources
+            lastError = nil
             _ = try? store.auditEvents.recordEvent(
                 matterID: matterID, eventType: "document_import_started", actor: "user",
                 summary: "Queued import of \(sources.count) item(s)", relatedTable: "document_processing_jobs", relatedID: job.id

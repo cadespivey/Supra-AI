@@ -43,13 +43,23 @@ struct MatterWorkspaceView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .sheet(isPresented: $showEditor) {
-            MatterEditorSheet(
-                mode: .edit,
-                draft: controller.draft(forMatter: matter.id) ?? MatterDraft(),
-                clientDirectory: controller.clientDirectory(),
-                practiceAreaDirectory: controller.practiceAreaDirectory()
-            ) { draft in
-                try? controller.updateMatter(id: matter.id, draft: draft)
+            if let submission = controller.identityEditorSubmission(
+                forMatter: matter.id
+            ) {
+                MatterEditorSheet(
+                    mode: .edit,
+                    submission: submission,
+                    practiceAreaDirectory: controller.practiceAreaDirectory()
+                ) { submission in
+                    try controller.updateMatter(identity: submission)
+                }
+            } else {
+                ContentUnavailableView(
+                    "Matter identity unavailable",
+                    systemImage: "exclamationmark.triangle",
+                    description: Text("Close Edit, reopen the matter, and try again.")
+                )
+                .frame(minWidth: 480, minHeight: 360)
             }
         }
         .sheet(isPresented: $showDraftSheet) {
@@ -97,7 +107,23 @@ struct MatterWorkspaceView: View {
                 Text(matterSubtitle)
                     .font(.supraSubheadline)
                     .foregroundStyle(.secondary)
-                if let detail = matterClientDetail {
+                HStack(spacing: 8) {
+                    Text(courtPresentation?.resolvedCourtName
+                        ?? courtPresentation?.savedCourtText
+                        ?? "No court selected")
+                        .font(.supraCaption)
+                        .foregroundStyle(
+                            courtPresentation?.canDraftCourtFiling == true
+                                ? Color.secondary : Color.orange
+                        )
+                        .accessibilityIdentifier("matter.identity.court.savedText")
+                    Button(courtPresentation?.actionTitle ?? "Choose Court") {
+                        showEditor = true
+                    }
+                    .buttonStyle(.link)
+                    .accessibilityIdentifier("matter.identity.court.action")
+                }
+                if let detail = matterReferenceDetail {
                     Text(detail)
                         .font(.supraCaption)
                         .foregroundStyle(.secondary)
@@ -110,6 +136,7 @@ struct MatterWorkspaceView: View {
                 } label: { Label("Draft", systemImage: "doc.badge.plus") }
                     .buttonStyle(.ghost)
                     .accessibilityIdentifier("matter.draft")
+                    .disabled(!(courtPresentation?.canDraftCourtFiling ?? false))
             }
             Button { showEditor = true } label: { Label("Edit", systemImage: "pencil") }
                 .buttonStyle(.ghost)
@@ -128,20 +155,21 @@ struct MatterWorkspaceView: View {
         .make(action: .moveToRecycleBin, target: .matter, displayName: matter.name)
     }
 
-    private var matterSubtitle: String {
-        var parts = [matter.jurisdiction]
-        if let court = matter.court?.trimmingCharacters(in: .whitespacesAndNewlines), !court.isEmpty {
-            parts.append(court)
-        }
-        parts.append(matter.partyPerspective.rawValue.capitalized)
-        return parts.joined(separator: " · ")
+    private var courtPresentation: MatterCourtPresentation? {
+        controller.courtPresentation(forMatter: matter.id)
     }
 
-    private var matterClientDetail: String? {
-        var parts: [String] = []
-        if let clientNames = matter.clientNames?.trimmingCharacters(in: .whitespacesAndNewlines), !clientNames.isEmpty {
-            parts.append(clientNames)
+    private var matterSubtitle: String {
+        guard let presentation = courtPresentation,
+              presentation.canDraftCourtFiling,
+              let jurisdiction = presentation.resolvedJurisdictionName else {
+            return "Court identity unresolved"
         }
+        return jurisdiction
+    }
+
+    private var matterReferenceDetail: String? {
+        var parts: [String] = []
         if let internalID = matter.internalMatterID?.trimmingCharacters(in: .whitespacesAndNewlines), !internalID.isEmpty {
             parts.append("ID \(internalID)")
         }

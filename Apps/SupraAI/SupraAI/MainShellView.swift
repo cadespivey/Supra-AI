@@ -115,14 +115,15 @@ struct MainShellView: View {
         .sheet(isPresented: $showNewMatter) {
             MatterEditorSheet(
                 mode: .create,
-                draft: MatterDraft(),
-                clientDirectory: environment.mattersController.clientDirectory(),
+                submission: environment.mattersController
+                    .newMatterIdentityEditorSubmission(),
                 practiceAreaDirectory: environment.mattersController.practiceAreaDirectory()
-            ) { draft in
-                if let created = try? environment.mattersController.createMatter(draft) {
-                    environment.mattersController.select(matterID: created.id)
-                    selection = .matter(created.id)
-                }
+            ) { submission in
+                let created = try environment.mattersController.createMatter(
+                    identity: submission
+                )
+                environment.mattersController.select(matterID: created.id)
+                selection = .matter(created.id)
             }
         }
     }
@@ -257,6 +258,11 @@ struct MainShellView: View {
            arguments.indices.contains(routeFlag + 1),
            let route = AppRoute(rawValue: arguments[routeFlag + 1]) {
             selectRoute(route)
+        } else if let wire = CanonicalMatterIdentityUITestWire(arguments: arguments),
+                  environment.mattersController.matters.contains(where: {
+                      $0.id == wire.matterID
+                  }) {
+            selectMatter(wire.matterID)
         } else if arguments.contains("-uiTestSelectFirstMatter"),
                   let id = environment.mattersController.matters.first?.id {
             selectMatter(id)

@@ -194,6 +194,44 @@ private enum CanonicalReadinessUITestScenario {
         }
     }
 }
+
+/// Exact launch-only selector for the canonical identity fixture. The scenario,
+/// value flag, and one allowed stable matter ID must each appear exactly once;
+/// malformed launches fall through to the ordinary hermetic UI-test fixture.
+@MainActor
+struct CanonicalMatterIdentityUITestWire: Equatable {
+    static let unresolvedMatterID = "matter-identity-unresolved-971"
+    static let plaintiffMatterID = "matter-identity-plaintiff-977"
+    static let defendantMatterID = "matter-identity-defendant-983"
+
+    let matterID: String
+
+    init?(arguments: [String]) {
+        let scenario = "-uiTestCanonicalMatterIdentity"
+        let valueFlag = "-uiTestCanonicalMatterID"
+        let allowedIDs = Set([
+            Self.unresolvedMatterID,
+            Self.plaintiffMatterID,
+            Self.defendantMatterID,
+        ])
+        let scenarioMatches = arguments.indices.filter {
+            arguments[$0] == scenario
+        }
+        let valueMatches = arguments.indices.filter {
+            arguments[$0] == valueFlag
+        }
+        guard AppEnvironment.isUITestMode,
+              scenarioMatches.count == 1,
+              valueMatches.count == 1,
+              let valueIndex = valueMatches.first,
+              arguments.indices.contains(valueIndex + 1),
+              allowedIDs.contains(arguments[valueIndex + 1]),
+              arguments.filter({ allowedIDs.contains($0) }).count == 1 else {
+            return nil
+        }
+        matterID = arguments[valueIndex + 1]
+    }
+}
 #endif
 
 @MainActor
@@ -1155,10 +1193,18 @@ final class AppEnvironment: ObservableObject {
     private func seedUITestFixturesIfNeeded() {
 #if DEBUG
         seedUITestWindowLedgerMatterIfNeeded()
+        seedUITestCanonicalMatterIdentityIfNeeded()
+        seedUITestDefaultCanonicalMatterIfNeeded()
 #endif
         mattersController.loadMatters()
         if mattersController.matters.isEmpty {
-            _ = try? mattersController.createMatter(name: "McKernon Motors v. Liberty Rail")
+            do {
+                _ = try mattersController.createMatter(
+                    name: "McKernon Motors v. Liberty Rail"
+                )
+            } catch {
+                assertionFailure("Could not seed ordinary UI-test matter: \(error)")
+            }
             mattersController.loadMatters()
         }
 #if DEBUG
@@ -1176,6 +1222,299 @@ final class AppEnvironment: ObservableObject {
     }
 
 #if DEBUG
+    private enum CanonicalMatterIdentityFixtureError: Error {
+        case incoherentCatalogSelection(courtID: String, jurisdictionID: String)
+    }
+
+    /// Seeds the exact unresolved/plaintiff/defendant table consumed by the
+    /// native WP-1.1 journey. All three are created through the Store's atomic
+    /// identity workspace command; no party is inferred from `clientNames`.
+    private func seedUITestCanonicalMatterIdentityIfNeeded() {
+        guard CanonicalMatterIdentityUITestWire(
+            arguments: ProcessInfo.processInfo.arguments
+        ) != nil else { return }
+
+        do {
+            try createCanonicalIdentityFixture(
+                matterID: CanonicalMatterIdentityUITestWire.unresolvedMatterID,
+                name: "Unresolved Maritime Identity 971",
+                legacyJurisdiction: "Legacy maritime forum 971",
+                legacyCourt: "Fictional Maritime Claims Tribunal 971",
+                legacyPerspective: .neutral,
+                legacyClientNames: "Legacy unresolved client evidence 971",
+                courtState: .unresolved,
+                jurisdictionID: nil,
+                courtID: nil,
+                parties: [],
+                representations: []
+            )
+
+            let plaintiffMatterID = CanonicalMatterIdentityUITestWire.plaintiffMatterID
+            let plaintiffPartyID = "party-identity-plaintiff-client-977"
+            let plaintiffOpponentID = "party-identity-plaintiff-opponent-979"
+            try createCanonicalIdentityFixture(
+                matterID: plaintiffMatterID,
+                name: "Aster Harbor v. Northline Rail 977",
+                legacyJurisdiction: "Florida",
+                legacyCourt: "S.D. Fla.",
+                legacyPerspective: .plaintiff,
+                legacyClientNames: "Aster Harbor legacy evidence 977",
+                courtState: .court,
+                jurisdictionID: federalEleventhCircuitJurisdictionID,
+                courtID: federalSouthernDistrictCourtID,
+                parties: [
+                    MatterPartyIdentity(
+                        id: plaintiffPartyID,
+                        matterID: plaintiffMatterID,
+                        displayName: "Aster Harbor Fabrication 977",
+                        captionName: "ASTER HARBOR FABRICATION 977,",
+                        baseRole: .plaintiff,
+                        captionOrder: 0,
+                        clientStatus: .represented
+                    ),
+                    MatterPartyIdentity(
+                        id: plaintiffOpponentID,
+                        matterID: plaintiffMatterID,
+                        displayName: "Northline Rail Logistics 979",
+                        captionName: "NORTHLINE RAIL LOGISTICS 979,",
+                        baseRole: .defendant,
+                        captionOrder: 1,
+                        clientStatus: .notRepresented
+                    ),
+                ],
+                representations: [
+                    canonicalFixtureRepresentation(
+                        id: "representation-identity-plaintiff-opponent-981",
+                        matterID: plaintiffMatterID,
+                        representedPartyID: plaintiffOpponentID,
+                        sequence: 981
+                    ),
+                ]
+            )
+
+            let defendantMatterID = CanonicalMatterIdentityUITestWire.defendantMatterID
+            let defendantPartyID = "party-identity-defendant-client-983"
+            let defendantOpponentID = "party-identity-defendant-opponent-991"
+            try createCanonicalIdentityFixture(
+                matterID: defendantMatterID,
+                name: "Northline Rail v. Aster Harbor 983",
+                legacyJurisdiction: "Florida",
+                legacyCourt: "S.D. Fla.",
+                legacyPerspective: .defendant,
+                legacyClientNames: "Northline Rail legacy evidence 983",
+                courtState: .court,
+                jurisdictionID: federalEleventhCircuitJurisdictionID,
+                courtID: federalSouthernDistrictCourtID,
+                parties: [
+                    MatterPartyIdentity(
+                        id: defendantOpponentID,
+                        matterID: defendantMatterID,
+                        displayName: "Aster Harbor Fabrication 991",
+                        captionName: "ASTER HARBOR FABRICATION 991,",
+                        baseRole: .plaintiff,
+                        captionOrder: 0,
+                        clientStatus: .notRepresented
+                    ),
+                    MatterPartyIdentity(
+                        id: defendantPartyID,
+                        matterID: defendantMatterID,
+                        displayName: "Northline Rail Logistics 983",
+                        captionName: "NORTHLINE RAIL LOGISTICS 983,",
+                        baseRole: .defendant,
+                        captionOrder: 1,
+                        clientStatus: .represented
+                    ),
+                ],
+                representations: [
+                    canonicalFixtureRepresentation(
+                        id: "representation-identity-defendant-opponent-997",
+                        matterID: defendantMatterID,
+                        representedPartyID: defendantOpponentID,
+                        sequence: 997
+                    ),
+                ]
+            )
+        } catch {
+            assertionFailure("Could not seed canonical matter-identity fixture: \(error)")
+        }
+    }
+
+    /// Ordinary UI tests still receive one usable matter, but its historical
+    /// caption form is now produced from the same canonical graph as shipping
+    /// Drafting instead of view-local plaintiff/defendant/counsel defaults.
+    private func seedUITestDefaultCanonicalMatterIfNeeded() {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard CanonicalMatterIdentityUITestWire(arguments: arguments) == nil,
+              WindowSessionLedgerWire(arguments: arguments) == nil else { return }
+        do {
+            guard try store.matters.fetchMatters().isEmpty else { return }
+            let matterID = "00000000-0000-4000-8000-000000000971"
+            let plaintiffID = "party-default-mckernon-1201"
+            let defendantID = "party-default-liberty-1207"
+            try createCanonicalIdentityFixture(
+                matterID: matterID,
+                name: "McKernon Motors v. Liberty Rail",
+                legacyJurisdiction: "Florida",
+                legacyCourt: "IN THE CIRCUIT COURT OF THE FOURTH JUDICIAL CIRCUIT,\nIN AND FOR DUVAL COUNTY, FLORIDA",
+                legacyPerspective: .defendant,
+                legacyClientNames: "Liberty Rail, LLC",
+                courtState: .court,
+                jurisdictionID: floridaStateJurisdictionID,
+                courtID: floridaDuvalCircuitCourtID,
+                parties: [
+                    MatterPartyIdentity(
+                        id: plaintiffID,
+                        matterID: matterID,
+                        displayName: "McKernon Motors, Inc.",
+                        captionName: "MCKERNON MOTORS, INC.,",
+                        baseRole: .plaintiff,
+                        captionOrder: 0,
+                        clientStatus: .notRepresented
+                    ),
+                    MatterPartyIdentity(
+                        id: defendantID,
+                        matterID: matterID,
+                        displayName: "Liberty Rail, LLC",
+                        captionName: "LIBERTY RAIL, LLC,",
+                        baseRole: .defendant,
+                        captionOrder: 1,
+                        clientStatus: .represented
+                    ),
+                ],
+                representations: [
+                    MatterRepresentationIdentity(
+                        id: "representation-default-mckernon-counsel-1213",
+                        matterID: matterID,
+                        representedPartyID: plaintiffID,
+                        relationshipKind: .counsel,
+                        representativeName: "Daniel Hardman, Esq.",
+                        firmName: "Hardman & Tanner, LLP",
+                        serviceAddress: MatterServiceAddress(
+                            street: "1 Independent Drive",
+                            city: "Jacksonville",
+                            state: "Florida",
+                            postalCode: "32202"
+                        ),
+                        serviceEmails: ["dhardman@example.test"],
+                        serviceOrder: 0
+                    ),
+                ],
+                workspace: MatterIdentityWorkspaceDetails(
+                    name: "McKernon Motors v. Liberty Rail",
+                    judge: nil,
+                    docketNumber: nil,
+                    practiceArea: nil,
+                    matterDescription: nil,
+                    internalMatterID: nil,
+                    clientID: nil,
+                    clientMatterID: nil,
+                    notes: nil,
+                    starterFolderNames: PracticeAreaFolderTemplates.generalFolders
+                )
+            )
+        } catch {
+            assertionFailure("Could not seed default canonical UI-test matter: \(error)")
+        }
+    }
+
+    private var federalEleventhCircuitJurisdictionID: String {
+        "federal-united-states-court-of-appeals-for-the-eleventh-circuit"
+    }
+
+    private var federalSouthernDistrictCourtID: String {
+        "federal-florida-united-states-district-court-for-the-southern-district-of-florida"
+    }
+
+    private var floridaStateJurisdictionID: String {
+        "state-florida-courts"
+    }
+
+    private var floridaDuvalCircuitCourtID: String {
+        "state-florida-circuit-court-of-the-fourth-judicial-circuit-in-and-for-duval-county"
+    }
+
+    private func canonicalFixtureRepresentation(
+        id: String,
+        matterID: String,
+        representedPartyID: String,
+        sequence: Int
+    ) -> MatterRepresentationIdentity {
+        MatterRepresentationIdentity(
+            id: id,
+            matterID: matterID,
+            representedPartyID: representedPartyID,
+            relationshipKind: .counsel,
+            representativeName: "Avery Synthetic, Esq. \(sequence)",
+            firmName: "Synthetic Trial Group \(sequence)",
+            serviceAddress: MatterServiceAddress(
+                street: "\(sequence) Fictional Avenue",
+                city: "Miami",
+                state: "Florida",
+                postalCode: "33131"
+            ),
+            serviceEmails: ["service+\(sequence)@example.test"],
+            serviceOrder: 0
+        )
+    }
+
+    private func createCanonicalIdentityFixture(
+        matterID: String,
+        name: String,
+        legacyJurisdiction: String,
+        legacyCourt: String?,
+        legacyPerspective: PartyPerspective,
+        legacyClientNames: String?,
+        courtState: MatterCourtResolutionState,
+        jurisdictionID: String?,
+        courtID: String?,
+        parties: [MatterPartyIdentity],
+        representations: [MatterRepresentationIdentity],
+        workspace: MatterIdentityWorkspaceDetails? = nil
+    ) throws {
+        let catalog = JurisdictionCatalog.shared
+        if let courtID, let jurisdictionID {
+            guard catalog.option(id: courtID) != nil,
+                  catalog.canonicalJurisdictionOption(
+                    forSelectedOptionID: courtID
+                  )?.id == jurisdictionID else {
+                throw CanonicalMatterIdentityFixtureError.incoherentCatalogSelection(
+                    courtID: courtID,
+                    jurisdictionID: jurisdictionID
+                )
+            }
+        }
+        _ = try store.matterIdentity.createMatter(
+            command: MatterIdentityCreateCommand(
+                matterID: matterID,
+                name: name,
+                legacyJurisdictionText: legacyJurisdiction,
+                legacyCourtText: legacyCourt,
+                legacyPartyPerspective: legacyPerspective,
+                legacyClientNames: legacyClientNames,
+                courtResolutionState: courtState,
+                canonicalCatalogVersion: catalog.catalogVersion,
+                canonicalCatalogDigestSHA256: catalog.identityDigestSHA256,
+                canonicalJurisdictionID: jurisdictionID.map {
+                    CanonicalJurisdictionID(rawValue: $0)
+                },
+                canonicalCourtID: courtID.map { CanonicalCourtID(rawValue: $0) },
+                parties: parties,
+                representations: representations,
+                workspaceDetails: workspace ?? MatterIdentityWorkspaceDetails(
+                    name: name,
+                    judge: nil,
+                    docketNumber: nil,
+                    practiceArea: nil,
+                    matterDescription: nil,
+                    internalMatterID: nil,
+                    clientID: nil,
+                    clientMatterID: nil,
+                    notes: nil
+                )
+            )
+        )
+    }
+
     /// Hermetic native boundary for T-DATA-READY-01/02/03. Exact flag parsing
     /// rejects duplicate or conflicting scenarios; all records remain in the
     /// throwaway UI-test Store selected by `makeStore()`.
