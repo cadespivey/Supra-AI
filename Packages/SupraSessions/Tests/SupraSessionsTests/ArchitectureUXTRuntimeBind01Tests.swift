@@ -213,7 +213,9 @@ final class ArchitectureUXTRuntimeBind01Tests: XCTestCase {
             contentBinding.fingerprintSHA256
         )
 
-        let wrongBinding = try embeddingContentBinding(repositoryID: "wrong-model-wire-811")
+        let wrongBinding = try embeddingContentBinding(
+            repositoryID: "synthetic/wrong-model-wire-811"
+        )
         let wrongRequest = ArchitectureUXRuntimeWire.request(
             "binding-embedding-wrong-1319",
             operation: .embeddingBatch,
@@ -305,7 +307,7 @@ final class ArchitectureUXTRuntimeBind01Tests: XCTestCase {
     }
 
     private func embeddingContentBinding(
-        repositoryID: String = "model-wire-713"
+        repositoryID: String = "synthetic/model-wire-713"
     ) throws -> RuntimeModelContentBinding {
         let files = [
             RuntimeModelContentBinding.File(
