@@ -59,7 +59,10 @@ smoke_script="${repo_root}/Scripts/run-app-smoke-tests.sh"
 claims_file="${repo_root}/Docs/Verified-Product-Claims.yml"
 architecture_file="${repo_root}/ARCHITECTURE.md"
 help_file="${repo_root}/Docs/local-legal-model-setup.md"
-migrator="${repo_root}/Packages/SupraStore/Sources/SupraStore/Database/SupraMigrator.swift"
+migration_database_root="${repo_root}/Packages/SupraStore/Sources/SupraStore/Database"
+migrator="${migration_database_root}/SupraMigrator.swift"
+migration_v072="${migration_database_root}/SupraMigrationV072.swift"
+migration_v073="${migration_database_root}/SupraMigrationV073.swift"
 retired_queue_policy="${repo_root}/Packages/SupraSessions/Sources/SupraSessions/DocumentProcessingQueue.swift"
 dormant_v073_deletion_compatibility="${repo_root}/Packages/SupraStore/Sources/SupraStore/Repositories/DocumentLibraryRepository.swift"
 
@@ -71,6 +74,8 @@ require_path 'verified product claims' "$claims_file"
 require_path 'current architecture' "$architecture_file"
 require_path 'current local-model help' "$help_file"
 require_path 'immutable migration compatibility' "$migrator"
+require_path 'immutable v072 migration compatibility' "$migration_v072"
+require_path 'immutable v073 migration compatibility' "$migration_v073"
 require_path 'retired queue compatibility policy' "$retired_queue_policy"
 require_path 'dormant v073 deletion compatibility' "$dormant_v073_deletion_compatibility"
 
@@ -108,6 +113,8 @@ fi
 package_source_count=0
 while IFS= read -r -d '' file; do
   if [[ "$file" == "$migrator" \
+      || "$file" == "$migration_v072" \
+      || "$file" == "$migration_v073" \
       || "$file" == "$retired_queue_policy" \
       || "$file" == "$dormant_v073_deletion_compatibility" ]]; then
     continue
@@ -223,7 +230,7 @@ file_count=$((file_count + 1))
 
 # v073 is already on shared main and must remain byte-identical even though its
 # product capability is retired. Only its exact frozen closure is excluded; the
-# rest of SupraMigrator.swift remains in the absence scan.
+# version-file wrapper and the rest of the migration sources remain in the scan.
 readonly expected_v073_sha256='819515bfe405e1459adbbce65288754f241b94239543fe077793c624f4c4d14f'
 readonly expected_reset_compatibility_sha256='93a75b7fb141dc79698ea3ee42f132784b3cd81020302b5b3670a3f18ad8e1ee'
 v073_start="$(awk '
@@ -231,7 +238,7 @@ v073_start="$(awk '
     print NR
     exit
   }
-' "$migrator")"
+' "$migration_v073")"
 v073_end=''
 if [[ -n "$v073_start" ]]; then
   v073_end="$(awk -v start="$v073_start" '
@@ -239,14 +246,14 @@ if [[ -n "$v073_start" ]]; then
       print NR
       exit
     }
-  ' "$migrator")"
+  ' "$migration_v073")"
 fi
 v073_allowed=0
 if [[ -z "$v073_start" || -z "$v073_end" ]]; then
   fail 'immutable v073 compatibility body is missing or cannot be delimited'
 else
   v073_body="${temporary_dir}/v073-body.swift"
-  sed -n "${v073_start},${v073_end}p" "$migrator" >"$v073_body"
+  sed -n "${v073_start},${v073_end}p" "$migration_v073" >"$v073_body"
   v073_actual_sha256="$(sha256_file "$v073_body")"
   if [[ "$v073_actual_sha256" != "$expected_v073_sha256" ]]; then
     fail "immutable v073 compatibility body drifted: expected ${expected_v073_sha256}, found ${v073_actual_sha256}"
@@ -291,21 +298,43 @@ migrator_relative="${migrator#${repo_root}/}"
 printf '%s:0:%s\n' "$migrator_relative" "$migrator_relative" >>"$scoped_corpus"
 LC_ALL=C awk \
   -v source="$migrator_relative" \
-  -v v073_start="${v073_start:-0}" \
-  -v v073_end="${v073_end:-0}" \
-  -v v073_allowed="$v073_allowed" \
   -v reset_start="${reset_start:-0}" \
   -v reset_end="${reset_end:-0}" \
-  -v reset_allowed="$reset_allowed" \
-  -v v072_compatibility="            // Case File Review's two export-eligible assurance states require a" '
-    v073_allowed == 1 && NR >= v073_start && NR <= v073_end { next }
+  -v reset_allowed="$reset_allowed" '
     reset_allowed == 1 && NR >= reset_start && NR <= reset_end { next }
-    $0 == v072_compatibility { next }
     {
       sub(/\r$/, "")
       printf "%s:%d:%s\n", source, NR, $0
     }
   ' "$migrator" >>"$scoped_corpus"
+file_count=$((file_count + 1))
+
+v072_relative="${migration_v072#${repo_root}/}"
+printf '%s:0:%s\n' "$v072_relative" "$v072_relative" >>"$scoped_corpus"
+LC_ALL=C awk \
+  -v source="$v072_relative" \
+  -v compatibility="            // Case File Review's two export-eligible assurance states require a" '
+    $0 == compatibility { next }
+    {
+      sub(/\r$/, "")
+      printf "%s:%d:%s\n", source, NR, $0
+    }
+  ' "$migration_v072" >>"$scoped_corpus"
+file_count=$((file_count + 1))
+
+v073_relative="${migration_v073#${repo_root}/}"
+printf '%s:0:%s\n' "$v073_relative" "$v073_relative" >>"$scoped_corpus"
+LC_ALL=C awk \
+  -v source="$v073_relative" \
+  -v v073_start="${v073_start:-0}" \
+  -v v073_end="${v073_end:-0}" \
+  -v v073_allowed="$v073_allowed" '
+    v073_allowed == 1 && NR >= v073_start && NR <= v073_end { next }
+    {
+      sub(/\r$/, "")
+      printf "%s:%d:%s\n", source, NR, $0
+    }
+  ' "$migration_v073" >>"$scoped_corpus"
 file_count=$((file_count + 1))
 
 append_source_file "$smoke_script"
