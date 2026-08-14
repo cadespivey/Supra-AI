@@ -1,5 +1,6 @@
 import AppKit
 import SupraCore
+import SupraDesignSystem
 import SupraSessions
 import SwiftUI
 
@@ -79,7 +80,10 @@ struct OutputDetailView: View {
                             // Rendered work product is a long-form reading surface —
                             // body text with reading leading and a capped measure. (Raw
                             // markdown above stays monospaced.)
-                            MarkdownPreview(markdown: selected.markdown)
+                            SupraMarkdownView(
+                                text: selected.markdown,
+                                presentation: .savedOutput
+                            )
                                 .supraReadingBody()
                         }
                     }
@@ -351,50 +355,5 @@ struct AssuranceBadge: View {
         case .negativeBlocked: "nosign"
         case .stale: "clock.arrow.circlepath"
         }
-    }
-}
-
-/// Lightweight block-level Markdown preview: heading lines are styled by level,
-/// everything else renders with inline Markdown.
-struct MarkdownPreview: View {
-    let markdown: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
-                lineView(line)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private var lines: [String] {
-        markdown.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-    }
-
-    @ViewBuilder
-    private func lineView(_ line: String) -> some View {
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
-        if trimmed.hasPrefix("### ") {
-            Text(trimmed.dropFirst(4)).font(.subheadline.weight(.semibold))
-        } else if trimmed.hasPrefix("## ") {
-            Text(trimmed.dropFirst(3)).font(.headline)
-        } else if trimmed.hasPrefix("# ") {
-            Text(trimmed.dropFirst(2)).font(.title3.weight(.bold))
-        } else if trimmed.isEmpty {
-            Color.clear.frame(height: 2)
-        } else {
-            // Parse inline Markdown explicitly rather than via LocalizedStringKey,
-            // which would treat model output as a localization key / format string
-            // (so a stray "%@" or key-like line could be mis-rendered).
-            Text(Self.inlineMarkdown(line)).font(.callout).textSelection(.enabled)
-        }
-    }
-
-    private static func inlineMarkdown(_ line: String) -> AttributedString {
-        (try? AttributedString(
-            markdown: line,
-            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-        )) ?? AttributedString(line)
     }
 }

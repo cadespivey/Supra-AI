@@ -366,7 +366,7 @@ struct GlobalChatsView: View {
     /// it in Finder. Emojis are stripped (matching the per-message copy) and the
     /// filename is derived from the chat title.
     private func exportChat(_ chat: ChatSummary) {
-        let markdown = EmojiStripper.strip(
+        let markdown = SupraEmojiStripper.strip(
             controller.exportTranscriptMarkdown(chatID: chat.id, title: chat.title)
         )
         let panel = NSSavePanel()
@@ -1478,14 +1478,14 @@ private struct MessageRow: View {
             }
             if let reasoningSectionText {
                 DisclosureGroup(isExpanded: reasoningExpanded) {
-                    Text(EmojiStripper.strip(reasoningSectionText))
+                    Text(SupraEmojiStripper.strip(reasoningSectionText))
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.top, 2)
                         .accessibilityElement(children: .ignore)
-                        .accessibilityLabel(Text(EmojiStripper.strip(reasoningSectionText)))
+                        .accessibilityLabel(Text(SupraEmojiStripper.strip(reasoningSectionText)))
                 } label: {
                     Label("Reasoning", systemImage: "brain")
                         .font(.caption.weight(.medium))
@@ -1498,14 +1498,19 @@ private struct MessageRow: View {
             // Reasoning → Support check → Answer → sources.
             if let supportNotice {
                 DisclosureGroup(isExpanded: $supportNoticeExpanded) {
-                    MarkdownView(text: supportNotice, citationLabels: [], onCitationTap: { _ in })
+                    SupraMarkdownView(
+                        text: supportNotice,
+                        presentation: .assistantResponse,
+                        citationLabels: [],
+                        onCitationTap: { _ in }
+                    )
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.top, 2)
                         .accessibilityElement(children: .ignore)
-                        .accessibilityLabel(Text(EmojiStripper.strip(supportNotice)))
+                        .accessibilityLabel(Text(SupraEmojiStripper.strip(supportNotice)))
                 } label: {
                     Label("Support check", systemImage: "exclamationmark.triangle")
                         .font(.caption.weight(.medium))
@@ -1514,8 +1519,9 @@ private struct MessageRow: View {
                 .tint(.secondary)
                 .accessibilityIdentifier("chat.message.supportNotice.\(message.id)")
             }
-            MarkdownView(
+            SupraMarkdownView(
                 text: displayContent,
+                presentation: .assistantResponse,
                 citationLabels: citationLabels,
                 onCitationTap: handleCitationTap
             )
@@ -1595,7 +1601,7 @@ private struct MessageRow: View {
             // Emoji-stripped Markdown — clean to paste elsewhere. Copies the
             // UNSPLIT answer (verification notice included): the notice is a trust
             // qualifier, and pasted work product must not silently shed it.
-            pasteboard.setString(EmojiStripper.strip(answerContent), forType: .string)
+            pasteboard.setString(SupraEmojiStripper.strip(answerContent), forType: .string)
         } label: {
             Label("Copy", systemImage: "doc.on.doc").font(.caption)
         }
@@ -1735,407 +1741,5 @@ private struct MessageRow: View {
         Text(text)
             .font(.supraCaption.weight(.semibold))
             .foregroundStyle(color)
-    }
-}
-
-// MARK: - Markdown rendering
-
-/// A dependency-free Markdown renderer for assistant responses: headings, lists,
-/// fenced code, block quotes, GitHub-style tables, and inline emphasis/code/links.
-/// Renders the shapes an LLM commonly emits as rich text (not raw markup), and
-/// degrades gracefully on partial/streaming input.
-struct MarkdownView: View {
-    let text: String
-    /// Citation labels ("A1", "S1") that should render as tappable links. Empty for
-    /// ordinary messages, which then parse byte-identically to before.
-    var citationLabels: Set<String> = []
-    /// Invoked with a citation label when its inline marker is tapped.
-    var onCitationTap: ((String) -> Void)?
-    @State private var blocks: [MarkdownBlock] = []
-    @State private var sourceText: String = ""
-    @State private var sourceLabels: Set<String> = []
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ForEach(blocks.indices, id: \.self) { index in
-                MarkdownBlockView(block: blocks[index])
-            }
-        }
-        .environment(\.openURL, OpenURLAction { url in
-            guard let label = Self.citationLabel(from: url) else { return .systemAction }
-            onCitationTap?(label)
-            return .handled
-        })
-        .onAppear(perform: refresh)
-        .onChange(of: text) { _, _ in refresh() }
-        // Citations attach AFTER a fresh answer is generated (the streamed text is
-        // unchanged), so re-link the inline markers when the labels arrive — otherwise
-        // they stay plain text until the chat is reloaded.
-        .onChange(of: citationLabels) { _, _ in refresh() }
-    }
-
-    /// Parse only when the text or its citation labels actually change, so
-    /// hover/selection re-renders don't re-parse. Emojis are stripped once here (never
-    /// inside code spacing, because the stripper only removes real emoji glyphs). When
-    /// the message has citations, inline `[A#]`/`[S#]` markers are rewritten to tappable
-    /// links first.
-    private func refresh() {
-        guard text != sourceText || citationLabels != sourceLabels else { return }
-        sourceText = text
-        sourceLabels = citationLabels
-        let stripped = EmojiStripper.strip(text)
-        let linked = citationLabels.isEmpty
-            ? stripped
-            : Self.citationLinked(stripped, labels: citationLabels)
-        blocks = MarkdownParser.parse(linked)
-    }
-
-    /// Rewrites standalone `[A#]`/`[S#]` markers whose label is a known citation into
-    /// custom-scheme Markdown links, e.g. `[A1]` → `[\[A1\]](supracite://A1)`. The
-    /// escaped brackets keep the visible text literal ("[A1]"); the lookbehind avoids
-    /// corrupting link syntax or path-like text. Unknown labels are left untouched.
-    static func citationLinked(_ text: String, labels: Set<String>) -> String {
-        guard let regex = try? NSRegularExpression(pattern: #"(?<![\w/])\[([AS]\d{1,3})\]"#) else { return text }
-        let ns = text as NSString
-        var result = ""
-        var cursor = 0
-        for match in regex.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
-            let label = ns.substring(with: match.range(at: 1))
-            result += ns.substring(with: NSRange(location: cursor, length: match.range.location - cursor))
-            if labels.contains(label) {
-                result += "[\\[\(label)\\]](supracite://\(label))"
-            } else {
-                result += ns.substring(with: match.range)
-            }
-            cursor = match.range.location + match.range.length
-        }
-        result += ns.substring(from: cursor)
-        return result
-    }
-
-    /// Extracts an uppercased citation label from a tapped `supracite://A1` URL.
-    static func citationLabel(from url: URL) -> String? {
-        guard url.scheme == "supracite" else { return nil }
-        let raw = url.host ?? String(url.absoluteString.dropFirst("supracite://".count))
-        return raw.isEmpty ? nil : raw.uppercased()
-    }
-}
-
-enum MarkdownColumnAlign {
-    case leading, center, trailing
-
-    var alignment: Alignment {
-        switch self {
-        case .leading: .leading
-        case .center: .center
-        case .trailing: .trailing
-        }
-    }
-}
-
-enum MarkdownBlock {
-    case heading(level: Int, text: String)
-    case paragraph(String)
-    case bulletList([String])
-    case numberedList([String])
-    case codeBlock(String)
-    case quote(String)
-    case table(headers: [String], rows: [[String]], aligns: [MarkdownColumnAlign])
-    case rule
-}
-
-private struct MarkdownBlockView: View {
-    let block: MarkdownBlock
-
-    var body: some View {
-        switch block {
-        case let .heading(level, text):
-            Text(MarkdownInline.attributed(text))
-                .font(headingFont(level))
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.top, level <= 2 ? 2 : 0)
-        case let .paragraph(text):
-            Text(MarkdownInline.attributed(text))
-                .fixedSize(horizontal: false, vertical: true)
-        case let .bulletList(items):
-            VStack(alignment: .leading, spacing: 3) {
-                ForEach(items.indices, id: \.self) { idx in
-                    listRow(marker: "•", text: items[idx])
-                }
-            }
-        case let .numberedList(items):
-            VStack(alignment: .leading, spacing: 3) {
-                ForEach(items.indices, id: \.self) { idx in
-                    listRow(marker: "\(idx + 1).", text: items[idx])
-                }
-            }
-        case let .codeBlock(code):
-            ScrollView(.horizontal, showsIndicators: false) {
-                Text(code)
-                    .font(.system(.callout, design: .monospaced))
-                    .textSelection(.enabled)
-                    .padding(10)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .background(Color.secondary.opacity(0.10), in: RoundedRectangle(cornerRadius: 6))
-        case let .quote(text):
-            HStack(alignment: .top, spacing: 8) {
-                RoundedRectangle(cornerRadius: 1.5)
-                    .fill(Color.secondary.opacity(0.4))
-                    .frame(width: 3)
-                Text(MarkdownInline.attributed(text))
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        case let .table(headers, rows, aligns):
-            MarkdownTableView(headers: headers, rows: rows, aligns: aligns)
-        case .rule:
-            Divider()
-        }
-    }
-
-    private func listRow(marker: String, text: String) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Text(marker).foregroundStyle(.secondary).monospacedDigit()
-            Text(MarkdownInline.attributed(text)).fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
-    private func headingFont(_ level: Int) -> Font {
-        switch level {
-        case 1: .title2.weight(.bold)
-        case 2: .title3.weight(.bold)
-        case 3: .headline
-        default: .subheadline.weight(.semibold)
-        }
-    }
-}
-
-private struct MarkdownTableView: View {
-    let headers: [String]
-    let rows: [[String]]
-    let aligns: [MarkdownColumnAlign]
-
-    var body: some View {
-        Grid(alignment: .topLeading, horizontalSpacing: 14, verticalSpacing: 6) {
-            GridRow {
-                ForEach(headers.indices, id: \.self) { column in
-                    Text(MarkdownInline.attributed(headers[column]))
-                        .font(.callout.weight(.semibold))
-                        .frame(maxWidth: .infinity, alignment: alignment(column))
-                }
-            }
-            Divider()
-            ForEach(rows.indices, id: \.self) { row in
-                GridRow {
-                    ForEach(headers.indices, id: \.self) { column in
-                        Text(MarkdownInline.attributed(cell(row, column)))
-                            .frame(maxWidth: .infinity, alignment: alignment(column))
-                    }
-                }
-            }
-        }
-        .padding(10)
-        .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.secondary.opacity(0.15)))
-    }
-
-    private func cell(_ row: Int, _ column: Int) -> String {
-        guard row < rows.count, column < rows[row].count else { return "" }
-        return rows[row][column]
-    }
-
-    private func alignment(_ column: Int) -> Alignment {
-        column < aligns.count ? aligns[column].alignment : .leading
-    }
-}
-
-/// Inline spans (bold/italic/`code`/links) via Foundation's Markdown parser, with
-/// a plain-text fallback so partial/streaming text never shows a parse error.
-enum MarkdownInline {
-    static func attributed(_ text: String) -> AttributedString {
-        (try? AttributedString(
-            markdown: text,
-            options: AttributedString.MarkdownParsingOptions(
-                interpretedSyntax: .inlineOnlyPreservingWhitespace,
-                failurePolicy: .returnPartiallyParsedIfPossible
-            )
-        )) ?? AttributedString(text)
-    }
-}
-
-/// Splits raw Markdown into block elements. Line-based and forgiving: anything it
-/// doesn't recognize becomes a paragraph, so it never throws on LLM output.
-enum MarkdownParser {
-    static func parse(_ raw: String) -> [MarkdownBlock] {
-        var blocks: [MarkdownBlock] = []
-        let lines = raw.components(separatedBy: "\n")
-        var paragraph: [String] = []
-        var i = 0
-
-        func flushParagraph() {
-            let joined = paragraph.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-            if !joined.isEmpty { blocks.append(.paragraph(joined)) }
-            paragraph.removeAll()
-        }
-
-        while i < lines.count {
-            let trimmed = lines[i].trimmingCharacters(in: .whitespaces)
-
-            if trimmed.hasPrefix("```") {
-                flushParagraph()
-                var code: [String] = []
-                i += 1
-                while i < lines.count, !lines[i].trimmingCharacters(in: .whitespaces).hasPrefix("```") {
-                    code.append(lines[i]); i += 1
-                }
-                if i < lines.count { i += 1 }
-                blocks.append(.codeBlock(code.joined(separator: "\n")))
-                continue
-            }
-
-            if let heading = heading(trimmed) {
-                flushParagraph()
-                blocks.append(.heading(level: heading.level, text: heading.text)); i += 1; continue
-            }
-
-            if isRule(trimmed) {
-                flushParagraph(); blocks.append(.rule); i += 1; continue
-            }
-
-            if trimmed.contains("|"), i + 1 < lines.count, isTableSeparator(lines[i + 1]) {
-                flushParagraph()
-                let (table, consumed) = parseTable(lines, start: i)
-                blocks.append(table); i += consumed; continue
-            }
-
-            if trimmed.hasPrefix(">") {
-                flushParagraph()
-                var quoted: [String] = []
-                while i < lines.count {
-                    let line = lines[i].trimmingCharacters(in: .whitespaces)
-                    guard line.hasPrefix(">") else { break }
-                    quoted.append(String(line.dropFirst()).trimmingCharacters(in: .whitespaces))
-                    i += 1
-                }
-                blocks.append(.quote(quoted.joined(separator: "\n"))); continue
-            }
-
-            if isBullet(trimmed) {
-                flushParagraph()
-                var items: [String] = []
-                while i < lines.count, isBullet(lines[i].trimmingCharacters(in: .whitespaces)) {
-                    items.append(bulletText(lines[i].trimmingCharacters(in: .whitespaces))); i += 1
-                }
-                blocks.append(.bulletList(items)); continue
-            }
-
-            if isNumbered(trimmed) {
-                flushParagraph()
-                var items: [String] = []
-                while i < lines.count, isNumbered(lines[i].trimmingCharacters(in: .whitespaces)) {
-                    items.append(numberedText(lines[i].trimmingCharacters(in: .whitespaces))); i += 1
-                }
-                blocks.append(.numberedList(items)); continue
-            }
-
-            if trimmed.isEmpty {
-                flushParagraph(); i += 1; continue
-            }
-
-            paragraph.append(trimmed); i += 1
-        }
-        flushParagraph()
-        return blocks
-    }
-
-    private static func heading(_ line: String) -> (level: Int, text: String)? {
-        guard line.hasPrefix("#") else { return nil }
-        var level = 0
-        var index = line.startIndex
-        while index < line.endIndex, line[index] == "#", level < 6 {
-            level += 1; index = line.index(after: index)
-        }
-        guard level > 0, index < line.endIndex, line[index] == " " else { return nil }
-        return (level, String(line[index...]).trimmingCharacters(in: .whitespaces))
-    }
-
-    private static func isRule(_ line: String) -> Bool {
-        let stripped = line.replacingOccurrences(of: " ", with: "")
-        guard stripped.count >= 3 else { return false }
-        return stripped.allSatisfy { $0 == "-" } || stripped.allSatisfy { $0 == "*" } || stripped.allSatisfy { $0 == "_" }
-    }
-
-    private static func isBullet(_ line: String) -> Bool {
-        line.hasPrefix("- ") || line.hasPrefix("* ") || line.hasPrefix("+ ")
-    }
-
-    private static func bulletText(_ line: String) -> String {
-        String(line.dropFirst(2)).trimmingCharacters(in: .whitespaces)
-    }
-
-    private static func isNumbered(_ line: String) -> Bool {
-        var index = line.startIndex
-        var digits = 0
-        while index < line.endIndex, line[index].isNumber {
-            digits += 1; index = line.index(after: index)
-        }
-        guard digits > 0, index < line.endIndex, line[index] == "." || line[index] == ")" else { return false }
-        let next = line.index(after: index)
-        return next < line.endIndex && line[next] == " "
-    }
-
-    private static func numberedText(_ line: String) -> String {
-        guard let marker = line.firstIndex(where: { $0 == "." || $0 == ")" }) else { return line }
-        return String(line[line.index(after: marker)...]).trimmingCharacters(in: .whitespaces)
-    }
-
-    private static func isTableSeparator(_ line: String) -> Bool {
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
-        guard trimmed.contains("-"), trimmed.contains("|") else { return false }
-        return trimmed.allSatisfy { $0 == "|" || $0 == "-" || $0 == ":" || $0 == " " }
-    }
-
-    private static func splitRow(_ line: String) -> [String] {
-        var trimmed = line.trimmingCharacters(in: .whitespaces)
-        if trimmed.hasPrefix("|") { trimmed.removeFirst() }
-        if trimmed.hasSuffix("|") { trimmed.removeLast() }
-        return trimmed.components(separatedBy: "|").map { $0.trimmingCharacters(in: .whitespaces) }
-    }
-
-    private static func parseTable(_ lines: [String], start: Int) -> (MarkdownBlock, Int) {
-        let headers = splitRow(lines[start])
-        let aligns = splitRow(lines[start + 1]).map { spec -> MarkdownColumnAlign in
-            let left = spec.hasPrefix(":")
-            let right = spec.hasSuffix(":")
-            if left && right { return .center }
-            if right { return .trailing }
-            return .leading
-        }
-        var rows: [[String]] = []
-        var i = start + 2
-        while i < lines.count {
-            let trimmed = lines[i].trimmingCharacters(in: .whitespaces)
-            guard !trimmed.isEmpty, trimmed.contains("|") else { break }
-            rows.append(splitRow(lines[i])); i += 1
-        }
-        return (.table(headers: headers, rows: rows, aligns: aligns), i - start)
-    }
-}
-
-/// Removes emoji so they never reach the chat or the clipboard, WITHOUT touching
-/// text symbols that double as content (✓ ✗ → ⚖ ™ © …) or code spacing. It strips
-/// only default-emoji glyphs and characters forced to emoji presentation by a
-/// variation selector — so it's safe to run over the whole answer, code included.
-enum EmojiStripper {
-    static func strip(_ text: String) -> String {
-        guard text.contains(where: isEmoji) else { return text }
-        return String(text.filter { !isEmoji($0) })
-    }
-
-    private static func isEmoji(_ character: Character) -> Bool {
-        character.unicodeScalars.contains { scalar in
-            scalar.properties.isEmojiPresentation || scalar.value == 0xFE0F
-        }
     }
 }
