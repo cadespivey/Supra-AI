@@ -3,6 +3,10 @@ import SupraCore
 import SupraRuntimeInterface
 
 final class GenerationEventBuffer: @unchecked Sendable {
+    struct ResidencyCounts: Equatable, Sendable {
+        let generationCount: Int
+        let eventCount: Int
+    }
     private let lock = NSLock()
     private let retainedGenerationLimit = 20
     private let budgetPolicy: RuntimeBudgetPolicy
@@ -116,6 +120,31 @@ final class GenerationEventBuffer: @unchecked Sendable {
 
         return eventsByGenerationID[generationID, default: []]
             .filter { $0.sequenceNumber > sequenceNumber }
+    }
+
+    func residencyCounts() -> ResidencyCounts {
+        lock.lock()
+        defer { lock.unlock() }
+        return ResidencyCounts(
+            generationCount: eventsByGenerationID.count,
+            eventCount: eventsByGenerationID.values.reduce(0) { $0 + $1.count }
+        )
+    }
+
+    @discardableResult
+    func resetForRuntimeEpoch() -> ResidencyCounts {
+        lock.lock()
+        defer { lock.unlock() }
+        let counts = ResidencyCounts(
+            generationCount: eventsByGenerationID.count,
+            eventCount: eventsByGenerationID.values.reduce(0) { $0 + $1.count }
+        )
+        eventsByGenerationID.removeAll(keepingCapacity: false)
+        outputBudgetTrackers.removeAll(keepingCapacity: false)
+        retainedReplayEncodedBytes.removeAll(keepingCapacity: false)
+        lastSequenceNumbers.removeAll(keepingCapacity: false)
+        generationOrder.removeAll(keepingCapacity: false)
+        return counts
     }
 
     private func pruneIfNeeded() {

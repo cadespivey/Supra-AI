@@ -65,6 +65,7 @@ public actor ModelExecutionCoordinator {
     private var loadedChatBindings: [ModelID: ModelExecutionModelBinding] = [:]
     private var loadedEmbeddingBindings: [DocumentEmbeddingModelID: ModelExecutionModelBinding] = [:]
     private var generationTasks: [GenerationID: ModelExecutionTaskID] = [:]
+    private var runtimeMemoryPressure: RuntimeMemoryPressureLevel = .normal
 
     public init(
         runtimeClient: RuntimeSafetyClient,
@@ -78,6 +79,42 @@ public actor ModelExecutionCoordinator {
 
     public var queuedTaskCount: Int {
         waiting.count
+    }
+
+    public var runtimeResidencyActiveTaskCount: Int {
+        activeTaskID == nil ? 0 : 1
+    }
+
+    public func runtimeResidencyQueuedWork() -> [RuntimeQueuedResidencyWork] {
+        var work = waiting.map { entry in
+            let workClass: RuntimeResidencyWorkClass
+            switch entry.request.priority {
+            case .foregroundInteractive: workClass = .foreground
+            case .userInitiatedBatch: workClass = .userInitiated
+            case .backgroundMaintenance: workClass = .background
+            case .speculative: workClass = .speculative
+            }
+            return RuntimeQueuedResidencyWork(
+                id: entry.request.taskID.rawValue,
+                workClass: workClass
+            )
+        }
+        if let activeTaskID,
+           let active = requests[activeTaskID],
+           (active.priority == .backgroundMaintenance || active.priority == .speculative) {
+            let workClass: RuntimeResidencyWorkClass = active.priority == .speculative
+                ? .speculative
+                : .background
+            work.append(RuntimeQueuedResidencyWork(
+                id: activeTaskID.rawValue,
+                workClass: workClass
+            ))
+        }
+        return work
+    }
+
+    public func setRuntimeMemoryPressure(_ level: RuntimeMemoryPressureLevel) {
+        runtimeMemoryPressure = level
     }
 
     public func snapshot(taskID: ModelExecutionTaskID) -> ModelExecutionSnapshot? {
@@ -200,6 +237,10 @@ public actor ModelExecutionCoordinator {
         guard runtimeIsAvailable else {
             snapshots[request.taskID] = snapshot(for: request, lifecycle: .recoveryRequired)
             throw ModelExecutionError.recoveryRequired
+        }
+        if runtimeMemoryPressure != .normal,
+           (request.priority == .backgroundMaintenance || request.priority == .speculative) {
+            throw ModelExecutionError.memoryPressure(level: runtimeMemoryPressure)
         }
 
         if let existing = requests[request.taskID] {

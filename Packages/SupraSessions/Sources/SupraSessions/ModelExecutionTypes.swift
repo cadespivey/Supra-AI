@@ -1,5 +1,6 @@
 import Foundation
 import SupraCore
+import SupraRuntimeClient
 
 /// Stable identity for one feature-owned model invocation.
 public struct ModelExecutionTaskID: RawRepresentable, Hashable, Sendable {
@@ -176,6 +177,7 @@ public enum ModelExecutionError: Error, Equatable, LocalizedError, Sendable {
     case recoveryRequired
     case duplicateInvocation(existingTaskID: ModelExecutionTaskID)
     case modelBindingMismatch
+    case memoryPressure(level: RuntimeMemoryPressureLevel)
 
     public var errorDescription: String? {
         switch self {
@@ -191,6 +193,8 @@ public enum ModelExecutionError: Error, Equatable, LocalizedError, Sendable {
             "The same model work is already active as \(existingTaskID.rawValue)."
         case .modelBindingMismatch:
             "The runtime request does not match the model bound to its execution permit."
+        case let .memoryPressure(level):
+            "The local model task was deferred during \(level.rawValue) memory pressure."
         }
     }
 }

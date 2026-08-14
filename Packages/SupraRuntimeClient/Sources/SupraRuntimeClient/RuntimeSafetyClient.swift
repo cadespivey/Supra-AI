@@ -68,14 +68,17 @@ struct RuntimeCancellationConfirmationPolicy: Sendable {
 /// Observation and cancellation calls remain available during quarantine; every
 /// model/data-plane call fails closed until recovery restarts the service and
 /// observes an idle status.
-public final class RuntimeSafetyClient: RuntimeClientProtocol, @unchecked Sendable {
+public final class RuntimeSafetyClient: RuntimeClientProtocol, RuntimeResidencyClientProtocol,
+    @unchecked Sendable {
     private let base: any RuntimeClientProtocol
+    private let residencyBase: (any RuntimeResidencyClientProtocol)?
     private let cancellationConfirmationPolicy: RuntimeCancellationConfirmationPolicy
     private let coordinator = RuntimeSafetyCoordinator()
     private let cancellationResolutions = RuntimeCancellationResolutionCoordinator()
 
     public init(base: any RuntimeClientProtocol) {
         self.base = base
+        residencyBase = base as? any RuntimeResidencyClientProtocol
         cancellationConfirmationPolicy = .live
     }
 
@@ -84,6 +87,7 @@ public final class RuntimeSafetyClient: RuntimeClientProtocol, @unchecked Sendab
         cancellationConfirmationPolicy: RuntimeCancellationConfirmationPolicy
     ) {
         self.base = base
+        residencyBase = base as? any RuntimeResidencyClientProtocol
         self.cancellationConfirmationPolicy = cancellationConfirmationPolicy
     }
 
@@ -109,6 +113,30 @@ public final class RuntimeSafetyClient: RuntimeClientProtocol, @unchecked Sendab
             guard status.activeGenerationID == nil, idleStates.contains(status.state) else {
                 throw RuntimeSafetyError.recoveryFailed(
                     message: "the restarted service did not report an idle state"
+                )
+            }
+            guard let residencyBase else {
+                throw RuntimeSafetyError.recoveryFailed(
+                    message: "the restarted service does not expose deterministic reset controls"
+                )
+            }
+            let snapshot = try await residencyBase.runtimeResidencySnapshot()
+            let (expectedNewEpoch, overflow) = snapshot.epoch.addingReportingOverflow(1)
+            guard !overflow else {
+                throw RuntimeSafetyError.recoveryFailed(
+                    message: "the runtime residency epoch cannot advance safely"
+                )
+            }
+            let resetRequest = RuntimeServiceResetRequest(
+                requestID: "runtime-recovery-\(UUID().uuidString.lowercased())",
+                expectedEpoch: snapshot.epoch
+            )
+            let receipt = try await residencyBase.resetRuntime(resetRequest)
+            guard receipt.requestID == resetRequest.requestID,
+                  receipt.previousEpoch == snapshot.epoch,
+                  receipt.newEpoch == expectedNewEpoch else {
+                throw RuntimeSafetyError.recoveryFailed(
+                    message: "the runtime returned an invalid deterministic reset receipt"
                 )
             }
             coordinator.finishRecovery(succeeded: true)
@@ -140,6 +168,37 @@ public final class RuntimeSafetyClient: RuntimeClientProtocol, @unchecked Sendab
 
     public func runtimeStatus() async throws -> RuntimeStatus {
         try await base.runtimeStatus()
+    }
+
+    public func runtimeResidencySnapshot() async throws -> RuntimeServiceResidencySnapshot {
+        guard let residencyBase else {
+            throw RuntimeClientError.remoteInvocationFailed(
+                "Runtime residency snapshots are unavailable on this control plane."
+            )
+        }
+        return try await residencyBase.runtimeResidencySnapshot()
+    }
+
+    public func evictRuntimeArtifact(
+        _ request: RuntimeServiceArtifactEvictionRequest
+    ) async throws -> RuntimeServiceArtifactEvictionResponse {
+        guard let residencyBase else {
+            throw RuntimeClientError.remoteInvocationFailed(
+                "Runtime artifact eviction is unavailable on this control plane."
+            )
+        }
+        return try await residencyBase.evictRuntimeArtifact(request)
+    }
+
+    public func resetRuntime(
+        _ request: RuntimeServiceResetRequest
+    ) async throws -> RuntimeServiceResetReceipt {
+        guard let residencyBase else {
+            throw RuntimeClientError.remoteInvocationFailed(
+                "Deterministic runtime reset is unavailable on this control plane."
+            )
+        }
+        return try await residencyBase.resetRuntime(request)
     }
 
     public func embeddingStatus() async throws -> EmbeddingModelStatus {

@@ -38,6 +38,7 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
     /// request reserves its transition synchronously, before any actor hop, so
     /// load/unload can never slip underneath an accepted generation (or vice versa).
     private var pendingModelMutationCount = 0
+    private var activeChatRequestCount = 0
     private var activeGenerationReservation: GenerationReservation?
     /// The XPC connection that started the in-flight generation, so a dropped
     /// client can have its orphaned generation cancelled (guarded by stateLock).
@@ -46,6 +47,16 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
     private var loadedEmbeddingModelID: DocumentEmbeddingModelID?
     private var embeddingDimension: Int?
     private var loadedEmbeddingResourceProfile: ModelResourceProfile?
+    private var pendingEmbeddingModelMutationCount = 0
+    private var activeEmbeddingRequestCount = 0
+    private var runtimeResetInProgress = false
+    private var runtimeResidencyEpoch: UInt64 = 0
+    private var runtimeResidencySequence: UInt64 = 0
+    private var chatLastUseSequence: UInt64 = 0
+    private var embeddingLastUseSequence: UInt64 = 0
+    private var runtimeResetReceipts: [String: RuntimeServiceResetReceipt] = [:]
+    private var runtimeResetReceiptOrder: [String] = []
+    private static let maximumRetainedRuntimeResetReceipts = 64
 
     init(budgetPolicy: RuntimeBudgetPolicy = .production) {
         let memoryEnvelope = Self.productionMemoryEnvelope()
@@ -202,6 +213,10 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
     ) {
         stateLock.lock()
         let isLoaded = loadedModelID == request.modelID
+            && activeGenerationReservation == nil
+            && pendingModelMutationCount == 0
+            && !runtimeResetInProgress
+        if isLoaded { activeChatRequestCount += 1 }
         stateLock.unlock()
         guard isLoaded else {
             reply(CountTokensResponse(
@@ -213,7 +228,13 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
         }
 
         let reply = RuntimeReply(reply)
-        modelOperations.enqueue { [modelController, reply, responseBudgetValidator] in
+        modelOperations.enqueue { [self, modelController, reply, responseBudgetValidator] in
+            defer {
+                stateLock.withLock {
+                    precondition(activeChatRequestCount > 0)
+                    activeChatRequestCount -= 1
+                }
+            }
             do {
                 let counts = try await modelController.countTokens(texts: request.texts)
                 let response = CountTokensResponse(
@@ -274,7 +295,10 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
             }
         }
 
-        guard pendingModelMutationCount == 0, activeGenerationReservation == nil else {
+        guard pendingModelMutationCount == 0,
+              activeChatRequestCount == 0,
+              activeGenerationReservation == nil,
+              !runtimeResetInProgress else {
             stateLock.unlock()
             reply(
                 GenerateStartResponse(
@@ -295,6 +319,8 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
             isConnectionOwned: ownerConnection != nil
         )
         activeGenerationConnection = ownerConnection
+        advanceRuntimeResidencySequenceLocked()
+        chatLastUseSequence = runtimeResidencySequence
 #if DEBUG
         if request.prompt == RuntimeLifecycleTestHooks.staleTerminationPrompt {
             RuntimeLifecycleTestHooks.shared.armStaleTermination(
@@ -525,6 +551,8 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
         let loadedModelID = loadedModelID
         let activeGenerationID = activeGenerationReservation?.generationID
         let hasPendingModelMutation = pendingModelMutationCount > 0
+            || pendingEmbeddingModelMutationCount > 0
+            || runtimeResetInProgress
         let loadedEmbeddingModelID = loadedEmbeddingModelID
         stateLock.unlock()
 
@@ -552,6 +580,187 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
                 embeddingModelID: loadedEmbeddingModelID
             )
         )
+    }
+
+    func runtimeResidencySnapshot(
+        reply: @escaping (RuntimeServiceResidencySnapshot) -> Void
+    ) {
+        stateLock.lock()
+        let counts = eventBuffer.residencyCounts()
+        var residents: [RuntimeServiceResidentArtifact] = []
+        if let modelID = loadedModelID,
+           let profile = loadedModelResourceProfile {
+            residents.append(RuntimeServiceResidentArtifact(
+                modelID: modelID.rawValue.uuidString.lowercased(),
+                revision: profile.modelRevision,
+                kind: .chat,
+                estimatedBytes: Self.residentBytes(profile),
+                isActive: activeGenerationReservation != nil || activeChatRequestCount > 0,
+                lastUseSequence: chatLastUseSequence
+            ))
+        }
+        if let modelID = loadedEmbeddingModelID,
+           let profile = loadedEmbeddingResourceProfile {
+            residents.append(RuntimeServiceResidentArtifact(
+                modelID: modelID.rawValue.uuidString.lowercased(),
+                revision: profile.modelRevision,
+                kind: .embedding,
+                estimatedBytes: Self.residentBytes(profile),
+                isActive: activeEmbeddingRequestCount > 0,
+                lastUseSequence: embeddingLastUseSequence
+            ))
+        }
+        residents.sort {
+            if $0.kind.rawValue != $1.kind.rawValue {
+                return $0.kind.rawValue < $1.kind.rawValue
+            }
+            return $0.modelID < $1.modelID
+        }
+        let activeTaskCount = (activeGenerationReservation == nil ? 0 : 1)
+            + activeChatRequestCount
+            + activeEmbeddingRequestCount
+            + pendingModelMutationCount
+            + pendingEmbeddingModelMutationCount
+            + (runtimeResetInProgress ? 1 : 0)
+        let snapshot = RuntimeServiceResidencySnapshot(
+            epoch: runtimeResidencyEpoch,
+            unifiedMemoryCeilingBytes: resourceAdmissionPlanner.envelope.unifiedMemoryCeilingBytes,
+            fixedResidentBytes: resourceAdmissionPlanner.envelope.fixedResidentBytes,
+            replayGenerationCount: counts.generationCount,
+            bufferedEventCount: counts.eventCount,
+            residents: residents,
+            activeTaskCount: activeTaskCount
+        )
+        stateLock.unlock()
+        reply(snapshot)
+    }
+
+    func evictRuntimeArtifact(
+        _ request: RuntimeServiceArtifactEvictionRequest,
+        reply: @escaping (RuntimeServiceArtifactEvictionResponse) -> Void
+    ) {
+        switch request.kind {
+        case .chat:
+            guard reserveChatEviction(request) else {
+                reply(Self.failedEviction("The exact chat artifact is active or unavailable."))
+                return
+            }
+            let reply = RuntimeReply(reply)
+            modelOperations.enqueue { [self, modelController, reply] in
+                defer { finishModelMutation() }
+                do {
+                    try await modelController.unload()
+                    clearLoadedModel()
+                    reply(RuntimeServiceArtifactEvictionResponse(
+                        evictedModelID: request.modelID,
+                        error: nil
+                    ))
+                } catch {
+                    clearLoadedModel()
+                    reply(Self.failedEviction(error.localizedDescription))
+                }
+            }
+        case .embedding:
+            guard reserveEmbeddingEviction(request) else {
+                reply(Self.failedEviction("The exact embedding artifact is active or unavailable."))
+                return
+            }
+            let reply = RuntimeReply(reply)
+            embeddingModelOperations.enqueue { [self, embeddingController, reply] in
+                defer { finishEmbeddingMutation() }
+                await embeddingController.unload()
+                clearLoadedEmbeddingModel()
+                reply(RuntimeServiceArtifactEvictionResponse(
+                    evictedModelID: request.modelID,
+                    error: nil
+                ))
+            }
+        case .reranker:
+            reply(Self.failedEviction("No reranker artifact is resident."))
+        }
+    }
+
+    func resetRuntime(
+        _ request: RuntimeServiceResetRequest,
+        reply: @escaping (RuntimeServiceResetResponse) -> Void
+    ) {
+        stateLock.lock()
+        if let existing = runtimeResetReceipts[request.requestID] {
+            stateLock.unlock()
+            reply(RuntimeServiceResetResponse(receipt: existing, error: nil))
+            return
+        }
+        let activeCount = (activeGenerationReservation == nil ? 0 : 1)
+            + activeChatRequestCount
+            + activeEmbeddingRequestCount
+            + pendingModelMutationCount
+            + pendingEmbeddingModelMutationCount
+        guard !runtimeResetInProgress,
+              activeCount == 0,
+              request.expectedEpoch == runtimeResidencyEpoch,
+              request.expectedEpoch < UInt64.max else {
+            let actualEpoch = runtimeResidencyEpoch
+            stateLock.unlock()
+            reply(RuntimeServiceResetResponse(
+                receipt: nil,
+                error: RuntimeError(
+                    category: "runtimeResidency",
+                    message: activeCount == 0
+                        ? "Runtime reset epoch mismatch: expected \(request.expectedEpoch), actual \(actualEpoch)."
+                        : "Runtime reset requires all model work to be quiescent."
+                )
+            ))
+            return
+        }
+        runtimeResetInProgress = true
+        let previousEpoch = runtimeResidencyEpoch
+        let chatIDs = loadedModelID.map { [$0.rawValue.uuidString.lowercased()] } ?? []
+        let embeddingIDs = loadedEmbeddingModelID.map {
+            [$0.rawValue.uuidString.lowercased()]
+        } ?? []
+        stateLock.unlock()
+
+        let reply = RuntimeReply(reply)
+        Task { [self, modelController, embeddingController, eventBuffer, reply] in
+            do {
+                if !chatIDs.isEmpty { try await modelController.unload() }
+                if !embeddingIDs.isEmpty { await embeddingController.unload() }
+                let cleared = eventBuffer.resetForRuntimeEpoch()
+                let receipt = stateLock.withLock {
+                    clearLoadedModelLocked()
+                    clearLoadedEmbeddingModelLocked()
+                    runtimeResidencyEpoch = previousEpoch + 1
+                    let receipt = RuntimeServiceResetReceipt(
+                        requestID: request.requestID,
+                        previousEpoch: previousEpoch,
+                        newEpoch: runtimeResidencyEpoch,
+                        unloadedChatModelIDs: chatIDs,
+                        unloadedEmbeddingModelIDs: embeddingIDs,
+                        clearedReplayGenerationCount: cleared.generationCount,
+                        clearedBufferedEventCount: cleared.eventCount
+                    )
+                    runtimeResetReceipts[request.requestID] = receipt
+                    runtimeResetReceiptOrder.append(request.requestID)
+                    if runtimeResetReceiptOrder.count
+                        > Self.maximumRetainedRuntimeResetReceipts {
+                        let retiredRequestID = runtimeResetReceiptOrder.removeFirst()
+                        runtimeResetReceipts[retiredRequestID] = nil
+                    }
+                    runtimeResetInProgress = false
+                    return receipt
+                }
+                reply(RuntimeServiceResetResponse(receipt: receipt, error: nil))
+            } catch {
+                stateLock.withLock { runtimeResetInProgress = false }
+                reply(RuntimeServiceResetResponse(
+                    receipt: nil,
+                    error: RuntimeError(
+                        category: "runtimeResidency",
+                        message: "Runtime reset failed: \(error.localizedDescription)"
+                    )
+                ))
+            }
+        }
     }
 
     // MARK: - Milestone 3: embeddings
@@ -612,6 +821,17 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
             return
         }
 
+        guard reserveEmbeddingMutation() else {
+            reply(LoadEmbeddingModelResponse(
+                state: .failed,
+                embeddingModelID: request.embeddingModelID,
+                error: RuntimeErrorMapper.invalidRequest(
+                    "The embedding model is active or the runtime is resetting."
+                )
+            ))
+            return
+        }
+
         let reply = RuntimeReply(reply)
         embeddingModelOperations.enqueue { [
             self,
@@ -620,6 +840,7 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
             replacementProfile,
             contentBinding,
         ] in
+            defer { finishEmbeddingMutation() }
             let startedAt = Date()
             do {
                 if let currentProfile = currentEmbeddingResourceProfile() {
@@ -695,18 +916,29 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
         stateLock.lock()
         let loadedEmbeddingModelID = loadedEmbeddingModelID
         let embeddingDimension = embeddingDimension
-        stateLock.unlock()
-
-        guard loadedEmbeddingModelID == request.embeddingModelID else {
+        guard loadedEmbeddingModelID == request.embeddingModelID,
+              pendingEmbeddingModelMutationCount == 0,
+              !runtimeResetInProgress else {
+            stateLock.unlock()
             reply(EmbedTextResponse(
                 state: .unloaded,
                 error: RuntimeErrorMapper.invalidRequest("The requested embedding model is not loaded.")
             ))
             return
         }
+        activeEmbeddingRequestCount += 1
+        advanceRuntimeResidencySequenceLocked()
+        embeddingLastUseSequence = runtimeResidencySequence
+        stateLock.unlock()
 
         let reply = RuntimeReply(reply)
-        Task { [embeddingController, reply, responseBudgetValidator] in
+        Task { [self, embeddingController, reply, responseBudgetValidator] in
+            defer {
+                stateLock.withLock {
+                    precondition(activeEmbeddingRequestCount > 0)
+                    activeEmbeddingRequestCount -= 1
+                }
+            }
             do {
                 let rawVectors = try await embeddingController.embed(texts: request.texts, normalize: request.normalize)
                 // JSONEncoder throws on non-finite Floats; map NaN/±Inf to 0 so a
@@ -756,15 +988,31 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
         loadedEmbeddingModelID = id
         embeddingDimension = dimension
         loadedEmbeddingResourceProfile = resourceProfile
+        advanceRuntimeResidencySequenceLocked()
+        embeddingLastUseSequence = runtimeResidencySequence
         stateLock.unlock()
     }
 
     private func clearLoadedEmbeddingModel() {
         stateLock.lock()
+        clearLoadedEmbeddingModelLocked()
+        stateLock.unlock()
+    }
+
+    private func clearLoadedEmbeddingModelLocked() {
         loadedEmbeddingModelID = nil
         embeddingDimension = nil
         loadedEmbeddingResourceProfile = nil
-        stateLock.unlock()
+        embeddingLastUseSequence = 0
+    }
+
+    /// Maintains deterministic LRU ordering without allowing a decades-long
+    /// service process to wrap an eviction sequence back to the oldest value.
+    /// Once saturated, stable kind/model/revision tie-breakers remain decisive.
+    private func advanceRuntimeResidencySequenceLocked() {
+        if runtimeResidencySequence < UInt64.max {
+            runtimeResidencySequence += 1
+        }
     }
 
     private func setLoadedModel(
@@ -774,6 +1022,8 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
         stateLock.lock()
         loadedModelID = request.modelID
         loadedModelResourceProfile = resourceProfile
+        advanceRuntimeResidencySequenceLocked()
+        chatLastUseSequence = runtimeResidencySequence
         // The plain bookmark carries a single-use sandbox extension that is dead
         // once the app releases its access, so it must not be replayed on reload.
         // Retain only the path; a sandboxed reload must be re-driven by the app
@@ -792,10 +1042,15 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
 
     private func clearLoadedModel() {
         stateLock.lock()
+        clearLoadedModelLocked()
+        stateLock.unlock()
+    }
+
+    private func clearLoadedModelLocked() {
         loadedModelID = nil
         currentModelRequest = nil
         loadedModelResourceProfile = nil
-        stateLock.unlock()
+        chatLastUseSequence = 0
     }
 
     private func currentChatResourceProfile() -> ModelResourceProfile? {
@@ -813,7 +1068,9 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
     private func reserveModelMutation() -> Bool {
         stateLock.lock()
         defer { stateLock.unlock() }
-        guard activeGenerationReservation == nil else { return false }
+        guard activeGenerationReservation == nil,
+              activeChatRequestCount == 0,
+              !runtimeResetInProgress else { return false }
         pendingModelMutationCount += 1
         return true
     }
@@ -823,6 +1080,74 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
         precondition(pendingModelMutationCount > 0, "Unbalanced runtime model mutation reservation")
         pendingModelMutationCount -= 1
         stateLock.unlock()
+    }
+
+    private func reserveEmbeddingMutation() -> Bool {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        guard activeEmbeddingRequestCount == 0,
+              !runtimeResetInProgress else { return false }
+        pendingEmbeddingModelMutationCount += 1
+        return true
+    }
+
+    private func finishEmbeddingMutation() {
+        stateLock.lock()
+        precondition(
+            pendingEmbeddingModelMutationCount > 0,
+            "Unbalanced runtime embedding-model mutation reservation"
+        )
+        pendingEmbeddingModelMutationCount -= 1
+        stateLock.unlock()
+    }
+
+    private func reserveChatEviction(
+        _ request: RuntimeServiceArtifactEvictionRequest
+    ) -> Bool {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        guard !runtimeResetInProgress,
+              activeGenerationReservation == nil,
+              activeChatRequestCount == 0,
+              pendingModelMutationCount == 0,
+              let loadedModelID,
+              let profile = loadedModelResourceProfile,
+              loadedModelID.rawValue.uuidString.lowercased() == request.modelID,
+              profile.modelRevision == request.revision else { return false }
+        pendingModelMutationCount += 1
+        return true
+    }
+
+    private func reserveEmbeddingEviction(
+        _ request: RuntimeServiceArtifactEvictionRequest
+    ) -> Bool {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        guard !runtimeResetInProgress,
+              activeEmbeddingRequestCount == 0,
+              pendingEmbeddingModelMutationCount == 0,
+              let loadedEmbeddingModelID,
+              let profile = loadedEmbeddingResourceProfile,
+              loadedEmbeddingModelID.rawValue.uuidString.lowercased() == request.modelID,
+              profile.modelRevision == request.revision else { return false }
+        pendingEmbeddingModelMutationCount += 1
+        return true
+    }
+
+    private static func residentBytes(_ profile: ModelResourceProfile) -> Int {
+        let result = profile.weightBytes.addingReportingOverflow(
+            profile.nonWeightOverheadBytes
+        )
+        return result.overflow ? Int.max : max(0, result.partialValue)
+    }
+
+    private static func failedEviction(
+        _ message: String
+    ) -> RuntimeServiceArtifactEvictionResponse {
+        RuntimeServiceArtifactEvictionResponse(
+            evictedModelID: nil,
+            error: RuntimeError(category: "runtimeResidency", message: message)
+        )
     }
 
     private static func isLowercaseSHA256(_ value: String) -> Bool {
@@ -1268,6 +1593,56 @@ extension SupraRuntimeService: SupraRuntimeXPCServiceProtocol {
         runtimeStatus(reply: { status in
             reply(Self.encoded(status))
         })
+    }
+
+    func runtimeResidencySnapshot(withReply reply: @escaping (Data) -> Void) {
+        runtimeResidencySnapshot(reply: { snapshot in
+            reply(Self.encoded(snapshot))
+        })
+    }
+
+    func evictRuntimeArtifact(
+        _ requestData: Data,
+        withReply reply: @escaping (Data) -> Void
+    ) {
+        do {
+            let request = try RuntimeXPCCodec.decodeRequest(
+                RuntimeServiceArtifactEvictionRequest.self,
+                from: requestData,
+                policy: budgetPolicy
+            )
+            evictRuntimeArtifact(request) { response in
+                reply(Self.encoded(response))
+            }
+        } catch {
+            reply(Self.encoded(Self.failedEviction(
+                "The artifact eviction request could not be decoded."
+            )))
+        }
+    }
+
+    func resetRuntime(
+        _ requestData: Data,
+        withReply reply: @escaping (Data) -> Void
+    ) {
+        do {
+            let request = try RuntimeXPCCodec.decodeRequest(
+                RuntimeServiceResetRequest.self,
+                from: requestData,
+                policy: budgetPolicy
+            )
+            resetRuntime(request) { response in
+                reply(Self.encoded(response))
+            }
+        } catch {
+            reply(Self.encoded(RuntimeServiceResetResponse(
+                receipt: nil,
+                error: RuntimeError(
+                    category: "runtimeResidency",
+                    message: "The runtime reset request could not be decoded."
+                )
+            )))
+        }
     }
 
 #if DEBUG

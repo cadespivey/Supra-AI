@@ -119,6 +119,7 @@ public final class ModelLibrary: ObservableObject {
     private let store: SupraStore
     private let modelExecutionGateway: any ModelExecutionGateway
     private let modelExecutionCoordinator: ModelExecutionCoordinator?
+    private let runtimeResidencyCoordinator: RuntimeResidencyCoordinator?
     private let managedModelRoots: [URL]
     private let authorizationExecutor: ContentBoundAuthorizationExecutor
     private var hasPersistedRoleAssignments: Bool
@@ -127,14 +128,16 @@ public final class ModelLibrary: ObservableObject {
         store: SupraStore,
         runtimeClient: any ModelExecutionGateway,
         managedModelRoots: [URL] = [ManagedModelStorage.modelsDirectory()],
-        hardwareProfile: MacHardwareProfile? = nil
+        hardwareProfile: MacHardwareProfile? = nil,
+        runtimeResidencyCoordinator: RuntimeResidencyCoordinator? = nil
     ) {
         self.init(
             store: store,
             runtimeClient: runtimeClient,
             managedModelRoots: managedModelRoots,
             authorizationExecutor: .live,
-            hardwareProfile: hardwareProfile
+            hardwareProfile: hardwareProfile,
+            runtimeResidencyCoordinator: runtimeResidencyCoordinator
         )
     }
 
@@ -143,11 +146,13 @@ public final class ModelLibrary: ObservableObject {
         runtimeClient: any ModelExecutionGateway,
         managedModelRoots: [URL],
         authorizationExecutor: ContentBoundAuthorizationExecutor,
-        hardwareProfile: MacHardwareProfile? = nil
+        hardwareProfile: MacHardwareProfile? = nil,
+        runtimeResidencyCoordinator: RuntimeResidencyCoordinator? = nil
     ) {
         self.store = store
         self.modelExecutionGateway = runtimeClient
         self.modelExecutionCoordinator = runtimeClient as? ModelExecutionCoordinator
+        self.runtimeResidencyCoordinator = runtimeResidencyCoordinator
         self.managedModelRoots = managedModelRoots
         self.authorizationExecutor = authorizationExecutor
         self.hardwareProfile = hardwareProfile ?? MacHardwareProfileProbe.current(
@@ -392,6 +397,45 @@ public final class ModelLibrary: ObservableObject {
         configuration: LegalModelConfiguration,
         honorsForcedChatSelection: Bool
     ) {
+        guard let runtimeResidencyCoordinator else {
+            scheduleExecutionPrewarm(
+                role: role,
+                configuration: configuration,
+                honorsForcedChatSelection: honorsForcedChatSelection
+            )
+            return
+        }
+        guard let target = prewarmTarget(
+            role: role,
+            configuration: configuration,
+            honorsForcedChatSelection: honorsForcedChatSelection
+        ), loadedModelID?.rawValue.uuidString.lowercased() != target.id.lowercased() else { return }
+
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let request = try await self.prewarmResidencyRequest(for: target)
+                let plan = try await runtimeResidencyCoordinator.requestPrewarm(request)
+                guard plan.disposition == .admitted
+                        || plan.disposition == .admittedAfterEviction else { return }
+                self.scheduleExecutionPrewarm(
+                    role: role,
+                    configuration: configuration,
+                    honorsForcedChatSelection: honorsForcedChatSelection
+                )
+            } catch {
+                // Speculative work fails closed and never changes user-visible
+                // model state when exact resource facts are unavailable.
+                return
+            }
+        }
+    }
+
+    private func scheduleExecutionPrewarm(
+        role: ModelRole,
+        configuration: LegalModelConfiguration,
+        honorsForcedChatSelection: Bool
+    ) {
         guard let coordinator = modelExecutionCoordinator else {
             Task { [weak self] in
                 guard let self else { return }
@@ -433,6 +477,69 @@ public final class ModelLibrary: ObservableObject {
                 }
             }
         }
+    }
+
+    private func prewarmTarget(
+        role: ModelRole,
+        configuration: LegalModelConfiguration,
+        honorsForcedChatSelection: Bool
+    ) -> ModelSummary? {
+        if honorsForcedChatSelection,
+           let forcedModelID,
+           let forced = models.first(where: {
+               $0.id == forcedModelID.rawValue.uuidString
+           }) {
+            return forced
+        }
+        return resolvedModel(for: role, configuration: configuration)
+    }
+
+    private func prewarmResidencyRequest(
+        for model: ModelSummary
+    ) async throws -> RuntimePrewarmRequest {
+        guard let modelID = model.modelID,
+              let managedRoot = managedModelRoots.first(where: {
+                  ManagedModelStorage.isManaged(path: model.path, roots: [$0])
+              }) else {
+            throw RuntimeResidencyError.invalidRequest
+        }
+        let modelDirectory = URL(fileURLWithPath: model.path, isDirectory: true)
+        return try await Task.detached(priority: .utility) {
+            let binding = try SignedReleaseModelAuthorization.inspectContentBinding(
+                modelDirectory: modelDirectory,
+                managedRoot: managedRoot
+            )
+            let configData = try Data(
+                contentsOf: modelDirectory.appendingPathComponent("config.json"),
+                options: [.mappedIfSafe]
+            )
+            let profile = try RuntimeModelResourceProfileBuilder(
+                calibration: .productionChat
+            ).buildChatProfile(
+                profileID: "prewarm-\(model.id.lowercased())",
+                modelID: modelID,
+                binding: binding,
+                configData: configData
+            )
+            let residentBytes = profile.weightBytes.addingReportingOverflow(
+                profile.nonWeightOverheadBytes
+            )
+            guard !residentBytes.overflow else {
+                throw RuntimeResidencyError.arithmeticOverflow
+            }
+            return RuntimePrewarmRequest(
+                wireID: "prewarm-\(model.id.lowercased())-\(binding.revision)",
+                artifact: RuntimeResidentArtifact(
+                    modelID: model.id.lowercased(),
+                    revision: binding.revision,
+                    kind: .chat,
+                    estimatedBytes: residentBytes.partialValue,
+                    isActive: false,
+                    lastUseSequence: 0
+                ),
+                workClass: .speculative
+            )
+        }.value
     }
 
     /// A suggested model for a role given what is currently registered: the plan's

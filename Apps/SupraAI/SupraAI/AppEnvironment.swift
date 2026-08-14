@@ -387,6 +387,9 @@ final class AppEnvironment: ObservableObject {
 
     private let runtimeStatusController: RuntimeStatusController
     private let modelExecutionCoordinator: ModelExecutionCoordinator
+    private let runtimeResidencyControlPlane: ProcessRuntimeResidencyControlPlane
+    private let runtimeResidencyCoordinator: RuntimeResidencyCoordinator
+    private var runtimeMemoryPressureSource: DispatchSourceMemoryPressure?
     /// Non-nil only for the explicitly authorized guided-Q&A XCUITest launch.
     /// The synthetic model fixture is confined to this throwaway root.
     private let guidedQAUITestModelRoot: URL?
@@ -413,6 +416,14 @@ final class AppEnvironment: ObservableObject {
             ),
             monotonicNow: { DispatchTime.now().uptimeNanoseconds }
         )
+        let runtimeResidencyControlPlane = ProcessRuntimeResidencyControlPlane(
+            runtimeClient: runtimeClient,
+            modelExecutionCoordinator: modelExecutionCoordinator
+        )
+        let runtimeResidencyCoordinator = RuntimeResidencyCoordinator(
+            controlPlane: runtimeResidencyControlPlane,
+            policy: RuntimeResidencyPolicy(maximumActions: 7)
+        )
         let guidedQAUITestModelRoot = guidedQAUITestAuthorized
             ? Optional(FileManager.default.temporaryDirectory.appendingPathComponent(
                 "SupraAI-UITest-GuidedQA-\(UUID().uuidString)",
@@ -432,7 +443,8 @@ final class AppEnvironment: ObservableObject {
         let modelLibrary = ModelLibrary(
             store: store,
             runtimeClient: modelExecutionCoordinator,
-            managedModelRoots: guidedQAUITestManagedRoots
+            managedModelRoots: guidedQAUITestManagedRoots,
+            runtimeResidencyCoordinator: runtimeResidencyCoordinator
         )
         let tokenStore = APIKeyStoreComposition.live()
         self.store = store
@@ -440,6 +452,8 @@ final class AppEnvironment: ObservableObject {
         self.databaseRecoveryState = storeResult.recoveryState
         self.runtimeStatusController = RuntimeStatusController(runtimeClient: runtimeClient)
         self.modelExecutionCoordinator = modelExecutionCoordinator
+        self.runtimeResidencyControlPlane = runtimeResidencyControlPlane
+        self.runtimeResidencyCoordinator = runtimeResidencyCoordinator
         self.guidedQAUITestModelRoot = guidedQAUITestModelRoot
         self.interruptedDraftRecoveryUITestRoot = interruptedDraftRecoveryUITestRoot
         self.modelLibrary = modelLibrary
@@ -703,6 +717,7 @@ final class AppEnvironment: ObservableObject {
                 guard let self, let matterID = self.mattersController.selectedMatterID else { return }
                 self.documentQueue.enqueueClassify(matterID: matterID)
             }
+        installRuntimeMemoryPressureHandling()
         // Headless probe dispatch (measurement qualification, finding #5): at most
         // ONE probe per launch — `HeadlessProbeMode.resolve` makes the modes
         // mutually exclusive and a conflict runs NOTHING. The model-dependent
@@ -737,6 +752,42 @@ final class AppEnvironment: ObservableObject {
             Task { await self.runCapabilityProbeIfRequested() }
         case .single(.typedProseAB):
             Task { await self.runTypedProseABProbeIfRequested() }
+        }
+    }
+
+    private func installRuntimeMemoryPressureHandling() {
+        let source = DispatchSource.makeMemoryPressureSource(
+            eventMask: [.normal, .warning, .critical],
+            queue: .main
+        )
+        source.setEventHandler { [weak self, weak source] in
+            guard let source else { return }
+            let level: RuntimeMemoryPressureLevel
+            if source.data.contains(.critical) {
+                level = .critical
+            } else if source.data.contains(.warning) {
+                level = .warning
+            } else {
+                level = .normal
+            }
+            Task { @MainActor [weak self] in
+                await self?.handleRuntimeMemoryPressure(level)
+            }
+        }
+        runtimeMemoryPressureSource = source
+        source.resume()
+    }
+
+    private func handleRuntimeMemoryPressure(
+        _ level: RuntimeMemoryPressureLevel
+    ) async {
+        runtimeResidencyControlPlane.setMemoryPressure(level)
+        await modelExecutionCoordinator.setRuntimeMemoryPressure(level)
+        do {
+            let queued = await modelExecutionCoordinator.runtimeResidencyQueuedWork()
+            _ = try await runtimeResidencyCoordinator.handlePressure(queuedWork: queued)
+        } catch {
+            runtimeStatusMessage = "Runtime memory-pressure recovery requires attention: \(error.localizedDescription)"
         }
     }
 

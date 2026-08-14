@@ -218,6 +218,7 @@ final class RAGSemanticCandidateCache: RAGSemanticCandidateCacheBackend, @unchec
 
     init(maximumBytes: Int = defaultMaximumBytes) {
         storage = ByteCostedRAGCache(maximumBytes: maximumBytes)
+        RAGDerivedCacheRegistry.shared.register(self)
     }
 
     func load(
@@ -304,6 +305,63 @@ final class RAGSemanticCandidateCache: RAGSemanticCandidateCacheBackend, @unchec
         let numericBytes = 6 * MemoryLayout<Int>.size + MemoryLayout<Double>.size
         let final = total.addingReportingOverflow(numericBytes)
         return final.overflow ? .max : final.partialValue
+    }
+}
+
+/// Process-wide, weak registry for the independently scoped retrieval caches.
+/// It does not make cache entries global; it gives the runtime control plane an
+/// exact way to count and purge every still-live derived cache under pressure or
+/// deterministic reset.
+final class RAGDerivedCacheRegistry: @unchecked Sendable {
+    static let shared = RAGDerivedCacheRegistry()
+
+    private final class WeakCache: @unchecked Sendable {
+        weak var value: RAGSemanticCandidateCache?
+
+        init(_ value: RAGSemanticCandidateCache) {
+            self.value = value
+        }
+    }
+
+    private let lock = NSLock()
+    private var caches: [ObjectIdentifier: WeakCache] = [:]
+
+    private init() {}
+
+    func register(_ cache: RAGSemanticCandidateCache) {
+        lock.withLock {
+            pruneLocked()
+            caches[ObjectIdentifier(cache)] = WeakCache(cache)
+        }
+    }
+
+    func totalBytes() -> Int {
+        liveCaches().reduce(0) { partial, cache in
+            let result = partial.addingReportingOverflow(cache.snapshot().totalBytes)
+            return result.overflow ? Int.max : result.partialValue
+        }
+    }
+
+    @discardableResult
+    func purgeAll() -> Int {
+        let live = liveCaches()
+        let bytes = live.reduce(0) { partial, cache in
+            let result = partial.addingReportingOverflow(cache.snapshot().totalBytes)
+            return result.overflow ? Int.max : result.partialValue
+        }
+        live.forEach { $0.handleMemoryPressure(.critical) }
+        return bytes
+    }
+
+    private func liveCaches() -> [RAGSemanticCandidateCache] {
+        lock.withLock {
+            pruneLocked()
+            return caches.values.compactMap(\.value)
+        }
+    }
+
+    private func pruneLocked() {
+        caches = caches.filter { $0.value.value != nil }
     }
 }
 

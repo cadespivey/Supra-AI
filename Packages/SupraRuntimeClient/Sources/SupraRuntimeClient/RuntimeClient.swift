@@ -28,7 +28,8 @@ public enum RuntimeClientError: Error, LocalizedError, Sendable {
     }
 }
 
-public final class RuntimeClient: RuntimeClientProtocol, @unchecked Sendable {
+public final class RuntimeClient: RuntimeClientProtocol, RuntimeResidencyClientProtocol,
+    @unchecked Sendable {
     private let serviceName: String
     private let injectedRemoteService: SupraRuntimeXPCServiceProtocol?
     private let budgetPolicy: RuntimeBudgetPolicy
@@ -235,6 +236,51 @@ public final class RuntimeClient: RuntimeClientProtocol, @unchecked Sendable {
         try await sendRequest(RuntimeStatus.self) { service, reply in
             service.runtimeStatus(withReply: reply)
         }
+    }
+
+    public func runtimeResidencySnapshot() async throws -> RuntimeServiceResidencySnapshot {
+        try await sendRequest(RuntimeServiceResidencySnapshot.self) { service, reply in
+            service.runtimeResidencySnapshot(withReply: reply)
+        }
+    }
+
+    public func evictRuntimeArtifact(
+        _ request: RuntimeServiceArtifactEvictionRequest
+    ) async throws -> RuntimeServiceArtifactEvictionResponse {
+        let requestData = try encode(request)
+        let response = try await sendRequest(RuntimeServiceArtifactEvictionResponse.self) {
+            service, reply in
+            service.evictRuntimeArtifact(requestData, withReply: reply)
+        }
+        if let error = response.error {
+            throw RuntimeClientError.remoteInvocationFailed(error.message)
+        }
+        guard response.evictedModelID == request.modelID else {
+            throw RuntimeClientError.remoteInvocationFailed(
+                "The runtime did not confirm the exact artifact eviction."
+            )
+        }
+        return response
+    }
+
+    public func resetRuntime(
+        _ request: RuntimeServiceResetRequest
+    ) async throws -> RuntimeServiceResetReceipt {
+        let requestData = try encode(request)
+        let response = try await sendRequest(RuntimeServiceResetResponse.self) { service, reply in
+            service.resetRuntime(requestData, withReply: reply)
+        }
+        if let error = response.error {
+            throw RuntimeClientError.remoteInvocationFailed(error.message)
+        }
+        guard let receipt = response.receipt,
+              receipt.requestID == request.requestID,
+              receipt.previousEpoch == request.expectedEpoch else {
+            throw RuntimeClientError.remoteInvocationFailed(
+                "The runtime returned an invalid reset receipt."
+            )
+        }
+        return receipt
     }
 
 #if DEBUG

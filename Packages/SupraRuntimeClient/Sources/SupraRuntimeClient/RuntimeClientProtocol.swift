@@ -24,6 +24,16 @@ public protocol RuntimeClientProtocol: Sendable {
     func embeddingStatus() async throws -> EmbeddingModelStatus
 }
 
+/// Privileged process-lifecycle controls. Ordinary feature gateways and scoped
+/// model-execution permits intentionally expose only `RuntimeClientProtocol`.
+public protocol RuntimeResidencyClientProtocol: Sendable {
+    func runtimeResidencySnapshot() async throws -> RuntimeServiceResidencySnapshot
+    func evictRuntimeArtifact(
+        _ request: RuntimeServiceArtifactEvictionRequest
+    ) async throws -> RuntimeServiceArtifactEvictionResponse
+    func resetRuntime(_ request: RuntimeServiceResetRequest) async throws -> RuntimeServiceResetReceipt
+}
+
 public extension RuntimeClientProtocol {
     func countTokens(_ request: CountTokensRequest) async throws -> CountTokensResponse {
         throw RuntimeClientError.remoteInvocationFailed(
