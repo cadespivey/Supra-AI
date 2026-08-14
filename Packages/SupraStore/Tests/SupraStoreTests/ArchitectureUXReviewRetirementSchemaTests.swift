@@ -27,6 +27,8 @@ final class ArchitectureUXReviewRetirementSchemaTests: XCTestCase {
             #"        migrator.registerMigration("v073_create_case_file_review_projects") { db in"#
         let v074Anchor =
             #"        migrator.registerMigration("v074_create_canonical_matter_identity") { db in"#
+        let v075Anchor =
+            #"        migrator.registerMigration("v075_create_grounded_chat_publications") { db in"#
         let returnAnchor = "        return migrator"
         let resetAnchor =
             "            // Case File Review: children before project/matter ownership."
@@ -36,13 +38,15 @@ final class ArchitectureUXReviewRetirementSchemaTests: XCTestCase {
         let v072Start = try XCTUnwrap(source.range(of: v072Anchor)?.lowerBound)
         let v073Start = try XCTUnwrap(source.range(of: v073Anchor)?.lowerBound)
         let v074Start = try XCTUnwrap(source.range(of: v074Anchor)?.lowerBound)
+        let v075Start = try XCTUnwrap(source.range(of: v075Anchor)?.lowerBound)
         let migratorReturn = try XCTUnwrap(source.range(of: returnAnchor)?.lowerBound)
         let resetStart = try XCTUnwrap(source.range(of: resetAnchor)?.lowerBound)
         let resetEnd = try XCTUnwrap(source.range(of: resetEndAnchor)?.lowerBound)
 
         XCTAssertLessThan(v072Start, v073Start)
         XCTAssertLessThan(v073Start, v074Start)
-        XCTAssertLessThan(v074Start, migratorReturn)
+        XCTAssertLessThan(v074Start, v075Start)
+        XCTAssertLessThan(v075Start, migratorReturn)
         XCTAssertLessThan(migratorReturn, resetStart)
         XCTAssertLessThan(resetStart, resetEnd)
 
@@ -83,22 +87,23 @@ final class ArchitectureUXReviewRetirementSchemaTests: XCTestCase {
         )
 
         let migrations = SupraMigrator.makeMigrator().migrations
-        XCTAssertEqual(migrations.count, 74)
-        XCTAssertEqual(Array(migrations.suffix(6)), [
+        XCTAssertEqual(migrations.count, 75)
+        XCTAssertEqual(Array(migrations.suffix(7)), [
             "v069_add_verification_dimensions",
             "v070_add_authority_reviewed_proposition",
             "v071_create_draft_artifact_intents",
             "v072_harden_corpus_review_integrity",
             "v073_create_case_file_review_projects",
             "v074_create_canonical_matter_identity",
+            "v075_create_grounded_chat_publications",
         ])
         XCTAssertEqual(
             sha256(linesData(migrations)),
-            "3d7371dbbebe7708f9494548bf961df8e6b3db56c6a5077d75ac7961b577f0f0"
+            "1a69d1bf89e66a6c4cee1fb904666f91e62276d51c0c739d6b28d742ac2cfdd4"
         )
         XCTAssertEqual(
-            sha256(linesData(Array(migrations.suffix(6)))),
-            "31168491e35b0a09a1bb63994b9cd1a7cf1d56c22d475b034fd95538e15003a4"
+            sha256(linesData(Array(migrations.suffix(7)))),
+            "67e0750d02af2de776151bf4fe37e5ba3fda6750aa77b955cdfe655c7a2637cc"
         )
 
         // v072 embeds these persisted raw values into its data upgrade. Freeze
@@ -211,7 +216,7 @@ final class ArchitectureUXReviewRetirementSchemaTests: XCTestCase {
                     db,
                     sql: "SELECT identifier FROM grdb_migrations ORDER BY rowid"
                 ).last,
-                "v074_create_canonical_matter_identity"
+                "v075_create_grounded_chat_publications"
             )
             XCTAssertEqual(Set(try db.columns(in: "case_file_review_projects").map(\.name)), Set([
                 "id", "matter_id", "title", "status", "stale_reason", "source_run_id",

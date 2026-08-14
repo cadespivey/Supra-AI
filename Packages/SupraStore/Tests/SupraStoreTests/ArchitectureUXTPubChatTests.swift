@@ -28,6 +28,74 @@ final class ArchitectureUXTPubChatTests: XCTestCase {
         static let tamperedDigest = String(repeating: "b", count: 64)
     }
 
+    func testTPUBCHATSchemaV075AppendsContentFreeReceiptAfterV074() throws {
+        // Standing compatibility guard: the finalization tests exercise the
+        // receipt, while this assertion owns its durable, content-free shape
+        // and proves the new endpoint is appended after immutable v074.
+        let migrator = SupraMigrator.makeMigrator()
+        XCTAssertEqual(migrator.migrations.count, 75)
+        XCTAssertEqual(Array(migrator.migrations.suffix(2)), [
+            "v074_create_canonical_matter_identity",
+            "v075_create_grounded_chat_publications",
+        ])
+
+        let queue = try DatabaseQueue()
+        try migrator.migrate(queue, upTo: "v074_create_canonical_matter_identity")
+        try queue.read { db in
+            XCTAssertFalse(try db.tableExists("grounded_chat_publications"))
+            let sourceSetColumns = Set(try db.columns(in: "document_source_sets").map(\.name))
+            XCTAssertTrue(sourceSetColumns.isDisjoint(with: [
+                "terminal_verification_dimensions_json",
+                "terminal_assurance_state",
+                "terminal_authorization_evidence_json",
+            ]))
+        }
+
+        try migrator.migrate(queue)
+        try queue.read { db in
+            XCTAssertEqual(
+                try String.fetchAll(
+                    db,
+                    sql: "SELECT identifier FROM grdb_migrations ORDER BY rowid"
+                ).last,
+                "v075_create_grounded_chat_publications"
+            )
+            let receiptColumns = Set(
+                try db.columns(in: "grounded_chat_publications").map(\.name)
+            )
+            XCTAssertEqual(receiptColumns, Set([
+                "idempotency_key",
+                "aggregate_digest_sha256",
+                "terminal_content_sha256",
+                "verification_dimensions_sha256",
+                "authorization_evidence_sha256",
+                "matter_id",
+                "chat_id",
+                "message_id",
+                "variant_id",
+                "generation_session_id",
+                "source_set_id",
+                "assurance_state",
+                "audit_event_id",
+                "created_at",
+            ]))
+            XCTAssertTrue(receiptColumns.isDisjoint(with: [
+                "terminal_content",
+                "verification_dimensions_json",
+                "authorization_evidence_json",
+                "source_excerpt",
+                "citation_quote",
+            ]))
+
+            let sourceSetColumns = Set(try db.columns(in: "document_source_sets").map(\.name))
+            XCTAssertTrue(sourceSetColumns.isSuperset(of: [
+                "terminal_verification_dimensions_json",
+                "terminal_assurance_state",
+                "terminal_authorization_evidence_json",
+            ]))
+        }
+    }
+
     func testTPUBCHAT01FaultAtEveryAggregateWriteLeavesPendingTurnAndNoOrphanPacket() throws {
         for boundary in AggregateWriteBoundary.allCases {
             let fixture = try makeFixture()

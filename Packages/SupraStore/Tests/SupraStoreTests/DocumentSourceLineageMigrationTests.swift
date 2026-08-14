@@ -36,12 +36,14 @@ final class DocumentSourceLineageMigrationTests: XCTestCase {
 
         try migrator.migrate(queue)
         try queue.read { db in
-            XCTAssertEqual(try appliedMigrations(db).last, "v074_create_canonical_matter_identity")
+            XCTAssertEqual(try appliedMigrations(db).last, "v075_create_grounded_chat_publications")
             XCTAssertEqual(Set(try db.columns(in: "document_source_sets").map(\.name)), Set([
                 "id", "matter_id", "structured_output_version_id", "status", "mode",
                 "scope_json", "retrieval_query", "retrieval_depth", "created_at",
                 "packing_report_json", "embedding_model_id", "embedding_model_revision",
                 "chunker_version", "retrieval_config_json", "corpus_snapshot_hash", "message_id",
+                "terminal_verification_dimensions_json", "terminal_assurance_state",
+                "terminal_authorization_evidence_json",
             ]))
             XCTAssertEqual(
                 try Int.fetchOne(

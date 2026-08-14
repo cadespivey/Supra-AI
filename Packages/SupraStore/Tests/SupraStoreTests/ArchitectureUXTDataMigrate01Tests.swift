@@ -26,12 +26,16 @@ final class ArchitectureUXTDataMigrate01Tests: XCTestCase {
             #"        migrator.registerMigration("v073_create_case_file_review_projects") { db in"#
         let v074Anchor =
             #"        migrator.registerMigration("v074_create_canonical_matter_identity") { db in"#
+        let v075Anchor =
+            #"        migrator.registerMigration("v075_create_grounded_chat_publications") { db in"#
 
         let v072Start = try XCTUnwrap(source.range(of: v072Anchor)?.lowerBound)
         let v073Start = try XCTUnwrap(source.range(of: v073Anchor)?.lowerBound)
         let v074Start = try XCTUnwrap(source.range(of: v074Anchor)?.lowerBound)
+        let v075Start = try XCTUnwrap(source.range(of: v075Anchor)?.lowerBound)
         XCTAssertLessThan(v072Start, v073Start)
         XCTAssertLessThan(v073Start, v074Start)
+        XCTAssertLessThan(v074Start, v075Start)
 
         let v072WithSeparator = source[v072Start..<v073Start]
         let v073WithSeparator = source[v073Start..<v074Start]
@@ -56,11 +60,12 @@ final class ArchitectureUXTDataMigrate01Tests: XCTestCase {
         )
 
         let migrations = SupraMigrator.makeMigrator().migrations
-        XCTAssertEqual(migrations.count, 74)
-        XCTAssertEqual(Array(migrations.suffix(3)), [
+        XCTAssertEqual(migrations.count, 75)
+        XCTAssertEqual(Array(migrations.suffix(4)), [
             "v072_harden_corpus_review_integrity",
             "v073_create_case_file_review_projects",
             "v074_create_canonical_matter_identity",
+            "v075_create_grounded_chat_publications",
         ])
     }
 
