@@ -74,9 +74,9 @@ final class ArchitectureUXTRagScan01Tests: XCTestCase {
         )
 
         let reference = [
-            (chunkID: "candidate-a-731", documentID: primary, similarity: 0.8),
-            (chunkID: "candidate-b-731", documentID: primary, similarity: 0.8),
-            (chunkID: "candidate-c-731", documentID: primary, similarity: 0.6),
+            (chunkID: "candidate-a-731", documentID: primary, similarity: Double(Float(0.8))),
+            (chunkID: "candidate-b-731", documentID: primary, similarity: Double(Float(0.8))),
+            (chunkID: "candidate-c-731", documentID: primary, similarity: Double(Float(0.6))),
         ].sorted {
             if $0.similarity != $1.similarity { return $0.similarity > $1.similarity }
             return $0.chunkID < $1.chunkID
@@ -118,4 +118,3 @@ final class ArchitectureUXTRagScan01Tests: XCTestCase {
             .appendingPathComponent("DocumentRetrievalService.swift")
     }
 }
-
