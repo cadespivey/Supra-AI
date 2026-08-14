@@ -680,7 +680,7 @@ struct MatterDocumentsView: View {
            dismissedImportFailureID != failure.id {
             let itemNoun = failure.failedCount == 1 ? "item" : "items"
             let message = failure.details.isEmpty
-                ? "Imported \(failure.importedCount) of \(failure.discoveredCount). \(failure.failedCount) need attention — see the Audit tab for details."
+                ? "Imported \(failure.importedCount) of \(failure.discoveredCount). \(failure.failedCount) need attention — see Activity for details."
                 : "Imported \(failure.importedCount) of \(failure.discoveredCount). Review the \(failure.failedCount) \(itemNoun) below."
             VStack(alignment: .leading, spacing: 6) {
                 SupraWarningBanner(
@@ -736,7 +736,7 @@ struct MatterDocumentsView: View {
                     }
                     .buttonStyle(.ghost)
                     .accessibilityIdentifier("documents.dismissImportFailureWarning")
-                    .accessibilityHint("Removes this warning; rejection details remain in the Audit tab")
+                    .accessibilityHint("Removes this warning; rejection details remain in Activity")
                 }
             }
             .padding(.horizontal, 8)

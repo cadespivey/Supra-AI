@@ -1550,12 +1550,12 @@ private struct MessageRow: View {
                     if quickAttachments.isEmpty,
                        artifactActions.contains(.saveToOutputs) {
                         Button(action: onSaveToOutputs) {
-                            Label("Save to Outputs", systemImage: "tray.and.arrow.down")
+                            Label("Save to Saved Work", systemImage: "tray.and.arrow.down")
                                 .font(.caption.weight(.medium))
                         }
                         .buttonStyle(.borderless)
                         .accessibilityIdentifier("chat.message.saveToOutputs.\(message.id)")
-                        .help("Save this grounded answer and its retained sources to Outputs")
+                        .help("Save this grounded answer and its retained sources to Saved Work")
                     }
                 }
             }

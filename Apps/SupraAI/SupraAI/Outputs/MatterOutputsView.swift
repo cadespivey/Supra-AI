@@ -2,8 +2,8 @@ import SupraCore
 import SupraSessions
 import SwiftUI
 
-/// The matter's Outputs tab: lists structured outputs and creates new ones
-/// (spec §13).
+/// The matter's Saved Work tab: lists structured work products and creates new
+/// ones (spec §13). Store and controller names retain `Output` for compatibility.
 struct MatterOutputsView: View {
     @ObservedObject var controller: StructuredOutputController
     @ObservedObject var library: ModelLibrary
@@ -14,8 +14,8 @@ struct MatterOutputsView: View {
 
     var body: some View {
         NavigationStack(path: $navigationPath) {
-            MatterTabScaffold("Structured Outputs") {
-                Button { showNew = true } label: { Label("New Output", systemImage: "plus") }
+            MatterTabScaffold("Saved Work") {
+                Button { showNew = true } label: { Label("New Work Product", systemImage: "plus") }
             } content: {
                 content
             }
@@ -41,11 +41,11 @@ struct MatterOutputsView: View {
     private var content: some View {
         if controller.outputs.isEmpty {
             ContentUnavailableView {
-                Label("No Outputs", systemImage: "doc.text")
+                Label("No Saved Work", systemImage: "doc.text")
             } description: {
-                Text("Generate reusable legal outputs — issue spotting, rule synthesis, or drafting skeletons — that the local model drafts from the context you provide. (Chronologies are created from the Documents tab.)")
+                Text("Create reusable legal work — issue spotting, rule synthesis, or drafting skeletons — from the context you provide. Chronologies are created from Documents.")
             } actions: {
-                Button("New Output") { showNew = true }
+                Button("New Work Product") { showNew = true }
             }
         } else {
             List(controller.outputs) { output in
@@ -112,8 +112,8 @@ private struct NewOutputSheet: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Text("New Structured Output").font(.supraTitle).padding([.horizontal, .top])
-            Text("Pick a deliverable type and give the model the issue, facts, or notes to work from. It produces a structured, reviewable draft saved to this matter's Outputs.")
+            Text("New Work Product").font(.supraTitle).padding([.horizontal, .top])
+            Text("Pick a deliverable type and provide the issue, facts, or notes. Supra creates a structured, reviewable draft and saves it with this matter's work.")
                 .font(.supraSubheadline)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

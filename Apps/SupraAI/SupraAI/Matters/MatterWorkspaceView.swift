@@ -3,7 +3,8 @@ import SupraSessions
 import SwiftUI
 
 /// The workspace for a single matter: a detail header plus the matter tab set.
-/// Audit is placed last as the least frequently used tab.
+/// Visible navigation follows the ordinary work sequence while raw values stay
+/// stable for deep links and existing automation.
 struct MatterWorkspaceView: View {
     @ObservedObject var controller: MattersController
     @ObservedObject var library: ModelLibrary
@@ -30,7 +31,24 @@ struct MatterWorkspaceView: View {
         case audit = "Audit"
 
         var id: String { rawValue }
-        var label: String { rawValue }
+
+        static let navigationOrder: [MatterTab] = [
+            .chat,
+            .documents,
+            .research,
+            .authorities,
+            .outputs,
+            .billing,
+            .audit,
+        ]
+
+        var label: String {
+            switch self {
+            case .outputs: "Saved Work"
+            case .audit: "Activity"
+            default: rawValue
+            }
+        }
     }
 
     var body: some View {
@@ -186,7 +204,9 @@ struct MatterWorkspaceView: View {
             Spacer(minLength: 0)
             GhostSegmentedControl(
                 selection: $tab,
-                segments: MatterTab.allCases.map { ($0, $0.label, "matterTab.\($0.rawValue)") }
+                segments: MatterTab.navigationOrder.map {
+                    ($0, $0.label, "matterTab.\($0.rawValue)")
+                }
             )
             Spacer(minLength: 0)
         }
@@ -313,8 +333,8 @@ struct MatterWorkspaceView: View {
                 MatterOutputsView(controller: outputs, library: library, matter: matter)
             } else {
                 placeholder(
-                    "Outputs unavailable",
-                    "Select the matter again to load its structured outputs.",
+                    "Saved Work unavailable",
+                    "Select the matter again to load its saved work.",
                     systemImage: "doc.text"
                 )
             }
@@ -425,10 +445,10 @@ struct MatterWorkspaceView: View {
     }
 }
 
-/// Uniform chrome for a matter's list-style tabs (Research, Authorities, Outputs,
-/// Audit): a title row with optional trailing actions, a divider, and a content
-/// area that fills the remaining height — so empty states stay centered instead of
-/// floating in the middle of the pane.
+/// Uniform chrome for a matter's list-style tabs (Research, Authorities, Saved
+/// Work, Activity): a title row with optional trailing actions, a divider, and a
+/// content area that fills the remaining height — so empty states stay centered
+/// instead of floating in the middle of the pane.
 struct MatterTabScaffold<Actions: View, Content: View>: View {
     private let title: String
     private let actions: Actions

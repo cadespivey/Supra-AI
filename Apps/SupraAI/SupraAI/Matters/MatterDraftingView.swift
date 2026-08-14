@@ -317,7 +317,7 @@ struct MatterDraftingView: View {
                     Text("Previous draft artifacts need review")
                         .font(.supraHeadline)
                         .fixedSize(horizontal: false, vertical: true)
-                    Text("\(controller.legacyDraftsNeedReviewCount) artifact(s) were generated before the current pre-render verification gate. Review the matter Audit and exports, and regenerate anything you plan to use.")
+                    Text("\(controller.legacyDraftsNeedReviewCount) artifact(s) were generated before the current pre-render verification gate. Review Activity and exports, and regenerate anything you plan to use.")
                         .font(.supraCaption)
                         .fixedSize(horizontal: false, vertical: true)
                 }
