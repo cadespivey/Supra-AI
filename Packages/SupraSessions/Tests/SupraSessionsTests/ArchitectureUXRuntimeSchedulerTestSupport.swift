@@ -388,3 +388,92 @@ final class ArchitectureUXCancellationMismatchRuntimeClient: RuntimeClientProtoc
         EmbeddingModelStatus(state: .loaded)
     }
 }
+
+enum ArchitectureUXHeldRuntimeOperation: String, Sendable {
+    case embeddingBatch
+    case modelLoad
+}
+
+/// A non-streaming data-plane probe whose reply ignores cooperative Task
+/// cancellation, matching RuntimeClient's checked-continuation XPC transport.
+/// The service terminal is controlled explicitly by `allowTerminalReply`.
+final class ArchitectureUXHeldRuntimeClient: RuntimeClientProtocol, @unchecked Sendable {
+    let operationStarted = ArchitectureUXAsyncSignal()
+    let allowTerminalReply = ArchitectureUXAsyncGate()
+
+    private let heldOperation: ArchitectureUXHeldRuntimeOperation
+    private let fallback = ArchitectureUXImmediateRuntimeClient()
+
+    init(heldOperation: ArchitectureUXHeldRuntimeOperation) {
+        self.heldOperation = heldOperation
+    }
+
+    func connect() async throws {
+        try await fallback.connect()
+    }
+
+    func loadModel(_ request: LoadModelRequest) async throws -> LoadModelResponse {
+        if heldOperation == .modelLoad {
+            await operationStarted.signal()
+            await allowTerminalReply.wait()
+        }
+        return try await fallback.loadModel(request)
+    }
+
+    func generate(
+        _ request: GenerateRequest
+    ) throws -> AsyncThrowingStream<GenerationEvent, Error> {
+        try fallback.generate(request)
+    }
+
+    func countTokens(_ request: CountTokensRequest) async throws -> CountTokensResponse {
+        try await fallback.countTokens(request)
+    }
+
+    func cancelGeneration(
+        _ generationID: GenerationID
+    ) async throws -> CancelGenerationResponse {
+        try await fallback.cancelGeneration(generationID)
+    }
+
+    func recentEvents(
+        for generationID: GenerationID,
+        after sequenceNumber: Int
+    ) async throws -> [GenerationEvent] {
+        try await fallback.recentEvents(for: generationID, after: sequenceNumber)
+    }
+
+    func unloadModel() async throws -> UnloadModelResponse {
+        try await fallback.unloadModel()
+    }
+
+    func reloadCurrentModel() async throws -> LoadModelResponse {
+        try await fallback.reloadCurrentModel()
+    }
+
+    func runtimeStatus() async throws -> RuntimeStatus {
+        try await fallback.runtimeStatus()
+    }
+
+    func restartRuntimeService() async throws {
+        try await fallback.restartRuntimeService()
+    }
+
+    func loadEmbeddingModel(
+        _ request: LoadEmbeddingModelRequest
+    ) async throws -> LoadEmbeddingModelResponse {
+        try await fallback.loadEmbeddingModel(request)
+    }
+
+    func embedTexts(_ request: EmbedTextRequest) async throws -> EmbedTextResponse {
+        if heldOperation == .embeddingBatch {
+            await operationStarted.signal()
+            await allowTerminalReply.wait()
+        }
+        return try await fallback.embedTexts(request)
+    }
+
+    func embeddingStatus() async throws -> EmbeddingModelStatus {
+        try await fallback.embeddingStatus()
+    }
+}

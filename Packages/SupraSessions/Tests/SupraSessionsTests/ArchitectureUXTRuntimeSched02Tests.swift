@@ -1,6 +1,7 @@
 import Foundation
 import SupraCore
 import SupraRuntimeClient
+import SupraRuntimeInterface
 @testable import SupraSessions
 import XCTest
 
@@ -228,6 +229,109 @@ final class ArchitectureUXTRuntimeSched02Tests: XCTestCase {
         XCTAssertEqual(base.prompts, ["active-cancellation-wire-907"])
         let trace = await successorTrace.snapshot().trace
         XCTAssertTrue(trace.isEmpty)
+    }
+
+    func testActiveEmbeddingCancellationKeepsLaneUntilTerminalReply() async throws {
+        try await assertNonStreamingCancellationWaitsForTerminalReply(
+            .embeddingBatch,
+            taskSuffix: "active-embedding-cancel-929"
+        )
+    }
+
+    func testActiveModelLoadCancellationKeepsLaneUntilTerminalReply() async throws {
+        try await assertNonStreamingCancellationWaitsForTerminalReply(
+            .modelLoad,
+            taskSuffix: "active-model-load-cancel-937"
+        )
+    }
+
+    private func assertNonStreamingCancellationWaitsForTerminalReply(
+        _ heldOperation: ArchitectureUXHeldRuntimeOperation,
+        taskSuffix: String
+    ) async throws {
+        let base = ArchitectureUXHeldRuntimeClient(heldOperation: heldOperation)
+        let coordinator = architectureUXRuntimeCoordinator(base: base)
+        let lane = ArchitectureUXRuntimeLaneProbe()
+        let activeRequest = ArchitectureUXRuntimeWire.request(
+            taskSuffix,
+            operation: heldOperation == .embeddingBatch ? .embeddingBatch : .modelLoad,
+            priority: .backgroundMaintenance,
+            binding: nil
+        )
+        let active = Task {
+            try await coordinator.execute(activeRequest) { permit in
+                await permit.markRunning()
+                await lane.enter("held-\(heldOperation.rawValue)")
+                switch heldOperation {
+                case .embeddingBatch:
+                    _ = try await permit.embedTexts(EmbedTextRequest(
+                        embeddingModelID: DocumentEmbeddingModelID(
+                            UUID(uuidString: "00000000-0000-0000-0000-000000000929")!
+                        ),
+                        texts: ["held-embedding-wire-929"]
+                    ))
+                case .modelLoad:
+                    _ = try await permit.loadModel(LoadModelRequest(
+                        modelID: ArchitectureUXRuntimeWire.modelID,
+                        modelPath: "/synthetic/model-wire-713",
+                        displayName: "Held Model Wire 713"
+                    ))
+                }
+                await lane.leave()
+                return "held-terminal-\(heldOperation.rawValue)"
+            }
+        }
+        await base.operationStarted.wait()
+
+        let successorRequest = ArchitectureUXRuntimeWire.request(
+            "successor-after-\(taskSuffix)",
+            priority: .foregroundInteractive
+        )
+        let successor = Task {
+            try await coordinator.execute(successorRequest) { _ in
+                await lane.enter("successor-after-\(heldOperation.rawValue)")
+                await lane.leave()
+                return "successor-after-\(heldOperation.rawValue)"
+            }
+        }
+        try await assertQueued(successorRequest.taskID, coordinator: coordinator)
+
+        await coordinator.cancel(taskID: activeRequest.taskID)
+        try await waitForArchitectureUXRuntime("non-streaming cancellation remains active") {
+            await coordinator.snapshot(taskID: activeRequest.taskID)?.lifecycle == .cancelling
+        }
+        let beforeTerminal = await lane.snapshot()
+        XCTAssertEqual(beforeTerminal.trace, ["held-\(heldOperation.rawValue)"])
+        XCTAssertEqual(beforeTerminal.active, 1)
+        XCTAssertEqual(beforeTerminal.maximum, 1)
+        let successorLifecycle = await coordinator.snapshot(
+            taskID: successorRequest.taskID
+        )?.lifecycle
+        XCTAssertEqual(
+            successorLifecycle,
+            .queued,
+            "Task cancellation cannot stand in for the service's terminal XPC reply"
+        )
+
+        await base.allowTerminalReply.open()
+        do {
+            _ = try await active.value
+            XCTFail("the terminal reply must complete the requested active cancellation")
+        } catch {
+            XCTAssertEqual(
+                error as? ModelExecutionError,
+                .cancelled(taskID: activeRequest.taskID)
+            )
+        }
+        let successorResult = try await successor.value
+        XCTAssertEqual(successorResult, "successor-after-\(heldOperation.rawValue)")
+        let terminal = await lane.snapshot()
+        XCTAssertEqual(terminal.trace, [
+            "held-\(heldOperation.rawValue)",
+            "successor-after-\(heldOperation.rawValue)",
+        ])
+        XCTAssertEqual(terminal.active, 0)
+        XCTAssertEqual(terminal.maximum, 1)
     }
 
     private func assertQueued(
