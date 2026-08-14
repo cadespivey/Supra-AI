@@ -12,6 +12,10 @@ public struct MatterCourtPresentation: Equatable, Sendable {
     public let actionTitle: String
     public let resolvedCourtName: String?
     public let resolvedJurisdictionName: String?
+    /// State associated with the exact selected court, when the versioned
+    /// catalog supplies one. Filing policy may use this canonical value; it
+    /// must never be inferred from the saved legacy court text.
+    public let resolvedFilingStateName: String?
     public let authorityScope: JurisdictionAuthorityScope?
     public let courtListenerIDs: [String]
     public let canRunCourtScopedResearch: Bool
@@ -53,6 +57,7 @@ public struct MatterCourtPresentationBuilder: Sendable {
             actionTitle: "Change Court",
             resolvedCourtName: court.displayName,
             resolvedJurisdictionName: scope.jurisdictionName,
+            resolvedFilingStateName: court.state,
             authorityScope: scope,
             courtListenerIDs: scope.courtListenerIDs,
             canRunCourtScopedResearch: true,
@@ -70,6 +75,7 @@ public struct MatterCourtPresentationBuilder: Sendable {
             actionTitle: "Choose Court",
             resolvedCourtName: nil,
             resolvedJurisdictionName: nil,
+            resolvedFilingStateName: nil,
             authorityScope: nil,
             courtListenerIDs: [],
             canRunCourtScopedResearch: false,
@@ -377,5 +383,69 @@ public struct DraftPartyDefaultsBuilder: Sendable {
             data.append(bytes)
         }
         return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+}
+
+/// Explicit availability of coherent drafting parties in the canonical read.
+/// A matter may have a valid court presentation while its migrated party graph
+/// still needs attorney resolution, so absence is retained as a typed blocker.
+public enum MatterDraftPartyReadState: Equatable, Sendable {
+    case available(DraftPartyDefaults)
+    case blocked(DraftPartyDefaultsError)
+}
+
+/// One shared, Store-snapshot-bound read projection for matter-scoped legal
+/// identity consumers. Legacy strings remain only on `snapshot` as evidence;
+/// resolved court and party values come from the versioned catalog and the
+/// structured identity graph.
+public struct MatterLegalIdentityReadProjection: Equatable, Sendable {
+    public let snapshot: MatterIdentitySnapshot
+    public let courtPresentation: MatterCourtPresentation
+    public let draftParties: MatterDraftPartyReadState
+
+    public init(
+        snapshot: MatterIdentitySnapshot,
+        courtPresentation: MatterCourtPresentation,
+        draftParties: MatterDraftPartyReadState
+    ) {
+        self.snapshot = snapshot
+        self.courtPresentation = courtPresentation
+        self.draftParties = draftParties
+    }
+}
+
+/// Builds every legal-identity presentation from the same immutable Store
+/// snapshot. Consumers choose which typed capability they require, but cannot
+/// combine a court from one read with parties from another.
+public struct MatterLegalIdentityReadProjectionBuilder: Sendable {
+    private let courtPresentationBuilder: MatterCourtPresentationBuilder
+    private let draftPartyDefaultsBuilder: DraftPartyDefaultsBuilder
+
+    public init(
+        courtPresentationBuilder: MatterCourtPresentationBuilder,
+        draftPartyDefaultsBuilder: DraftPartyDefaultsBuilder = DraftPartyDefaultsBuilder()
+    ) {
+        self.courtPresentationBuilder = courtPresentationBuilder
+        self.draftPartyDefaultsBuilder = draftPartyDefaultsBuilder
+    }
+
+    public func makeProjection(
+        for snapshot: MatterIdentitySnapshot
+    ) -> MatterLegalIdentityReadProjection {
+        let draftParties: MatterDraftPartyReadState
+        do {
+            draftParties = .available(
+                try draftPartyDefaultsBuilder.canonicalDefaults(for: snapshot)
+            )
+        } catch let error as DraftPartyDefaultsError {
+            draftParties = .blocked(error)
+        } catch {
+            draftParties = .blocked(.incoherentMatterOwnership)
+        }
+        return MatterLegalIdentityReadProjection(
+            snapshot: snapshot,
+            courtPresentation: courtPresentationBuilder.makePresentation(for: snapshot),
+            draftParties: draftParties
+        )
     }
 }

@@ -8,6 +8,8 @@ struct SidebarView: View {
     /// The row under the cursor, so its background can match the selection pill.
     @State private var hoveredRow: SidebarSelection?
     @State private var recycleBinHovering = false
+    @State private var retryMutation: (() -> Void)?
+    @State private var correctMutation: (() -> Void)?
 
     var body: some View {
         List(selection: $selection) {
@@ -84,6 +86,19 @@ struct SidebarView: View {
             }
         }
         .navigationTitle("Supra AI")
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if let failure = matters.lastMutationFailure,
+               let retryMutation {
+                UserMutationFailureBanner(
+                    failure: failure,
+                    retry: retryMutation,
+                    correct: correctMutation
+                )
+                .padding(.horizontal, 8)
+                .padding(.top, 6)
+                .accessibilityIdentifier("mutation.failure.sidebar")
+            }
+        }
         // Pinned to the very bottom of the sidebar (below the Matters list, which can
         // grow), so deleted items always have a clear, fixed home.
         .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -137,14 +152,14 @@ struct SidebarView: View {
         .tag(SidebarSelection.matter(matter.id))
         .contextMenu {
             Button(matter.isPinned ? "Unpin" : "Pin") {
-                matters.setPinned(matterID: matter.id, pinned: !matter.isPinned)
+                performPin(matterID: matter.id, pinned: !matter.isPinned)
             }
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(matter.name)
         .accessibilityValue(matter.isPinned ? "Pinned" : "Not pinned")
         .accessibilityAction(named: matter.isPinned ? "Unpin" : "Pin") {
-            matters.setPinned(matterID: matter.id, pinned: !matter.isPinned)
+            performPin(matterID: matter.id, pinned: !matter.isPinned)
         }
         .accessibilityIdentifier("matter.row.\(matter.name)")
     }
@@ -152,13 +167,54 @@ struct SidebarView: View {
     private var sortModeBinding: Binding<MatterSortMode> {
         Binding(
             get: { matters.sortMode },
-            set: { matters.setSortMode($0) }
+            set: { performSortMode($0) }
         )
     }
 
     private var moveHandler: ((IndexSet, Int) -> Void)? {
         guard matters.sortMode == .manual else { return nil }
-        return { matters.moveMatters(fromOffsets: $0, toOffset: $1) }
+        return { performMove(fromOffsets: $0, toOffset: $1) }
+    }
+
+    private func performPin(matterID: String, pinned: Bool) {
+        let outcome = matters.attemptSetPinned(matterID: matterID, pinned: pinned)
+        captureFailure(
+            outcome,
+            retry: { performPin(matterID: matterID, pinned: pinned) }
+        )
+    }
+
+    private func performMove(fromOffsets: IndexSet, toOffset: Int) {
+        let outcome = matters.attemptMoveMatters(
+            fromOffsets: fromOffsets,
+            toOffset: toOffset
+        )
+        captureFailure(
+            outcome,
+            retry: { performMove(fromOffsets: fromOffsets, toOffset: toOffset) }
+        )
+    }
+
+    private func performSortMode(_ mode: MatterSortMode) {
+        let outcome = matters.attemptSetSortMode(mode)
+        captureFailure(
+            outcome,
+            retry: { performSortMode(mode) }
+        )
+    }
+
+    private func captureFailure<Success>(
+        _ outcome: UserMutationOutcome<Success>,
+        retry: @escaping () -> Void,
+        correct: (() -> Void)? = nil
+    ) {
+        guard outcome.failure != nil else {
+            retryMutation = nil
+            correctMutation = nil
+            return
+        }
+        retryMutation = retry
+        correctMutation = correct
     }
 
     private var isGroupedSortMode: Bool {

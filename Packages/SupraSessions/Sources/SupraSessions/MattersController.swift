@@ -359,43 +359,26 @@ public final class MattersController: ObservableObject {
         }
     }
 
-    /// Creates a matter, its default matter chat, and a `matter_created` audit
-    /// event, then selects it (spec §8.3).
+    /// Compatibility create for callers that have not adopted the structured
+    /// editor payload. The legacy court text is retained as evidence, but the
+    /// new matter is explicitly unresolved and is written only through the
+    /// canonical aggregate; free text never acquires canonical authority.
     @discardableResult
     public func createMatter(_ draft: MatterDraft) throws -> MatterSummary {
-        // Matter + default chat are created atomically by the repository so a
-        // matter never exists without its chat (spec §8.3). The audit row stays
-        // best-effort: an audit hiccup shouldn't fail matter creation.
-        let trimmedName = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
-        let record = try store.matters.createMatter(
-            name: draft.name,
-            jurisdiction: draft.jurisdiction,
-            partyPerspective: draft.partyPerspective,
-            court: draft.court,
-            judge: draft.judge,
-            docketNumber: draft.docketNumber,
-            practiceArea: draft.practiceArea,
-            clientNames: draft.clientNames,
-            matterDescription: draft.matterDescription,
-            internalMatterID: draft.internalMatterID,
-            clientID: draft.clientID,
-            clientMatterID: draft.clientMatterID,
-            notes: draft.notes,
-            defaultChatTitle: "General — \(trimmedName)"
+        let result = try createMatter(
+            identity: MatterIdentityEditorSubmission(
+                matterID: UUID().uuidString,
+                expectedIdentityRevision: nil,
+                draft: draft,
+                courtResolutionState: .unresolved,
+                canonicalJurisdictionID: nil,
+                canonicalCourtID: nil,
+                parties: [],
+                representations: []
+            )
         )
-        _ = try? store.auditEvents.recordEvent(
-            matterID: record.id,
-            eventType: "matter_created",
-            actor: "user",
-            summary: "Created matter “\(record.name)”"
-        )
-        // Preload the Documents tab with the practice area's starter folders
-        // (best-effort — a folder hiccup shouldn't fail matter creation).
-        seedStarterFolders(matterID: record.id, practiceArea: draft.practiceArea)
-        reload()
-        select(matterID: record.id)
         lastMutationFailure = nil
-        return MatterSummary(record: record)
+        return result
     }
 
     /// Creates the complete workspace and Store-owned identity graph in one
@@ -452,7 +435,26 @@ public final class MattersController: ObservableObject {
         } catch {
             return rejectMutation(
                 .matterCreate,
-                message: "Couldn’t create the matter. \(error.localizedDescription)"
+                message: "Couldn’t create the matter. \(error.localizedDescription)",
+                recoveryActions: error is MatterIdentityEditorError
+                    ? [.correctInput] : [.retry, .correctInput]
+            )
+        }
+    }
+
+    /// Canonical editor create boundary. Presentation consumes the committed
+    /// matter ID and cannot route into an aggregate that failed to persist.
+    public func attemptCreateMatter(
+        identity submission: MatterIdentityEditorSubmission
+    ) -> UserMutationOutcome<String> {
+        do {
+            return .committed(try createMatter(identity: submission).id)
+        } catch {
+            return rejectMutation(
+                .matterCreate,
+                message: "Couldn’t create the matter. \(error.localizedDescription)",
+                recoveryActions: error is MatterIdentityEditorError
+                    ? [.correctInput] : [.retry, .correctInput]
             )
         }
     }
@@ -492,30 +494,25 @@ public final class MattersController: ObservableObject {
         return MatterDraft(record: record)
     }
 
+    /// Compatibility update retains the existing structured party graph but
+    /// explicitly clears court authority. A caller with only free-text fields
+    /// cannot silently overwrite or preserve a previously resolved court.
     public func updateMatter(id: String, draft: MatterDraft) throws {
-        try store.matters.updateMatter(
-            id: id,
-            name: draft.name,
-            jurisdiction: draft.jurisdiction,
-            partyPerspective: draft.partyPerspective,
-            court: draft.court,
-            judge: draft.judge,
-            docketNumber: draft.docketNumber,
-            practiceArea: draft.practiceArea,
-            clientNames: draft.clientNames,
-            matterDescription: draft.matterDescription,
-            internalMatterID: draft.internalMatterID,
-            clientID: draft.clientID,
-            clientMatterID: draft.clientMatterID,
-            notes: draft.notes
+        guard let snapshot = try store.matterIdentity.fetchSnapshot(matterID: id) else {
+            throw MatterIdentityEditorError.matterUnavailable
+        }
+        try updateMatter(
+            identity: MatterIdentityEditorSubmission(
+                matterID: id,
+                expectedIdentityRevision: snapshot.identityRevision,
+                draft: draft,
+                courtResolutionState: .unresolved,
+                canonicalJurisdictionID: nil,
+                canonicalCourtID: nil,
+                parties: snapshot.parties,
+                representations: snapshot.representations
+            )
         )
-        _ = try? store.auditEvents.recordEvent(
-            matterID: id,
-            eventType: "matter_updated",
-            actor: "user",
-            summary: "Updated matter details"
-        )
-        reload()
         lastMutationFailure = nil
     }
 
@@ -531,7 +528,28 @@ public final class MattersController: ObservableObject {
         } catch {
             return rejectMutation(
                 .matterEdit,
-                message: "Couldn’t save the matter changes. \(error.localizedDescription)"
+                message: "Couldn’t save the matter changes. \(error.localizedDescription)",
+                recoveryActions: error is MatterIdentityEditorError
+                    ? [.correctInput] : [.retry, .correctInput]
+            )
+        }
+    }
+
+    /// Canonical editor update boundary. The submitted identity graph remains
+    /// with the sheet until this returns a committed matter ID.
+    public func attemptUpdateMatter(
+        identity submission: MatterIdentityEditorSubmission
+    ) -> UserMutationOutcome<String> {
+        do {
+            try updateMatter(identity: submission)
+            lastMutationFailure = nil
+            return .committed(submission.matterID)
+        } catch {
+            return rejectMutation(
+                .matterEdit,
+                message: "Couldn’t save the matter changes. \(error.localizedDescription)",
+                recoveryActions: error is MatterIdentityEditorError
+                    ? [.correctInput] : [.retry, .correctInput]
             )
         }
     }
@@ -705,12 +723,30 @@ public final class MattersController: ObservableObject {
     /// is currently looking at, so the list doesn't jump; afterwards the saved
     /// manual order is restored whenever they come back to it.
     public func setSortMode(_ mode: MatterSortMode) {
+        _ = attemptSetSortMode(mode)
+    }
+
+    /// Retains the selected candidate in the sidebar while committing the
+    /// first manual order before persisting that mode as authoritative.
+    public func attemptSetSortMode(
+        _ mode: MatterSortMode
+    ) -> UserMutationOutcome<MatterSortMode> {
         sortMode = mode
-        defaults.set(mode.rawValue, forKey: Self.sortModeKey)
-        if mode == .manual, matters.allSatisfy({ $0.sortOrder == nil }) {
-            try? store.matters.updateMatterSortOrder(orderedIDs: matters.map(\.id))
+        do {
+            if mode == .manual, matters.allSatisfy({ $0.sortOrder == nil }) {
+                try store.matters.updateMatterSortOrder(orderedIDs: matters.map(\.id))
+            }
+            defaults.set(mode.rawValue, forKey: Self.sortModeKey)
+            reload()
+            lastMutationFailure = nil
+            return .committed(mode)
+        } catch {
+            reload()
+            return rejectMutation(
+                .matterReorder,
+                message: "Couldn’t save the matter order. \(error.localizedDescription)"
+            )
         }
-        reload()
     }
 
     /// Replaces court identity and its unchanged party graph in one optimistic

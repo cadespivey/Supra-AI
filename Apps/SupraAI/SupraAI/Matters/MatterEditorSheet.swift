@@ -38,18 +38,19 @@ struct MatterEditorSheet: View {
     /// Known practice areas from existing matters; recommends an existing
     /// spelling as one is typed.
     private let practiceAreaDirectory: PracticeAreaDirectory
-    private let onSave: (MatterIdentityEditorSubmission) throws -> Void
+    private let onSave: (MatterIdentityEditorSubmission) -> UserMutationOutcome<String>
 
     @Environment(\.dismiss) private var dismiss
     @State private var showValidation = false
     @State private var selectedCourtID: String
-    @State private var saveError: String?
+    @State private var lastMutationFailure: UserMutationFailure?
+    @State private var focusChain = SupraFocusChain()
 
     init(
         mode: Mode,
         submission: MatterIdentityEditorSubmission,
         practiceAreaDirectory: PracticeAreaDirectory = .empty,
-        onSave: @escaping (MatterIdentityEditorSubmission) throws -> Void
+        onSave: @escaping (MatterIdentityEditorSubmission) -> UserMutationOutcome<String>
     ) {
         self.mode = mode
         self.matterID = submission.matterID
@@ -71,28 +72,42 @@ struct MatterEditorSheet: View {
 
     var body: some View {
         SupraSheetScaffold(mode.title, doneLabel: "Cancel", onClose: { dismiss() }) {
-            editorForm
-        } footer: {
-            if let saveError {
-                Text(saveError)
-                    .font(.supraCaption)
-                    .foregroundStyle(.red)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityIdentifier("matter.identity.saveError")
+            VStack(spacing: 0) {
+                if let failure = lastMutationFailure {
+                    UserMutationFailureBanner(
+                        failure: failure,
+                        retry: save,
+                        correct: {
+                            _ = focusChain.focus(identifier: "matter.editor.name")
+                        }
+                    )
+                    .padding([.horizontal, .top], 12)
+                }
+                editorForm
             }
+        } footer: {
             Spacer()
             Button(mode.confirmLabel) { save() }
                 .buttonStyle(.ghost)
                 .keyboardShortcut(.defaultAction)
                 .disabled(showValidation && !draft.isValid)
+                .accessibilityIdentifier("matter.editor.commit")
         }
         .frame(minWidth: 480, idealWidth: 600, maxWidth: .infinity, minHeight: 520, idealHeight: 640, maxHeight: .infinity)
+        .accessibilityIdentifier("matter.editor.sheet")
     }
 
     private var editorForm: some View {
             Form {
                 Section("Required") {
-                    field("Matter name", text: $draft.name, invalid: nameInvalid, message: "Name is required.")
+                    field(
+                        "Matter name",
+                        text: $draft.name,
+                        invalid: nameInvalid,
+                        message: "Name is required.",
+                        focusOrder: 10,
+                        accessibilityID: "matter.editor.name"
+                    )
                     JurisdictionAutocompleteField(
                         jurisdiction: $draft.jurisdiction,
                         court: $draft.court,
@@ -100,7 +115,9 @@ struct MatterEditorSheet: View {
                         courtResolutionState: $courtResolutionState,
                         canonicalJurisdictionID: $canonicalJurisdictionID,
                         canonicalCourtID: $canonicalCourtID,
-                        invalid: jurisdictionInvalid
+                        invalid: jurisdictionInvalid,
+                        focusChain: focusChain,
+                        focusOrder: 20
                     )
                 }
 
@@ -582,9 +599,22 @@ struct MatterEditorSheet: View {
     }
 
     @ViewBuilder
-    private func field(_ label: String, text: Binding<String>, invalid: Bool, message: String) -> some View {
+    private func field(
+        _ label: String,
+        text: Binding<String>,
+        invalid: Bool,
+        message: String,
+        focusOrder: Int = 0,
+        accessibilityID: String? = nil
+    ) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            LabeledTextField(label: label, text: text)
+            LabeledTextField(
+                label: label,
+                text: text,
+                focusChain: focusChain,
+                focusOrder: focusOrder,
+                accessibilityID: accessibilityID
+            )
             if invalid {
                 Text(message)
                     .font(.supraCaption)
@@ -598,21 +628,19 @@ struct MatterEditorSheet: View {
             showValidation = true
             return
         }
-        do {
-            try onSave(MatterIdentityEditorSubmission(
-                matterID: matterID,
-                expectedIdentityRevision: expectedIdentityRevision,
-                draft: draft,
-                courtResolutionState: courtResolutionState,
-                canonicalJurisdictionID: canonicalJurisdictionID,
-                canonicalCourtID: canonicalCourtID,
-                parties: parties,
-                representations: representations
-            ))
-            dismiss()
-        } catch {
-            saveError = error.localizedDescription
-        }
+        let outcome = onSave(MatterIdentityEditorSubmission(
+            matterID: matterID,
+            expectedIdentityRevision: expectedIdentityRevision,
+            draft: draft,
+            courtResolutionState: courtResolutionState,
+            canonicalJurisdictionID: canonicalJurisdictionID,
+            canonicalCourtID: canonicalCourtID,
+            parties: parties,
+            representations: representations
+        ))
+        lastMutationFailure = outcome.failure
+        guard outcome.allowsSuccessPresentation else { return }
+        dismiss()
     }
 
 }

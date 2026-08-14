@@ -31,6 +31,7 @@ struct ResearchPlannerView: View {
     @State private var selectedCourtID: String
     @State private var focusChain = SupraFocusChain()
     @State private var focusedPlannerControlID = "none"
+    @State private var pendingSaveAndRun = false
 
     /// Called after Save & Run persists the session and kicks off the run,
     /// so the parent can navigate straight into the session detail.
@@ -57,6 +58,18 @@ struct ResearchPlannerView: View {
     var body: some View {
         SupraSheetScaffold("New Research Session", doneLabel: "Cancel", onClose: { controller.resetPlan(); dismiss() }) {
             Form {
+                if let failure = controller.lastMutationFailure {
+                    Section {
+                        UserMutationFailureBanner(
+                            failure: failure,
+                            retry: retryPlanCommit,
+                            correct: {
+                                _ = focusChain.focus(identifier: "planner.title")
+                            }
+                        )
+                        .accessibilityIdentifier("planner.mutationFailure")
+                    }
+                }
                 Section("Issue") {
                     BoxedLeadingTextField(
                         placeholder: "Title",
@@ -390,12 +403,18 @@ struct ResearchPlannerView: View {
         if run {
             saveAndRun()
         } else {
-            syncFilters()
-            if (try? controller.savePlan(draft: draft)) != nil {
-                controller.loadSessions()
-                dismiss()
-            }
+            saveWithoutRun()
         }
+    }
+
+    private func saveWithoutRun() {
+        syncFilters()
+        pendingSaveAndRun = false
+        let outcome = controller.attemptSavePlan(draft: draft)
+        guard outcome.allowsDependentNavigation,
+              outcome.committedValue != nil else { return }
+        controller.loadSessions()
+        dismiss()
     }
 
     /// Saves the plan and immediately starts the run — no reopening the saved
@@ -403,11 +422,22 @@ struct ResearchPlannerView: View {
     /// user watches results (or the token/run message) arrive.
     private func saveAndRun() {
         syncFilters()
-        guard let sessionID = try? controller.savePlan(draft: draft) else { return }
+        pendingSaveAndRun = true
+        let outcome = controller.attemptSavePlan(draft: draft)
+        guard outcome.allowsDependentNavigation,
+              let sessionID = outcome.committedValue else { return }
         controller.openSession(sessionID)
         dismiss()
         onSaveAndRun?(sessionID)
         Task { await controller.runApprovedSearches() }
+    }
+
+    private func retryPlanCommit() {
+        if pendingSaveAndRun {
+            saveAndRun()
+        } else {
+            saveWithoutRun()
+        }
     }
 
     private func seedManualQueryIfNeeded() {

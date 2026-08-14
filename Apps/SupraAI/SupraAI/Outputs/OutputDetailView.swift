@@ -15,6 +15,7 @@ struct OutputDetailView: View {
     @State private var showRaw = false
     @State private var routingMessage: String?
     @State private var sourcePreview: PreviewItem?
+    @State private var pendingExportFormat: DocumentExportFormat?
 
     private var router: ModelRouter { ModelRouter(configuration: .fromEnvironment()) }
 
@@ -53,6 +54,17 @@ struct OutputDetailView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal)
                     .padding(.top, 6)
+            }
+            if let failure = controller.lastMutationFailure,
+               pendingExportFormat != nil {
+                UserMutationFailureBanner(
+                    failure: failure,
+                    retry: retryExport,
+                    correct: correctExport
+                )
+                .padding(.horizontal)
+                .padding(.top, 6)
+                .accessibilityIdentifier("output.mutationFailure")
             }
             if let selected {
                 verificationBar(selected)
@@ -122,9 +134,7 @@ struct OutputDetailView: View {
                     Section("Format") {
                         ForEach(DocumentExportFormat.allCases, id: \.self) { format in
                             Button(format.fileExtension.uppercased()) {
-                                if let url = controller.exportOutput(outputID: outputID, format: format) {
-                                    NSWorkspace.shared.activateFileViewerSelecting([url])
-                                }
+                                performExport(format: format)
                             }
                         }
                     }
@@ -249,6 +259,27 @@ struct OutputDetailView: View {
             return
         }
         _ = await controller.repairOutput(outputID, modelID: modelID, route: repairRoute)
+    }
+
+    private func performExport(format: DocumentExportFormat) {
+        pendingExportFormat = format
+        let outcome = controller.attemptExportOutput(
+            outputID: outputID,
+            format: format
+        )
+        guard outcome.allowsSuccessPresentation,
+              let url = outcome.committedValue else { return }
+        pendingExportFormat = nil
+        NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+
+    private func retryExport() {
+        guard let pendingExportFormat else { return }
+        performExport(format: pendingExportFormat)
+    }
+
+    private func correctExport() {
+        _ = controller.reverifyOutput(outputID)
     }
 
     private func missingBar(_ version: StructuredOutputController.VersionItem) -> some View {

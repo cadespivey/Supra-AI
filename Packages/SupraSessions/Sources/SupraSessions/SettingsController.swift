@@ -50,17 +50,30 @@ public final class SettingsController: ObservableObject {
     @Published public var preset: GenerationPreset {
         didSet {
             guard preset != oldValue else { return }
+            isApplyingPreset = true
             let defaults = preset.defaultOptions
             topP = defaults.topP
             topK = defaults.topK
             maxContextTokens = defaults.maxContextTokens
             thinkingBudget = defaults.thinkingBudget
             maxOutputTokens = defaults.maxOutputTokens
-            temperature = defaults.temperature // persists via temperature's didSet
+            temperature = defaults.temperature
+            isApplyingPreset = false
+            persist()
         }
     }
-    @Published public var temperature: Double { didSet { persist() } }
-    @Published public var maxOutputTokens: Int { didSet { persist() } }
+    @Published public var temperature: Double {
+        didSet {
+            guard !isApplyingPreset else { return }
+            persist()
+        }
+    }
+    @Published public var maxOutputTokens: Int {
+        didSet {
+            guard !isApplyingPreset else { return }
+            persist()
+        }
+    }
 
     public let modelsDirectoryPath: String
     public let appVersion: AppVersion
@@ -70,6 +83,10 @@ public final class SettingsController: ObservableObject {
     private var topK: Int?
     private var maxContextTokens: Int
     private var thinkingBudget: ThinkingBudget
+    /// A preset is one user mutation even though it updates several in-memory
+    /// generation fields. Suppress property-observer writes and persist the
+    /// final candidate once so a failure cannot expose an intermediate preset.
+    private var isApplyingPreset = false
 
     public init(
         store: SupraStore,
@@ -122,7 +139,8 @@ public final class SettingsController: ObservableObject {
         } catch {
             return rejectMutation(
                 .credentialSave,
-                message: "Couldn’t save the API key for \(service.rawValue). \(error.localizedDescription)"
+                message: "Couldn’t save the API key for \(service.rawValue). \(error.localizedDescription)",
+                recoveryActions: [.retry, .correctInput]
             )
         }
     }
@@ -213,7 +231,8 @@ public final class SettingsController: ObservableObject {
         } catch {
             return rejectMutation(
                 .credentialSave,
-                message: "Couldn’t save the CourtListener token. \(error.localizedDescription)"
+                message: "Couldn’t save the CourtListener token. \(error.localizedDescription)",
+                recoveryActions: [.retry, .correctInput]
             )
         }
     }
@@ -246,10 +265,38 @@ public final class SettingsController: ObservableObject {
 
     /// Keeps the non-default candidate in the editor even when persistence
     /// fails; the typed result controls success presentation and retry.
+    public func attemptSetPreset(
+        _ value: GenerationPreset
+    ) -> UserMutationOutcome<GenerationPreset> {
+        if preset == value {
+            // An exact Retry addresses the retained candidate even though the
+            // published value no longer changes and its observer will not fire.
+            persist()
+        } else {
+            preset = value
+        }
+        if let lastMutationFailure,
+           lastMutationFailure.operation == .settingsPersist {
+            return .failed(lastMutationFailure)
+        }
+        return .committed(value)
+    }
+
     public func attemptSetTemperature(
         _ value: Double
     ) -> UserMutationOutcome<Double> {
         temperature = value
+        if let lastMutationFailure,
+           lastMutationFailure.operation == .settingsPersist {
+            return .failed(lastMutationFailure)
+        }
+        return .committed(value)
+    }
+
+    public func attemptSetMaxOutputTokens(
+        _ value: Int
+    ) -> UserMutationOutcome<Int> {
+        maxOutputTokens = value
         if let lastMutationFailure,
            lastMutationFailure.operation == .settingsPersist {
             return .failed(lastMutationFailure)
@@ -265,7 +312,7 @@ public final class SettingsController: ObservableObject {
             let failure = UserMutationFailure(
                 operation: .settingsPersist,
                 userMessage: "Couldn’t save the generation settings. \(error.localizedDescription)",
-                recoveryActions: [.retry]
+                recoveryActions: [.retry, .correctInput]
             )
             lastMutationFailure = failure
         }

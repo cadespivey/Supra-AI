@@ -37,6 +37,9 @@ struct MatterDocumentsView: View {
     }
     @State private var dismissedImportFailureID: String?
     @AccessibilityFocusState private var importFailureFocused: Bool
+    @State private var pendingImportURLs: [URL] = []
+    @State private var pendingImportFolderID: String?
+    @AccessibilityFocusState private var mutationCorrectionFocused: Bool
     /// The single row whose action buttons (move/preview/open/delete) are revealed.
     @State private var selectedDocID: String?
     /// Documents ticked for multi-select sharing.
@@ -56,6 +59,16 @@ struct MatterDocumentsView: View {
             resumeImportBanner
             jobProgress
             importFailureBanner
+            if let failure = controller.lastMutationFailure,
+               !pendingImportURLs.isEmpty {
+                UserMutationFailureBanner(
+                    failure: failure,
+                    retry: retryPendingImport,
+                    correct: correctPendingImport
+                )
+                .padding(.horizontal, 8)
+                .accessibilityIdentifier("documents.mutationFailure")
+            }
             classifyPendingBanner
             // A fixed-width folder rail (not a resizable split): HSplitView rebalanced its
             // panes to their ideal widths whenever the document list changed on folder
@@ -84,7 +97,9 @@ struct MatterDocumentsView: View {
             allowedContentTypes: controller.allowedContentTypes,
             allowsMultipleSelection: true
         ) { result in
-            if case let .success(urls) = result { controller.importItems(urls) }
+            if case let .success(urls) = result {
+                attemptImport(urls, targetFolderID: controller.selectedFolderID)
+            }
         }
         .onDrop(of: [.fileURL], isTargeted: $dropTargeted) { providers in
             handleDrop(providers)
@@ -652,6 +667,7 @@ struct MatterDocumentsView: View {
         .accessibilityIdentifier("documents.importUnavailableWarning")
         .accessibilityLabel("Document import unavailable")
         .accessibilityValue("Complete Document Intelligence setup in Settings before importing files")
+        .accessibilityFocused($mutationCorrectionFocused)
     }
 
     /// In-app banner for the most recent import that completed with failures
@@ -1019,9 +1035,35 @@ struct MatterDocumentsView: View {
         }
         group.notify(queue: .main) {
             let urls = collector.drain()
-            if !urls.isEmpty { controller.importItems(urls, targetFolderID: targetFolderID) }
+            if !urls.isEmpty {
+                attemptImport(urls, targetFolderID: targetFolderID)
+            }
         }
         return true
+    }
+
+    private func attemptImport(_ urls: [URL], targetFolderID: String?) {
+        pendingImportURLs = urls
+        pendingImportFolderID = targetFolderID
+        let outcome = controller.attemptImportItems(
+            urls,
+            targetFolderID: targetFolderID
+        )
+        guard outcome.didCommit else { return }
+        pendingImportURLs = []
+        pendingImportFolderID = nil
+    }
+
+    private func retryPendingImport() {
+        guard !pendingImportURLs.isEmpty else { return }
+        attemptImport(
+            pendingImportURLs,
+            targetFolderID: pendingImportFolderID
+        )
+    }
+
+    private func correctPendingImport() {
+        mutationCorrectionFocused = true
     }
 }
 

@@ -87,6 +87,7 @@
 		D1E708080000000000000008 /* ArchitectureUXTAttachNativeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1E708080000000000000108 /* ArchitectureUXTAttachNativeTests.swift */; };
 		D1E709090000000000000009 /* ArchitectureUXTDataIdentityConsumerSourceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1E709090000000000000109 /* ArchitectureUXTDataIdentityConsumerSourceTests.swift */; };
 		D1E70A0A000000000000000A /* ArchitectureUXTMutationNativeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1E70A0A000000000000010A /* ArchitectureUXTMutationNativeTests.swift */; };
+		D1E70B0B000000000000000B /* UserMutationFailureBanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1E70B0B000000000000010B /* UserMutationFailureBanner.swift */; };
 		D8049735424078FD470EAD6B /* RecycleBinView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF9D6D522EA0F7997D75B63B /* RecycleBinView.swift */; };
 		F56264303FD9BE608870FB9F /* MultilineField.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E06DCE8DB8B78E41F939F2C /* MultilineField.swift */; };
 /* End PBXBuildFile section */
@@ -136,6 +137,7 @@
 		D1E708080000000000000108 /* ArchitectureUXTAttachNativeTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ArchitectureUXTAttachNativeTests.swift; sourceTree = "<group>"; };
 		D1E709090000000000000109 /* ArchitectureUXTDataIdentityConsumerSourceTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ArchitectureUXTDataIdentityConsumerSourceTests.swift; sourceTree = "<group>"; };
 		D1E70A0A000000000000010A /* ArchitectureUXTMutationNativeTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ArchitectureUXTMutationNativeTests.swift; sourceTree = "<group>"; };
+		D1E70B0B000000000000010B /* UserMutationFailureBanner.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = UserMutationFailureBanner.swift; sourceTree = "<group>"; };
 		45DF0346474345DA98F88B95 /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/Cocoa.framework; sourceTree = DEVELOPER_DIR; };
 		5A0000000000000000000101 /* SupraAIApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupraAIApp.swift; sourceTree = "<group>"; };
 		5A0000000000000000000102 /* AppEnvironment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppEnvironment.swift; sourceTree = "<group>"; };
@@ -255,6 +257,7 @@
 				A42B02040000000000000104 /* SignedReleaseSmokeHost.swift */,
 				5A0000000000000000000102 /* AppEnvironment.swift */,
 				5A0000000000000000000103 /* RootView.swift */,
+				D1E70B0B000000000000010B /* UserMutationFailureBanner.swift */,
 				A42B02020000000000000102 /* RuntimeXPCIntegrationView.swift */,
 				5A0000000000000000000104 /* MainShellView.swift */,
 				5A0000000000000000000105 /* SidebarView.swift */,
@@ -624,6 +627,7 @@
 				A42B02040000000000000004 /* SignedReleaseSmokeHost.swift in Sources */,
 				5A0000000000000000000002 /* AppEnvironment.swift in Sources */,
 				5A0000000000000000000003 /* RootView.swift in Sources */,
+				D1E70B0B000000000000000B /* UserMutationFailureBanner.swift in Sources */,
 				A42B02020000000000000002 /* RuntimeXPCIntegrationView.swift in Sources */,
 				5A0000000000000000000004 /* MainShellView.swift in Sources */,
 				5A0000000000000000000005 /* SidebarView.swift in Sources */,

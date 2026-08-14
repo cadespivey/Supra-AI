@@ -115,17 +115,47 @@ struct MainShellView: View {
         .sheet(isPresented: $showNewMatter) {
             MatterEditorSheet(
                 mode: .create,
-                submission: environment.mattersController
-                    .newMatterIdentityEditorSubmission(),
+                submission: newMatterIdentityEditorSubmission(),
                 practiceAreaDirectory: environment.mattersController.practiceAreaDirectory()
             ) { submission in
-                let created = try environment.mattersController.createMatter(
+                let outcome = environment.mattersController.attemptCreateMatter(
                     identity: submission
                 )
-                environment.mattersController.select(matterID: created.id)
-                selection = .matter(created.id)
+                if outcome.allowsDependentNavigation,
+                   let createdID = outcome.committedValue {
+                    selectMatter(createdID)
+                }
+                return outcome
             }
         }
+    }
+
+    /// Builds the ordinary canonical create payload. The DEBUG mutation wire
+    /// changes only its stable request ID, name, and explicit not-applicable
+    /// court state so the real editor can exercise a Store rejection without
+    /// embedding test-owned names or error markers in the app.
+    private func newMatterIdentityEditorSubmission() -> MatterIdentityEditorSubmission {
+        let ordinary = environment.mattersController.newMatterIdentityEditorSubmission()
+#if DEBUG
+        guard let wire = MutationFailureUITestWire(
+            arguments: ProcessInfo.processInfo.arguments
+        ), wire.operation == .matterCreate else { return ordinary }
+        var draft = ordinary.draft
+        draft.name = wire.draftName
+        draft.jurisdiction = "Not applicable"
+        return MatterIdentityEditorSubmission(
+            matterID: wire.targetMatterID,
+            expectedIdentityRevision: nil,
+            draft: draft,
+            courtResolutionState: .notApplicable,
+            canonicalJurisdictionID: nil,
+            canonicalCourtID: nil,
+            parties: [],
+            representations: []
+        )
+#else
+        return ordinary
+#endif
     }
 
     /// Pins the shell to the proposed layout height, so the panes end exactly at
@@ -249,7 +279,18 @@ struct MainShellView: View {
     private func applyUITestInitialSelection() {
         guard AppEnvironment.isUITestMode else { return }
         let arguments = ProcessInfo.processInfo.arguments
-        if let fixture = SetupNavigationUITestFixture(arguments: arguments) {
+        if let wire = MutationFailureUITestWire(arguments: arguments) {
+            switch wire.operation {
+            case .matterCreate:
+                selectRoute(.globalChats)
+                showNewMatter = true
+            case .matterEdit:
+                guard environment.mattersController.matters.contains(where: {
+                    $0.id == wire.targetMatterID
+                }) else { return }
+                selectMatter(wire.targetMatterID)
+            }
+        } else if let fixture = SetupNavigationUITestFixture(arguments: arguments) {
             setupNavigationFixture = fixture
             isShowingSetupNavigationFixture = true
             setupNavigationRequest = nil

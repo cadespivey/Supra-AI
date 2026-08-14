@@ -51,6 +51,12 @@ enum PermanentDeletionTarget: Identifiable {
     }
 }
 
+private enum RestoreTarget {
+    case matter(String)
+    case chat(String)
+    case document(String)
+}
+
 private struct PermanentDeletionConfirmationModifier: ViewModifier {
     @Binding var target: PermanentDeletionTarget?
     let perform: (PermanentDeletionTarget) -> Void
@@ -95,13 +101,26 @@ struct RecycleBinView: View {
     @ObservedObject var chats: GlobalChatController
 
     @State private var pendingDelete: PermanentDeletionTarget?
+    @State private var pendingRestore: RestoreTarget?
 
     var body: some View {
-        Group {
-            if controller.isEmpty {
-                emptyState
-            } else {
-                list
+        VStack(spacing: 0) {
+            if let failure = controller.lastMutationFailure,
+               pendingRestore != nil {
+                UserMutationFailureBanner(
+                    failure: failure,
+                    retry: retryRestore,
+                    correct: correctRestore
+                )
+                .padding([.horizontal, .top], 10)
+                .accessibilityIdentifier("recycleBin.mutationFailure")
+            }
+            Group {
+                if controller.isEmpty {
+                    emptyState
+                } else {
+                    list
+                }
             }
         }
         .navigationTitle("Recycle Bin")
@@ -139,7 +158,7 @@ struct RecycleBinView: View {
                 Section("Matters") {
                     ForEach(controller.matters) { matter in
                         row(kind: .matter, icon: "folder", title: matter.name, subtitle: "Matter", deletedAt: matter.deletedAt,
-                            restore: { controller.restoreMatter(id: matter.id); matters.loadMatters() },
+                            restore: { performRestore(.matter(matter.id)) },
                             delete: { pendingDelete = .matter(id: matter.id, name: matter.name) })
                     }
                 }
@@ -149,7 +168,7 @@ struct RecycleBinView: View {
                     ForEach(controller.chats) { chat in
                         let title = chat.title.isEmpty ? "Untitled chat" : chat.title
                         row(kind: .chat, icon: "bubble.left.and.bubble.right", title: title, subtitle: chat.context, deletedAt: chat.deletedAt,
-                            restore: { controller.restoreChat(id: chat.id); chats.loadChats() },
+                            restore: { performRestore(.chat(chat.id)) },
                             delete: { pendingDelete = .chat(id: chat.id, name: title) })
                     }
                 }
@@ -158,7 +177,7 @@ struct RecycleBinView: View {
                 Section("Documents") {
                     ForEach(controller.documents) { doc in
                         row(kind: .document, icon: "doc", title: doc.name, subtitle: doc.matterName, deletedAt: doc.deletedAt,
-                            restore: { controller.restoreDocument(id: doc.id) },
+                            restore: { performRestore(.document(doc.id)) },
                             delete: { pendingDelete = .document(id: doc.id, name: doc.name) })
                     }
                 }
@@ -212,5 +231,38 @@ struct RecycleBinView: View {
         case let .chat(id, _): controller.permanentlyDeleteChat(id: id)
         case let .document(id, _): controller.permanentlyDeleteDocument(id: id)
         }
+    }
+
+    private func performRestore(_ target: RestoreTarget) {
+        pendingRestore = target
+        let outcome: UserMutationOutcome<String>
+        switch target {
+        case let .matter(id):
+            outcome = controller.attemptRestoreMatter(id: id)
+        case let .chat(id):
+            outcome = controller.attemptRestoreChat(id: id)
+        case let .document(id):
+            outcome = controller.attemptRestoreDocument(id: id)
+        }
+        guard outcome.allowsSuccessPresentation else { return }
+        pendingRestore = nil
+        switch target {
+        case .matter:
+            matters.loadMatters()
+        case .chat:
+            chats.loadChats()
+        case .document:
+            break
+        }
+    }
+
+    private func retryRestore() {
+        guard let pendingRestore else { return }
+        performRestore(pendingRestore)
+    }
+
+    private func correctRestore() {
+        pendingRestore = nil
+        controller.reload()
     }
 }

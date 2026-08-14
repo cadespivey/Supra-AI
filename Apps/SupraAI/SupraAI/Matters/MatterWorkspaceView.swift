@@ -48,10 +48,14 @@ struct MatterWorkspaceView: View {
             ) {
                 MatterEditorSheet(
                     mode: .edit,
-                    submission: submission,
+                    submission: mutationEditorSubmission(from: submission),
                     practiceAreaDirectory: controller.practiceAreaDirectory()
                 ) { submission in
-                    try controller.updateMatter(identity: submission)
+                    let outcome = controller.attemptUpdateMatter(identity: submission)
+                    if outcome.allowsSuccessPresentation {
+                        controller.loadMatters()
+                    }
+                    return outcome
                 }
             } else {
                 ContentUnavailableView(
@@ -85,6 +89,7 @@ struct MatterWorkspaceView: View {
                 .accessibilityIdentifier("matter.moveToRecycleBin.message")
         }
         .task {
+            applyUITestInitialEditor()
             applyUITestInitialTab()
             applyUITestInitialDraftSheet()
             await pollUITestTabCommand()
@@ -187,6 +192,36 @@ struct MatterWorkspaceView: View {
         }
         .padding(.horizontal)
         .padding(.vertical, 6)
+    }
+
+    /// Keeps the synthetic edited name in the real editor's own `@State`. The
+    /// failed Store command therefore proves that the shipping sheet, not an
+    /// automation-only stand-in, retains the exact draft.
+    private func mutationEditorSubmission(
+        from ordinary: MatterIdentityEditorSubmission
+    ) -> MatterIdentityEditorSubmission {
+#if DEBUG
+        guard let wire = MutationFailureUITestWire(
+            arguments: ProcessInfo.processInfo.arguments
+        ), wire.operation == .matterEdit,
+           wire.targetMatterID == matter.id else { return ordinary }
+        var fixture = ordinary
+        fixture.draft.name = wire.draftName
+        return fixture
+#else
+        return ordinary
+#endif
+    }
+
+    @MainActor
+    private func applyUITestInitialEditor() {
+#if DEBUG
+        guard let wire = MutationFailureUITestWire(
+            arguments: ProcessInfo.processInfo.arguments
+        ), wire.operation == .matterEdit,
+           wire.targetMatterID == matter.id else { return }
+        showEditor = true
+#endif
     }
 
     @MainActor

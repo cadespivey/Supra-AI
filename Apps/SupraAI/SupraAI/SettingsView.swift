@@ -18,6 +18,8 @@ struct SettingsView: View {
     var setupNavigationRequest: SetupNavigationRequest?
     var onReturnFromSetup: (SetupNavigationRequest) -> Void
     @FocusState private var focusedSetupRequirementID: String?
+    @FocusState private var generationSettingsFocused: Bool
+    @State private var retryGenerationSettings: (() -> Void)?
 
     init(
         settings: SettingsController,
@@ -50,6 +52,18 @@ struct SettingsView: View {
                 )
             }
 
+            if let failure = settings.lastMutationFailure,
+               failure.operation == .settingsPersist,
+               let retryGenerationSettings {
+                UserMutationFailureBanner(
+                    failure: failure,
+                    retry: retryGenerationSettings,
+                    correct: { generationSettingsFocused = true }
+                )
+                .padding([.horizontal, .top], 12)
+                .accessibilityIdentifier("settings.mutationFailure")
+            }
+
             ScrollViewReader { proxy in
                 Form {
                     AssistantProfileSection(profile: profile, billing: billing)
@@ -64,7 +78,7 @@ struct SettingsView: View {
                 )
 
             Section("Generation Defaults") {
-                Picker("Preset", selection: $settings.preset) {
+                Picker("Preset", selection: presetBinding) {
                     ForEach(GenerationPreset.userSelectableDefaults, id: \.self) { preset in
                         Text(preset.displayName).tag(preset)
                     }
@@ -78,7 +92,8 @@ struct SettingsView: View {
                             .foregroundStyle(.secondary)
                             .monospacedDigit()
                     }
-                    Slider(value: $settings.temperature, in: 0...1, step: 0.05)
+                    Slider(value: temperatureBinding, in: 0...1, step: 0.05)
+                        .focused($generationSettingsFocused)
                     Text("Lower is more precise, deterministic, and consistent — best for legal accuracy. Higher is more varied and creative, with more risk of drift or invented detail.")
                         .font(.callout).foregroundStyle(.secondary)
                 }
@@ -86,7 +101,7 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Stepper(
                         "Max output tokens: \(settings.maxOutputTokens)",
-                        value: $settings.maxOutputTokens,
+                        value: maxOutputTokensBinding,
                         in: 128...8192,
                         step: 128
                     )
@@ -227,6 +242,58 @@ struct SettingsView: View {
         guard let setupNavigationRequest,
               setupNavigationRequest.navigationTarget.isSettings else { return nil }
         return setupNavigationRequest
+    }
+
+    private var presetBinding: Binding<GenerationPreset> {
+        Binding(
+            get: { settings.preset },
+            set: { performPresetChange($0) }
+        )
+    }
+
+    private var temperatureBinding: Binding<Double> {
+        Binding(
+            get: { settings.temperature },
+            set: { performTemperatureChange($0) }
+        )
+    }
+
+    private var maxOutputTokensBinding: Binding<Int> {
+        Binding(
+            get: { settings.maxOutputTokens },
+            set: { performMaxOutputTokensChange($0) }
+        )
+    }
+
+    private func performPresetChange(_ value: GenerationPreset) {
+        _ = settings.attemptSetPreset(value)
+        captureGenerationSettingsFailure {
+            performPresetChange(value)
+        }
+    }
+
+    private func performTemperatureChange(_ value: Double) {
+        _ = settings.attemptSetTemperature(value)
+        captureGenerationSettingsFailure {
+            performTemperatureChange(value)
+        }
+    }
+
+    private func performMaxOutputTokensChange(_ value: Int) {
+        _ = settings.attemptSetMaxOutputTokens(value)
+        captureGenerationSettingsFailure {
+            performMaxOutputTokensChange(value)
+        }
+    }
+
+    private func captureGenerationSettingsFailure(
+        retry: @escaping () -> Void
+    ) {
+        if settings.lastMutationFailure?.operation == .settingsPersist {
+            retryGenerationSettings = retry
+        } else {
+            retryGenerationSettings = nil
+        }
     }
 
     private func focusRequestedSetupRow() {
@@ -684,6 +751,8 @@ private struct APIKeyDisclosure: View {
     let description: String
     let kind: Kind
     @State private var entry = ""
+    @State private var credentialFailure: UserMutationFailure?
+    @FocusState private var entryFocused: Bool
 
     enum Kind {
         case service(APIKeyService, prompt: String, signupURL: URL)
@@ -731,6 +800,14 @@ private struct APIKeyDisclosure: View {
                 Text(description)
                     .font(.callout).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                if let failure = credentialFailure {
+                    UserMutationFailureBanner(
+                        failure: failure,
+                        retry: retryCredentialSave,
+                        correct: { correctCredentialInput(for: failure) }
+                    )
+                    .accessibilityIdentifier("settings.mutationFailure")
+                }
                 controls
             }
             .padding(.top, 4)
@@ -758,14 +835,14 @@ private struct APIKeyDisclosure: View {
         case let .service(service, prompt, signupURL):
             keyControls(
                 prompt: prompt, signupURL: signupURL,
-                save: { settings.saveAPIKey($0, for: service) },
+                save: { saveAPIKey($0, for: service) },
                 clear: { settings.clearAPIKey(for: service) },
                 verify: { await settings.verifyAPIKey(service) }
             )
         case let .courtListener(signupURL):
             keyControls(
                 prompt: "CourtListener API token", signupURL: signupURL,
-                save: { settings.saveCourtListenerToken($0) },
+                save: { saveCourtListenerToken($0) },
                 clear: { settings.clearCourtListenerToken() },
                 verify: { await settings.verifyCourtListenerToken() }
             )
@@ -793,8 +870,10 @@ private struct APIKeyDisclosure: View {
             KeyVerificationStatusView(state: verificationState)
         } else {
             SecureField(prompt, text: $entry)
+                .focused($entryFocused)
+                .accessibilityIdentifier("settings.credential.\(title)")
             HStack {
-                Button("Save Key") { save(entry); entry = "" }
+                Button("Save Key") { save(entry) }
                     .disabled(entry.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 Spacer()
             }
@@ -806,6 +885,35 @@ private struct APIKeyDisclosure: View {
     private func verifyButton(_ verify: @escaping () async -> Void) -> some View {
         Button("Verify Key") { Task { await verify() } }
             .disabled(verificationState == .verifying)
+    }
+
+    private func saveAPIKey(_ key: String, for service: APIKeyService) {
+        let outcome = settings.attemptSaveAPIKey(key, for: service)
+        credentialFailure = outcome.failure
+        if outcome.didCommit { entry = "" }
+    }
+
+    private func saveCourtListenerToken(_ token: String) {
+        let outcome = settings.attemptSaveCourtListenerToken(token)
+        credentialFailure = outcome.failure
+        if outcome.didCommit { entry = "" }
+    }
+
+    private func retryCredentialSave() {
+        switch kind {
+        case let .service(service, _, _):
+            saveAPIKey(entry, for: service)
+        case .courtListener:
+            saveCourtListenerToken(entry)
+        case .builtIn:
+            credentialFailure = nil
+        }
+    }
+
+    private func correctCredentialInput(for failure: UserMutationFailure) {
+        if failure.recoveryActions.contains(.correctInput) || !entry.isEmpty {
+            entryFocused = true
+        }
     }
 }
 

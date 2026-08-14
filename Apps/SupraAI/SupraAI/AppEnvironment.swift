@@ -232,6 +232,84 @@ struct CanonicalMatterIdentityUITestWire: Equatable {
         matterID = arguments[valueIndex + 1]
     }
 }
+
+/// Exact DEBUG-only launch contract for the native mutation-failure journey.
+/// Values stay test-owned and are accepted only with the dedicated scenario in
+/// the already-hermetic UI-test Store. Duplicate, incomplete, or mixed create /
+/// edit wires are rejected instead of falling back to a plausible fixture.
+@MainActor
+struct MutationFailureUITestWire: Equatable {
+    enum Operation: String, Equatable {
+        case matterCreate
+        case matterEdit
+    }
+
+    let operation: Operation
+    let draftName: String
+    let failureMarker: String
+    let matterID: String?
+    let originalName: String?
+
+    /// Create needs a stable request identity so an exact Retry cannot produce a
+    /// second lookalike command after SwiftUI recomputes the sheet content.
+    var targetMatterID: String {
+        matterID ?? "matter-ui-test-mutation-create"
+    }
+
+    init?(arguments: [String]) {
+        func exactValue(after flag: String) -> String? {
+            let matches = arguments.indices.filter { arguments[$0] == flag }
+            guard matches.count == 1,
+                  let index = matches.first,
+                  arguments.indices.contains(index + 1) else { return nil }
+            let value = arguments[index + 1]
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !value.isEmpty,
+                  value.count <= 240,
+                  !value.unicodeScalars.contains(where: {
+                      CharacterSet.controlCharacters.contains($0)
+                  }) else { return nil }
+            return value
+        }
+
+        let scenario = "-uiTestMutationFailureTruth"
+        guard AppEnvironment.isUITestMode,
+              arguments.filter({ $0 == scenario }).count == 1,
+              let operationRaw = exactValue(after: "-uiTestMutationOperation"),
+              let operation = Operation(rawValue: operationRaw),
+              let draftName = exactValue(after: "-uiTestMutationDraftName"),
+              let failureMarker = exactValue(after: "-uiTestMutationFailureMarker") else {
+            return nil
+        }
+
+        let matterID = exactValue(after: "-uiTestMutationMatterID")
+        let originalName = exactValue(after: "-uiTestMutationOriginalName")
+        let matterIDFlagCount = arguments.filter {
+            $0 == "-uiTestMutationMatterID"
+        }.count
+        let originalNameFlagCount = arguments.filter {
+            $0 == "-uiTestMutationOriginalName"
+        }.count
+        switch operation {
+        case .matterCreate:
+            guard matterIDFlagCount == 0,
+                  originalNameFlagCount == 0,
+                  matterID == nil,
+                  originalName == nil else { return nil }
+        case .matterEdit:
+            guard matterIDFlagCount == 1,
+                  originalNameFlagCount == 1,
+                  matterID != nil,
+                  originalName != nil else { return nil }
+        }
+
+        self.operation = operation
+        self.draftName = draftName
+        self.failureMarker = failureMarker
+        self.matterID = matterID
+        self.originalName = originalName
+    }
+}
 #endif
 
 @MainActor
@@ -1207,6 +1285,7 @@ final class AppEnvironment: ObservableObject {
 #if DEBUG
         seedUITestWindowLedgerMatterIfNeeded()
         seedUITestCanonicalMatterIdentityIfNeeded()
+        seedUITestMutationFailureIfNeeded()
         seedUITestDefaultCanonicalMatterIfNeeded()
         seedUITestQuickAttachmentTruthIfNeeded()
 #endif
@@ -1238,6 +1317,68 @@ final class AppEnvironment: ObservableObject {
 #if DEBUG
     private enum CanonicalMatterIdentityFixtureError: Error {
         case incoherentCatalogSelection(courtID: String, jurisdictionID: String)
+    }
+
+    /// Seeds only the aggregate needed by edit, then makes the exact submitted
+    /// create/update command fail inside the real Store transaction. The trigger
+    /// is installed after seeding so the saved original can never be confused
+    /// with the user's retained edited draft.
+    private func seedUITestMutationFailureIfNeeded() {
+        guard let wire = MutationFailureUITestWire(
+            arguments: ProcessInfo.processInfo.arguments
+        ) else { return }
+
+        do {
+            if wire.operation == .matterEdit,
+               try store.matters.fetchMatter(id: wire.targetMatterID) == nil {
+                try createCanonicalIdentityFixture(
+                    matterID: wire.targetMatterID,
+                    name: wire.originalName ?? "Synthetic mutation matter",
+                    legacyJurisdiction: "Not applicable",
+                    legacyCourt: nil,
+                    legacyPerspective: .neutral,
+                    legacyClientNames: nil,
+                    courtState: .notApplicable,
+                    jurisdictionID: nil,
+                    courtID: nil,
+                    parties: [],
+                    representations: []
+                )
+            }
+
+            let triggerName: String
+            let timing: String
+            switch wire.operation {
+            case .matterCreate:
+                triggerName = "ui_test_mutation_create_failure"
+                timing = "INSERT"
+            case .matterEdit:
+                triggerName = "ui_test_mutation_edit_failure"
+                timing = "UPDATE OF name"
+            }
+            let matterID = Self.sqliteStringLiteral(wire.targetMatterID)
+            let draftName = Self.sqliteStringLiteral(wire.draftName)
+            let failureMarker = Self.sqliteStringLiteral(wire.failureMarker)
+            try store.database.writer.write { database in
+                try database.execute(sql: """
+                    CREATE TRIGGER IF NOT EXISTS \(triggerName)
+                    BEFORE \(timing) ON matters
+                    WHEN NEW.id = \(matterID) AND NEW.name = \(draftName)
+                    BEGIN
+                        SELECT RAISE(ABORT, \(failureMarker));
+                    END
+                    """)
+            }
+        } catch {
+            assertionFailure("Could not seed mutation-failure UI-test fixture: \(error)")
+        }
+    }
+
+    /// The trigger grammar cannot bind parameters inside `RAISE`. This narrow
+    /// quoting helper is used only after the DEBUG launch parser rejects control
+    /// characters, and it still escapes SQLite's sole string delimiter.
+    private static func sqliteStringLiteral(_ value: String) -> String {
+        "'\(value.replacingOccurrences(of: "'", with: "''"))'"
     }
 
     /// Seeds the exact unresolved/plaintiff/defendant table consumed by the
