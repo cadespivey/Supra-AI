@@ -11,6 +11,7 @@ public enum MatterIdentityRepositoryError: Error, Equatable, Sendable {
     case invalidRequestDigest
     case invalidField(String)
     case conflictingDecision
+    case conflictingWrite
 }
 
 /// Authoritative Store owner for one-snapshot matter identity reads and durable
@@ -21,6 +22,10 @@ public final class MatterIdentityRepository: @unchecked Sendable {
 
     public init(writer: any DatabaseWriter) {
         self.writer = writer
+    }
+
+    func writeIdentity<T>(_ updates: (Database) throws -> T) throws -> T {
+        try writer.write(updates)
     }
 
     public func fetchSnapshot(matterID: String) throws -> MatterIdentitySnapshot? {
