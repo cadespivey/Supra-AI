@@ -320,6 +320,14 @@ Each feature area adds migrations and a repository:
 - Draft publication first persists a Store-owned prepared intent before public installation. Finalization binds the exact installed bytes and allow-listed output format—and, for the supported motion, a fresh source snapshot—to the audit and terminal intent state in one transaction; relaunch finalizes only authenticated exact files and preserves uncertain public files for explicit recovery.
 - Document semantic readiness is derived from complete chunk-vector coverage for
   the active embedding model, not the document's generic `ready` string alone.
+  SupraStore owns that base readiness receipt. SupraSessions'
+  `CanonicalDocumentReadinessLedger` projects the same exact receipt into
+  Documents, Ask, Chronology, and Drafting; consumer-specific task exclusions
+  are additive and cannot rewrite base readiness. DEBUG demo qualification uses
+  the same complete revision, FTS, embedding-model, and vector graph as the
+  shipping projection, with an exact three-document denominator. An active
+  model switch without vectors for the new model therefore fails closed in
+  every consumer rather than preserving a stale green state.
   Model switches enqueue semantic-only work that reuses current chunks and keeps
   prior-model vectors; saved text edits enqueue a full re-chunk/reindex pass.
   Extraction methods carry a toolchain-version suffix so launch-time capability
