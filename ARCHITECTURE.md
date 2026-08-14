@@ -76,6 +76,10 @@ Dependency rules that are enforced by package boundaries:
 
 - `SupraCore` depends on nothing internal; everything depends on it for IDs and domain enums.
 - `SupraStore` owns the database connection. No other package opens the SQLite database.
+- Cross-package transport auditing uses `SupraCore.NetworkRequestAuditWriting`; `SupraStore`
+  vends the narrow `networkRequestAudits` implementation, which can only create and finish
+  network-request rows. Backup, restore, and benchmark tooling retain explicit privileged access
+  to the Store-owned database rather than widening that transport capability.
 - `SupraNetworking` owns the Keychain and all `URLSession` policy. `SupraResearch` builds
   CourtListener requests but never touches the Keychain or raw network policy directly.
 - `SupraDocuments` owns document-intelligence domain logic but **not** the database, views,
