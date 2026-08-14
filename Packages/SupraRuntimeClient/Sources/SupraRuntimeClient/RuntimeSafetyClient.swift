@@ -38,6 +38,15 @@ public struct RuntimeRecoverySnapshot: Equatable, Sendable {
     public static let available = RuntimeRecoverySnapshot(phase: .available)
 }
 
+/// Exact terminal result of generation quiescence owned by
+/// `RuntimeSafetyClient`. A scheduler must not admit successor data-plane work
+/// until this result is available for the generation it interrupted.
+public enum RuntimeGenerationQuiescenceResolution: Equatable, Sendable {
+    case completedNormally(generationID: GenerationID)
+    case cancellationConfirmed(generationID: GenerationID)
+    case recoveryRequired(generationID: GenerationID, message: String)
+}
+
 struct RuntimeCancellationConfirmationPolicy: Sendable {
     let maxStatusPollAttempts: Int
     let statusPollInterval: Duration
@@ -63,6 +72,7 @@ public final class RuntimeSafetyClient: RuntimeClientProtocol, @unchecked Sendab
     private let base: any RuntimeClientProtocol
     private let cancellationConfirmationPolicy: RuntimeCancellationConfirmationPolicy
     private let coordinator = RuntimeSafetyCoordinator()
+    private let cancellationResolutions = RuntimeCancellationResolutionCoordinator()
 
     public init(base: any RuntimeClientProtocol) {
         self.base = base
@@ -79,6 +89,15 @@ public final class RuntimeSafetyClient: RuntimeClientProtocol, @unchecked Sendab
 
     public func currentRecoverySnapshot() -> RuntimeRecoverySnapshot {
         coordinator.snapshot()
+    }
+
+    /// Suspends until stream termination has completed normally, confirmed
+    /// exact cancellation, or established the fail-closed recovery quarantine.
+    /// Already-resolved generations return immediately.
+    public func awaitQuiescenceResolution(
+        for generationID: GenerationID
+    ) async -> RuntimeGenerationQuiescenceResolution {
+        await cancellationResolutions.resolution(for: generationID)
     }
 
     public func recoverRuntime() async throws {
@@ -139,10 +158,12 @@ public final class RuntimeSafetyClient: RuntimeClientProtocol, @unchecked Sendab
         _ request: GenerateRequest
     ) throws -> AsyncThrowingStream<GenerationEvent, Error> {
         let permit = try coordinator.acquirePermit()
+        cancellationResolutions.begin(generationID: request.generationID)
         let baseStream: AsyncThrowingStream<GenerationEvent, Error>
         do {
             baseStream = try base.generate(request)
         } catch {
+            cancellationResolutions.discardPending(generationID: request.generationID)
             permit.release()
             throw error
         }
@@ -160,13 +181,22 @@ public final class RuntimeSafetyClient: RuntimeClientProtocol, @unchecked Sendab
                 if Task.isCancelled {
                     if await generationCancellationWasConfirmed(request.generationID) {
                         permit.release()
+                        cancellationResolutions.resolve(.cancellationConfirmed(
+                            generationID: request.generationID
+                        ))
                     } else {
-                        permit.failClosed(
-                            message: "Generation cancellation did not confirm runtime quiescence."
-                        )
+                        let message = "Generation cancellation did not confirm runtime quiescence."
+                        permit.failClosed(message: message)
+                        cancellationResolutions.resolve(.recoveryRequired(
+                            generationID: request.generationID,
+                            message: message
+                        ))
                     }
                 } else {
                     permit.release()
+                    cancellationResolutions.resolve(.completedNormally(
+                        generationID: request.generationID
+                    ))
                 }
             }
             continuation.onTermination = { @Sendable termination in
@@ -241,6 +271,96 @@ public final class RuntimeSafetyClient: RuntimeClientProtocol, @unchecked Sendab
             }
         }
         return await confirmation.value
+    }
+}
+
+private final class RuntimeCancellationResolutionCoordinator: @unchecked Sendable {
+    private enum State {
+        case pending([CheckedContinuation<RuntimeGenerationQuiescenceResolution, Never>])
+        case resolved(RuntimeGenerationQuiescenceResolution)
+    }
+
+    private let lock = NSLock()
+    private let maximumRetainedResolutions = 256
+    private var states: [GenerationID: State] = [:]
+    private var resolutionOrder: [GenerationID] = []
+
+    func begin(generationID: GenerationID) {
+        lock.withLock {
+            switch states[generationID] {
+            case let .pending(waiters):
+                states[generationID] = .pending(waiters)
+            case .resolved, nil:
+                states[generationID] = .pending([])
+                resolutionOrder.removeAll { $0 == generationID }
+            }
+        }
+    }
+
+    func resolution(
+        for generationID: GenerationID
+    ) async -> RuntimeGenerationQuiescenceResolution {
+        await withCheckedContinuation { continuation in
+            let immediate: RuntimeGenerationQuiescenceResolution? = lock.withLock {
+                switch states[generationID] {
+                case let .resolved(resolution):
+                    return resolution
+                case let .pending(waiters):
+                    states[generationID] = .pending(waiters + [continuation])
+                    return nil
+                case nil:
+                    states[generationID] = .pending([continuation])
+                    return nil
+                }
+            }
+            if let immediate {
+                continuation.resume(returning: immediate)
+            }
+        }
+    }
+
+    func resolve(_ resolution: RuntimeGenerationQuiescenceResolution) {
+        let generationID: GenerationID
+        switch resolution {
+        case let .completedNormally(resolvedGenerationID),
+             let .cancellationConfirmed(resolvedGenerationID),
+             let .recoveryRequired(resolvedGenerationID, _):
+            generationID = resolvedGenerationID
+        }
+
+        let waiters = lock.withLock {
+            let waiters: [CheckedContinuation<RuntimeGenerationQuiescenceResolution, Never>]
+            if case let .pending(pendingWaiters) = states[generationID] {
+                waiters = pendingWaiters
+            } else {
+                waiters = []
+            }
+            states[generationID] = .resolved(resolution)
+            resolutionOrder.removeAll { $0 == generationID }
+            resolutionOrder.append(generationID)
+            trimResolvedStatesIfNeeded()
+            return waiters
+        }
+        for waiter in waiters {
+            waiter.resume(returning: resolution)
+        }
+    }
+
+    func discardPending(generationID: GenerationID) {
+        lock.withLock {
+            guard case let .pending(waiters) = states[generationID],
+                  waiters.isEmpty else { return }
+            states[generationID] = nil
+        }
+    }
+
+    private func trimResolvedStatesIfNeeded() {
+        while resolutionOrder.count > maximumRetainedResolutions {
+            let generationID = resolutionOrder.removeFirst()
+            if case .resolved = states[generationID] {
+                states[generationID] = nil
+            }
+        }
     }
 }
 
