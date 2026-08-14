@@ -333,9 +333,17 @@ final class DocumentRetrievalTests: XCTestCase {
         )
 
         func install(version: Int) throws {
+            let distractorPart = try XCTUnwrap(
+                store.documentIndex.fetchParts(documentID: distractor.id).first
+            )
+            let structuredPart = try XCTUnwrap(
+                store.documentIndex.fetchParts(documentID: structured.id).first
+            )
             try store.documentIndex.replaceChunks(documentID: distractor.id, chunks: [
                 DocumentChunkRecord(
                     id: "literal-v\(version)", documentID: distractor.id,
+                    pagePartID: distractorPart.id,
+                    revisionID: distractorPart.currentRevisionID,
                     unitKind: version == 2 ? DocumentStructureNodeKind.paragraph.rawValue : nil,
                     chunkerVersion: version, chunkIndex: 0, sourceKind: "text",
                     normalizedText: "comment table context"
@@ -344,12 +352,16 @@ final class DocumentRetrievalTests: XCTestCase {
             try store.documentIndex.replaceChunks(documentID: structured.id, chunks: [
                 DocumentChunkRecord(
                     id: "comment-v\(version)", documentID: structured.id,
+                    pagePartID: structuredPart.id,
+                    revisionID: structuredPart.currentRevisionID,
                     unitKind: version == 2 ? DocumentStructureNodeKind.comment.rawValue : nil,
                     chunkerVersion: version, chunkIndex: 0, sourceKind: "text",
                     normalizedText: "Reviewer asks whether business days apply"
                 ),
                 DocumentChunkRecord(
                     id: "cell-v\(version)", documentID: structured.id,
+                    pagePartID: structuredPart.id,
+                    revisionID: structuredPart.currentRevisionID,
                     unitKind: version == 2 ? DocumentStructureNodeKind.tableCell.rawValue : nil,
                     chunkerVersion: version, chunkIndex: 1, sourceKind: "text",
                     normalizedText: "Amount 275000"
@@ -357,6 +369,7 @@ final class DocumentRetrievalTests: XCTestCase {
             ])
             try store.documentLibrary.updateIndexStatus(documentID: distractor.id, indexStatus: .textIndexed)
             try store.documentLibrary.updateIndexStatus(documentID: structured.id, indexStatus: .textIndexed)
+            try store.documentSettings.updateSettings { $0.chunkerVersion = version }
         }
 
         try install(version: 2)
