@@ -231,15 +231,29 @@ private struct DatabaseRecoveryView: View {
                     .accessibilityIdentifier("restore.recovery.actionStatus")
             }
 
-            DisclosureGroup("Support Details", isExpanded: $supportDetailsExpanded) {
-                Text(state.supportDetails)
-                    .font(.caption.monospaced())
-                    .textSelection(.enabled)
-                    .frame(maxWidth: 620, alignment: .leading)
-                    .accessibilityIdentifier("restore.recovery.technicalFacts")
+            VStack(alignment: .leading, spacing: 8) {
+                Button {
+                    supportDetailsExpanded.toggle()
+                } label: {
+                    Label(
+                        "Support Details",
+                        systemImage: supportDetailsExpanded ? "chevron.down" : "chevron.right"
+                    )
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Support Details")
+                .accessibilityValue(supportDetailsExpanded ? "Expanded" : "Collapsed")
+                .accessibilityIdentifier("restore.recovery.supportDetails")
+
+                if supportDetailsExpanded {
+                    Text(state.supportDetails)
+                        .font(.caption.monospaced())
+                        .textSelection(.enabled)
+                        .frame(maxWidth: 620, alignment: .leading)
+                        .accessibilityIdentifier("restore.recovery.technicalFacts")
+                }
             }
             .frame(maxWidth: 620, alignment: .leading)
-            .accessibilityIdentifier("restore.recovery.supportDetails")
         }
         .padding(40)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
