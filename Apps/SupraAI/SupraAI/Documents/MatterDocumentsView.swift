@@ -245,14 +245,14 @@ struct MatterDocumentsView: View {
 
     /// The folder tree flattened for a plain List: depth drives indentation, so
     /// subfolders read as nested without disclosure chevrons.
-    private var flattenedFolders: [(folder: DocumentFolderRecord, depth: Int)] {
+    private var flattenedFolders: [(folder: DocumentFolderSummary, depth: Int)] {
         // Roots are the top-level folders PLUS any live folder whose parent
         // isn't live — a subfolder restored from Trash while its parent is
         // still trashed must stay visible, or the restore looks like it failed.
         // (It re-nests automatically when the parent is restored.)
         let liveIDs = Set(controller.folders.map(\.id))
         var visited = Set<String>()
-        func walk(_ folder: DocumentFolderRecord, _ depth: Int) -> [(DocumentFolderRecord, Int)] {
+        func walk(_ folder: DocumentFolderSummary, _ depth: Int) -> [(DocumentFolderSummary, Int)] {
             guard visited.insert(folder.id).inserted else { return [] }
             return [(folder, depth)] + controller.subfolders(of: folder.id).flatMap { walk($0, depth + 1) }
         }
@@ -364,7 +364,7 @@ struct MatterDocumentsView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private func documentRow(_ doc: MatterDocumentRecord) -> some View {
+    private func documentRow(_ doc: MatterDocumentSummary) -> some View {
         // The row itself is just identity: a multi-select tick, the name, its readiness
         // status, and the tags applied on import. The move/preview/open/delete actions
         // appear on the right only once the row is selected.
@@ -424,7 +424,7 @@ struct MatterDocumentsView: View {
     /// The trailing action cluster shown on the selected document row: preview, open in
     /// the default app, tag, move, and delete.
     @ViewBuilder
-    private func rowActions(_ doc: MatterDocumentRecord) -> some View {
+    private func rowActions(_ doc: MatterDocumentSummary) -> some View {
         Button { showPreview(doc) } label: { Image(systemName: "eye") }
             .buttonStyle(.plain)
             .help("Preview")
@@ -444,7 +444,7 @@ struct MatterDocumentsView: View {
             Image(systemName: "arrow.clockwise")
         }
         .buttonStyle(.plain)
-        .help(doc.status == MatterDocumentStatus.failed.rawValue
+        .help(doc.status == .failed
             ? "Retry processing"
             : "Reprocess extracted text")
         .accessibilityIdentifier("documents.reprocess")
@@ -501,7 +501,7 @@ struct MatterDocumentsView: View {
 
     /// Opens the managed original in the user's default app. Because it opens the file
     /// Supra manages, saving in that app writes straight back to Supra's copy.
-    private func openInDefaultApp(_ doc: MatterDocumentRecord) {
+    private func openInDefaultApp(_ doc: MatterDocumentSummary) {
         guard let url = controller.fileURL(forDocument: doc.id) else { return }
         NSWorkspace.shared.open(url)
     }
@@ -551,7 +551,7 @@ struct MatterDocumentsView: View {
     }
 
     /// Opens (or refreshes) the preview pane for a document.
-    private func showPreview(_ doc: MatterDocumentRecord) {
+    private func showPreview(_ doc: MatterDocumentSummary) {
         if let model = controller.preview(documentID: doc.id) {
             preview = PreviewItem(model: model)
         }
@@ -858,7 +858,7 @@ struct MatterDocumentsView: View {
         .make(action: .moveToRecycleBin, target: target, displayName: displayName)
     }
 
-    private func statusBadge(_ document: MatterDocumentRecord) -> some View {
+    private func statusBadge(_ document: MatterDocumentSummary) -> some View {
         let reindexing = controller.isCorrectionReindexing(document)
         let projection = controller.readiness(documentID: document.id)
         let appearance = reindexing

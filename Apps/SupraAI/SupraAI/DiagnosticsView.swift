@@ -12,7 +12,7 @@ struct DiagnosticsView: View {
     /// Recent model-load / generation timings (category `performance`), so pre-warming
     /// wins are visible: a warmed model shows its load time up front, and the first
     /// message's first-token latency no longer includes a multi-second load.
-    @State private var timings: [DiagnosticEventRecord] = []
+    @State private var timings: [DiagnosticEventSummary] = []
     @State private var networkCleanupMessage: String?
     @State private var capabilityReport: CapabilityReport?
     @State private var runningCapabilityProbe = false
@@ -286,8 +286,9 @@ struct DiagnosticsView: View {
     }
 
     private func refreshTimings() {
-        let recent = (try? environment.store.diagnostics.fetchRecentDiagnostics(limit: 100)) ?? []
-        timings = recent.filter { $0.category == "performance" }.prefix(8).map { $0 }
+        let controller = DiagnosticsController(store: environment.store)
+        controller.reload(limit: 100)
+        timings = controller.performanceEvents(limit: 8)
     }
 
     private var chunkerSwitchTitle: String {

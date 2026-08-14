@@ -67,7 +67,7 @@ final class BillingProfileControllerTests: XCTestCase {
 
         let controller = BillingProfileController(matterID: matter.id, store: store)
         XCTAssertEqual(controller.guidelineDocuments.map(\.id), [guideline.id])
-        XCTAssertTrue(controller.isExtracted(guideline))
+        XCTAssertTrue(controller.isExtracted(try XCTUnwrap(controller.guidelineDocuments.first)))
         XCTAssertFalse(controller.guidelineDocuments.contains { $0.id == other.id })
 
         // Removing untags (but leaves the doc in the library).

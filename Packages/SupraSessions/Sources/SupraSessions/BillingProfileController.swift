@@ -21,7 +21,7 @@ public final class BillingProfileController: ObservableObject {
     /// firm-wide setting (e.g. a client whose narratives must end with a semicolon).
     @Published public var narrativeTerminal: BillingNarrativeTerminal?
     /// Documents tagged "billing guideline" for this matter (the client's rules).
-    @Published public private(set) var guidelineDocuments: [MatterDocumentRecord] = []
+    @Published public private(set) var guidelineDocuments: [MatterDocumentSummary] = []
     @Published public var message: String?
     /// True after edits that haven't been saved yet (drives the Save button state).
     @Published public private(set) var hasUnsavedChanges = false
@@ -148,8 +148,8 @@ public final class BillingProfileController: ObservableObject {
 
     /// Whether a guideline doc has finished extracting (its text is available to the
     /// engine). Surfaced in the UI so the attorney knows when a rule is "live".
-    public func isExtracted(_ document: MatterDocumentRecord) -> Bool {
-        document.extractionStatus == DocumentExtractionStatus.extracted.rawValue
+    public func isExtracted(_ document: MatterDocumentSummary) -> Bool {
+        document.extractionStatus == .extracted
     }
 
     // MARK: - Helpers
@@ -189,7 +189,7 @@ public final class BillingProfileController: ObservableObject {
         guard let tag = guidelineTag() else { guidelineDocuments = []; return }
         let ids = Set((try? store.documentLibrary.resolveScopeDocumentIDs(matterID: matterID, tagIDs: [tag.id])) ?? [])
         let all = (try? store.documentLibrary.fetchDocuments(matterID: matterID)) ?? []
-        guidelineDocuments = all.filter { ids.contains($0.id) }
+        guidelineDocuments = all.filter { ids.contains($0.id) }.map(MatterDocumentSummary.init)
     }
 
     private func guidelineTag() -> DocumentTagRecord? {

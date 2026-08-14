@@ -149,7 +149,7 @@ struct ScratchPadView: View {
                     .padding(.top, 60)
             } else {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(controller.searchResults, id: \.entryID) { hit in
+                    ForEach(controller.searchResults) { hit in
                         Button {
                             controller.openDay(dayString: hit.day)
                             searchTerm = ""
@@ -166,7 +166,7 @@ struct ScratchPadView: View {
     }
 
     @ViewBuilder
-    private func searchHitRow(_ hit: ScratchPadRepository.EntryHit) -> some View {
+    private func searchHitRow(_ hit: ScratchPadSearchHit) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Text(Self.displayDate(hit.day)).font(.supraCaption).foregroundStyle(.secondary)

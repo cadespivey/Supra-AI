@@ -52,7 +52,7 @@ public struct MatterOption: Identifiable, Sendable, Equatable {
 /// regeneration that preserves manual edits, and export. UI-agnostic.
 @MainActor
 public final class BillingDraftController: ObservableObject {
-    @Published public private(set) var lines: [BillingLineItemRecord] = []
+    @Published public private(set) var lines: [BillingLineView] = []
     @Published public private(set) var reconciliation: BillingReconciliation?
     @Published public private(set) var draftVersion: Int?
     @Published public private(set) var requiresLegacyReview = false
@@ -115,7 +115,8 @@ public final class BillingDraftController: ObservableObject {
         }
         draftID = draft.id
         draftVersion = draft.version
-        lines = (try? store.billing.lineItems(draftID: draft.id)) ?? []
+        lines = ((try? store.billing.lineItems(draftID: draft.id)) ?? [])
+            .map(BillingLineView.init)
         reconciliation = Self.decodeReconciliation(draft.reconciliationJSON)
         requiresLegacyReview = (try? store.remediationRecovery.pendingItem(
             kind: .multiMatterBillingDraft,
@@ -213,7 +214,7 @@ public final class BillingDraftController: ObservableObject {
     }
 
     /// The governing UTBMS code set for an existing line (drives the task-code picker).
-    public func codeSet(forLine line: BillingLineItemRecord) -> BillingCodeSet {
+    public func codeSet(forLine line: BillingLineView) -> BillingCodeSet {
         line.matterID.map(codeSet(forMatterID:)) ?? .none
     }
 
@@ -285,7 +286,7 @@ public final class BillingDraftController: ObservableObject {
     }
 
     /// The display name for a line's matter (for grouping/labeling in the table).
-    public func matterName(for line: BillingLineItemRecord) -> String? {
+    public func matterName(for line: BillingLineView) -> String? {
         guard let matterID = line.matterID else { return nil }
         return (try? store.matters.fetchMatter(id: matterID))?.name
     }
