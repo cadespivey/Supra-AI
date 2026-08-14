@@ -1103,6 +1103,9 @@ final class AppEnvironment: ObservableObject {
 
     /// Seeds a deterministic matter for UI tests if none exists yet.
     private func seedUITestFixturesIfNeeded() {
+#if DEBUG
+        seedUITestWindowLedgerMatterIfNeeded()
+#endif
         mattersController.loadMatters()
         if mattersController.matters.isEmpty {
             _ = try? mattersController.createMatter(name: "McKernon Motors v. Liberty Rail")
@@ -1118,6 +1121,46 @@ final class AppEnvironment: ObservableObject {
         seedUITestGuidedQAIfNeeded()
         seedUITestMotionDraftIfNeeded()
     }
+
+#if DEBUG
+    /// Creates the exact synthetic matter carried by T-WINDOW-01's parsed wire.
+    /// The ordinary UI-test default remains unchanged when any field is absent,
+    /// duplicated, or empty. This always runs against `makeStore()`'s throwaway
+    /// database and cannot reach the user's matter store.
+    private func seedUITestWindowLedgerMatterIfNeeded() {
+        guard let wire = WindowSessionLedgerWire(
+            arguments: ProcessInfo.processInfo.arguments
+        ) else { return }
+
+        do {
+            guard try store.matters.fetchMatter(id: wire.matterID) == nil else { return }
+            let catalog = JurisdictionCatalog()
+            _ = try store.matterIdentity.createMatter(
+                command: MatterIdentityCreateCommand(
+                    matterID: wire.matterID,
+                    name: wire.matterName,
+                    legacyJurisdictionText: "Unspecified",
+                    legacyCourtText: nil,
+                    legacyPartyPerspective: .neutral,
+                    legacyClientNames: nil,
+                    courtResolutionState: .unresolved,
+                    canonicalCatalogVersion: catalog.catalogVersion,
+                    canonicalCatalogDigestSHA256: catalog.identityDigestSHA256,
+                    canonicalJurisdictionID: nil,
+                    canonicalCourtID: nil,
+                    parties: [],
+                    representations: []
+                )
+            )
+            _ = try store.chats.createMatterChat(
+                matterID: wire.matterID,
+                title: "General — \(wire.matterName)"
+            )
+        } catch {
+            assertionFailure("Could not seed window-session ledger fixture: \(error)")
+        }
+    }
+#endif
 
     /// Seeds one ready and one review-required revision-bound passage plus a
     /// throwaway model for the guided Q&A hosted test. Both synthetic runtime and

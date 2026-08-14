@@ -6,7 +6,7 @@ struct SupraAIApp: App {
     @StateObject private var environment = AppEnvironment()
 
     var body: some Scene {
-        WindowGroup {
+        Window("Supra AI", id: "main") {
             RootView()
                 .environmentObject(environment)
         }
@@ -15,6 +15,12 @@ struct SupraAIApp: App {
         // full size instead of collapsing to the splash content.
         .defaultSize(width: 1100, height: 720)
         .commands {
+            // Supra AI owns one process-wide workspace session. Replacing the
+            // standard new-item group removes File > New Window and Command-N,
+            // so visual selection can never diverge from the shared controller
+            // bundle through a second main scene.
+            CommandGroup(replacing: .newItem) {}
+
             // Go menu: keyboard navigation to every sidebar destination
             // (Mail/Finder convention). MainShellView owns the selection, so
             // the menu posts and the shell observes.
@@ -32,7 +38,6 @@ struct SupraAIApp: App {
 
 @MainActor
 private final class SupraApplicationDelegate: NSObject, NSApplicationDelegate {
-    private var freshWindowOpenScheduled = false
 #if DEBUG
     private var uiTestWindowWidthScheduled = false
     private var uiTestWindowWidthApplied = false
@@ -40,34 +45,12 @@ private final class SupraApplicationDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let app = notification.object as? NSApplication
-        scheduleFreshUITestWindowIfNeeded(app)
         scheduleUITestWindowWidthIfNeeded(app)
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
         let app = notification.object as? NSApplication
-        scheduleFreshUITestWindowIfNeeded(app)
         scheduleUITestWindowWidthIfNeeded(app)
-    }
-
-    private func scheduleFreshUITestWindowIfNeeded(_ app: NSApplication?) {
-        guard shouldEnsureFreshUITestWindow,
-              let app,
-              app.windows.isEmpty,
-              !freshWindowOpenScheduled else { return }
-        freshWindowOpenScheduled = true
-        DispatchQueue.main.async { [weak self, weak app] in
-            guard let self, let app else { return }
-            self.freshWindowOpenScheduled = false
-            guard app.windows.isEmpty,
-                  let item = app.mainMenu?
-                    .item(withTitle: "File")?
-                    .submenu?
-                    .item(withTitle: "New Window"),
-                  let action = item.action else { return }
-            app.sendAction(action, to: item.target, from: item)
-            self.scheduleUITestWindowWidthIfNeeded(app)
-        }
     }
 
     private func scheduleUITestWindowWidthIfNeeded(_ app: NSApplication?) {
@@ -106,11 +89,4 @@ private final class SupraApplicationDelegate: NSObject, NSApplicationDelegate {
 #endif
     }
 
-    private var shouldEnsureFreshUITestWindow: Bool {
-#if DEBUG
-        ProcessInfo.processInfo.arguments.contains("-uiTestEnsureFreshWindow")
-#else
-        false
-#endif
-    }
 }

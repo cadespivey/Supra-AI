@@ -86,8 +86,22 @@ struct MainShellView: View {
             // the region (which SwiftUI resolves by centering, i.e. clipping).
             .frame(minHeight: 420, idealHeight: windowContentHeight, maxHeight: windowContentHeight, alignment: .top)
         }
+#if DEBUG
+        .overlay(alignment: .topLeading) {
+            windowSessionLedgerView
+        }
+#endif
         .onReceive(NotificationCenter.default.publisher(for: .supraNavigateToRoute)) { note in
-            if let route = note.object as? AppRoute { selection = .route(route) }
+            if let route = note.object as? AppRoute { selectRoute(route) }
+        }
+        .onChange(of: environment.mattersController.selectedMatterID) { _, matterID in
+            // SidebarView refreshes its matter list on appearance. The controller
+            // historically auto-selected the first matter during that refresh,
+            // even while this window visibly showed a global route. In the one-
+            // window model, a non-matter destination owns no hidden matter scope.
+            guard matterID != nil else { return }
+            if case .matter = selection { return }
+            environment.mattersController.select(matterID: nil)
         }
         #if DEBUG
         .onAppear { applyUITestInitialSelection() }
@@ -132,6 +146,7 @@ struct MainShellView: View {
                     selectMatter(id)
                 } else {
                     selection = newValue
+                    environment.mattersController.select(matterID: nil)
                 }
             }
         )
@@ -145,8 +160,16 @@ struct MainShellView: View {
         // survives the transition, the first click in a matter workspace merely
         // ends that session instead of activating the intended control.
         NSApp.keyWindow?.makeFirstResponder(nil)
-        environment.mattersController.select(matterID: id)
         selection = .matter(id)
+        environment.mattersController.select(matterID: id)
+    }
+
+    /// A global route and a matter-scoped controller are mutually exclusive in
+    /// the supported single window. Go-menu and setup navigation use this same
+    /// targeted path as the sidebar.
+    private func selectRoute(_ route: AppRoute) {
+        selection = .route(route)
+        environment.mattersController.select(matterID: nil)
     }
 
     @ViewBuilder
@@ -203,7 +226,7 @@ struct MainShellView: View {
         switch pieces.first {
         case "route":
             if pieces.count > 1, let route = AppRoute(rawValue: pieces[1]) {
-                selection = .route(route)
+                selectRoute(route)
             }
         case "matter-first":
             if let id = environment.mattersController.matters.first?.id {
@@ -229,14 +252,48 @@ struct MainShellView: View {
             setupNavigationFixture = fixture
             isShowingSetupNavigationFixture = true
             setupNavigationRequest = nil
+            environment.mattersController.select(matterID: nil)
         } else if let routeFlag = arguments.firstIndex(of: "-uiTestInitialRoute"),
            arguments.indices.contains(routeFlag + 1),
            let route = AppRoute(rawValue: arguments[routeFlag + 1]) {
-            selection = .route(route)
+            selectRoute(route)
         } else if arguments.contains("-uiTestSelectFirstMatter"),
                   let id = environment.mattersController.matters.first?.id {
             selectMatter(id)
         }
+    }
+
+    @ViewBuilder
+    private var windowSessionLedgerView: some View {
+        if let wire = WindowSessionLedgerWire(
+            arguments: ProcessInfo.processInfo.arguments
+        ) {
+            Text("Window session ledger")
+                .font(.system(size: 1))
+                .frame(width: 1, height: 1)
+                .clipped()
+                .accessibilityLabel("Window session ledger")
+                .accessibilityValue(windowSessionLedgerValue(wire: wire))
+                .accessibilityIdentifier("window.session.ledger")
+        }
+    }
+
+    private func windowSessionLedgerValue(wire: WindowSessionLedgerWire) -> String {
+        let route: String
+        let visibleMatter: String
+        switch selection ?? .route(.globalChats) {
+        case let .route(selectedRoute):
+            route = selectedRoute.rawValue
+            visibleMatter = "none"
+        case let .matter(matterID):
+            route = "matter"
+            visibleMatter = matterID
+        case .recycleBin:
+            route = "recycleBin"
+            visibleMatter = "none"
+        }
+        let controllerMatter = environment.mattersController.selectedMatterID ?? "none"
+        return "ledger=\(wire.ledgerID)|route=\(route)|visibleMatter=\(visibleMatter)|controllerMatter=\(controllerMatter)"
     }
     #endif
 
@@ -296,9 +353,9 @@ struct MainShellView: View {
 #endif
         switch request.navigationTarget {
         case .aiSetup:
-            selection = .route(.models)
+            selectRoute(.models)
         case .settings:
-            selection = .route(.settings)
+            selectRoute(.settings)
         }
     }
 
@@ -383,6 +440,38 @@ extension View {
 }
 
 #if DEBUG
+/// Exact launch-only identity for T-WINDOW-01. Every field is parsed once from
+/// a unique nonempty argument; the app never substitutes a current matter or a
+/// default ledger identity when the wire is malformed.
+@MainActor
+struct WindowSessionLedgerWire: Equatable {
+    let ledgerID: String
+    let matterID: String
+    let matterName: String
+
+    init?(arguments: [String]) {
+        func exactValue(after flag: String) -> String? {
+            let matches = arguments.indices.filter { arguments[$0] == flag }
+            guard matches.count == 1,
+                  let index = matches.first,
+                  arguments.indices.contains(index + 1) else { return nil }
+            let value = arguments[index + 1]
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return value.isEmpty ? nil : value
+        }
+
+        guard AppEnvironment.isUITestMode,
+              let ledgerID = exactValue(after: "-uiTestWindowLedgerID"),
+              let matterID = exactValue(after: "-uiTestWindowMatterID"),
+              let matterName = exactValue(after: "-uiTestWindowMatterName") else {
+            return nil
+        }
+        self.ledgerID = ledgerID
+        self.matterID = matterID
+        self.matterName = matterName
+    }
+}
+
 private struct SetupNavigationUITestFixture: Equatable {
     let request: SetupNavigationRequest
     let input: String
