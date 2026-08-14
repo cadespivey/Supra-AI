@@ -38,6 +38,7 @@ final class ArchitectureUXTRagCache01Tests: XCTestCase {
             makeRAGCacheKey(modelID: "cache-model-751"),
             makeRAGCacheKey(modelRepoID: "synthetic/cache-model-757"),
             makeRAGCacheKey(modelRevision: "cache-model-revision-8"),
+            makeRAGCacheKey(artifactIdentitySHA256: String(repeating: "b", count: 64)),
             makeRAGCacheKey(modelDimension: 7),
             makeRAGCacheKey(pageSize: 7),
             makeRAGCacheKey(candidateLimit: 7),
@@ -193,6 +194,7 @@ private final class CountingRAGCacheEmbedder: TextEmbedder, @unchecked Sendable 
     let modelRepoID = ArchitectureUXRagScanFixture.modelRepoID
     let modelDisplayName = ArchitectureUXRagScanFixture.modelDisplayName
     let modelRevision: String? = ArchitectureUXRagScanFixture.modelRevision
+    let artifactIdentitySHA256: String? = String(repeating: "a", count: 64)
     let dimension = ArchitectureUXRagScanFixture.dimension
 
     private let lock = NSLock()
@@ -214,6 +216,7 @@ private func makeRAGCacheKey(
     modelID: String = "cache-model-713",
     modelRepoID: String = "synthetic/cache-model-713",
     modelRevision: String? = "cache-model-revision-7",
+    artifactIdentitySHA256: String = String(repeating: "a", count: 64),
     modelDimension: Int = 3,
     pageSize: Int = 3,
     candidateLimit: Int = 2,
@@ -232,6 +235,7 @@ private func makeRAGCacheKey(
             revision: modelRevision,
             dimension: modelDimension
         ),
+        artifactIdentitySHA256: artifactIdentitySHA256,
         pageSize: pageSize,
         candidateLimit: candidateLimit,
         minimumSimilarity: minimumSimilarity,

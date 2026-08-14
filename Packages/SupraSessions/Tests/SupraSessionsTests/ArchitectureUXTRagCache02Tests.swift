@@ -150,6 +150,7 @@ private func makeRAGCache02Key() -> RAGDerivedCacheKey {
             revision: "cache-02-model-revision-7",
             dimension: 3
         ),
+        artifactIdentitySHA256: String(repeating: "a", count: 64),
         pageSize: 3,
         candidateLimit: 2,
         minimumSimilarity: 0.713,
