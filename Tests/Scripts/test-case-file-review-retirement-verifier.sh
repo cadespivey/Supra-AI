@@ -95,7 +95,7 @@ make_shipping_fixture() {
     'claims:' \
     '  - id: "STORE-MIGRATION-SEQUENCE"' \
     '    topic: "migration-count"' \
-    '    expected: "v074_create_canonical_matter_identity"' \
+    '    expected: "v075_create_grounded_chat_publications"' \
     '  - id: "RETAINED-ATTORNEY-REVIEW"' \
     '    wording: "Research results and reviewed authorities remain available for attorney review."'
   write_file "${fixture_root}/ARCHITECTURE.md" \
@@ -122,9 +122,9 @@ if ! grep -Fq 'static let identityPrefix = "guided-review:"' \
   printf '%s\n' 'FAIL: fixture does not exercise the exact retired-queue discriminator allowlist' >&2
   failures=$((failures + 1))
 fi
-if ! grep -Fq 'expected: "v074_create_canonical_matter_identity"' \
+if ! grep -Fq 'expected: "v075_create_grounded_chat_publications"' \
     "${base_fixture}/Docs/Verified-Product-Claims.yml"; then
-  printf '%s\n' 'FAIL: fixture does not exercise the shipping v074 migration endpoint' >&2
+  printf '%s\n' 'FAIL: fixture does not exercise the shipping v075 migration endpoint' >&2
   failures=$((failures + 1))
 fi
 if ! grep -Fq 'BEGIN hash-pinned dormant v073 evidence compatibility' \
@@ -225,7 +225,7 @@ run_case \
   'shipping app composes package-only corpus execution' \
   env SUPRA_REPO_ROOT="$stale_corpus_owner_fixture" bash "$verifier"
 
-# Verified claims receive no v073 exception after v074 becomes the shipping
+# Verified claims receive no v073 exception after v075 becomes the shipping
 # endpoint. A stale Review endpoint under any claim fails the ordinary scan.
 stale_claim_endpoint_fixture="${temporary_dir}/stale-claim-endpoint"
 mkdir -p "$stale_claim_endpoint_fixture"

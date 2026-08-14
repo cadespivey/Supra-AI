@@ -310,7 +310,7 @@ file_count=$((file_count + 1))
 
 append_source_file "$smoke_script"
 
-# v074 is now the shipping migration endpoint, so verified claims need no
+# v075 is now the shipping migration endpoint, so verified claims need no
 # exception for the retired v073 identifier. Scan the whole claims file: any
 # stale Review endpoint or wording must fail through the ordinary retired-term
 # rules below.
