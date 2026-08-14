@@ -21,12 +21,17 @@ enum AppRoute: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
+    /// Stable route identities grouped for the ordinary sidebar. Matters remain
+    /// their own leading section because each matter is directly selectable.
+    static let workRoutes: [AppRoute] = [.globalChats, .scratchpad, .publicRecords]
+    static let utilityRoutes: [AppRoute] = [.models, .settings, .diagnostics]
+
     var title: String {
         switch self {
         case .globalChats:
-            "Global Chats"
+            "Chats"
         case .scratchpad:
-            "ScratchPad"
+            "Notes & Time"
         case .publicRecords:
             "Public Records"
         case .models:

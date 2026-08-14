@@ -225,7 +225,7 @@ struct ScratchPadView: View {
 
     private var moduleIdentity: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("ScratchPad")
+            Text("Notes & Time")
                 .font(.supraTitle)
             GhostSegmentedControl(
                 selection: $tab,

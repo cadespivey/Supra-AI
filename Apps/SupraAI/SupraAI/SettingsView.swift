@@ -970,7 +970,7 @@ private struct ScratchPadBillingSection: View {
                 }
             }
         } header: {
-            Text("ScratchPad & Billing")
+            Text("Notes & Time")
         }
 
         Section {

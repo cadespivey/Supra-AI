@@ -13,18 +13,8 @@ struct SidebarView: View {
 
     var body: some View {
         List(selection: $selection) {
-            ForEach(AppRoute.allCases) { route in
-                Label(route.title, systemImage: route.systemImage)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
-                    .accessibilityIdentifier("sidebar.route.\(route.rawValue)")
-                    .onHover { setRowHover($0, .route(route)) }
-                    .listRowBackground(rowHoverBackground(.route(route)))
-                    .tag(SidebarSelection.route(route))
-            }
-
             // All matters live directly in the primary sidebar (no inner column).
-            // List selection drives the highlight; the "+" creates a new matter.
+            // Keep them first because they are the main unit of legal work.
             Section {
                 if isGroupedSortMode {
                     // Grouped modes (client / practice area): a non-selectable
@@ -84,6 +74,18 @@ struct SidebarView: View {
                 }
                 .font(.supraBody)
             }
+
+            Section("Work") {
+                ForEach(AppRoute.workRoutes) { route in
+                    routeRow(route)
+                }
+            }
+
+            Section("Utilities") {
+                ForEach(AppRoute.utilityRoutes) { route in
+                    routeRow(route)
+                }
+            }
         }
         .navigationTitle("Supra AI")
         .safeAreaInset(edge: .top, spacing: 0) {
@@ -133,6 +135,16 @@ struct SidebarView: View {
         .onAppear {
             Task { @MainActor in matters.loadMatters() }
         }
+    }
+
+    private func routeRow(_ route: AppRoute) -> some View {
+        Label(route.title, systemImage: route.systemImage)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .accessibilityIdentifier("sidebar.route.\(route.rawValue)")
+            .onHover { setRowHover($0, .route(route)) }
+            .listRowBackground(rowHoverBackground(.route(route)))
+            .tag(SidebarSelection.route(route))
     }
 
     private func matterRow(_ matter: MatterSummary) -> some View {
