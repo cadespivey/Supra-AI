@@ -21,7 +21,10 @@ final class ArchitectureUXTUxDelete01Tests: XCTestCase {
         XCTAssertEqual(action.label, "Move to Recycle Bin")
         action.click()
 
-        assertRestorableDialog(in: app, identifier: "matter.moveToRecycleBin.message")
+        assertRestorableDialog(
+            in: app,
+            message: "This moves the matter and its chats to the Recycle Bin. You can restore them from the Recycle Bin."
+        )
         app.buttons["matter.moveToRecycleBin.confirm"].click()
         XCTAssertTrue(app.descendants(matching: .any)["matter.row.\(matterName)"].waitForNonExistence(timeout: 10))
 
@@ -36,7 +39,10 @@ final class ArchitectureUXTUxDelete01Tests: XCTestCase {
 
     func testChatMovesToRecycleBinAndRestores() {
         let app = launch(selectFirstMatter: false)
-        let menu = app.buttons["chat.menu.\(chatName)"]
+        // SwiftUI exposes `Menu` as a menu-button-like accessibility element on
+        // macOS, not consistently as XCUIElementTypeButton. The stable shipping
+        // identifier is the contract; do not couple this gate to the host role.
+        let menu = app.descendants(matching: .any)["chat.menu.\(chatName)"]
         XCTAssertTrue(menu.waitForExistence(timeout: 20))
         menu.click()
         let action = app.menuItems["chat.moveToRecycleBin.\(chatName)"]
@@ -44,7 +50,10 @@ final class ArchitectureUXTUxDelete01Tests: XCTestCase {
         XCTAssertEqual(action.label, "Move to Recycle Bin")
         action.click()
 
-        assertRestorableDialog(in: app, identifier: "chat.moveToRecycleBin.message")
+        assertRestorableDialog(
+            in: app,
+            message: "This moves the chat to the Recycle Bin. You can restore it from the Recycle Bin."
+        )
         app.buttons["chat.moveToRecycleBin.confirm"].click()
         XCTAssertTrue(app.descendants(matching: .any)["chat.row.\(chatName)"].waitForNonExistence(timeout: 10))
 
@@ -71,9 +80,12 @@ final class ArchitectureUXTUxDelete01Tests: XCTestCase {
         return app
     }
 
-    private func assertRestorableDialog(in app: XCUIApplication, identifier: String) {
-        let message = app.descendants(matching: .any)[identifier]
-        XCTAssertTrue(message.waitForExistence(timeout: 5))
+    private func assertRestorableDialog(in app: XCUIApplication, message expected: String) {
+        // macOS confirmationDialog flattens the SwiftUI message identifier into
+        // the system dialog. Bind to the exact non-default shipping copy rather
+        // than pretending that swallowed child identifier is observable.
+        let message = app.staticTexts[expected]
+        XCTAssertTrue(message.waitForExistence(timeout: 5), expected)
         let text = [message.label, message.value as? String].compactMap { $0 }.joined(separator: " ")
         XCTAssertTrue(text.contains("Recycle Bin"))
         XCTAssertTrue(text.localizedCaseInsensitiveContains("restore"))

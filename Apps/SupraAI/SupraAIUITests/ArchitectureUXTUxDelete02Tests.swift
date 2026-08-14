@@ -20,7 +20,11 @@ final class ArchitectureUXTUxDelete02Tests: XCTestCase {
         XCTAssertEqual(destination.value as? String, "Restorable deleted items")
         destination.click()
 
-        let permanent = app.buttons["recycleBin.deletePermanently.matter.\(matterName)"]
+        // The icon-only SwiftUI button's stable identifier and accessibility
+        // label are authoritative across macOS host-role projection changes.
+        let permanent = app.descendants(matching: .any)[
+            "recycleBin.deletePermanently.matter.\(matterName)"
+        ]
         XCTAssertTrue(permanent.waitForExistence(timeout: 10))
         XCTAssertEqual(permanent.label, "Delete Permanently")
         permanent.click()
@@ -54,10 +58,12 @@ final class ArchitectureUXTUxDelete02Tests: XCTestCase {
         XCTAssertTrue(app.buttons["Copy Diagnostic Report"].exists)
         XCTAssertTrue(app.buttons["Quit Without Changes"].exists)
 
-        let details = app.disclosureTriangles["restore.recovery.supportDetails"]
+        let details = app.descendants(matching: .any)["restore.recovery.supportDetails"]
         XCTAssertTrue(details.exists)
         XCTAssertFalse(app.descendants(matching: .any)["restore.recovery.technicalFacts"].exists)
-        details.click()
+        let detailsLabel = app.staticTexts["Support Details"]
+        XCTAssertTrue(detailsLabel.exists)
+        detailsLabel.click()
         let facts = app.descendants(matching: .any)["restore.recovery.technicalFacts"]
         XCTAssertTrue(facts.waitForExistence(timeout: 5))
         let factText = [facts.label, facts.value as? String].compactMap { $0 }.joined(separator: " ")
