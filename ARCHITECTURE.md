@@ -61,7 +61,7 @@ Packages/
 ├─ SupraSessions           App-facing controllers (chat, research, documents, Q&A, outputs, models, jobs, ScratchPad/billing, drafting)
 ├─ SupraDraftingCore       Shared drafting types (kinds, slots, house style sheet, document model, gates)
 ├─ SupraDrafting           Drafting pipeline: slot resolution, generation/authority firewall, verification, pre-file gate
-├─ SupraExports            Drafting OOXML: court (courtFL) + letterhead shells → .docx (no Office dependency)
+├─ SupraExports            Package root: neutral SupraOOXML primitives + drafting-specific court/letterhead → .docx
 ├─ SupraResearch           Named legal-data clients + authority normalization, ranking, verification
 ├─ SupraDocuments          Extraction, OCR, chunking, retrieval, grounding, rich output export
 ├─ SupraNetworking         Authorized HTTP client, default-deny network policy, rate limiting, Keychain
@@ -76,6 +76,10 @@ Dependency rules that are enforced by package boundaries:
 
 - `SupraCore` depends on nothing internal; everything depends on it for IDs and domain enums.
 - `SupraStore` owns the database connection. No other package opens the SQLite database.
+- The `SupraExports` package root exposes a neutral `SupraOOXML` target for typed
+  WordprocessingML models, serialization, package parts, relationships, and renderer-neutral
+  styles. `SupraDocuments` consumes that product directly. Court/letterhead shells, house-style
+  floors, and drafting policy remain in the separate `SupraExports` target.
 - Store persistence records stop at the Store/Sessions boundary. High-change app surfaces receive
   stable `SupraSessions` projections for document and folder summaries, billing lines, ScratchPad
   search hits, and diagnostic events; their controllers map once while preserving persisted
