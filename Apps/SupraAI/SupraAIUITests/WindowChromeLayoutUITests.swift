@@ -41,8 +41,8 @@ final class WindowChromeLayoutUITests: XCTestCase {
             "Sidebar Recycle Bin button never appeared (shell not mounted?)"
         )
 
-        // Global Chats is the default route; its composer sits at the pane's bottom.
-        let composer = app.textFields["Message — type / for commands"]
+        // Chats is the default route; its composer sits at the pane's bottom.
+        let composer = app.textFields["Ask a question or describe the work you need."]
         XCTAssertTrue(
             composer.waitForExistence(timeout: 10),
             "Global Chats composer field never appeared"
