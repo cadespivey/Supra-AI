@@ -2231,6 +2231,11 @@ final class SupraSessionsTests: XCTestCase {
     func testResearchPlannerGeneratesParsesAndPersistsApprovedQueries() async throws {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "Acme", jurisdiction: "California", partyPerspective: .plaintiff)
+        try resolveResearchCourt(
+            store,
+            matterID: matter.id,
+            exactCourtName: "United States District Court for the Central District of California"
+        )
         let markdown = """
         # Research Queries
         ## Query 1
@@ -2273,6 +2278,11 @@ final class SupraSessionsTests: XCTestCase {
     func testResearchPlannerForcesThinkingOffOnLegalResearchRoute() async throws {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "Acme", jurisdiction: "California", partyPerspective: .plaintiff)
+        try resolveResearchCourt(
+            store,
+            matterID: matter.id,
+            exactCourtName: "United States District Court for the Central District of California"
+        )
         let markdown = """
         # Research Queries
         ## Query 1
@@ -2313,6 +2323,11 @@ final class SupraSessionsTests: XCTestCase {
     func testResearchPlannerPromptIncludesStructuredJurisdictionContext() async throws {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "Acme", jurisdiction: "Florida", partyPerspective: .plaintiff)
+        try resolveResearchCourt(
+            store,
+            matterID: matter.id,
+            exactCourtName: "Circuit Court of the Fourth Judicial Circuit in and for Duval County"
+        )
         let route = ModelRouter(configuration: LegalModelConfiguration()).route(for: .legalResearch)
         let scope = try XCTUnwrap(
             JurisdictionCatalog.shared.authorityScope(
@@ -2363,6 +2378,11 @@ final class SupraSessionsTests: XCTestCase {
     func testResearchPlannerWithoutModelAllowsManualEntry() async throws {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "Acme")
+        try resolveResearchCourt(
+            store,
+            matterID: matter.id,
+            exactCourtName: "United States District Court for the Central District of California"
+        )
         let stub = StubRuntimeClient { request in .events([.event(request, 1, .generationCompleted)]) }
         let controller = ResearchSessionController(store: store, runtimeClient: stub, matterID: matter.id)
 
@@ -2393,11 +2413,49 @@ final class SupraSessionsTests: XCTestCase {
         return session.id
     }
 
+    @discardableResult
+    private func resolveResearchCourt(
+        _ store: SupraStore,
+        matterID: String,
+        exactCourtName: String =
+            "United States District Court for the Central District of California"
+    ) throws -> MatterIdentitySnapshot {
+        let snapshot = try XCTUnwrap(
+            try store.matterIdentity.fetchSnapshot(matterID: matterID)
+        )
+        if snapshot.courtResolutionState == .court {
+            return snapshot
+        }
+        let catalog = JurisdictionCatalog.shared
+        let court = try XCTUnwrap(catalog.resolvePersistedCourtIdentity(exactCourtName))
+        let jurisdiction = try XCTUnwrap(
+            catalog.canonicalJurisdictionOption(forSelectedOptionID: court.id)
+        )
+        return try store.matterIdentity.updateMatter(
+            command: MatterIdentityUpdateCommand(
+                matterID: matterID,
+                expectedIdentityRevision: snapshot.identityRevision,
+                legacyJurisdictionText: snapshot.legacyJurisdictionText,
+                legacyCourtText: exactCourtName,
+                legacyPartyPerspective: .neutral,
+                legacyClientNames: nil,
+                courtResolutionState: .court,
+                canonicalCatalogVersion: catalog.catalogVersion,
+                canonicalCatalogDigestSHA256: catalog.identityDigestSHA256,
+                canonicalJurisdictionID: CanonicalJurisdictionID(rawValue: jurisdiction.id),
+                canonicalCourtID: CanonicalCourtID(rawValue: court.id),
+                parties: snapshot.parties,
+                representations: snapshot.representations
+            )
+        )
+    }
+
     private func makeRunController(
         store: SupraStore, matterID: String,
         client: StubCourtListenerClient, token: String? = "test-token"
-    ) -> ResearchSessionController {
-        ResearchSessionController(
+    ) throws -> ResearchSessionController {
+        try resolveResearchCourt(store, matterID: matterID)
+        return ResearchSessionController(
             store: store,
             runtimeClient: StubRuntimeClient { _ in .events([]) },
             matterID: matterID,
@@ -2418,7 +2476,7 @@ final class SupraSessionsTests: XCTestCase {
             rawResultJSON: "{\"x\":1}"
         )
         let client = StubCourtListenerClient(response: .init(count: 1, next: nil, previous: nil, results: [dto]))
-        let controller = makeRunController(store: store, matterID: matter.id, client: client)
+        let controller = try makeRunController(store: store, matterID: matter.id, client: client)
 
         controller.openSession(sessionID)
         XCTAssertTrue(controller.canRunOpenSession)
@@ -2441,7 +2499,7 @@ final class SupraSessionsTests: XCTestCase {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "Acme")
         let sessionID = try seedApprovedSession(store, matterID: matter.id)
-        let controller = makeRunController(
+        let controller = try makeRunController(
             store: store, matterID: matter.id,
             client: StubCourtListenerClient(shouldFail: true)
         )
@@ -2461,7 +2519,7 @@ final class SupraSessionsTests: XCTestCase {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "Acme")
         let sessionID = try seedApprovedSession(store, matterID: matter.id)
-        let controller = makeRunController(
+        let controller = try makeRunController(
             store: store, matterID: matter.id,
             client: StubCourtListenerClient(), token: nil
         )
@@ -2478,7 +2536,7 @@ final class SupraSessionsTests: XCTestCase {
         let matter = try store.matters.createMatter(name: "Acme")
         let sessionID = try seedApprovedSession(store, matterID: matter.id)
         let dto = CourtListenerSearchResultDTO(caseName: "Roe", rawResultJSON: "{}")
-        let controller = makeRunController(
+        let controller = try makeRunController(
             store: store, matterID: matter.id,
             client: StubCourtListenerClient(response: .init(count: 3, next: "https://www.courtlistener.com/x", previous: nil, results: [dto]))
         )
@@ -2496,6 +2554,11 @@ final class SupraSessionsTests: XCTestCase {
     func testRunApprovedSearchesAppliesSavedCourtAndDateFilters() async throws {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "Acme", jurisdiction: "Florida")
+        try resolveResearchCourt(
+            store,
+            matterID: matter.id,
+            exactCourtName: "Circuit Court of the Fourth Judicial Circuit in and for Duval County"
+        )
         let session = try store.research.createSession(
             matterID: matter.id,
             title: "S",
@@ -2543,7 +2606,7 @@ final class SupraSessionsTests: XCTestCase {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "Acme")
         let sessionID = try seedApprovedSession(store, matterID: matter.id)
-        let controller = makeRunController(
+        let controller = try makeRunController(
             store: store, matterID: matter.id,
             client: StubCourtListenerClient(failure: .localRateLimitExceeded)
         )
@@ -2563,7 +2626,7 @@ final class SupraSessionsTests: XCTestCase {
         let sessionID = try seedApprovedSession(store, matterID: matter.id)
         let dto = CourtListenerSearchResultDTO(caseName: "Specter v. Hardman", citation: ["1 U.S. 1"], rawResultJSON: "{}")
         let client = StubCourtListenerClient(response: .init(count: 1, next: nil, previous: nil, results: [dto]))
-        let controller = makeRunController(store: store, matterID: matter.id, client: client)
+        let controller = try makeRunController(store: store, matterID: matter.id, client: client)
 
         controller.openSession(sessionID)
         await controller.runApprovedSearches()
@@ -2597,7 +2660,7 @@ final class SupraSessionsTests: XCTestCase {
         let sessionID = try seedApprovedSession(store, matterID: matter.id)
         let dto = CourtListenerSearchResultDTO(caseName: "Specter v. Hardman", citation: ["1 U.S. 1"], rawResultJSON: "{}")
         let client = StubCourtListenerClient(response: .init(count: 1, next: nil, previous: nil, results: [dto]))
-        let runController = makeRunController(store: store, matterID: matter.id, client: client)
+        let runController = try makeRunController(store: store, matterID: matter.id, client: client)
         runController.openSession(sessionID)
         await runController.runApprovedSearches()
         let results = runController.resultsByQuery.values.flatMap { $0 }
@@ -2630,7 +2693,7 @@ final class SupraSessionsTests: XCTestCase {
         let sessionID = try seedApprovedSession(store, matterID: matter.id)
         let dto = CourtListenerSearchResultDTO(caseName: "Specter v. Hardman", rawResultJSON: "{}")
         let client = StubCourtListenerClient(response: .init(count: 1, next: nil, previous: nil, results: [dto]))
-        let controller = makeRunController(store: store, matterID: matter.id, client: client)
+        let controller = try makeRunController(store: store, matterID: matter.id, client: client)
 
         controller.openSession(sessionID)
         await controller.runApprovedSearches()
@@ -2682,7 +2745,7 @@ final class SupraSessionsTests: XCTestCase {
                 END
                 """)
         }
-        let controller = makeRunController(
+        let controller = try makeRunController(
             store: store,
             matterID: matter.id,
             client: StubCourtListenerClient()
@@ -2767,7 +2830,7 @@ final class SupraSessionsTests: XCTestCase {
             matterID: foreignMatter.id,
             sessionTitle: "Foreign session"
         )
-        let controller = makeRunController(
+        let controller = try makeRunController(
             store: store,
             matterID: matter.id,
             client: StubCourtListenerClient()
@@ -3725,7 +3788,7 @@ final class SupraSessionsTests: XCTestCase {
         let sessionID = try seedApprovedSession(store, matterID: matter.id)
         let dto = CourtListenerSearchResultDTO(caseName: "Roe", rawResultJSON: "{}")
         let client = StubCourtListenerClient(response: .init(count: 1, next: nil, previous: nil, results: [dto]))
-        let controller = makeRunController(store: store, matterID: matter.id, client: client)
+        let controller = try makeRunController(store: store, matterID: matter.id, client: client)
         controller.openSession(sessionID)
         await controller.runApprovedSearches()
 
@@ -3793,7 +3856,7 @@ final class SupraSessionsTests: XCTestCase {
                 END
                 """)
         }
-        let controller = makeRunController(
+        let controller = try makeRunController(
             store: store,
             matterID: matter.id,
             client: StubCourtListenerClient()

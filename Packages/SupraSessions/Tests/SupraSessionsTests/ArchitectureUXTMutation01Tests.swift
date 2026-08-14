@@ -3,6 +3,7 @@ import GRDB
 import SupraCore
 import SupraDocuments
 import SupraNetworking
+import SupraResearch
 import SupraRuntimeClient
 import SupraStore
 @testable import SupraSessions
@@ -515,6 +516,7 @@ final class ArchitectureUXTMutation01Tests: XCTestCase {
             ),
             into: store
         )
+        try resolveResearchCourtFixture(store: store, matterID: Wire.researchMatterID)
         let controller = ResearchSessionController(
             store: store,
             runtimeClient: StubRuntimeClient(),
@@ -560,6 +562,41 @@ final class ArchitectureUXTMutation01Tests: XCTestCase {
     }
 
     // MARK: - Assertions and fixtures
+
+    private func resolveResearchCourtFixture(
+        store: SupraStore,
+        matterID: String
+    ) throws {
+        let snapshot = try XCTUnwrap(
+            try store.matterIdentity.fetchSnapshot(matterID: matterID)
+        )
+        let catalog = JurisdictionCatalog.shared
+        let court = try XCTUnwrap(
+            catalog.resolvePersistedCourtIdentity(
+                "United States District Court for the Southern District of Florida"
+            )
+        )
+        let jurisdiction = try XCTUnwrap(
+            catalog.canonicalJurisdictionOption(forSelectedOptionID: court.id)
+        )
+        _ = try store.matterIdentity.updateMatter(
+            command: MatterIdentityUpdateCommand(
+                matterID: matterID,
+                expectedIdentityRevision: snapshot.identityRevision,
+                legacyJurisdictionText: snapshot.legacyJurisdictionText,
+                legacyCourtText: court.displayName,
+                legacyPartyPerspective: .neutral,
+                legacyClientNames: nil,
+                courtResolutionState: .court,
+                canonicalCatalogVersion: catalog.catalogVersion,
+                canonicalCatalogDigestSHA256: catalog.identityDigestSHA256,
+                canonicalJurisdictionID: CanonicalJurisdictionID(rawValue: jurisdiction.id),
+                canonicalCourtID: CanonicalCourtID(rawValue: court.id),
+                parties: snapshot.parties,
+                representations: snapshot.representations
+            )
+        )
+    }
 
     @discardableResult
     private func assertRejected<Success>(

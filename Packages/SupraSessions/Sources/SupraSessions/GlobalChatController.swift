@@ -3353,14 +3353,13 @@ public final class GlobalChatController: ObservableObject {
 
     private func matterJurisdictionScope() -> JurisdictionAuthorityScope? {
         guard let matterID = scopedMatterID,
-              let matter = try? store.matters.fetchMatter(id: matterID)
+              let snapshot = try? store.matterIdentity.fetchSnapshot(matterID: matterID)
         else {
             return nil
         }
-        return JurisdictionCatalog.shared.authorityScope(
-            jurisdiction: matter.jurisdiction,
-            court: matter.court
-        )
+        return MatterCourtPresentationBuilder(catalog: .shared)
+            .makePresentation(for: snapshot)
+            .authorityScope
     }
 
     /// Applies the global chat's jurisdiction selection — or, when set to

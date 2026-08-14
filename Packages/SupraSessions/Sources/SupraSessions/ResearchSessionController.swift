@@ -68,8 +68,24 @@ public struct ResearchSessionSummary: Identifiable, Sendable, Equatable {
     }
 }
 
-public enum ResearchSessionError: Error, Equatable, Sendable {
+private let researchChooseCourtMessage =
+    "Choose Court in Matter Edit before planning or running matter-scoped research."
+
+public enum ResearchSessionError: LocalizedError, Equatable, Sendable {
     case noApprovedQueries
+    case courtSelectionRequired
+    case invalidCourtFilter
+
+    public var errorDescription: String? {
+        switch self {
+        case .noApprovedQueries:
+            return "Approve at least one non-empty research query before saving."
+        case .courtSelectionRequired:
+            return researchChooseCourtMessage
+        case .invalidCourtFilter:
+            return "The saved court filters do not match the matter's canonical court. Review the plan and try again."
+        }
+    }
 }
 
 /// Drives research-session planning for one matter: generates proposed queries
@@ -77,6 +93,12 @@ public enum ResearchSessionError: Error, Equatable, Sendable {
 /// persists the approved queries (spec §9 / WO 24). Running the searches is WO 25.
 @MainActor
 public final class ResearchSessionController: ObservableObject {
+    private struct CanonicalResearchContext {
+        let courtPresentation: MatterCourtPresentation
+        let authorityScope: JurisdictionAuthorityScope
+        let partyPerspective: String
+    }
+
     public struct PlannedQuery: Identifiable, Sendable, Equatable {
         public let id: UUID
         public var text: String
@@ -281,6 +303,13 @@ public final class ResearchSessionController: ObservableObject {
         // (e.g. the explicit commit landing while the speculative run is still going)
         // is a no-op — the caller waits out the in-flight run and reuses its queries.
         if case .generating = planState { return }
+        let identity: CanonicalResearchContext
+        do {
+            identity = try canonicalResearchContext()
+        } catch {
+            planState = .incomplete(researchChooseCourtMessage)
+            return
+        }
         let effectiveRoute = route ?? ModelRouter().route(for: .legalResearch)
         guard let modelID else {
             if plannedQueries.isEmpty {
@@ -295,10 +324,10 @@ public final class ResearchSessionController: ObservableObject {
         do {
             let prompt = try planner.buildPrompt(
                 issueText: draft.issueText,
-                jurisdiction: draft.jurisdiction,
-                jurisdictionContext: effectiveJurisdictionContext(for: draft),
-                partyPerspective: draft.partyPerspective,
-                preferredCourts: effectivePreferredCourts(for: draft),
+                jurisdiction: identity.authorityScope.jurisdictionName,
+                jurisdictionContext: identity.authorityScope.modelContext,
+                partyPerspective: identity.partyPerspective,
+                preferredCourts: identity.authorityScope.preferredCourtNames,
                 excludedCourts: draft.excludedCourts,
                 dateRange: formatDateRange(start: draft.dateRangeStart, end: draft.dateRangeEnd)
             )
@@ -334,18 +363,21 @@ public final class ResearchSessionController: ObservableObject {
     /// `approved`) and writes a `research_queries_approved` audit event.
     @discardableResult
     public func savePlan(draft: ResearchPlanDraft) throws -> String {
+        let identity = try canonicalResearchContext()
         let approved = plannedQueries.filter {
             $0.approved && !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
         guard !approved.isEmpty else { throw ResearchSessionError.noApprovedQueries }
 
-        let courtFilter = JurisdictionCatalog.courtFilterString(draft.courtFilterIDs)
+        let courtFilter = JurisdictionCatalog.courtFilterString(
+            try validatedCourtFilterIDs(draft.courtFilterIDs, identity: identity)
+        )
         let result = try store.research.createApprovedSessionAtomically(
             matterID: matterID,
             title: draft.title,
             issueText: draft.issueText,
-            jurisdiction: draft.jurisdiction,
-            preferredCourts: effectivePreferredCourts(for: draft),
+            jurisdiction: identity.authorityScope.jurisdictionName,
+            preferredCourts: identity.authorityScope.preferredCourtNames,
             excludedCourts: draft.excludedCourts,
             dateRangeStart: draft.dateRangeStart,
             dateRangeEnd: draft.dateRangeEnd,
@@ -419,6 +451,24 @@ public final class ResearchSessionController: ObservableObject {
     /// ends results_ready if any query succeeded, else failed.
     public func runApprovedSearches() async {
         guard let sessionID = openSessionID, !isRunning else { return }
+        let identity: CanonicalResearchContext
+        do {
+            identity = try canonicalResearchContext()
+        } catch {
+            runMessage = researchChooseCourtMessage
+            return
+        }
+        do {
+            for query in sessionQueries where query.status == ResearchQueryStatus.approved.rawValue {
+                _ = try validatedCourtFilterIDs(
+                    JurisdictionCatalog.courtFilterIDs(from: query.courtFilter),
+                    identity: identity
+                )
+            }
+        } catch {
+            runMessage = ResearchSessionError.invalidCourtFilter.localizedDescription
+            return
+        }
         guard hasCourtListenerToken else {
             runMessage = "Add a CourtListener API token in Settings to run searches."
             return
@@ -547,6 +597,20 @@ public final class ResearchSessionController: ObservableObject {
     public func rerunQuery(queryID: String) async {
         guard let sessionID = openSessionID, !isRunning,
               let query = sessionQueries.first(where: { $0.id == queryID }) else { return }
+        let identity: CanonicalResearchContext
+        do {
+            identity = try canonicalResearchContext()
+            _ = try validatedCourtFilterIDs(
+                JurisdictionCatalog.courtFilterIDs(from: query.courtFilter),
+                identity: identity
+            )
+        } catch ResearchSessionError.invalidCourtFilter {
+            runMessage = ResearchSessionError.invalidCourtFilter.localizedDescription
+            return
+        } catch {
+            runMessage = researchChooseCourtMessage
+            return
+        }
         guard hasCourtListenerToken else {
             runMessage = "Add a CourtListener API token in Settings to run searches."
             return
@@ -573,6 +637,20 @@ public final class ResearchSessionController: ObservableObject {
               let query = sessionQueries.first(where: { $0.id == queryID }),
               let next = query.nextURL, let cursorURL = URL(string: next)
         else { return }
+        let identity: CanonicalResearchContext
+        do {
+            identity = try canonicalResearchContext()
+            _ = try validatedCourtFilterIDs(
+                JurisdictionCatalog.courtFilterIDs(from: query.courtFilter),
+                identity: identity
+            )
+        } catch ResearchSessionError.invalidCourtFilter {
+            runMessage = ResearchSessionError.invalidCourtFilter.localizedDescription
+            return
+        } catch {
+            runMessage = researchChooseCourtMessage
+            return
+        }
 
         isRunning = true
         runMessage = nil
@@ -940,19 +1018,52 @@ public final class ResearchSessionController: ObservableObject {
 
     // MARK: - Helpers
 
-    private func effectiveJurisdictionContext(for draft: ResearchPlanDraft) -> String {
-        let trimmed = draft.jurisdictionContext.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmed.isEmpty { return trimmed }
-        return JurisdictionCatalog.shared.authorityScope(jurisdiction: draft.jurisdiction)?.modelContext ?? ""
+    private func canonicalResearchContext() throws -> CanonicalResearchContext {
+        let projection: MatterLegalIdentityReadProjection
+        do {
+            projection = try legalIdentityReadProjection()
+        } catch {
+            throw ResearchSessionError.courtSelectionRequired
+        }
+        let presentation = projection.courtPresentation
+        guard presentation.canRunCourtScopedResearch,
+              let authorityScope = presentation.authorityScope,
+              presentation.resolvedCourtName != nil,
+              presentation.resolvedJurisdictionName != nil else {
+            throw ResearchSessionError.courtSelectionRequired
+        }
+        let partyPerspective: String
+        switch projection.draftParties {
+        case let .available(defaults):
+            partyPerspective =
+                "Representing \(defaults.representedClientName) as \(defaults.representedDesignation) "
+                + "against \(defaults.opposingPartyName) as \(defaults.opposingDesignation)"
+        case .blocked:
+            partyPerspective = "Structured party identity incomplete; do not infer a represented side."
+        }
+        return CanonicalResearchContext(
+            courtPresentation: presentation,
+            authorityScope: authorityScope,
+            partyPerspective: partyPerspective
+        )
     }
 
-    private func effectivePreferredCourts(for draft: ResearchPlanDraft) -> [String] {
-        var courts = draft.preferredCourts
-        if courts.isEmpty,
-           let scope = JurisdictionCatalog.shared.authorityScope(jurisdiction: draft.jurisdiction) {
-            courts = scope.preferredCourtNames
+    private func validatedCourtFilterIDs(
+        _ requestedIDs: [String],
+        identity: CanonicalResearchContext
+    ) throws -> [String] {
+        let requested = Self.uniquePreservingOrder(requestedIDs)
+        guard !requested.isEmpty else { return [] }
+        var allowed = Set(identity.authorityScope.courtListenerIDs)
+        if let state = identity.courtPresentation.resolvedFilingStateName {
+            allowed.formUnion(
+                JurisdictionCatalog.shared.relatedFederalCourtIDs(forState: state)
+            )
         }
-        return Self.uniquePreservingOrder(courts)
+        guard requested.allSatisfy(allowed.contains) else {
+            throw ResearchSessionError.invalidCourtFilter
+        }
+        return requested
     }
 
     private static func uniquePreservingOrder(_ values: [String]) -> [String] {
