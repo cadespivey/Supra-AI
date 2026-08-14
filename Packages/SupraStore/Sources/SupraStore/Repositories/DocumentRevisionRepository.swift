@@ -1,5 +1,6 @@
 import Foundation
 import GRDB
+import SupraCore
 
 public enum DocumentRevisionRepositoryError: Error, LocalizedError, Equatable, Sendable {
     case derivationKeyCollision(String)
@@ -48,6 +49,98 @@ public final class DocumentRevisionRepository: @unchecked Sendable {
     public func appendSelection(_ selection: DocumentPartSelectionRecord) throws -> DocumentPartSelectionRecord {
         try writer.write { db in
             try appendSelection(selection, materializeExisting: false, db: db)
+        }
+    }
+
+    /// Appends and selects one revision, updates the compatible part projection,
+    /// and invalidates every document-level artifact derived from the prior text
+    /// in one optimistic transaction.
+    public func commitSelectionAndInvalidateIndex(
+        _ command: DocumentRevisionSelectionTransitionCommand
+    ) throws -> DocumentRevisionSelectionTransitionReceipt {
+        try writer.write { database in
+            guard try MatterDocumentRecord.fetchOne(database, key: command.documentID) != nil else {
+                throw DocumentReadinessTransitionError.documentNotFound(command.documentID)
+            }
+            guard let part = try DocumentPagePartRecord.fetchOne(database, key: command.partID),
+                  part.documentID == command.documentID else {
+                throw DocumentReadinessTransitionError.partNotFound(
+                    documentID: command.documentID,
+                    partID: command.partID
+                )
+            }
+            guard part.currentRevisionID == command.expectedCurrentRevisionID,
+                  part.currentSelectionID == command.expectedCurrentSelectionID else {
+                throw DocumentReadinessTransitionError.stalePartSelection(
+                    documentID: command.documentID,
+                    partID: command.partID
+                )
+            }
+            guard !command.revision.id.isEmpty,
+                  command.revision.documentID == command.documentID,
+                  command.revision.partIndex == part.partIndex,
+                  command.revision.supersedesRevisionID == command.expectedCurrentRevisionID,
+                  command.revision.charCount == command.revision.text.count else {
+                throw DocumentReadinessTransitionError.invalidRevisionSelection(
+                    "the revision scope or predecessor does not match the current part"
+                )
+            }
+            guard !command.selection.id.isEmpty,
+                  command.selection.documentID == command.documentID,
+                  command.selection.partIndex == part.partIndex,
+                  command.selection.selectedRevisionID == command.revision.id,
+                  command.selection.supersedesSelectionID == command.expectedCurrentSelectionID else {
+                throw DocumentReadinessTransitionError.invalidRevisionSelection(
+                    "the selection scope, chosen revision, or predecessor is invalid"
+                )
+            }
+
+            let revision = try appendRevision(command.revision, db: database)
+            let selection = try appendSelection(
+                command.selection,
+                materializeExisting: false,
+                db: database
+            )
+            try database.execute(
+                sql: """
+                    UPDATE matter_documents
+                    SET has_user_edited_text = 1,
+                        extraction_status = ?,
+                        index_status = ?,
+                        classification_metadata_json = NULL,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                arguments: [
+                    DocumentExtractionStatus.edited.rawValue,
+                    DocumentIndexStatus.stale.rawValue,
+                    Date(),
+                    command.documentID,
+                ]
+            )
+
+            guard let document = try MatterDocumentRecord.fetchOne(
+                database,
+                key: command.documentID
+            ) else {
+                throw DocumentReadinessTransitionError.documentNotFound(command.documentID)
+            }
+            let readiness = try DocumentReadinessRepository.deriveReceipt(
+                for: document,
+                in: database
+            )
+            guard readiness.exclusions.contains(.staleRevision) else {
+                throw DocumentReadinessTransitionError.textIndexPostconditionFailed(
+                    command.documentID
+                )
+            }
+            return DocumentRevisionSelectionTransitionReceipt(
+                documentID: command.documentID,
+                partID: command.partID,
+                revisionID: revision.id,
+                selectionID: selection.id,
+                readinessReceipt: readiness
+            )
         }
     }
 

@@ -107,6 +107,82 @@ public final class DocumentSettingsRepository: @unchecked Sendable {
         }
     }
 
+    /// Atomically selects one model only while its immutable identity and
+    /// successful load-test timestamp still match the caller's observation.
+    /// The legacy id-only selector remains available to existing callers.
+    public func activateVerifiedEmbeddingModel(
+        _ command: DocumentVerifiedEmbeddingModelSelectionCommand
+    ) throws -> DocumentVerifiedEmbeddingModelSelectionReceipt {
+        try writer.write { database in
+            guard var settings = try DocumentIntelligenceSettingsRecord.fetchOne(
+                database,
+                key: DocumentIntelligenceSettingsRecord.singletonID
+            ) else {
+                throw DocumentReadinessTransitionError.settingsNotFound
+            }
+            guard let model = try DocumentEmbeddingModelRecord.fetchOne(
+                database,
+                key: command.expectedModel.id
+            ) else {
+                throw DocumentReadinessTransitionError.modelNotFound(command.expectedModel.id)
+            }
+            let persistedIdentity = DocumentReadinessEmbeddingModelIdentity(
+                id: model.id,
+                repoID: model.repoID,
+                revision: model.revision,
+                dimension: model.dimension
+            )
+            guard persistedIdentity == command.expectedModel,
+                  model.dimension > 0 else {
+                throw DocumentReadinessTransitionError.modelIdentityChanged(model.id)
+            }
+            guard model.lastTestLoadResult == "passed",
+                  model.lastTestLoadAt != nil else {
+                throw DocumentReadinessTransitionError.modelNotVerified(model.id)
+            }
+            guard model.lastTestLoadAt == command.verifiedAt else {
+                throw DocumentReadinessTransitionError.modelVerificationChanged(model.id)
+            }
+            guard !command.setupInvalidationReason
+                .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw DocumentReadinessTransitionError.modelSelectionInconsistent(model.id)
+            }
+
+            let now = Date()
+            try database.execute(
+                sql: """
+                    UPDATE document_embedding_models
+                    SET is_selected = (id = ?), updated_at = ?
+                    """,
+                arguments: [model.id, now]
+            )
+            settings.selectedEmbeddingModelID = model.id
+            settings.embeddingModelLastTestedAt = command.verifiedAt
+            settings.setupCompletedAt = nil
+            settings.setupInvalidatedReason = command.setupInvalidationReason
+            settings.updatedAt = now
+            try settings.update(database)
+
+            let selectedIDs = try String.fetchAll(
+                database,
+                sql: """
+                    SELECT id
+                    FROM document_embedding_models
+                    WHERE is_selected = 1
+                    ORDER BY id
+                    """
+            )
+            guard selectedIDs == [model.id] else {
+                throw DocumentReadinessTransitionError.modelSelectionInconsistent(model.id)
+            }
+            return DocumentVerifiedEmbeddingModelSelectionReceipt(
+                activeModel: persistedIdentity,
+                verifiedAt: command.verifiedAt,
+                setupInvalidationReason: command.setupInvalidationReason
+            )
+        }
+    }
+
     public func recordTestLoad(
         modelID: String,
         at date: Date = Date(),
