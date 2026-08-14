@@ -66,7 +66,7 @@ final class ArchitectureUXTRuntimeEmbeddingBindingOwnershipTests: XCTestCase {
 
         controller.prewarmEmbeddingModel()
         for _ in 0..<100 where runtime.embeddingLoadRequests.count < 2 {
-            await Task.yield()
+            try await Task.sleep(for: .milliseconds(10))
         }
         XCTAssertEqual(runtime.embeddingLoadRequests.count, 2)
         let prewarm = try XCTUnwrap(runtime.embeddingLoadRequests.last)
