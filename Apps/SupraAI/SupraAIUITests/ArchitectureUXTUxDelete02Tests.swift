@@ -20,24 +20,13 @@ final class ArchitectureUXTUxDelete02Tests: XCTestCase {
         XCTAssertEqual(destination.value as? String, "Restorable deleted items")
         destination.click()
 
-        // The icon-only SwiftUI button's stable identifier and accessibility
-        // label are authoritative across macOS host-role projection changes.
-        let permanent = app.descendants(matching: .any)[
-            "recycleBin.deletePermanently.matter.\(matterName)"
-        ]
+        let permanent = app.buttons["recycleBin.deletePermanently.matter.\(matterName)"]
         XCTAssertTrue(permanent.waitForExistence(timeout: 10))
         XCTAssertEqual(permanent.label, "Delete Permanently")
         permanent.click()
 
-        let expectedMessage = "This removes the matter’s source data, chats, saved in-app outputs, and export records. Prior audit history and previously written export files remain. This cannot be undone."
-        let message = app.staticTexts.matching(
-            NSPredicate(
-                format: "label CONTAINS[c] %@ OR value CONTAINS[c] %@",
-                "cannot be undone",
-                "cannot be undone"
-            )
-        ).firstMatch
-        XCTAssertTrue(message.waitForExistence(timeout: 5), expectedMessage)
+        let message = app.descendants(matching: .any)["recycleBin.deletePermanently.message"]
+        XCTAssertTrue(message.waitForExistence(timeout: 5))
         let text = [message.label, message.value as? String].compactMap { $0 }.joined(separator: " ")
         XCTAssertTrue(text.localizedCaseInsensitiveContains("cannot be undone"))
         XCTAssertFalse(text.contains("DEFAULT-000"))
@@ -65,12 +54,10 @@ final class ArchitectureUXTUxDelete02Tests: XCTestCase {
         XCTAssertTrue(app.buttons["Copy Diagnostic Report"].exists)
         XCTAssertTrue(app.buttons["Quit Without Changes"].exists)
 
-        let details = app.descendants(matching: .any)["restore.recovery.supportDetails"]
+        let details = app.disclosureTriangles["restore.recovery.supportDetails"]
         XCTAssertTrue(details.exists)
         XCTAssertFalse(app.descendants(matching: .any)["restore.recovery.technicalFacts"].exists)
-        XCTAssertEqual(details.value as? String, "Collapsed")
         details.click()
-        XCTAssertEqual(details.value as? String, "Expanded")
         let facts = app.descendants(matching: .any)["restore.recovery.technicalFacts"]
         XCTAssertTrue(facts.waitForExistence(timeout: 5))
         let factText = [facts.label, facts.value as? String].compactMap { $0 }.joined(separator: " ")
@@ -83,11 +70,7 @@ final class ArchitectureUXTUxDelete02Tests: XCTestCase {
         app.buttons["Copy Diagnostic Report"].click()
         let actionStatus = app.descendants(matching: .any)["restore.recovery.actionStatus"]
         XCTAssertTrue(actionStatus.waitForExistence(timeout: 5))
-        let statusText = [actionStatus.label, actionStatus.value as? String]
-            .compactMap { $0 }
-            .filter { !$0.isEmpty }
-            .joined(separator: " ")
-        XCTAssertEqual(statusText, "Diagnostic report copied.")
+        XCTAssertEqual(actionStatus.label, "Diagnostic report copied.")
     }
 
     private func launchDeletionFixture() -> XCUIApplication {

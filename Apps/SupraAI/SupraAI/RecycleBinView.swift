@@ -222,7 +222,6 @@ struct RecycleBinView: View {
                 .accessibilityIdentifier("recycleBin.deletePermanently.\(kind.rawValue).\(title)")
         }
         .padding(.vertical, 2)
-        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("recycleBin.item.\(kind.rawValue).\(title)")
     }
 
