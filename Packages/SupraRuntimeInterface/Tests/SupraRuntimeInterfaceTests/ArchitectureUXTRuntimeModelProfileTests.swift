@@ -122,6 +122,20 @@ final class ArchitectureUXTRuntimeModelProfileTests: XCTestCase {
         XCTAssertEqual(fixture.binding.files.count, 4)
     }
 
+    func testShippingHostBuildsBoundChatProfileFromVerifiedConfigNotFixedShape() throws {
+        let host = try source(
+            "Apps/SupraAI/SupraRuntimeService/SupraRuntimeService.swift"
+        )
+
+        XCTAssertTrue(host.contains("RuntimeModelResourceProfileBuilder"))
+        XCTAssertTrue(host.contains("verifiedModelConfigData("))
+        XCTAssertTrue(host.contains("buildChatProfile("))
+        XCTAssertFalse(host.contains("layerCount: 32"))
+        XCTAssertFalse(host.contains("keyValueHeadCount: 8"))
+        XCTAssertFalse(host.contains("headDimension: 128"))
+        XCTAssertFalse(host.contains(Self.forbiddenDefault))
+    }
+
     private func makeFixture() throws -> ProfileFixture {
         let configData = try JSONSerialization.data(
             withJSONObject: Self.validConfig(),
@@ -204,6 +218,15 @@ final class ArchitectureUXTRuntimeModelProfileTests: XCTestCase {
 
     private static func sha256(_ data: Data) -> String {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func source(_ relativePath: String) throws -> String {
+        var root = URL(fileURLWithPath: #filePath)
+        for _ in 0..<5 { root.deleteLastPathComponent() }
+        return try String(
+            contentsOf: root.appendingPathComponent(relativePath),
+            encoding: .utf8
+        )
     }
 }
 
