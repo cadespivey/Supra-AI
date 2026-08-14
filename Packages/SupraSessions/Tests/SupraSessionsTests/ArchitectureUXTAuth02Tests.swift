@@ -322,7 +322,7 @@ final class ArchitectureUXTAuth02Tests: XCTestCase {
             )
         }
         XCTAssertNil(
-            alteredFixture.store.researchPackets.egressConsumptionRegistration(
+            try alteredFixture.store.researchPackets.egressConsumptionRegistration(
                 id: consumed.id
             )
         )
@@ -357,10 +357,12 @@ final class ArchitectureUXTAuth02Tests: XCTestCase {
             unconsumedFixture.store,
             egressReceiptID: nil
         )
-        let registrar = ResearchPacketEgressReceiptRegistrar(store: unconsumedFixture.store)
+        let unconsumedRegistrar = ResearchPacketEgressReceiptRegistrar(
+            store: unconsumedFixture.store
+        )
 
         XCTAssertThrowsError(
-            try registrar.register(.unconsumed(unconsumedGrant))
+            try unconsumedRegistrar.register(.unconsumed(unconsumedGrant))
         ) { error in
             XCTAssertEqual(
                 error as? ResearchPacketEgressReceiptRegistrationError,
