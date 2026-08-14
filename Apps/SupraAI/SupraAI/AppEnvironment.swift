@@ -2635,6 +2635,17 @@ final class AppEnvironment: ObservableObject {
     /// `[S1]` preview resolves to real content. Lets UI tests exercise the sources
     /// block / inline-citation / export features without a model or network.
     private func seedUITestCitationsChatIfNeeded() {
+#if DEBUG
+        if let readinessScenario = CanonicalReadinessUITestScenario(
+            arguments: ProcessInfo.processInfo.arguments
+        ), case .canonicalDemo = readinessScenario {
+            // T-DATA-READY-02 owns an exact three-document denominator. The
+            // generic citation fixture's raw-ready agreement would otherwise
+            // make the visible native projection report 3 of 4 even though the
+            // canonical demo receipts themselves are exact.
+            return
+        }
+#endif
         let existing = (try? store.chats.fetchGlobalChats()) ?? []
         guard !existing.contains(where: { $0.title == "Citations Demo" }) else { return }
         do {
