@@ -199,3 +199,69 @@ public struct SetupNavigationRequest: Codable, Hashable, Sendable, Identifiable 
         requirement.navigationTarget
     }
 }
+
+/// A named application surface that can participate in a workflow handoff.
+/// These are stable internal identities, not user-facing navigation labels.
+public enum WorkSurface: String, Codable, CaseIterable, Hashable, Sendable {
+    case documents
+    case ask
+    case chat
+    case research
+    case authorities
+    case newWorkProduct
+    case quickAttachment
+    case savedWork
+    case checkSources
+    case publicRecords
+}
+
+/// One exact transfer of a version-bound work context between product surfaces.
+/// The destination receives this value as-is and may not replace any member from
+/// process-global selection or a newly fetched "current" version.
+public struct WorkHandoffRequest: Codable, Hashable, Sendable, Identifiable {
+    public let id: String
+    public let origin: WorkSurface
+    public let destination: WorkSurface
+    public let context: WorkContext
+
+    public init(
+        id: String,
+        origin: WorkSurface,
+        destination: WorkSurface,
+        context: WorkContext
+    ) {
+        precondition(Self.isExactIdentity(id), "A handoff requires an exact identity")
+        self.id = id
+        self.origin = origin
+        self.destination = destination
+        self.context = context
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case origin
+        case destination
+        case context
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        let id = try values.decode(String.self, forKey: .id)
+        guard Self.isExactIdentity(id) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .id,
+                in: values,
+                debugDescription: "A handoff requires an exact nonempty identity."
+            )
+        }
+        self.id = id
+        self.origin = try values.decode(WorkSurface.self, forKey: .origin)
+        self.destination = try values.decode(WorkSurface.self, forKey: .destination)
+        self.context = try values.decode(WorkContext.self, forKey: .context)
+    }
+
+    private static func isExactIdentity(_ value: String) -> Bool {
+        !value.isEmpty
+            && value == value.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
