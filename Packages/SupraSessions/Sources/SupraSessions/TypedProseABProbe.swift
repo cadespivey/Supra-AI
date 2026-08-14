@@ -205,7 +205,8 @@ public enum TypedProseABProbe {
         )
         let request = GenerateRequest(
             generationID: GenerationID(), modelID: modelID,
-            prompt: prompt, systemPrompt: systemPrompt, options: options
+            prompt: prompt, systemPrompt: systemPrompt,
+            contextWorkload: .ordinaryConversation, options: options
         )
         guard let raw = try? await runtimeClient.collectGeneratedText(request) else {
             return TypedProseABOutcome(

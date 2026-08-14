@@ -140,6 +140,16 @@ public struct RuntimeRequestBudgetValidator: Sendable {
         try validateStrings(request.texts)
     }
 
+    public func validate(_ request: LoadEmbeddingModelRequest) throws {
+        guard let dimension = request.expectedDimension else { return }
+        try require(
+            dimension > 0 && dimension <= policy.maxEmbeddingDimension,
+            .embeddingDimension,
+            policy.maxEmbeddingDimension,
+            dimension
+        )
+    }
+
     public func validate(_ request: GenerateRequest) throws {
         try validateStrings(
             [request.prompt] + (request.systemPrompt.map { [$0] } ?? [])
@@ -420,6 +430,7 @@ public enum RuntimeResourceField: String, Codable, Equatable, Sendable {
     case safetyMarginBytes
     case currentPressureReserveBytes
     case contextTokens
+    case reservedOutputTokens
 }
 
 public enum RuntimeResourceArithmeticOperation: String, Codable, Equatable, Sendable {
@@ -432,6 +443,8 @@ public enum RuntimeResourceArithmeticOperation: String, Codable, Equatable, Send
     case modelSwitchReplacementModelBytes
     case modelSwitchTransactionalOverlapPeakBytes
     case modelSwitchUnloadPeakBytes
+    case requestedKVTokens
+    case actualPeakKVTokens
 }
 
 /// A fail-closed resource-planning rejection. Invalid or unrepresentable
@@ -666,6 +679,9 @@ public struct RuntimeContextAdmissionRequest: Equatable, Sendable {
     public let expectedModelSHA256: String
     public let requestedContextTokens: Int
     public let actualPromptTokens: Int
+    /// Output tokens held back in the same rotating KV window. Admission must
+    /// account for these before generation so output cannot evict prompt facts.
+    public let reservedOutputTokens: Int
     public let workload: RuntimeContextWorkload
     public let allowsExactSourceRepacking: Bool
 
@@ -677,6 +693,7 @@ public struct RuntimeContextAdmissionRequest: Equatable, Sendable {
         expectedModelSHA256: String,
         requestedContextTokens: Int,
         actualPromptTokens: Int,
+        reservedOutputTokens: Int = 0,
         workload: RuntimeContextWorkload,
         allowsExactSourceRepacking: Bool
     ) {
@@ -687,6 +704,7 @@ public struct RuntimeContextAdmissionRequest: Equatable, Sendable {
         self.expectedModelSHA256 = expectedModelSHA256
         self.requestedContextTokens = requestedContextTokens
         self.actualPromptTokens = actualPromptTokens
+        self.reservedOutputTokens = reservedOutputTokens
         self.workload = workload
         self.allowsExactSourceRepacking = allowsExactSourceRepacking
     }
@@ -714,7 +732,11 @@ public struct RuntimeContextAdmissionDecision: Equatable, Sendable {
     public let expectedModelSHA256: String
     public let requestedContextTokens: Int
     public let actualPromptTokens: Int
+    public let reservedOutputTokens: Int
+    public let requestedKVTokens: Int
+    public let actualPeakKVTokens: Int
     public let maximumAdmittedContextTokens: Int
+    public let maximumAdmittedPromptTokens: Int
     public let estimatedPeakBytes: Int
     public let disposition: RuntimeContextAdmissionDisposition
     public let correctiveAction: RuntimeContextCorrectiveAction
@@ -735,13 +757,29 @@ public struct RuntimeContextAdmissionPlanner: Sendable {
         _ request: RuntimeContextAdmissionRequest,
         profile: ModelResourceProfile
     ) throws -> RuntimeContextAdmissionDecision {
+        try requireNonnegative(request.requestedContextTokens, field: .contextTokens)
+        try requireNonnegative(request.actualPromptTokens, field: .contextTokens)
+        try requireNonnegative(request.reservedOutputTokens, field: .reservedOutputTokens)
+        let requestedKVTokens = try checkedResourceAdd(
+            request.requestedContextTokens,
+            request.reservedOutputTokens,
+            operation: .requestedKVTokens
+        )
+        let actualPeakKVTokens = try checkedResourceAdd(
+            request.actualPromptTokens,
+            request.reservedOutputTokens,
+            operation: .actualPeakKVTokens
+        )
         let estimate = try resourcePlanner.estimate(
             profile: profile,
-            contextTokens: request.requestedContextTokens
+            contextTokens: actualPeakKVTokens
         )
         let maximum = try maximumAdmittedContextTokens(for: profile)
-        let fits = request.requestedContextTokens <= maximum
-            && request.actualPromptTokens <= request.requestedContextTokens
+        let maximumPromptByHardware = max(0, maximum - request.reservedOutputTokens)
+        let maximumPrompt = min(request.requestedContextTokens, maximumPromptByHardware)
+        let fits = requestedKVTokens <= maximum
+            && actualPeakKVTokens <= maximum
+            && request.actualPromptTokens <= maximumPrompt
 
         let disposition: RuntimeContextAdmissionDisposition
         let action: RuntimeContextCorrectiveAction
@@ -754,7 +792,7 @@ public struct RuntimeContextAdmissionPlanner: Sendable {
             switch request.workload {
             case .groundedExactEvidence where request.allowsExactSourceRepacking:
                 disposition = .repackExactSources
-                action = .repackExactSources(maximumContextTokens: maximum)
+                action = .repackExactSources(maximumContextTokens: maximumPrompt)
                 disclosure = false
             case .groundedExactEvidence:
                 disposition = .defer
@@ -762,7 +800,7 @@ public struct RuntimeContextAdmissionPlanner: Sendable {
                 disclosure = false
             case .ordinaryConversation:
                 disposition = .trimHistoryWithDisclosure
-                action = .trimHistoryWithDisclosure(maximumContextTokens: maximum)
+                action = .trimHistoryWithDisclosure(maximumContextTokens: maximumPrompt)
                 disclosure = true
             }
         }
@@ -775,7 +813,11 @@ public struct RuntimeContextAdmissionPlanner: Sendable {
             expectedModelSHA256: request.expectedModelSHA256,
             requestedContextTokens: request.requestedContextTokens,
             actualPromptTokens: request.actualPromptTokens,
+            reservedOutputTokens: request.reservedOutputTokens,
+            requestedKVTokens: requestedKVTokens,
+            actualPeakKVTokens: actualPeakKVTokens,
             maximumAdmittedContextTokens: maximum,
+            maximumAdmittedPromptTokens: maximumPrompt,
             estimatedPeakBytes: estimate.totalPeakBytes,
             disposition: disposition,
             correctiveAction: action,

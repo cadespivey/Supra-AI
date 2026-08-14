@@ -569,8 +569,22 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
             return
         }
 
-        let replacementProfile = Self.embeddingResourceProfile(for: request)
         do {
+            try requestBudgetValidator.validate(request)
+        } catch {
+            reply(LoadEmbeddingModelResponse(
+                state: .failed,
+                embeddingModelID: request.embeddingModelID,
+                error: RuntimeErrorMapper.invalidRequest(
+                    "The embedding model dimensions exceed the runtime boundary."
+                )
+            ))
+            return
+        }
+
+        let replacementProfile: ModelResourceProfile
+        do {
+            replacementProfile = try Self.embeddingResourceProfile(for: request)
             let admission = try resourceAdmissionPlanner.evaluate(
                 profile: replacementProfile,
                 contextTokens: 0
@@ -875,24 +889,46 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
 
     private static func embeddingResourceProfile(
         for request: LoadEmbeddingModelRequest
-    ) -> ModelResourceProfile {
+    ) throws -> ModelResourceProfile {
         let identifier = request.embeddingModelID.rawValue.uuidString.lowercased()
-        let estimatedWeights = max(
-            64 * 1_024 * 1_024,
-            (request.expectedDimension ?? 384) * 256 * MemoryLayout<Float>.size
-        )
+        let dimension = request.expectedDimension ?? 384
+        let estimatedWeights: Int
+        if let binding = request.contentBinding {
+            estimatedWeights = try binding.files.reduce(into: 0) { total, file in
+                guard file.size <= Int64(Int.max) else {
+                    throw RuntimeServiceResourceAdmissionError.invalidWeightCardinality
+                }
+                let (next, overflow) = total.addingReportingOverflow(Int(file.size))
+                guard !overflow else {
+                    throw RuntimeServiceResourceAdmissionError.invalidWeightCardinality
+                }
+                total = next
+            }
+        } else {
+            let (scaled, overflow) = dimension.multipliedReportingOverflow(by: 256)
+            guard !overflow else {
+                throw RuntimeServiceResourceAdmissionError.invalidWeightCardinality
+            }
+            let (bytes, byteOverflow) = scaled.multipliedReportingOverflow(
+                by: MemoryLayout<Float>.size
+            )
+            guard !byteOverflow else {
+                throw RuntimeServiceResourceAdmissionError.invalidWeightCardinality
+            }
+            estimatedWeights = max(64 * 1_024 * 1_024, bytes)
+        }
+        let binding = request.contentBinding
         return ModelResourceProfile(
             profileID: "runtime-embedding-\(identifier)",
             modelID: ModelID(request.embeddingModelID.rawValue),
-            modelArtifactID: "embedding-\(identifier)",
-            modelRevision: request.revision ?? "unbound",
-            contentFingerprintSHA256: unboundFingerprint(
-                for: request.embeddingModelID.rawValue
-            ),
+            modelArtifactID: binding?.repositoryID ?? "embedding-\(identifier)",
+            modelRevision: binding?.revision ?? request.revision ?? "unbound",
+            contentFingerprintSHA256: binding?.fingerprintSHA256
+                ?? unboundFingerprint(for: request.embeddingModelID.rawValue),
             weightBytes: estimatedWeights,
             layerCount: 1,
             keyValueHeadCount: 1,
-            headDimension: max(1, request.expectedDimension ?? 384),
+            headDimension: dimension,
             scalarBytes: MemoryLayout<Float>.size,
             supportedContextTokens: 32_768,
             nonWeightOverheadBytes: 32 * 1_024 * 1_024,

@@ -1302,6 +1302,7 @@ public final class StructuredOutputController: ObservableObject {
             // profile on top personalizes citation style / jurisdiction / voice
             // without overriding the output structure.
             systemPrompt: structuredSystemPrompt(route),
+            contextWorkload: .groundedExactEvidence,
             options: route?.options ?? GenerationOptions()
         )
         return try await runtimeClient.collectGeneratedText(request)

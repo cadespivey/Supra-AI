@@ -776,6 +776,7 @@ public final class ModelLibrary: ObservableObject {
         // returns (the multi-GB read happens service-side during that call).
         var scopedAccess: SecurityScopedModelAccess?
         var scopedAccessTransferred = false
+        var preparedManagedLoad: ContentBoundAuthorizationExecutor.PreparedLoad?
         defer {
             if !scopedAccessTransferred {
                 scopedAccess?.release()
@@ -811,20 +812,33 @@ public final class ModelLibrary: ObservableObject {
         } else if let managedRoot = managedModelRoots.first(where: {
             ManagedModelStorage.isManaged(path: record.path, roots: [$0])
         }) {
-            // App-downloaded model: establish an app-held scope before minting
-            // the plain bookmark. A path or unscoped bookmark is not authority.
-            let access = SecurityScopedModelAccess(
-                url: URL(fileURLWithPath: record.path, isDirectory: true)
-            )
-            scopedAccess = access
-            guard access.hasAccess,
-                  let authorization = access.makeTransferableAuthorization() else {
-                loadState = .failed(message: "The downloaded model files could not be found. Re-download the model.")
+            // Managed installs already carry a revision-pinned manifest. Build
+            // the ordinary Models-tab request through the same byte-verified
+            // authorization used by protected loads; a managed model never
+            // falls back to UUID/path-only runtime authority.
+            let modelDirectory = URL(fileURLWithPath: record.path, isDirectory: true)
+            do {
+                let inspectedBinding = try await Task.detached(priority: .userInitiated) {
+                    try SignedReleaseModelAuthorization.inspectContentBinding(
+                        modelDirectory: modelDirectory,
+                        managedRoot: managedRoot
+                    )
+                }.value
+                let prepared = try await authorizationExecutor.prepare(
+                    modelDirectory: modelDirectory,
+                    managedRoot: managedRoot,
+                    expectedSHA256: inspectedBinding.fingerprintSHA256,
+                    modelID: ModelID(uuid),
+                    displayName: record.displayName
+                )
+                preparedManagedLoad = prepared
+                modelBookmark = prepared.request.modelBookmark
+                directoryIdentity = prepared.request.modelDirectoryIdentity
+                managedRootPath = prepared.request.managedRootPath
+            } catch {
+                loadState = .failed(message: error.localizedDescription)
                 return
             }
-            modelBookmark = authorization.bookmark
-            directoryIdentity = authorization.directoryIdentity
-            managedRootPath = managedRoot.path
         } else {
             // Raw paths are never authority at the service boundary. Preserve the
             // explicit failure path so the user is told to re-add the folder.
@@ -833,7 +847,7 @@ public final class ModelLibrary: ObservableObject {
             directoryIdentity = nil
         }
 
-        let request = LoadModelRequest(
+        let request = preparedManagedLoad?.request ?? LoadModelRequest(
             modelID: ModelID(uuid),
             modelPath: record.path,
             displayName: record.displayName,
@@ -843,8 +857,9 @@ public final class ModelLibrary: ObservableObject {
         )
 
         let retainedScopedAccess = scopedAccess
+        let retainedManagedAuthorization = preparedManagedLoad?.authorization
         scopedAccessTransferred = true
-        Task { @MainActor [weak self, retainedScopedAccess] in
+        Task { @MainActor [weak self, retainedScopedAccess, retainedManagedAuthorization] in
             defer { retainedScopedAccess?.release() }
             guard let self else { return }
             do {
@@ -863,6 +878,7 @@ public final class ModelLibrary: ObservableObject {
             } catch {
                 loadState = .failed(message: error.localizedDescription)
             }
+            withExtendedLifetime(retainedManagedAuthorization) {}
         }
         _ = await settleInFlightLoad()
     }

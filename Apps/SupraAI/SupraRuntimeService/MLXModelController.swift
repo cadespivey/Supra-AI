@@ -420,6 +420,7 @@ private func generationStream(
             expectedModelSHA256: resourceProfile.contentFingerprintSHA256,
             requestedContextTokens: budget,
             actualPromptTokens: actualPromptTokenCount,
+            reservedOutputTokens: options.maxOutputTokens,
             workload: contextWorkload,
             allowsExactSourceRepacking: allowsExactSourceRepacking
         ),
@@ -436,13 +437,13 @@ private func generationStream(
         break
 
     case .trimHistoryWithDisclosure:
-        while input.text.tokens.size > admission.maximumAdmittedContextTokens,
+        while input.text.tokens.size > admission.maximumAdmittedPromptTokens,
               !keptHistory.isEmpty {
             keptHistory.removeFirst()
             contextTrimmed = true
             input = try await prepared(keptHistory)
         }
-        guard input.text.tokens.size <= admission.maximumAdmittedContextTokens else {
+        guard input.text.tokens.size <= admission.maximumAdmittedPromptTokens else {
             throw MLXModelControllerError.contextAdmissionRequired(
                 admission.correctiveAction
             )

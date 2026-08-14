@@ -127,6 +127,7 @@ public final class DocumentClassificationService {
             modelID: modelID,
             prompt: DocumentClassificationPrompt.userContent(fileName: document.displayName, samples: samples),
             systemPrompt: DocumentClassificationPrompt.system(),
+            contextWorkload: .groundedExactEvidence,
             options: GenerationOptions(
                 preset: .extractive,
                 temperature: 0.0,

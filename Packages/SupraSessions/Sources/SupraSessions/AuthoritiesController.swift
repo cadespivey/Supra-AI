@@ -311,6 +311,7 @@ public final class AuthoritiesController: ObservableObject {
             modelID: modelID,
             prompt: prompt,
             systemPrompt: nil,
+            contextWorkload: .groundedExactEvidence,
             options: options
         )
         guard let raw = try? await runtimeClient.collectGeneratedText(request),

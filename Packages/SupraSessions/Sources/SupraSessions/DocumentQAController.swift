@@ -1023,6 +1023,7 @@ public final class DocumentQAController: ObservableObject {
             // the user's profile on top personalizes citation style / jurisdiction /
             // voice without loosening the grounding discipline.
             systemPrompt: routedSystemPrompt(route),
+            contextWorkload: .groundedExactEvidence,
             options: route?.options ?? GenerationOptions()
         )
         activeGenerationID = request.generationID

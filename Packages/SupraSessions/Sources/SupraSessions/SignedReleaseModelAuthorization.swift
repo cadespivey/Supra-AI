@@ -108,6 +108,26 @@ public final class SignedReleaseModelAuthorization: @unchecked Sendable {
         )
     }
 
+    public func makeEmbeddingLoadRequest(
+        embeddingModelID: DocumentEmbeddingModelID,
+        displayName: String,
+        revision: String?,
+        expectedDimension: Int?
+    ) throws -> LoadEmbeddingModelRequest {
+        try reverify()
+        return LoadEmbeddingModelRequest(
+            embeddingModelID: embeddingModelID,
+            modelPath: modelDirectory.path,
+            displayName: displayName,
+            revision: revision,
+            expectedDimension: expectedDimension,
+            modelBookmark: modelBookmark,
+            managedRootPath: managedRoot.path,
+            modelDirectoryIdentity: modelDirectoryIdentity,
+            contentBinding: contentBinding
+        )
+    }
+
     /// Repeats the complete identity, tree, manifest, and byte-fingerprint
     /// verification. The signed smoke runner calls this after model unload.
     public func reverify() throws {
@@ -367,6 +387,51 @@ public final class SignedReleaseModelAuthorization: @unchecked Sendable {
     private struct Snapshot {
         let manifest: ModelArtifactManifest
         let contentBinding: RuntimeModelContentBinding
+    }
+}
+
+struct ContentBoundEmbeddingAuthorizationExecutor: Sendable {
+    struct PreparedLoad: @unchecked Sendable {
+        var authorization: SignedReleaseModelAuthorization
+        var request: LoadEmbeddingModelRequest
+    }
+
+    static let live = ContentBoundEmbeddingAuthorizationExecutor()
+
+    func prepare(
+        modelDirectory: URL,
+        managedRoot: URL,
+        embeddingModelID: DocumentEmbeddingModelID,
+        displayName: String,
+        revision: String?,
+        expectedDimension: Int?
+    ) async throws -> PreparedLoad {
+        let worker = Task.detached(priority: .userInitiated) {
+            let binding = try SignedReleaseModelAuthorization.inspectContentBinding(
+                modelDirectory: modelDirectory,
+                managedRoot: managedRoot
+            )
+            try Task.checkCancellation()
+            let authorization = try SignedReleaseModelAuthorization.authorize(
+                modelDirectory: modelDirectory,
+                managedRoot: managedRoot,
+                expectedSHA256: binding.fingerprintSHA256
+            )
+            try Task.checkCancellation()
+            let request = try authorization.makeEmbeddingLoadRequest(
+                embeddingModelID: embeddingModelID,
+                displayName: displayName,
+                revision: revision,
+                expectedDimension: expectedDimension
+            )
+            try Task.checkCancellation()
+            return PreparedLoad(authorization: authorization, request: request)
+        }
+        return try await withTaskCancellationHandler {
+            try await worker.value
+        } onCancel: {
+            worker.cancel()
+        }
     }
 }
 

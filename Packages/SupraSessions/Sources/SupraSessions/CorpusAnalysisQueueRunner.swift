@@ -275,6 +275,7 @@ extension CorpusAnalysisQueueRunner {
                     prompt: input.prompt,
                     systemPrompt: generationConfiguration.systemPrompt,
                     history: [],
+                    contextWorkload: .groundedExactEvidence,
                     options: generationConfiguration.options
                 )
                 let cancellation = CorpusAnalysisGenerationCancellation(

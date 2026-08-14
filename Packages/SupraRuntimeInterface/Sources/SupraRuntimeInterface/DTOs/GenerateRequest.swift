@@ -44,7 +44,7 @@ public struct GenerateRequest: Codable, Sendable {
         prompt: String,
         systemPrompt: String?,
         history: [Turn] = [],
-        contextWorkload: RuntimeContextWorkload = .ordinaryConversation,
+        contextWorkload: RuntimeContextWorkload,
         allowsExactSourceRepacking: Bool = false,
         options: GenerationOptions
     ) {

@@ -1103,6 +1103,7 @@ public final class ResearchSessionController: ObservableObject {
             // machine-parsed into `## Query N` blocks, so a broader route prompt
             // must not override the required structure.
             systemPrompt: defaultSystemPrompt,
+            contextWorkload: .groundedExactEvidence,
             options: options
         )
         return try await runtimeClient.collectGeneratedText(request)

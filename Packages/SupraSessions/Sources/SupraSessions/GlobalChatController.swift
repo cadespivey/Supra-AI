@@ -1258,6 +1258,9 @@ public final class GlobalChatController: ObservableObject {
                     prompt: effectiveModelPrompt,
                     systemPrompt: effectiveSystemPrompt,
                     history: history,
+                    contextWorkload: context == nil
+                        ? .ordinaryConversation
+                        : .groundedExactEvidence,
                     options: effectiveOptions
                 )
 
@@ -1819,6 +1822,7 @@ public final class GlobalChatController: ObservableObject {
                 prompt: critiquePrompt,
                 systemPrompt: systemPrompt,
                 history: history,
+                contextWorkload: .groundedExactEvidence,
                 options: options
             )
             let output = ReasoningContent.answer(from: try await runtimeClient.collectGeneratedText(request))
@@ -1845,6 +1849,7 @@ public final class GlobalChatController: ObservableObject {
                 modelID: modelID,
                 prompt: prompt,
                 systemPrompt: systemPrompt,
+                contextWorkload: .ordinaryConversation,
                 options: options
             )
             let output = ReasoningContent.answer(from: try await runtimeClient.collectGeneratedText(request))
@@ -2112,6 +2117,7 @@ public final class GlobalChatController: ObservableObject {
             prompt: answerPrompt,
             systemPrompt: systemPrompt,
             history: history,
+            contextWorkload: .groundedExactEvidence,
             options: options
         )
         var output = ReasoningContent.answer(from: try await runtimeClient.collectGeneratedText(request))
@@ -2149,7 +2155,8 @@ public final class GlobalChatController: ObservableObject {
             )
             let revisionRequest = GenerateRequest(
                 generationID: generationID, modelID: modelID, prompt: revisionPrompt,
-                systemPrompt: systemPrompt, history: history, options: options
+                systemPrompt: systemPrompt, history: history,
+                contextWorkload: .groundedExactEvidence, options: options
             )
             if let revisedRaw = try? await runtimeClient.collectGeneratedText(revisionRequest) {
                 let revised = ReasoningContent.answer(from: revisedRaw)
@@ -2934,6 +2941,7 @@ public final class GlobalChatController: ObservableObject {
             modelID: modelID,
             prompt: prompt,
             systemPrompt: defaultSystemPrompt,
+            contextWorkload: .ordinaryConversation,
             options: options
         )
         guard let raw = try? await runtimeClient.collectGeneratedText(request),
@@ -3559,6 +3567,7 @@ public final class GlobalChatController: ObservableObject {
             modelID: modelID,
             prompt: prompt,
             systemPrompt: defaultSystemPrompt,
+            contextWorkload: .ordinaryConversation,
             options: options
         )
         guard let raw = try? await runtimeClient.collectGeneratedText(request),

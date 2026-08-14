@@ -210,6 +210,7 @@ public struct ValidationRunner: Sendable {
                 modelID: modelID,
                 prompt: test.prompt,
                 systemPrompt: systemPrompt,
+                contextWorkload: .groundedExactEvidence,
                 options: options
             )
 

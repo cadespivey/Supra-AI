@@ -136,6 +136,7 @@ public struct FirmStyleExemplarParser: Sendable {
             modelID: modelID,
             prompt: prompt,
             systemPrompt: Self.systemContract(kind: kind),
+            contextWorkload: .groundedExactEvidence,
             options: GenerationOptions(
                 preset: .extractive,
                 temperature: 0.0,

@@ -21,6 +21,7 @@ struct RuntimeLetterGenerator: LetterGenerator {
             modelID: modelID,
             prompt: Self.buildPrompt(parts),
             systemPrompt: Self.buildSystemPrompt(route.systemPrompt),
+            contextWorkload: .groundedExactEvidence,
             options: route.options
         )
         let raw = try await runtimeClient.collectGeneratedText(request)

@@ -46,7 +46,10 @@ public final class ModelExecutionPermit: RuntimeClientProtocol, @unchecked Senda
 
     public func loadModel(_ request: LoadModelRequest) async throws -> LoadModelResponse {
         try validate(modelID: request.modelID)
-        if let contentBinding = request.contentBinding {
+        if modelBinding != nil {
+            guard let contentBinding = request.contentBinding else {
+                throw ModelExecutionError.modelBindingMismatch
+            }
             try validate(
                 repositoryID: contentBinding.repositoryID,
                 revision: contentBinding.revision,
@@ -110,11 +113,23 @@ public final class ModelExecutionPermit: RuntimeClientProtocol, @unchecked Senda
     public func loadEmbeddingModel(
         _ request: LoadEmbeddingModelRequest
     ) async throws -> LoadEmbeddingModelResponse {
+        try validate(modelID: ModelID(request.embeddingModelID.rawValue))
+        if modelBinding != nil {
+            guard let contentBinding = request.contentBinding else {
+                throw ModelExecutionError.modelBindingMismatch
+            }
+            try validate(
+                repositoryID: contentBinding.repositoryID,
+                revision: contentBinding.revision,
+                fingerprintSHA256: contentBinding.fingerprintSHA256
+            )
+        }
         return try await runtimeClient.loadEmbeddingModel(request)
     }
 
     public func embedTexts(_ request: EmbedTextRequest) async throws -> EmbedTextResponse {
-        try await runtimeClient.embedTexts(request)
+        try validate(modelID: ModelID(request.embeddingModelID.rawValue))
+        return try await runtimeClient.embedTexts(request)
     }
 
     public func embeddingStatus() async throws -> EmbeddingModelStatus {

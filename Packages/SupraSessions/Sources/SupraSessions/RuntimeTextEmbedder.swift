@@ -76,8 +76,28 @@ public actor RuntimeTextEmbedder: TextEmbedder {
 
     private func ensureLoaded() async throws {
         if loaded { return }
+        let embeddingModelURL = URL(fileURLWithPath: modelPath, isDirectory: true)
+        let expectedDimension = dimension > 0 ? dimension : nil
+        if ManagedModelStorage.isManagedEmbedding(path: modelPath) {
+            let prepared = try await ContentBoundEmbeddingAuthorizationExecutor.live.prepare(
+                modelDirectory: embeddingModelURL,
+                managedRoot: ManagedModelStorage.embeddingModelsDirectory(),
+                embeddingModelID: embeddingModelID,
+                displayName: modelDisplayName,
+                revision: modelRevision,
+                expectedDimension: expectedDimension
+            )
+            let response = try await runtimeClient.loadEmbeddingModel(prepared.request)
+            _ = prepared.authorization
+            guard response.state == .loaded else {
+                throw TextEmbedderError.loadFailed(response.error?.message ?? "unknown error")
+            }
+            loaded = true
+            return
+        }
+
         let access = SecurityScopedModelAccess(
-            url: URL(fileURLWithPath: modelPath, isDirectory: true)
+            url: embeddingModelURL
         )
         defer { access.release() }
         guard access.hasAccess,
@@ -93,11 +113,9 @@ public actor RuntimeTextEmbedder: TextEmbedder {
                 // A non-positive dimension means "unknown" (custom model not yet
                 // verified): skip the assertion rather than fail the load. Auto-verify
                 // normally persists the real dimension before any indexing runs.
-                expectedDimension: dimension > 0 ? dimension : nil,
+                expectedDimension: expectedDimension,
                 modelBookmark: authorization.bookmark,
-                managedRootPath: ManagedModelStorage.isManagedEmbedding(path: modelPath)
-                    ? ManagedModelStorage.embeddingModelsDirectory().path
-                    : nil,
+                managedRootPath: nil,
                 modelDirectoryIdentity: authorization.directoryIdentity
             )
         )

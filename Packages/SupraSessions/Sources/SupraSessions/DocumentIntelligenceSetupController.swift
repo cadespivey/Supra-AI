@@ -314,33 +314,9 @@ public final class DocumentIntelligenceSetupController: ObservableObject {
             embeddingVerifyInFlight = false
         }
 
-        let access = SecurityScopedModelAccess(
-            url: URL(fileURLWithPath: path, isDirectory: true)
-        )
-        defer { access.release() }
-        guard access.hasAccess,
-              let authorization = access.makeTransferableAuthorization() else {
-            embeddingTestPassed = false
-            message = "The embedding model folder could not be authorized for the runtime service."
-            return
-        }
-        let request = LoadEmbeddingModelRequest(
-            embeddingModelID: DocumentEmbeddingModelID(UUID(uuidString: model.id) ?? UUID()),
-            modelPath: path,
-            displayName: model.displayName,
-            revision: model.revision,
-            // A non-positive stored dimension means "unknown" (e.g. a custom repo):
-            // skip the post-load assertion and discover the real value from the probe.
-            expectedDimension: model.dimension > 0 ? model.dimension : nil,
-            modelBookmark: authorization.bookmark,
-            managedRootPath: ManagedModelStorage.isManagedEmbedding(path: path)
-                ? ManagedModelStorage.embeddingModelsDirectory().path
-                : nil,
-            modelDirectoryIdentity: authorization.directoryIdentity
-        )
         let response: LoadEmbeddingModelResponse
         do {
-            response = try await runtimeClient.loadEmbeddingModel(request)
+            response = try await loadEmbeddingModel(model)
         } catch {
             embeddingTestPassed = false
             message = error.localizedDescription
@@ -481,38 +457,62 @@ public final class DocumentIntelligenceSetupController: ObservableObject {
               (try? Self.verifyManagedEmbeddingModel(model)) != nil else { return }
         embeddingWarmInFlight = true
         warmedEmbeddingModelID = model.id
-        let access = SecurityScopedModelAccess(
-            url: URL(fileURLWithPath: path, isDirectory: true)
-        )
-        guard access.hasAccess,
-              let authorization = access.makeTransferableAuthorization() else {
-            embeddingWarmInFlight = false
-            warmedEmbeddingModelID = nil
-            return
-        }
-        let request = LoadEmbeddingModelRequest(
-            embeddingModelID: DocumentEmbeddingModelID(UUID(uuidString: model.id) ?? UUID()),
-            modelPath: path,
-            displayName: model.displayName,
-            revision: model.revision,
-            expectedDimension: model.dimension > 0 ? model.dimension : nil,
-            modelBookmark: authorization.bookmark,
-            managedRootPath: ManagedModelStorage.isManagedEmbedding(path: path)
-                ? ManagedModelStorage.embeddingModelsDirectory().path
-                : nil,
-            modelDirectoryIdentity: authorization.directoryIdentity
-        )
         Task {
-            defer {
-                access.release()
-                embeddingWarmInFlight = false
-            }
+            defer { embeddingWarmInFlight = false }
             do {
-                _ = try await runtimeClient.loadEmbeddingModel(request)
+                _ = try await loadEmbeddingModel(model)
             } catch {
                 warmedEmbeddingModelID = nil // allow a retry on the next trigger
             }
         }
+    }
+
+    private func loadEmbeddingModel(
+        _ model: DocumentEmbeddingModelRecord
+    ) async throws -> LoadEmbeddingModelResponse {
+        guard let path = model.localPath, !path.isEmpty else {
+            throw TextEmbedderError.modelNotDownloaded
+        }
+        let embeddingModelID = DocumentEmbeddingModelID(
+            UUID(uuidString: model.id) ?? UUID()
+        )
+        let expectedDimension = model.dimension > 0 ? model.dimension : nil
+        let modelDirectory = URL(fileURLWithPath: path, isDirectory: true)
+
+        if ManagedModelStorage.isManagedEmbedding(path: path) {
+            let prepared = try await ContentBoundEmbeddingAuthorizationExecutor.live.prepare(
+                modelDirectory: modelDirectory,
+                managedRoot: ManagedModelStorage.embeddingModelsDirectory(),
+                embeddingModelID: embeddingModelID,
+                displayName: model.displayName,
+                revision: model.revision,
+                expectedDimension: expectedDimension
+            )
+            let response = try await runtimeClient.loadEmbeddingModel(prepared.request)
+            _ = prepared.authorization
+            return response
+        }
+
+        let access = SecurityScopedModelAccess(url: modelDirectory)
+        defer { access.release() }
+        guard access.hasAccess,
+              let authorization = access.makeTransferableAuthorization() else {
+            throw TextEmbedderError.loadFailed(
+                "the model-folder security scope could not be activated"
+            )
+        }
+        return try await runtimeClient.loadEmbeddingModel(
+            LoadEmbeddingModelRequest(
+                embeddingModelID: embeddingModelID,
+                modelPath: path,
+                displayName: model.displayName,
+                revision: model.revision,
+                expectedDimension: expectedDimension,
+                modelBookmark: authorization.bookmark,
+                managedRootPath: nil,
+                modelDirectoryIdentity: authorization.directoryIdentity
+            )
+        )
     }
 
     private static func verifyManagedEmbeddingModel(_ model: DocumentEmbeddingModelRecord) throws {

@@ -102,6 +102,7 @@ enum DocumentRerank {
             modelID: modelID,
             prompt: prompt(question: question, candidates: candidates, limit: limit),
             systemPrompt: rerankSystemPrompt,
+            contextWorkload: .groundedExactEvidence,
             options: options
         )
         guard let raw = try? await runtimeClient.collectGeneratedText(request) else {

@@ -55,6 +55,7 @@ public final class BillingDraftService {
                 modelID: modelID,
                 prompt: userPrompt,
                 systemPrompt: systemPrompt,
+                contextWorkload: .groundedExactEvidence,
                 options: GenerationOptions(
                     preset: .extractive,
                     temperature: 0.0,

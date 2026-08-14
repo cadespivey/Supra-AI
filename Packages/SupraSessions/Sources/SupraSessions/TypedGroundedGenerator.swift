@@ -66,7 +66,8 @@ public enum TypedGroundedGenerator {
         for attempt in 1...totalAttempts {
             let request = GenerateRequest(
                 generationID: GenerationID(), modelID: modelID,
-                prompt: prompt, systemPrompt: systemPrompt, options: options
+                prompt: prompt, systemPrompt: systemPrompt,
+                contextWorkload: .groundedExactEvidence, options: options
             )
             guard let raw = try? await runtimeClient.collectGeneratedText(request) else {
                 return .fallback(.modelError, attempts: attempt)

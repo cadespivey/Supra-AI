@@ -328,6 +328,7 @@ private struct RuntimeXPCIntegrationRunner {
                         expectedModelSHA256: wrongExpectedSHA256,
                         prompt: Self.completionPrompt,
                         systemPrompt: nil,
+                        contextWorkload: .ordinaryConversation,
                         options: GenerationOptions(maxOutputTokens: 17)
                     )
                 )
@@ -372,6 +373,7 @@ private struct RuntimeXPCIntegrationRunner {
                     expectedModelSHA256: fixture.contentBinding.fingerprintSHA256,
                     prompt: Self.completionPrompt,
                     systemPrompt: nil,
+                    contextWorkload: .ordinaryConversation,
                     options: GenerationOptions(maxOutputTokens: 8)
                 )
             )
@@ -399,6 +401,7 @@ private struct RuntimeXPCIntegrationRunner {
                     modelID: modelID,
                     prompt: Self.holdPrompt,
                     systemPrompt: nil,
+                    contextWorkload: .ordinaryConversation,
                     options: GenerationOptions(maxOutputTokens: 8)
                 )
             )
@@ -463,6 +466,7 @@ private struct RuntimeXPCIntegrationRunner {
                         modelID: modelID,
                         prompt: Self.installRacePrompt,
                         systemPrompt: nil,
+                        contextWorkload: .ordinaryConversation,
                         options: GenerationOptions(maxOutputTokens: 8)
                     )
                 )
@@ -484,6 +488,7 @@ private struct RuntimeXPCIntegrationRunner {
                         modelID: modelID,
                         prompt: Self.completionPrompt,
                         systemPrompt: nil,
+                        contextWorkload: .ordinaryConversation,
                         options: GenerationOptions(maxOutputTokens: 8)
                     )
                 )
@@ -509,6 +514,7 @@ private struct RuntimeXPCIntegrationRunner {
                         modelID: modelID,
                         prompt: Self.reservationRacePrompt,
                         systemPrompt: nil,
+                        contextWorkload: .ordinaryConversation,
                         options: GenerationOptions(maxOutputTokens: 8)
                     )
                 )
@@ -548,9 +554,10 @@ private struct RuntimeXPCIntegrationRunner {
                 GenerateRequest(
                     generationID: terminatedID,
                     modelID: modelID,
-                    prompt: Self.holdPrompt,
-                    systemPrompt: nil,
-                    options: GenerationOptions(maxOutputTokens: 8)
+                prompt: Self.holdPrompt,
+                systemPrompt: nil,
+                contextWorkload: .ordinaryConversation,
+                options: GenerationOptions(maxOutputTokens: 8)
                 )
             )
         )
@@ -571,6 +578,7 @@ private struct RuntimeXPCIntegrationRunner {
                         modelID: modelID,
                         prompt: Self.holdPrompt,
                         systemPrompt: nil,
+                        contextWorkload: .ordinaryConversation,
                         options: GenerationOptions(maxOutputTokens: 8)
                     )
                 )
@@ -632,6 +640,7 @@ private struct RuntimeXPCIntegrationRunner {
                         modelID: modelID,
                         prompt: Self.staleTerminationPrompt,
                         systemPrompt: nil,
+                        contextWorkload: .ordinaryConversation,
                         options: GenerationOptions(maxOutputTokens: 8)
                     )
                 )
@@ -656,6 +665,7 @@ private struct RuntimeXPCIntegrationRunner {
                         modelID: modelID,
                         prompt: Self.holdPrompt,
                         systemPrompt: nil,
+                        contextWorkload: .ordinaryConversation,
                         options: GenerationOptions(maxOutputTokens: 8)
                     )
                 )

@@ -1465,6 +1465,7 @@ public final class DocumentChronologyController: ObservableObject {
             // Keep chronology structure isolated from the user's free-form profile
             // while still applying task-specific routing instructions.
             systemPrompt: routedSystemPrompt(route),
+            contextWorkload: .groundedExactEvidence,
             options: route?.options ?? GenerationOptions()
         )
         // Track the in-flight generation so cancel() can stop the runtime, not
