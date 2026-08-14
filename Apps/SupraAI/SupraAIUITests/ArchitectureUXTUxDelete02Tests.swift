@@ -30,7 +30,9 @@ final class ArchitectureUXTUxDelete02Tests: XCTestCase {
         permanent.click()
 
         let expectedMessage = "This removes the matter’s source data, chats, saved in-app outputs, and export records. Prior audit history and previously written export files remain. This cannot be undone."
-        let message = app.staticTexts[expectedMessage]
+        let message = app.staticTexts.matching(
+            NSPredicate(format: "label == %@", expectedMessage)
+        ).firstMatch
         XCTAssertTrue(message.waitForExistence(timeout: 5), expectedMessage)
         let text = [message.label, message.value as? String].compactMap { $0 }.joined(separator: " ")
         XCTAssertTrue(text.localizedCaseInsensitiveContains("cannot be undone"))
@@ -65,7 +67,7 @@ final class ArchitectureUXTUxDelete02Tests: XCTestCase {
         // The identifier is attached to the full-width DisclosureGroup. Click
         // its leading disclosure control instead of the empty center of that
         // accessibility frame.
-        details.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.5)).click()
+        details.coordinate(withNormalizedOffset: CGVector(dx: 0.08, dy: 0.5)).click()
         let facts = app.descendants(matching: .any)["restore.recovery.technicalFacts"]
         XCTAssertTrue(facts.waitForExistence(timeout: 5))
         let factText = [facts.label, facts.value as? String].compactMap { $0 }.joined(separator: " ")
