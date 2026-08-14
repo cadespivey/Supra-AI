@@ -587,7 +587,7 @@ struct GlobalChatsView: View {
                     .foregroundStyle(.tertiary)
                 Text("How can I help with your legal work?")
                     .font(.supraTitle)
-                Text("Pick a starting point or ask anything.")
+                Text("Choose an example or describe the work you need.")
                     .font(.supraSubheadline)
                     .foregroundStyle(.secondary)
             }
@@ -731,10 +731,11 @@ struct GlobalChatsView: View {
             // TextField(axis:.vertical)'s commit-and-reselect. Shift-Return inserts
             // a newline; ⌘-Return stays with the send button's shortcut.
             SupraComposerField(
-                "Message — type / for commands",
+                "Ask a question or describe the work you need.",
                 text: $draft,
                 isFocused: $inputFocused,
                 lineRange: 1...6,
+                accessibilityID: "chat.composer",
                 onPrimaryAction: send
             )
             if controller.isGenerating {
@@ -777,7 +778,7 @@ struct GlobalChatsView: View {
                 .font(.supraCaption)
                 .foregroundStyle(.secondary)
         case .idle:
-            Text("Task models load on demand. Assign them in Models for model answers; verification can run without one.")
+            Text("Local assistant models load when needed. Assign them in AI Setup; verification can run without one.")
                 .font(.supraCaption)
                 .foregroundStyle(.secondary)
         }
