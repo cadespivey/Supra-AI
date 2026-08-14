@@ -45,6 +45,9 @@ struct MatterDocumentsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+#if DEBUG
+            demoReadinessQualificationElements
+#endif
             if !controller.setupReady {
                 setupBanner
             }
@@ -841,28 +844,145 @@ struct MatterDocumentsView: View {
 
     private func statusBadge(_ document: MatterDocumentRecord) -> some View {
         let reindexing = controller.isCorrectionReindexing(document)
-        let (label, color) = reindexing
-            ? ("Reindexing", Color.blue)
-            : Self.statusAppearance(document.status)
-        return Text(label)
-            .font(.supraCaption.weight(.medium))
-            .padding(.horizontal, 5).padding(.vertical, 1)
-            .background(color.opacity(0.18), in: Capsule())
-            .foregroundStyle(color)
-            .accessibilityIdentifier(reindexing ? "documents.reindexingBadge" : "")
-    }
+        let projection = controller.readiness(documentID: document.id)
+        let appearance = reindexing
+            ? ReadinessBadgeAppearance(
+                label: "Reindexing",
+                accessibilityValue: "Base not ready: updated text is being reindexed",
+                color: .blue
+            )
+            : Self.statusAppearance(projection)
+        return HStack(spacing: 0) {
+            Text(appearance.label)
+                .font(.supraCaption.weight(.medium))
+                .padding(.horizontal, 5).padding(.vertical, 1)
+                .background(appearance.color.opacity(0.18), in: Capsule())
+                .foregroundStyle(appearance.color)
+                .accessibilityValue(appearance.accessibilityValue)
+                .accessibilityIdentifier("documents.readinessBadge.\(document.id)")
 
-    private static func statusAppearance(_ status: String) -> (String, Color) {
-        switch MatterDocumentStatus(rawValue: status) {
-        case .ready: ("Ready", .green)
-        case .failed: ("Failed", .red)
-        case .needsReview: ("Needs review", .orange)
-        case .needsOCR, .ocrPending: ("OCR", .orange)
-        case .importing, .extracting, .indexing, .embedding: ("Processing", .blue)
-        case .deleted: ("Deleted", .secondary)
-        case .none: (status, .secondary)
+            // Preserve the established correction-flow identifier while the
+            // visible badge now owns one stable per-document readiness identity.
+            if reindexing {
+                Text("Reindexing")
+                    .foregroundStyle(.clear)
+                    .frame(width: 1, height: 1)
+                    .accessibilityIdentifier("documents.reindexingBadge")
+            }
         }
     }
+
+    private struct ReadinessBadgeAppearance {
+        let label: String
+        let accessibilityValue: String
+        let color: Color
+    }
+
+    private static func statusAppearance(
+        _ projection: DocumentReadinessConsumerProjection?
+    ) -> ReadinessBadgeAppearance {
+        guard let projection else {
+            return ReadinessBadgeAppearance(
+                label: "Readiness unavailable",
+                accessibilityValue: "Base readiness unavailable; refresh the document list",
+                color: .secondary
+            )
+        }
+        if projection.isBaseReady {
+            return ReadinessBadgeAppearance(
+                label: "Ready",
+                accessibilityValue: "Base ready",
+                color: .green
+            )
+        }
+
+        return switch projection.primaryBaseExclusion {
+        case .deleted:
+            ReadinessBadgeAppearance(
+                label: "Deleted",
+                accessibilityValue: "Base not ready: document is in the Recycle Bin",
+                color: .secondary
+            )
+        case .extractionFailed, .processingFailed, .textIndexFailed:
+            ReadinessBadgeAppearance(
+                label: "Processing failed",
+                accessibilityValue: "Base not ready: document processing failed; retry processing",
+                color: .red
+            )
+        case .reviewRequired:
+            ReadinessBadgeAppearance(
+                label: "Needs review",
+                accessibilityValue: "Base not ready: review the extracted document text",
+                color: .orange
+            )
+        case .extractionIncomplete:
+            ReadinessBadgeAppearance(
+                label: "Processing",
+                accessibilityValue: "Base not ready: text extraction is still in progress",
+                color: .blue
+            )
+        case .selectedRevisionIncoherent, .staleRevision, .textIndexIncomplete:
+            ReadinessBadgeAppearance(
+                label: "Needs reindexing",
+                accessibilityValue: "Base not ready: the source changed or its text index is stale; reindex required",
+                color: .orange
+            )
+        case .activeEmbeddingModelMissing:
+            ReadinessBadgeAppearance(
+                label: "Setup required",
+                accessibilityValue: "Base not ready: set up a document search model",
+                color: .orange
+            )
+        case .selectionInconsistent, .unverified:
+            ReadinessBadgeAppearance(
+                label: "Setup required",
+                accessibilityValue: "Base not ready: verify the selected document search model",
+                color: .orange
+            )
+        case .semanticIndexIncomplete:
+            ReadinessBadgeAppearance(
+                label: "Needs reindexing",
+                accessibilityValue: "Base not ready: the semantic model index is incomplete; reindex required",
+                color: .orange
+            )
+        case .none:
+            ReadinessBadgeAppearance(
+                label: "Not ready",
+                accessibilityValue: "Base not ready: refresh or retry document processing",
+                color: .secondary
+            )
+        }
+    }
+
+#if DEBUG
+    /// T-DATA-READY-02's native seam. These values are derived from the exact
+    /// Store receipts cached by the shipping Documents controller. All other
+    /// consumer adapters preserve that same base receipt; package gates cover
+    /// their additive task exclusions separately.
+    @ViewBuilder
+    private var demoReadinessQualificationElements: some View {
+        if ProcessInfo.processInfo.arguments.contains("-uiTestCanonicalDemoReadiness") {
+            let projections = controller.documents.compactMap {
+                controller.readiness(documentID: $0.id)
+            }
+            let readyCount = projections.filter(\.isBaseReady).count
+            let baseSummary = "\(readyCount) of \(controller.documents.count) base ready"
+            ZStack {
+                ForEach(DocumentReadinessConsumer.allCases, id: \.rawValue) { consumer in
+                    Text(consumer.rawValue)
+                        .foregroundStyle(.clear)
+                        .frame(width: 1, height: 1)
+                        .accessibilityLabel(consumer.rawValue)
+                        .accessibilityValue(baseSummary)
+                        .accessibilityIdentifier(
+                            "readiness.demo.consumer.\(consumer.rawValue)"
+                        )
+                }
+            }
+            .frame(width: 1, height: 1)
+        }
+    }
+#endif
 
     private func phaseLabel(_ phase: String) -> String {
         switch DocumentProcessingPhase(rawValue: phase) {

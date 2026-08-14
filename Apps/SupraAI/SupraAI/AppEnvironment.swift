@@ -148,6 +148,54 @@ struct DatabaseRecoveryState: Sendable {
     }
 }
 
+private enum CanonicalReadinessSeed {
+    static let embeddingModelID = "canonical-readiness-embedding-model-769"
+    static let embeddingModelRepoID = "synthetic/canonical-readiness-embedding-769"
+    static let embeddingModelDisplayName = "Canonical Readiness Embedding 769"
+    static let embeddingModelRevision = "canonical-readiness-revision-23"
+    static let embeddingDimension = 8
+    static let chunkerVersion = 2
+    static let timestamp = Date(timeIntervalSince1970: 1_946_249_769)
+
+    static let demoMSAName = "Master Services Agreement (2024).pdf"
+    static let demoDepositionName = "Deposition Tr. — R. Calloway (Vol. I).pdf"
+    static let demoCoverageName = "Insurance Coverage Letter.docx"
+}
+
+private enum CanonicalReadinessSeedError: Error, LocalizedError {
+    case selectedEmbeddingModelUnavailable
+    case receiptNotReady(documentID: String, exclusions: [DocumentReadinessExclusionReason])
+    case consumerMismatch(consumer: DocumentReadinessConsumer, ready: Int, total: Int)
+
+    var errorDescription: String? {
+        switch self {
+        case .selectedEmbeddingModelUnavailable:
+            "The synthetic canonical-readiness embedding model is unavailable."
+        case let .receiptNotReady(documentID, exclusions):
+            "Document \(documentID) did not produce a base-ready receipt (\(exclusions.map(\.rawValue).joined(separator: ", ")))."
+        case let .consumerMismatch(consumer, ready, total):
+            "The \(consumer.rawValue) demo projection reported \(ready) of \(total) base ready."
+        }
+    }
+}
+
+#if DEBUG
+private enum CanonicalReadinessUITestScenario {
+    case receiptTable
+    case canonicalDemo
+
+    init?(arguments: [String]) {
+        let tableCount = arguments.filter { $0 == "-uiTestCanonicalDocumentReadiness" }.count
+        let demoCount = arguments.filter { $0 == "-uiTestCanonicalDemoReadiness" }.count
+        switch (tableCount, demoCount) {
+        case (1, 0): self = .receiptTable
+        case (0, 1): self = .canonicalDemo
+        default: return nil
+        }
+    }
+}
+#endif
+
 @MainActor
 final class AppEnvironment: ObservableObject {
     @Published var runtimeServiceState: RuntimeServiceState = .disconnected
@@ -655,7 +703,9 @@ final class AppEnvironment: ObservableObject {
         // lives in a separate runtime slot from the chat model, so this never evicts
         // the chat model — and it removes the first-use wait on Document Q&A, semantic
         // search, and import indexing.
-        if !Self.isUITestMode, !Self.isHeadlessProbeMode { documentSetupController.prewarmEmbeddingModel() }
+        if !Self.isUITestMode, !Self.isDemoMode, !Self.isHeadlessProbeMode {
+            documentSetupController.prewarmEmbeddingModel()
+        }
         // Auto-purge documents and chats soft-deleted past the retention window
         // (plan §12.2). Matters are never auto-purged — only manually from the Recycle Bin.
         let maintenance = DocumentMaintenance(store: store)
@@ -1111,6 +1161,9 @@ final class AppEnvironment: ObservableObject {
             _ = try? mattersController.createMatter(name: "McKernon Motors v. Liberty Rail")
             mattersController.loadMatters()
         }
+#if DEBUG
+        seedUITestCanonicalReadinessIfNeeded()
+#endif
         seedUITestCitationsChatIfNeeded()
         seedUITestRemediationWarningsIfNeeded()
         seedUITestInterruptedDraftRecoveryIfNeeded()
@@ -1123,6 +1176,109 @@ final class AppEnvironment: ObservableObject {
     }
 
 #if DEBUG
+    /// Hermetic native boundary for T-DATA-READY-01/02/03. Exact flag parsing
+    /// rejects duplicate or conflicting scenarios; all records remain in the
+    /// throwaway UI-test Store selected by `makeStore()`.
+    private func seedUITestCanonicalReadinessIfNeeded() {
+        guard let scenario = CanonicalReadinessUITestScenario(
+            arguments: ProcessInfo.processInfo.arguments
+        ), let matterID = mattersController.matters.first?.id else { return }
+
+        do {
+            try configureCanonicalReadinessEmbeddingModel()
+            switch scenario {
+            case .receiptTable:
+                try seedUITestCanonicalReadinessTable(matterID: matterID)
+            case .canonicalDemo:
+                let documentIDs = try seedCanonicalDemoDocuments(matterID: matterID)
+                try validateCanonicalDemoReadiness(
+                    matterID: matterID,
+                    documentIDs: documentIDs
+                )
+            }
+        } catch {
+            assertionFailure("Could not seed canonical document-readiness fixture: \(error)")
+        }
+    }
+
+    private func seedUITestCanonicalReadinessTable(matterID: String) throws {
+        let readyID = try seedCanonicalReadinessDocumentGraph(
+            documentID: "readiness-ready-ui-document-743",
+            matterID: matterID,
+            name: "Canonical Ready 743.txt",
+            shaSeed: "readiness-ready-ui-sha-743",
+            text: "T_DATA_READY_UI_CANONICAL_READY_743",
+            includeSemanticIndex: true
+        )
+        let staleID = try seedCanonicalReadinessDocumentGraph(
+            documentID: "readiness-raw-green-stale-ui-document-751",
+            matterID: matterID,
+            name: "Raw Green Stale 751.txt",
+            shaSeed: "readiness-raw-green-stale-ui-sha-751",
+            text: "T_DATA_READY_UI_RAW_GREEN_STALE_751",
+            includeSemanticIndex: true
+        )
+        try store.documentLibrary.updateIndexStatus(
+            documentID: staleID,
+            indexStatus: .stale
+        )
+        let modelMissingID = try seedCanonicalReadinessDocumentGraph(
+            documentID: "readiness-raw-green-model-missing-ui-document-757",
+            matterID: matterID,
+            name: "Raw Green Model Missing 757.txt",
+            shaSeed: "readiness-raw-green-model-missing-ui-sha-757",
+            text: "T_DATA_READY_UI_RAW_GREEN_MODEL_MISSING_757",
+            includeSemanticIndex: false
+        )
+
+        let ready = try store.documentReadiness.fetchReceipt(documentID: readyID)
+        let stale = try store.documentReadiness.fetchReceipt(documentID: staleID)
+        let modelMissing = try store.documentReadiness.fetchReceipt(
+            documentID: modelMissingID
+        )
+        let rawStale = try store.documentLibrary.fetchDocument(id: staleID)
+        let rawModelMissing = try store.documentLibrary.fetchDocument(id: modelMissingID)
+        guard ready.isBaseReady,
+              rawStale?.status == MatterDocumentStatus.ready.rawValue,
+              stale.primaryExclusion == .staleRevision,
+              rawModelMissing?.status == MatterDocumentStatus.ready.rawValue,
+              modelMissing.exclusions.contains(.semanticIndexIncomplete) else {
+            throw CanonicalReadinessSeedError.receiptNotReady(
+                documentID: readyID,
+                exclusions: ready.exclusions
+            )
+        }
+    }
+
+    private func seedCanonicalDemoDocuments(matterID: String) throws -> [String] {
+        let msaText = "T_DATA_READY_DEMO_MSA_761. Carrier will indemnify Meridian."
+        let depositionText = "T_DATA_READY_DEMO_DEPOSITION_763. The straps were not doubled."
+        let coverageText = "T_DATA_READY_DEMO_COVERAGE_767. Coverage is subject to a reservation of rights."
+        return [
+            try seedDemoDocument(
+                matterID: matterID,
+                name: CanonicalReadinessSeed.demoMSAName,
+                sha: "canonical-demo-msa-761",
+                text: msaText,
+                documentID: "canonical-demo-msa-document-761"
+            ),
+            try seedDemoDocument(
+                matterID: matterID,
+                name: CanonicalReadinessSeed.demoDepositionName,
+                sha: "canonical-demo-deposition-763",
+                text: depositionText,
+                documentID: "canonical-demo-deposition-document-763"
+            ),
+            try seedDemoDocument(
+                matterID: matterID,
+                name: CanonicalReadinessSeed.demoCoverageName,
+                sha: "canonical-demo-coverage-767",
+                text: coverageText,
+                documentID: "canonical-demo-coverage-document-767"
+            ),
+        ]
+    }
+
     /// Creates the exact synthetic matter carried by T-WINDOW-01's parsed wire.
     /// The ordinary UI-test default remains unchanged when any field is absent,
     /// duplicated, or empty. This always runs against `makeStore()`'s throwaway
@@ -2094,6 +2250,7 @@ final class AppEnvironment: ObservableObject {
                 matterID: matter.id,
                 practiceArea: "Commercial Litigation"
             )
+            try configureCanonicalReadinessEmbeddingModel()
 
             // Fictitious documents with real (fictional) contract text so previews work.
             let msaText = """
@@ -2130,6 +2287,10 @@ final class AppEnvironment: ObservableObject {
                 matterID: matter.id, name: "Insurance Coverage Letter.docx",
                 sha: "demo-coverage", text: coverageText
             )
+            try validateCanonicalDemoReadiness(
+                matterID: matter.id,
+                documentIDs: [msaID, depoID, coverageID]
+            )
             let contractsTag = try store.documentLibrary.createTag(matterID: matter.id, name: "Contracts")
             let depositionsTag = try store.documentLibrary.createTag(matterID: matter.id, name: "Depositions")
             let insuranceTag = try store.documentLibrary.createTag(matterID: matter.id, name: "Insurance")
@@ -2165,21 +2326,21 @@ final class AppEnvironment: ObservableObject {
                     messageID: docAssistant.id, label: "S1", kind: "source",
                     documentID: msaID,
                     locatorJSON: DocumentSourceLocator(sourceKind: .text, charStart: 0, charEnd: 320).encodedJSON(),
-                    displayName: "Master Services Agreement (2024).pdf",
+                    displayName: CanonicalReadinessSeed.demoMSAName,
                     matchText: "SECTION 9. INDEMNIFICATION", rank: 0
                 ),
                 MessageCitationRecord(
                     messageID: docAssistant.id, label: "S2", kind: "source",
                     documentID: coverageID,
                     locatorJSON: DocumentSourceLocator(sourceKind: .text, charStart: 0, charEnd: 200).encodedJSON(),
-                    displayName: "Insurance Coverage Letter.docx",
+                    displayName: CanonicalReadinessSeed.demoCoverageName,
                     matchText: "reservation of rights", rank: 1
                 ),
                 MessageCitationRecord(
                     messageID: docAssistant.id, label: "S3", kind: "source",
                     documentID: depoID,
                     locatorJSON: DocumentSourceLocator(sourceKind: .text, charStart: 0, charEnd: 220).encodedJSON(),
-                    displayName: "Deposition Tr. — R. Calloway (Vol. I).pdf",
+                    displayName: CanonicalReadinessSeed.demoDepositionName,
                     matchText: "tie-down procedures", rank: 2
                 )
             ])
@@ -2327,29 +2488,242 @@ final class AppEnvironment: ObservableObject {
         }
     }
 
-    /// One fictitious, fully-indexed demo document (ready status, previewable text).
-    private func seedDemoDocument(matterID: String, name: String, sha: String, text: String) throws -> String {
+    /// One fictitious demo document built through the complete canonical graph.
+    /// The derived receipt is the completion boundary; a raw document status can
+    /// never make this producer return success.
+    private func seedDemoDocument(
+        matterID: String,
+        name: String,
+        sha: String,
+        text: String,
+        documentID: String? = nil
+    ) throws -> String {
+        let resolvedDocumentID = documentID ?? "demo-document-\(sha)"
+        let seededDocumentID = try seedCanonicalReadinessDocumentGraph(
+            documentID: resolvedDocumentID,
+            matterID: matterID,
+            name: name,
+            shaSeed: sha,
+            text: text,
+            includeSemanticIndex: true
+        )
+        let receipt = try store.documentReadiness.fetchReceipt(
+            documentID: seededDocumentID
+        )
+        guard receipt.isBaseReady else {
+            // Fail closed even if graph creation reached its final status update.
+            try? store.documentLibrary.updateStatus(
+                documentID: seededDocumentID,
+                status: .failed
+            )
+            throw CanonicalReadinessSeedError.receiptNotReady(
+                documentID: seededDocumentID,
+                exclusions: receipt.exclusions
+            )
+        }
+        return seededDocumentID
+    }
+
+    private func configureCanonicalReadinessEmbeddingModel() throws {
+        _ = try store.documentSettings.loadSettings()
+        try store.documentSettings.upsertEmbeddingModel(
+            DocumentEmbeddingModelRecord(
+                id: CanonicalReadinessSeed.embeddingModelID,
+                repoID: CanonicalReadinessSeed.embeddingModelRepoID,
+                localPath: "/synthetic/canonical-readiness-embedding-769",
+                displayName: CanonicalReadinessSeed.embeddingModelDisplayName,
+                dimension: CanonicalReadinessSeed.embeddingDimension,
+                runtimeFamily: "canonical-readiness-synthetic-23",
+                revision: CanonicalReadinessSeed.embeddingModelRevision,
+                isDefault: false,
+                isSelected: false,
+                lastTestLoadAt: CanonicalReadinessSeed.timestamp,
+                lastTestLoadResult: "passed",
+                createdAt: CanonicalReadinessSeed.timestamp,
+                updatedAt: CanonicalReadinessSeed.timestamp
+            )
+        )
+        try store.documentSettings.selectEmbeddingModel(
+            id: CanonicalReadinessSeed.embeddingModelID
+        )
+        try store.documentSettings.updateSettings { settings in
+            settings.embeddingModelLastTestedAt = CanonicalReadinessSeed.timestamp
+            settings.chunkerVersion = CanonicalReadinessSeed.chunkerVersion
+        }
+    }
+
+    /// Shared synchronous producer for hermetic demos and native qualification.
+    /// It mirrors the real completion graph: terminal extraction metadata,
+    /// immutable revision + selection, current chunk + FTS row, and an exact
+    /// selected-model vector. `includeSemanticIndex` exists only to construct the
+    /// raw-green negative fixture under the parsed DEBUG scenario.
+    private func seedCanonicalReadinessDocumentGraph(
+        documentID: String,
+        matterID: String,
+        name: String,
+        shaSeed: String,
+        text: String,
+        includeSemanticIndex: Bool
+    ) throws -> String {
+        if try store.documentLibrary.fetchDocument(id: documentID) != nil {
+            return documentID
+        }
+        guard let model = try store.documentSettings.fetchSelectedEmbeddingModel(),
+              model.id == CanonicalReadinessSeed.embeddingModelID else {
+            throw CanonicalReadinessSeedError.selectedEmbeddingModelUnavailable
+        }
+
+        let timestamp = CanonicalReadinessSeed.timestamp
+        let textChecksum = DocumentStorage.sha256Hex(of: Data(text.utf8))
         let blob = try store.documentLibrary.upsertBlob(
             DocumentBlobRecord(
-                sha256: sha, byteSize: 0,
+                id: "\(documentID)-blob",
+                sha256: DocumentStorage.sha256Hex(
+                    of: Data("\(shaSeed)\u{001f}\(text)".utf8)
+                ),
+                byteSize: text.utf8.count,
                 originalExtension: (name as NSString).pathExtension,
-                managedRelativePath: "demo/\(sha)"
+                managedRelativePath: "demo/\(shaSeed)",
+                mimeType: "text/plain",
+                integrityStatus: DocumentBlobIntegrityStatus.verified.rawValue,
+                verifiedAt: timestamp,
+                createdAt: timestamp
             )
         ).blob
         let document = try store.documentLibrary.insertDocument(
             MatterDocumentRecord(
-                matterID: matterID, blobID: blob.id, displayName: name,
-                status: MatterDocumentStatus.ready.rawValue
+                id: documentID,
+                matterID: matterID,
+                blobID: blob.id,
+                displayName: name,
+                status: MatterDocumentStatus.indexing.rawValue,
+                extractionStatus: DocumentExtractionStatus.extracted.rawValue,
+                indexStatus: DocumentIndexStatus.notIndexed.rawValue,
+                sourceKind: DocumentSourceKind.text.rawValue,
+                extractionMethod: "synthetic_exact_text@toolchain:canonical-readiness-23",
+                extractedTextChecksum: textChecksum,
+                pagePartCount: 1,
+                importedAt: timestamp,
+                createdAt: timestamp,
+                updatedAt: timestamp
             )
         )
-        try store.documentIndex.replaceParts(documentID: document.id, parts: [
-            DocumentPagePartRecord(
-                documentID: document.id, partIndex: 0,
-                sourceKind: DocumentSourceKind.text.rawValue,
-                normalizedText: text, charCount: text.count
+        let part = DocumentPagePartRecord(
+            id: "\(documentID)-part-0",
+            documentID: document.id,
+            partIndex: 0,
+            sourceKind: DocumentSourceKind.text.rawValue,
+            normalizedText: text,
+            charCount: text.count,
+            createdAt: timestamp,
+            updatedAt: timestamp
+        )
+        let revision = DocumentPartRevisionRecord(
+            id: "\(documentID)-revision-23",
+            documentID: document.id,
+            partIndex: 0,
+            derivationKey: "canonical-readiness:\(documentID):revision-23",
+            origin: "parser",
+            method: "synthetic_exact_text",
+            text: text,
+            charCount: text.count,
+            toolchainVersion: "canonical-readiness-toolchain-23",
+            createdAt: timestamp
+        )
+        let selection = DocumentPartSelectionRecord(
+            id: "\(documentID)-selection-23",
+            documentID: document.id,
+            partIndex: 0,
+            selectedRevisionID: revision.id,
+            selectionKey: "canonical-readiness:\(documentID):selection-23",
+            selectedBy: "synthetic_policy",
+            policyVersion: 23,
+            decisionJSON: #"{"rule":"canonical_readiness_fixture_23"}"#,
+            createdAt: timestamp
+        )
+        _ = try store.documentRevisions.replacePartsAndPersistLineage(
+            documentID: document.id,
+            parts: [part],
+            revisions: [revision],
+            selections: [selection]
+        )
+
+        let chunk = DocumentChunkRecord(
+            id: "\(documentID)-chunk-23",
+            documentID: document.id,
+            pagePartID: part.id,
+            revisionID: revision.id,
+            unitKind: "document",
+            chunkerVersion: CanonicalReadinessSeed.chunkerVersion,
+            chunkIndex: 0,
+            sourceKind: DocumentSourceKind.text.rawValue,
+            charStart: 0,
+            charEnd: text.count,
+            normalizedText: text,
+            displayExcerpt: text,
+            tokenCount: max(1, text.split(whereSeparator: { $0.isWhitespace }).count),
+            createdAt: timestamp,
+            updatedAt: timestamp
+        )
+        try store.documentIndex.replaceChunks(
+            documentID: document.id,
+            chunks: [chunk]
+        )
+        if includeSemanticIndex {
+            var vector = [Float](repeating: 0, count: model.dimension)
+            let digest = SHA256.hash(data: Data(text.utf8))
+            let deterministicIndex = digest.prefix(8).reduce(UInt64(0)) {
+                ($0 << 8) | UInt64($1)
+            }
+            vector[Int(deterministicIndex % UInt64(model.dimension))] = 1
+            try store.documentIndex.upsertEmbedding(
+                DocumentChunkEmbeddingRecord(
+                    id: "\(documentID)-embedding-23",
+                    chunkID: chunk.id,
+                    documentID: document.id,
+                    embeddingModelID: model.id,
+                    modelDisplayName: model.displayName,
+                    modelRevision: model.revision,
+                    dimension: model.dimension,
+                    normalized: true,
+                    vector: VectorMath.encode(vector),
+                    createdAt: timestamp
+                )
             )
-        ])
+        }
+        try store.documentLibrary.updateIndexStatus(
+            documentID: document.id,
+            indexStatus: .ready
+        )
+        _ = try store.documentLibrary.promoteStatus(
+            documentID: document.id,
+            to: .ready,
+            whenCurrentIn: [.indexing]
+        )
         return document.id
+    }
+
+    private func validateCanonicalDemoReadiness(
+        matterID: String,
+        documentIDs: [String]
+    ) throws {
+        let projections = try CanonicalDocumentReadinessLedger(store: store)
+            .consumerProjections(
+                matterID: matterID,
+                documentIDs: documentIDs
+            )
+        for consumer in DocumentReadinessConsumer.allCases {
+            let consumerProjections = projections.filter { $0.consumer == consumer }
+            let ready = consumerProjections.filter(\.isBaseReady).count
+            guard consumerProjections.count == documentIDs.count,
+                  ready == documentIDs.count else {
+                throw CanonicalReadinessSeedError.consumerMismatch(
+                    consumer: consumer,
+                    ready: ready,
+                    total: consumerProjections.count
+                )
+            }
+        }
     }
 
     /// Authorizes the one UI test that must retain Store state across a real
