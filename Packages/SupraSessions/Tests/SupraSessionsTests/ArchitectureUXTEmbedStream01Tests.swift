@@ -57,10 +57,10 @@ final class ArchitectureUXTEmbedStream01Tests: XCTestCase {
             embedder: resumed,
             semanticBatchSize: EmbedStreamFixture.batchSize
         )
-        XCTAssertEqual(
-            try await relaunchedIndexer.indexDocument(documentID: EmbedStreamFixture.documentID),
-            EmbedStreamFixture.chunkIDs.count
+        let resumedChunkCount = try await relaunchedIndexer.indexDocument(
+            documentID: EmbedStreamFixture.documentID
         )
+        XCTAssertEqual(resumedChunkCount, EmbedStreamFixture.chunkIDs.count)
 
         let resumedBatchSizes = await resumed.batchSizes()
         let resumedMaximumVectors = await resumed.maximumLiveVectorCount()
