@@ -1,5 +1,6 @@
 import Foundation
 import SupraDraftingCore
+import SupraOOXML
 
 // Letterhead shell renderer (`.letter(LetterModel)`) — a business letter, not a court filing.
 // LOCKED against letterDemand-golden.docx (Letter §3 / Exports §5). No caption / certificate / footer.

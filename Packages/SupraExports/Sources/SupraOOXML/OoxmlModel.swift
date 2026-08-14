@@ -1,6 +1,6 @@
 import Foundation
 
-// Typed WordprocessingML value types (design: SupraExports impl §2 / NoticeAppearance §4.2).
+// Typed WordprocessingML value types shared by neutral and drafting-specific renderers.
 // These serialize 1:1 to WML via `OoxmlWriter`. Geometry is in twips; font sizes in half-points.
 
 public enum Jc: String, Sendable, Equatable {

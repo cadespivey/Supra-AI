@@ -259,7 +259,7 @@ public enum OoxmlWriter {
 
     // MARK: - Escaping
 
-    static func escape(_ s: String) -> String {
+    public static func escape(_ s: String) -> String {
         var out = ""
         out.reserveCapacity(s.count)
         for ch in s {

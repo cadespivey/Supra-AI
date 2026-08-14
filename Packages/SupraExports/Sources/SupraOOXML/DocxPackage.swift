@@ -18,67 +18,6 @@ public struct DocxPackage: Sendable {
         self.parts = parts
     }
 
-    public static func court(
-        documentXML: String,
-        stylesXML: String,
-        settingsXML: String,
-        footerXML: String,
-        emptyFooterXML: String = "<w:ftr xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:p/></w:ftr>"
-    ) -> DocxPackage {
-        let relsType = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
-        return DocxPackage(parts: [
-            "[Content_Types].xml": contentTypes(includeFooters: true, includeEmptyFooter: true),
-            "_rels/.rels": """
-            <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-            <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-              <Relationship Id="rId1" Type="\(relsType)/officeDocument" Target="word/document.xml"/>
-            </Relationships>
-            """,
-            "word/_rels/document.xml.rels": """
-            <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-            <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-              <Relationship Id="rIdStyles" Type="\(relsType)/styles" Target="styles.xml"/>
-              <Relationship Id="rIdSettings" Type="\(relsType)/settings" Target="settings.xml"/>
-              <Relationship Id="rIdFooter1" Type="\(relsType)/footer" Target="footer1.xml"/>
-              <Relationship Id="rIdFooterEmpty" Type="\(relsType)/footer" Target="footerEmpty.xml"/>
-            </Relationships>
-            """,
-            "word/document.xml": documentXML,
-            "word/styles.xml": stylesXML,
-            "word/settings.xml": settingsXML,
-            "word/footer1.xml": footerXML,
-            "word/footerEmpty.xml": emptyFooterXML
-        ])
-    }
-
-    /// Letterhead package — omits court-only footer parts (Letter §3.10 / Exports §1).
-    public static func letter(
-        documentXML: String,
-        stylesXML: String,
-        settingsXML: String
-    ) -> DocxPackage {
-        let relsType = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
-        return DocxPackage(parts: [
-            "[Content_Types].xml": contentTypes(includeFooters: false),
-            "_rels/.rels": """
-            <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-            <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-              <Relationship Id="rId1" Type="\(relsType)/officeDocument" Target="word/document.xml"/>
-            </Relationships>
-            """,
-            "word/_rels/document.xml.rels": """
-            <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-            <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-              <Relationship Id="rIdStyles" Type="\(relsType)/styles" Target="styles.xml"/>
-              <Relationship Id="rIdSettings" Type="\(relsType)/settings" Target="settings.xml"/>
-            </Relationships>
-            """,
-            "word/document.xml": documentXML,
-            "word/styles.xml": stylesXML,
-            "word/settings.xml": settingsXML
-        ])
-    }
-
     /// General rich-export package assembled from the shared typed OOXML
     /// model/writer. Includes styles, numbering, a running title, and PAGE
     /// footer so relationship validation covers every presentation part.
