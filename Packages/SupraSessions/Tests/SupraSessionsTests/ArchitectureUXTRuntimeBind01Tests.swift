@@ -27,7 +27,7 @@ final class ArchitectureUXTRuntimeBind01Tests: XCTestCase {
         )
         let first = Task {
             try await coordinator.execute(firstRequest) { permit in
-                let scopedRuntime: any RuntimeClientProtocol = permit
+                let scopedRuntime: any RuntimeFeatureClientProtocol = permit
                 XCTAssertEqual(firstRequest.duplicateKey, "T_RUNTIME_BIND_01_WIRE_731")
                 XCTAssertFalse(
                     (firstRequest.duplicateKey ?? "")
