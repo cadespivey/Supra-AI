@@ -358,7 +358,7 @@ final class ArchitectureUXTDataMigrate01Tests: XCTestCase {
                     db,
                     sql: "SELECT identifier FROM grdb_migrations ORDER BY rowid"
                 ).last,
-                Wire.v074
+                Wire.currentMigration
             )
             XCTAssertEqual(try String.fetchOne(db, sql: "PRAGMA integrity_check"), "ok")
             XCTAssertEqual(
@@ -714,6 +714,7 @@ private struct LegacyCanarySnapshot: Equatable {
 private enum Wire {
     static let v073 = "v073_create_case_file_review_projects"
     static let v074 = "v074_create_canonical_matter_identity"
+    static let currentMigration = "v075_create_grounded_chat_publications"
     static let catalogVersion = "jurisdiction-courts-v1"
     static let catalogDigestSHA256 =
         "0393b9dc507ea91ebbf939e3b7620c3e6555dd01cfdbcdc00d5298d89e14adf3"
