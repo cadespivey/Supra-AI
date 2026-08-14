@@ -151,7 +151,7 @@ public enum RepositoryArchitecturePolicyError: Error, Equatable, LocalizedError 
 /// harness exceptions. Every other local edge is part of the ordinary graph.
 public struct RepositoryArchitecturePolicy: Sendable {
     public static let current = RepositoryArchitecturePolicy(
-        policyVersion: 7,
+        policyVersion: 8,
         packageNames: currentPackageNames,
         requiredEdges: currentRequiredEdges,
         approvedExceptions: currentApprovedExceptions,
@@ -438,6 +438,7 @@ public struct RepositoryArchitecturePolicy: Sendable {
         "SupraDrafting",
         "SupraDraftingCore",
         "SupraExports",
+        "SupraNetworking",
         "SupraResearch",
         "SupraRuntimeClient",
         "SupraRuntimeInterface",
@@ -483,7 +484,6 @@ public struct RepositoryArchitecturePolicy: Sendable {
         .init(source: "SupraDraftingCore", destination: "SupraCore"),
         .init(source: "SupraExports", destination: "SupraDraftingCore"),
         .init(source: "SupraNetworking", destination: "SupraCore"),
-        .init(source: "SupraNetworking", destination: "SupraStore"),
         .init(source: "SupraResearch", destination: "SupraCore"),
         .init(source: "SupraResearch", destination: "SupraNetworking"),
         .init(source: "SupraRuntimeClient", destination: "SupraCore"),

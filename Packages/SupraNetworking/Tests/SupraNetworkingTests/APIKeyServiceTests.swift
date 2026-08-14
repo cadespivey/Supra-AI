@@ -1,5 +1,4 @@
 import Foundation
-import SupraStore
 @testable import SupraNetworking
 import XCTest
 
@@ -81,12 +80,12 @@ final class APIKeyServiceTests: XCTestCase {
     }
 
     func testACRKEY003MissingCourtListenerKeyIsTypedAndNeverReachesTransport() async throws {
-        let store = try SupraStore.inMemory()
+        let auditRecorder = NetworkAuditRecorder()
         let transport = TransportCallSpy()
         let client = AuthorizedHTTPClient(
             keyStore: MultiKeyStore(),
             policy: NetworkPolicyService(),
-            logger: NetworkRequestLogger(repository: store.networkRequests),
+            logger: NetworkRequestLogger(writer: auditRecorder),
             transport: { request in
                 transport.recordCall()
                 return (

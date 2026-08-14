@@ -1,5 +1,4 @@
 import Foundation
-import SupraStore
 @testable import SupraNetworking
 import XCTest
 
@@ -48,11 +47,11 @@ final class QueryFingerprinterTests: XCTestCase {
     }
 
     func testACRFP005PersistedAuditMetadataUsesVersionedKeyedMarkers() async throws {
-        let store = try SupraStore.inMemory()
+        let auditRecorder = NetworkAuditRecorder()
         let client = AuthorizedHTTPClient(
             keyStore: FingerprintAPIKeyStore(token: "secret-token"),
             policy: NetworkPolicyService(),
-            logger: NetworkRequestLogger(repository: store.networkRequests),
+            logger: NetworkRequestLogger(writer: auditRecorder),
             queryFingerprinter: try HMACQueryFingerprinter(key: Data(repeating: 0x44, count: 32)),
             transport: { request in
                 let response = HTTPURLResponse(
@@ -70,38 +69,11 @@ final class QueryFingerprinterTests: XCTestCase {
 
         _ = try await client.send(URLRequest(url: url))
 
-        let record = try XCTUnwrap(try store.networkRequests.fetchRecent(limit: 1).first)
+        let record = try XCTUnwrap(auditRecorder.fetchRecent(limit: 1).first)
         let metadata = try XCTUnwrap(record.requestMetadataJSON)
         XCTAssertTrue(metadata.contains("#h1:"))
         XCTAssertFalse(metadata.contains("trade"))
         XCTAssertFalse(metadata.contains("#\(legacyFNV("trade%20secret"))"))
-    }
-
-    func testACRFP006CleanupRemovesLegacyQueryMetadataWithoutExposingValues() throws {
-        let store = try SupraStore.inMemory()
-        _ = try store.networkRequests.createRequest(
-            domain: "www.courtlistener.com",
-            method: "GET",
-            endpoint: "/api/rest/v4/search/",
-            approved: true,
-            requestMetadataJSON: #"{"query":"q=#deadbeef&type=#cafebabe","headers":{"Accept":"application/json"}}"#
-        )
-        _ = try store.networkRequests.createRequest(
-            domain: "www.courtlistener.com",
-            method: "GET",
-            endpoint: "/malformed",
-            approved: true,
-            requestMetadataJSON: "legacy-q=#secret-canary"
-        )
-
-        XCTAssertEqual(try store.networkRequests.removeStoredQueryMetadata(), 2)
-
-        let records = try store.networkRequests.fetchRecent(limit: 10)
-        let structured = try XCTUnwrap(records.first { $0.endpoint.contains("search") })
-        XCTAssertFalse(structured.requestMetadataJSON?.contains("query") ?? false)
-        XCTAssertTrue(structured.requestMetadataJSON?.contains("Accept") ?? false)
-        let malformed = try XCTUnwrap(records.first { $0.endpoint == "/malformed" })
-        XCTAssertNil(malformed.requestMetadataJSON)
     }
 
     private func legacyFNV(_ value: String) -> String {

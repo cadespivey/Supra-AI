@@ -78,8 +78,9 @@ Dependency rules that are enforced by package boundaries:
 - `SupraStore` owns the database connection. No other package opens the SQLite database.
 - Cross-package transport auditing uses `SupraCore.NetworkRequestAuditWriting`; `SupraStore`
   vends the narrow `networkRequestAudits` implementation, which can only create and finish
-  network-request rows. Backup, restore, and benchmark tooling retain explicit privileged access
-  to the Store-owned database rather than widening that transport capability.
+  network-request rows. `SupraNetworking` receives only that capability and has no Store package
+  edge. Backup, restore, and benchmark tooling retain explicit privileged access to the
+  Store-owned database rather than widening that transport capability.
 - `SupraNetworking` owns the Keychain and all `URLSession` policy. `SupraResearch` builds
   CourtListener requests but never touches the Keychain or raw network policy directly.
 - `SupraDocuments` owns document-intelligence domain logic but **not** the database, views,
@@ -88,8 +89,8 @@ Dependency rules that are enforced by package boundaries:
 - The runtime service depends only on `SupraRuntimeInterface` (the shared contract) and the
   MLX packages — not on the store, networking, or UI.
 
-`SupraTestKit.RepositoryArchitecturePolicy` version 7 reads the fourteen local manifests and
-pins the exact acyclic 37-edge graph. `SupraTestKit` is isolated from the app product; its seven
+`SupraTestKit.RepositoryArchitecturePolicy` version 8 reads the fourteen local manifests and
+pins the exact acyclic 36-edge graph. `SupraTestKit` is isolated from the app product; its seven
 higher-layer package dependencies are reviewed test-harness exceptions beyond `SupraCore`, and
 an eighth exception fails closed. The same policy rejects inventory drift, undeclared or missing
 edges, cycles, and direct Store/network capability edges from packages that must remain isolated.

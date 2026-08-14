@@ -62,7 +62,7 @@ public final class PublicRecordsController: ObservableObject {
             AuthorizedHTTPClient(
                 keyStore: keyStore,
                 policy: NetworkPolicyService(),
-                logger: NetworkRequestLogger(repository: store.networkRequests),
+                logger: NetworkRequestLogger(writer: store.networkRequestAudits),
                 rateLimitTracker: RateLimitTracker(
                     limits: .init(perMinute: perMinute, perHour: perHour, perDay: perDay)
                 )

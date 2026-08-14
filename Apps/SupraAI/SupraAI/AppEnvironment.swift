@@ -2796,7 +2796,7 @@ final class AppEnvironment: ObservableObject {
             httpClient: AuthorizedHTTPClient(
                 keyStore: tokenStore,
                 policy: NetworkPolicyService(),
-                logger: NetworkRequestLogger(repository: store.networkRequests)
+                logger: NetworkRequestLogger(writer: store.networkRequestAudits)
             )
         )
         Task { @MainActor in

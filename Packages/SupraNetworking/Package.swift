@@ -11,15 +11,13 @@ let package = Package(
         .library(name: "SupraNetworking", targets: ["SupraNetworking"])
     ],
     dependencies: [
-        .package(path: "../SupraCore"),
-        .package(path: "../SupraStore")
+        .package(path: "../SupraCore")
     ],
     targets: [
         .target(
             name: "SupraNetworking",
             dependencies: [
-                .product(name: "SupraCore", package: "SupraCore"),
-                .product(name: "SupraStore", package: "SupraStore")
+                .product(name: "SupraCore", package: "SupraCore")
             ],
             linkerSettings: [
                 .linkedFramework("Security")
@@ -29,7 +27,7 @@ let package = Package(
             name: "SupraNetworkingTests",
             dependencies: [
                 "SupraNetworking",
-                .product(name: "SupraStore", package: "SupraStore")
+                .product(name: "SupraCore", package: "SupraCore")
             ]
         )
     ]

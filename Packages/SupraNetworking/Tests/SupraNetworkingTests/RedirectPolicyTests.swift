@@ -1,7 +1,6 @@
 import Foundation
 import Network
 @testable import SupraNetworking
-import SupraStore
 import XCTest
 
 final class RedirectPolicyTests: XCTestCase {
@@ -19,11 +18,11 @@ final class RedirectPolicyTests: XCTestCase {
         }
         try await firstServer.start()
 
-        let store = try makeStore()
+        let auditRecorder = NetworkAuditRecorder()
         let client = AuthorizedHTTPClient(
             keyStore: EmptyKeyStore(),
             policy: LoopbackInitialPolicy(),
-            logger: NetworkRequestLogger(repository: store.networkRequests)
+            logger: NetworkRequestLogger(writer: auditRecorder)
         )
         let initialURL = try XCTUnwrap(firstServer.url(path: "/start?q=initial-canary"))
 
@@ -44,7 +43,7 @@ final class RedirectPolicyTests: XCTestCase {
             "the disallowed second origin must receive zero requests"
         )
 
-        let records = try store.networkRequests.fetchRecent(limit: 10)
+        let records = auditRecorder.fetchRecent(limit: 10)
         let blocked = records.filter { !$0.approved }
         XCTAssertEqual(blocked.count, 1, "one rejected hop must produce one blocked audit row")
         XCTAssertEqual(blocked.first?.domain, "127.0.0.1")
@@ -77,11 +76,11 @@ final class RedirectPolicyTests: XCTestCase {
             let firstServer = try LoopbackHTTPServer { _ in .redirect(to: secondURL, status: status) }
             try await firstServer.start()
             let initialURL = try XCTUnwrap(firstServer.url(path: "/start-\(code)"))
-            let store = try makeStore()
+            let auditRecorder = NetworkAuditRecorder()
             let client = AuthorizedHTTPClient(
                 keyStore: EmptyKeyStore(),
                 policy: LoopbackInitialPolicy(),
-                logger: NetworkRequestLogger(repository: store.networkRequests)
+                logger: NetworkRequestLogger(writer: auditRecorder)
             )
 
             do {
@@ -113,11 +112,11 @@ final class RedirectPolicyTests: XCTestCase {
         try await server.start()
         address.baseURL = try XCTUnwrap(server.url(path: ""))
         let initialURL = try XCTUnwrap(server.url(path: "/hop/0"))
-        let store = try makeStore()
+        let auditRecorder = NetworkAuditRecorder()
         let client = AuthorizedHTTPClient(
             keyStore: EmptyKeyStore(),
             policy: LoopbackInitialPolicy(),
-            logger: NetworkRequestLogger(repository: store.networkRequests)
+            logger: NetworkRequestLogger(writer: auditRecorder)
         )
 
         do {
@@ -357,12 +356,6 @@ final class RedirectPolicyTests: XCTestCase {
         )!
     }
 
-    private func makeStore() throws -> SupraStore {
-        let directoryURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("RedirectPolicyTests-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
-        return try SupraStore(url: directoryURL.appendingPathComponent("test.sqlite"))
-    }
 }
 
 private struct LoopbackInitialPolicy: NetworkPolicyServiceProtocol {

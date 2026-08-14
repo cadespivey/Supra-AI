@@ -191,7 +191,7 @@ public final class SettingsController: ObservableObject {
         let http = AuthorizedHTTPClient(
             keyStore: tokenStore,
             policy: NetworkPolicyService(),
-            logger: NetworkRequestLogger(repository: store.networkRequests)
+            logger: NetworkRequestLogger(writer: store.networkRequestAudits)
         )
         return LegalDataKeyVerifier(httpClient: http, tokenStore: tokenStore)
     }

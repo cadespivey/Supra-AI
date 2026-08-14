@@ -63,7 +63,7 @@ final class CourtListenerLiveTests: XCTestCase {
             httpClient: AuthorizedHTTPClient(
                 keyStore: StaticTokenStore(token: token),
                 policy: NetworkPolicyService(),
-                logger: NetworkRequestLogger(repository: store.networkRequests)
+                logger: NetworkRequestLogger(writer: store.networkRequestAudits)
             )
         )
 

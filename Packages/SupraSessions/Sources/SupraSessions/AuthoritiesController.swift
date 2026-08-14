@@ -69,7 +69,7 @@ public final class AuthoritiesController: ObservableObject {
             httpClient: AuthorizedHTTPClient(
                 keyStore: resolvedTokenStore,
                 policy: NetworkPolicyService(),
-                logger: NetworkRequestLogger(repository: store.networkRequests),
+                logger: NetworkRequestLogger(writer: store.networkRequestAudits),
                 redactsQueryValues: !legalConfiguration.logPrivilegedQueryTerms
             ),
             baseURLOverride: legalConfiguration.courtListenerBaseURL
