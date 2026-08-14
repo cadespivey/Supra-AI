@@ -347,7 +347,7 @@ final class ArchitectureUXTDataReady01Tests: XCTestCase {
                     chunkID: Wire.chunkID,
                     documentID: Wire.documentID,
                     embeddingModelID: Wire.modelAID,
-                    modelDisplayName: "T-DATA-READY-01 Consumer Model A 731",
+                    modelDisplayName: Wire.modelAID,
                     modelRevision: Wire.modelARevision,
                     dimension: Wire.modelDimension,
                     normalized: true,
