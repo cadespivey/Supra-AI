@@ -132,6 +132,7 @@ public final class DocumentRetrievalService: @unchecked Sendable {
     static let fastMinSemanticSimilarity = 0.25
     private let store: SupraStore
     private let readinessLedger: CanonicalDocumentReadinessLedger
+    private let semanticScanner: BoundedSemanticScanner
     private let embedder: (any TextEmbedder)?
     private let maxPerDocument: Int
     private let minSemanticSimilarity: Double
@@ -144,6 +145,7 @@ public final class DocumentRetrievalService: @unchecked Sendable {
     ) {
         self.store = store
         self.readinessLedger = CanonicalDocumentReadinessLedger(store: store)
+        self.semanticScanner = BoundedSemanticScanner(store: store)
         self.embedder = embedder
         self.maxPerDocument = maxPerDocument
         self.minSemanticSimilarity = minSemanticSimilarity
@@ -250,24 +252,32 @@ public final class DocumentRetrievalService: @unchecked Sendable {
         // Semantic candidates (cosine over normalized vectors == dot product).
         var semanticBucket: [String: String] = [:]
         var usedSemantic = false
-        if let embedder, let queryVector = try await embedQuery(query, embedder: embedder) {
+        if let embedder,
+           !scopeIDs.isEmpty,
+           let queryVector = try await embedQuery(query, embedder: embedder) {
+            let activeModel = DocumentReadinessEmbeddingModelIdentity(
+                id: embedder.modelID,
+                repoID: embedder.modelRepoID,
+                revision: embedder.modelRevision,
+                dimension: embedder.dimension
+            )
+            let scan = try semanticScanner.scan(
+                matterID: matterID,
+                documentIDs: scopeIDs,
+                queryVector: queryVector,
+                activeModel: activeModel,
+                configuration: BoundedSemanticScanConfiguration(
+                    pageSize: 256,
+                    candidateLimit: 60,
+                    minimumSimilarity: semanticFloor
+                )
+            )
             usedSemantic = true
-            let scopeSet = Set(scopeIDs)
-            let embeddings = try store.documentIndex.fetchEmbeddings(matterID: matterID, embeddingModelID: embedder.modelID)
-                .filter { scopeSet.contains($0.documentID) }
-            var ranked: [(chunkID: String, score: Double)] = []
-            for embedding in embeddings {
-                let similarity = Double(VectorMath.dot(queryVector, VectorMath.decode(embedding.vector)))
-                // Only relevant chunks count; this keeps off-topic documents out of
-                // scope-restricted answers.
-                if similarity >= semanticFloor {
-                    ranked.append((embedding.chunkID, similarity))
-                }
-            }
-            ranked.sort { $0.score > $1.score }
-            for (position, entry) in ranked.prefix(60).enumerated() {
+            for (position, entry) in scan.candidates.enumerated() {
                 scores[entry.chunkID, default: 0] += Self.rrfContribution(rank: position + 1)
-                semanticBucket[entry.chunkID] = entry.score > 0.7 ? "high" : (entry.score > 0.45 ? "medium" : "low")
+                semanticBucket[entry.chunkID] = entry.similarity > 0.7
+                    ? "high"
+                    : (entry.similarity > 0.45 ? "medium" : "low")
             }
         }
 
@@ -280,13 +290,13 @@ public final class DocumentRetrievalService: @unchecked Sendable {
         let requestedStructureKinds = Self.requestedStructureKinds(query: query)
         if !requestedStructureKinds.isEmpty {
             let structureIntentScore = 2 * Self.rrfContribution(rank: 1)
-            for documentID in scopeIDs {
-                for chunk in try store.documentIndex.fetchChunks(documentID: documentID)
-                    where chunk.chunkerVersion == 2
-                        && chunk.unitKind.map(requestedStructureKinds.contains) == true {
-                    chunkByID[chunk.id] = chunk
-                    scores[chunk.id, default: 0] += structureIntentScore
-                }
+            for chunk in try store.documentIndex.fetchStructureCandidateChunks(
+                documentIDs: scopeIDs,
+                unitKinds: Array(requestedStructureKinds),
+                limit: 60
+            ) {
+                chunkByID[chunk.id] = chunk
+                scores[chunk.id, default: 0] += structureIntentScore
             }
         }
 
@@ -298,7 +308,10 @@ public final class DocumentRetrievalService: @unchecked Sendable {
 
         // Rank, then collapse duplicates by normalized text, then apply source
         // diversity (cap per document).
-        let rawOrdered = scores.sorted { $0.value > $1.value }
+        let rawOrdered = scores.sorted { lhs, rhs in
+            if lhs.value != rhs.value { return lhs.value > rhs.value }
+            return lhs.key < rhs.key
+        }
         let ordered = Self.v2DocumentDiverseOrder(
             rawOrdered,
             chunksByID: chunkByID,
@@ -366,16 +379,13 @@ public final class DocumentRetrievalService: @unchecked Sendable {
         // [S#] cite to content that lives in a neighbor still resolves to a verifiable
         // range, not just the original chunk's narrower span.
         let selectedChunkIDs = Set(sources.map(\.chunkID))
-        var chunksByDocument: [String: [DocumentChunkRecord]] = [:]
+        let neighborhoods = try store.documentIndex.fetchChunkNeighborhoods(
+            ids: Array(selectedChunkIDs)
+        )
+        let neighborhoodsByDocument = Dictionary(grouping: neighborhoods, by: \.documentID)
         for index in sources.indices {
             guard let current = chunkByID[sources[index].chunkID] else { continue }
-            let docChunks: [DocumentChunkRecord]
-            if let cached = chunksByDocument[current.documentID] {
-                docChunks = cached
-            } else {
-                docChunks = (try? store.documentIndex.fetchChunks(documentID: current.documentID)) ?? []
-                chunksByDocument[current.documentID] = docChunks
-            }
+            let docChunks = neighborhoodsByDocument[current.documentID] ?? [current]
             let expanded: (text: String, charStart: Int?, charEnd: Int?)
             if current.chunkerVersion == 2,
                let parent = structureContextByChunkID[current.id]?.parent {

@@ -220,7 +220,7 @@ public final class DocumentIndexRepository: @unchecked Sendable {
 
     public func fetchChunks(documentID: String) throws -> [DocumentChunkRecord] {
         try writer.read { db in
-            try DocumentChunkRecord.fetchAll(
+            return try DocumentChunkRecord.fetchAll(
                 db,
                 sql: "SELECT * FROM document_chunks WHERE document_id = ? ORDER BY chunk_index ASC",
                 arguments: [documentID]
@@ -268,6 +268,70 @@ public final class DocumentIndexRepository: @unchecked Sendable {
                 db,
                 sql: "SELECT * FROM document_chunks WHERE id IN (\(databaseQuestionMarks(count: ids.count)))",
                 arguments: StatementArguments(ids)
+            )
+        }
+    }
+
+    /// Fetches only each selected chunk and its immediate same-part neighbors.
+    /// The result is bounded by three rows per unique selected identity and is
+    /// used after ranking rather than materializing every chunk in a document.
+    public func fetchChunkNeighborhoods(ids: [String]) throws -> [DocumentChunkRecord] {
+        let selectedIDs = Array(Set(ids)).sorted()
+        guard !selectedIDs.isEmpty else { return [] }
+        return try writer.read { database in
+            try DocumentChunkRecord.fetchAll(
+                database,
+                sql: """
+                    SELECT DISTINCT neighbor.*
+                    FROM document_chunks selected
+                    JOIN document_chunks neighbor
+                      ON neighbor.document_id = selected.document_id
+                     AND neighbor.page_part_id IS selected.page_part_id
+                     AND neighbor.chunk_index BETWEEN selected.chunk_index - 1
+                                                  AND selected.chunk_index + 1
+                    WHERE selected.id IN (\(databaseQuestionMarks(count: selectedIDs.count)))
+                    ORDER BY neighbor.document_id, neighbor.chunk_index, neighbor.id
+                    """,
+                arguments: StatementArguments(selectedIDs)
+            )
+        }
+    }
+
+    /// Bounded typed-structure candidates for explicit structure-intent queries.
+    /// Current revision and active chunker bindings are enforced before any
+    /// chunk text reaches Sessions.
+    public func fetchStructureCandidateChunks(
+        documentIDs: [String],
+        unitKinds: [String],
+        limit: Int
+    ) throws -> [DocumentChunkRecord] {
+        let scopedDocumentIDs = Array(Set(documentIDs)).sorted()
+        let scopedKinds = Array(Set(unitKinds)).sorted()
+        guard !scopedDocumentIDs.isEmpty,
+              !scopedKinds.isEmpty,
+              limit > 0 else { return [] }
+        return try writer.read { database in
+            var arguments: [DatabaseValueConvertible] = scopedDocumentIDs
+            arguments.append(contentsOf: scopedKinds)
+            arguments.append(limit)
+            return try DocumentChunkRecord.fetchAll(
+                database,
+                sql: """
+                    SELECT c.*
+                    FROM document_chunks c
+                    JOIN document_pages_parts p
+                      ON p.id = c.page_part_id
+                     AND p.document_id = c.document_id
+                    JOIN document_intelligence_settings settings
+                      ON settings.id = 'default'
+                    WHERE c.document_id IN (\(databaseQuestionMarks(count: scopedDocumentIDs.count)))
+                      AND c.unit_kind IN (\(databaseQuestionMarks(count: scopedKinds.count)))
+                      AND c.chunker_version = settings.chunker_version
+                      AND c.revision_id = p.current_revision_id
+                    ORDER BY c.document_id, c.chunk_index, c.id
+                    LIMIT ?
+                    """,
+                arguments: StatementArguments(arguments)
             )
         }
     }
@@ -723,6 +787,113 @@ public final class DocumentIndexRepository: @unchecked Sendable {
                 """,
                 arguments: [matterID, embeddingModelID]
             )
+        }
+    }
+
+    /// Fetches one fixed semantic page whose matter, document, deletion,
+    /// current-revision, chunker, and selected-model bindings are all enforced
+    /// by SQL inside one Store read snapshot. No chunk text is hydrated here.
+    public func fetchEmbeddingScanPage(
+        matterID: String,
+        documentIDs: [String],
+        activeModel: DocumentReadinessEmbeddingModelIdentity,
+        pageSize: Int,
+        after cursor: DocumentEmbeddingScanCursor? = nil
+    ) throws -> DocumentEmbeddingScanPage {
+        guard pageSize > 0 else {
+            throw DocumentEmbeddingScanError.invalidPageSize(pageSize)
+        }
+        let scopedDocumentIDs = Array(Set(documentIDs)).sorted()
+        guard !scopedDocumentIDs.isEmpty else {
+            throw DocumentEmbeddingScanError.emptyDocumentScope
+        }
+        return try writer.read { database in
+            guard let settings = try DocumentIntelligenceSettingsRecord.fetchOne(
+                database,
+                key: DocumentIntelligenceSettingsRecord.singletonID
+            ) else {
+                throw DocumentEmbeddingScanError.settingsNotFound
+            }
+            guard activeModel.dimension > 0,
+                  settings.selectedEmbeddingModelID == activeModel.id,
+                  settings.embeddingModelLastTestedAt != nil,
+                  let model = try DocumentEmbeddingModelRecord.fetchOne(
+                      database,
+                      key: activeModel.id
+                  ),
+                  model.repoID == activeModel.repoID,
+                  model.revision == activeModel.revision,
+                  model.dimension == activeModel.dimension,
+                  model.isSelected,
+                  model.lastTestLoadResult == "passed",
+                  model.lastTestLoadAt == settings.embeddingModelLastTestedAt else {
+                throw DocumentEmbeddingScanError.activeModelMismatch(activeModel.id)
+            }
+
+            let sql = """
+                SELECT c.id AS chunk_id,
+                       c.document_id AS document_id,
+                       e.dimension AS dimension,
+                       e.vector AS vector
+                FROM document_chunks c
+                JOIN matter_documents d
+                  ON d.id = c.document_id
+                JOIN document_pages_parts p
+                  ON p.id = c.page_part_id
+                 AND p.document_id = c.document_id
+                JOIN document_chunk_embeddings e
+                  ON e.chunk_id = c.id
+                 AND e.document_id = c.document_id
+                 AND e.embedding_model_id = ?
+                 AND e.model_revision IS ?
+                 AND e.model_display_name = ?
+                WHERE d.matter_id = ?
+                  AND d.deleted_at IS NULL
+                  AND c.revision_id = p.current_revision_id
+                  AND c.chunker_version = ?
+                  AND e.dimension = ?
+                  AND e.normalized = 1
+                  AND length(e.vector) = ?
+                  AND d.id IN (\(databaseQuestionMarks(count: scopedDocumentIDs.count)))
+                  AND c.id > ?
+                ORDER BY c.id
+                LIMIT ?
+                """
+            let vectorByteCount = activeModel.dimension.multipliedReportingOverflow(
+                by: MemoryLayout<UInt32>.size
+            )
+            guard !vectorByteCount.overflow else {
+                throw DocumentEmbeddingScanError.activeModelMismatch(activeModel.id)
+            }
+            var arguments: [DatabaseValueConvertible] = [
+                activeModel.id,
+                activeModel.revision,
+                model.displayName,
+                matterID,
+                settings.chunkerVersion,
+                activeModel.dimension,
+                vectorByteCount.partialValue,
+            ]
+            arguments.append(contentsOf: scopedDocumentIDs)
+            arguments.append(cursor?.lastChunkID ?? "")
+            arguments.append(pageSize)
+            let rows = try Row.fetchAll(
+                database,
+                sql: sql,
+                arguments: StatementArguments(arguments)
+            )
+            let entries = rows.map { row in
+                DocumentEmbeddingScanEntry(
+                    chunkID: row["chunk_id"],
+                    documentID: row["document_id"],
+                    dimension: row["dimension"],
+                    vector: row["vector"]
+                )
+            }
+            let nextCursor = entries.count == pageSize
+                ? entries.last.map { DocumentEmbeddingScanCursor(lastChunkID: $0.chunkID) }
+                : nil
+            return DocumentEmbeddingScanPage(entries: entries, nextCursor: nextCursor)
         }
     }
 
