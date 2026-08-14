@@ -69,7 +69,10 @@ public final class DocumentReadinessRepository: @unchecked Sendable {
         }
     }
 
-    private static func deriveReceipt(
+    /// Internal snapshot seam for Store repositories that must return their
+    /// domain rows and the canonical readiness proof from one database read.
+    /// Callers outside SupraStore continue to use `fetchReceipt(s)`.
+    static func deriveReceipt(
         for document: MatterDocumentRecord,
         in database: Database
     ) throws -> DocumentReadinessReceipt {

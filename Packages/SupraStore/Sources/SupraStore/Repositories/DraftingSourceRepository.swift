@@ -66,6 +66,9 @@ public struct MotionDraftFactSourceRecord: Sendable {
     public let document: MatterDocumentRecord
     public let part: DocumentPagePartRecord?
     public let chunk: DocumentChunkRecord
+    /// Canonical base-readiness proof derived in the same database snapshot as
+    /// `document`, `part`, and `chunk`.
+    public let readinessReceipt: DocumentReadinessReceipt
 }
 
 /// Raw authority metadata and its recomputed proposition state captured by one
@@ -229,6 +232,10 @@ public final class DraftingSourceRepository: @unchecked Sendable {
             )
             var sources: [MotionDraftFactSourceRecord] = []
             for document in documents {
+                let readinessReceipt = try DocumentReadinessRepository.deriveReceipt(
+                    for: document,
+                    in: db
+                )
                 let partsByID = Dictionary(
                     uniqueKeysWithValues: try DocumentPagePartRecord.fetchAll(
                         db,
@@ -245,7 +252,8 @@ public final class DraftingSourceRepository: @unchecked Sendable {
                     MotionDraftFactSourceRecord(
                         document: document,
                         part: chunk.pagePartID.flatMap { partsByID[$0] },
-                        chunk: chunk
+                        chunk: chunk,
+                        readinessReceipt: readinessReceipt
                     )
                 })
             }

@@ -737,7 +737,11 @@ public final class MatterDraftingController: ObservableObject {
         return MotionDraftReadiness(
             selectedFactCount: selectedFactIDs.count,
             selectedAuthorityCount: selectedAuthorities.count,
-            blockingReasons: uniqueReasons
+            blockingReasons: uniqueReasons,
+            factDocumentReadiness: Self.motionFactDocumentReadiness(
+                factSources: factSources,
+                selectedFactChunkIDs: Set(selectedFactIDs)
+            )
         )
     }
 
@@ -1132,17 +1136,15 @@ public final class MatterDraftingController: ObservableObject {
         return try store.draftingSources.fetchMotionFactSources(matterID: matterID).map { record in
             let document = record.document
             let chunk = record.chunk
+            let readiness = DocumentReadinessConsumerProjection(
+                consumer: .drafting,
+                baseReceipt: record.readinessReceipt
+            )
             var blockers: [String] = []
-            if document.status != MatterDocumentStatus.ready.rawValue {
-                blockers.append("the document is not ready")
-            }
-            if ![DocumentExtractionStatus.extracted.rawValue, DocumentExtractionStatus.ocrComplete.rawValue, DocumentExtractionStatus.edited.rawValue]
-                .contains(document.extractionStatus) {
-                blockers.append("text extraction is not ready")
-            }
-            if ![DocumentIndexStatus.textIndexed.rawValue, DocumentIndexStatus.ready.rawValue]
-                .contains(document.indexStatus) {
-                blockers.append("the text index is not current")
+            if let exclusion = readiness.primaryBaseExclusion {
+                blockers.append(Self.motionFactReadinessDescription(for: exclusion))
+            } else if !readiness.isBaseReady {
+                blockers.append("the document's canonical readiness could not be verified")
             }
             let revisionID = chunk.revisionID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             if revisionID.isEmpty {
@@ -1183,7 +1185,66 @@ public final class MatterDraftingController: ObservableObject {
                 locator: locator,
                 text: text,
                 isReady: blockers.isEmpty,
-                blockingReason: blockers.isEmpty ? nil : blockers.joined(separator: ", ")
+                blockingReason: blockers.isEmpty ? nil : blockers.joined(separator: ", "),
+                readiness: readiness
+            )
+        }
+    }
+
+    private static func motionFactReadinessDescription(
+        for exclusion: DocumentReadinessExclusionReason
+    ) -> String {
+        switch exclusion {
+        case .deleted:
+            "the document is in the Recycle Bin"
+        case .extractionFailed, .processingFailed:
+            "document processing failed"
+        case .reviewRequired:
+            "the document needs review"
+        case .extractionIncomplete:
+            "text extraction is not ready"
+        case .selectedRevisionIncoherent:
+            "the selected document revision is inconsistent"
+        case .textIndexFailed:
+            "text indexing failed"
+        case .staleRevision:
+            "the excerpt is stale relative to the current revision"
+        case .textIndexIncomplete:
+            "the text index is not current"
+        case .activeEmbeddingModelMissing:
+            "an active embedding model is required"
+        case .selectionInconsistent:
+            "the active embedding-model selection is inconsistent"
+        case .unverified:
+            "the active embedding model has not passed its local test"
+        case .semanticIndexIncomplete:
+            "the semantic index is not current for the active model"
+        }
+    }
+
+    private static func motionFactDocumentReadiness(
+        factSources: [MotionDraftFactSource]?,
+        selectedFactChunkIDs: Set<String>
+    ) -> [DocumentReadinessConsumerProjection] {
+        guard let factSources else { return [] }
+        let selectedDocumentIDs = Set(
+            factSources.lazy
+                .filter { selectedFactChunkIDs.contains($0.chunkID) }
+                .map(\.documentID)
+        )
+        var emittedDocumentIDs: Set<String> = []
+        return factSources.compactMap { source in
+            guard emittedDocumentIDs.insert(source.documentID).inserted else {
+                return nil
+            }
+            let taskExclusions: [DocumentTaskEligibilityExclusion] =
+                selectedDocumentIDs.contains(source.documentID)
+                ? []
+                : [.missingDraftingSourceSelection]
+            return DocumentReadinessConsumerProjection(
+                consumer: .drafting,
+                baseReceipt: source.readiness.baseReceipt,
+                taskExclusions: taskExclusions
             )
         }
     }
@@ -2035,6 +2096,10 @@ public struct MotionDraftFactSource: Sendable, Equatable, Identifiable {
     public let text: String
     public let isReady: Bool
     public let blockingReason: String?
+    /// Store-owned base readiness captured in the same database snapshot as
+    /// this displayed fact row. Input selection policy is layered later by
+    /// `MotionDraftReadiness` and never changes this receipt.
+    public let readiness: DocumentReadinessConsumerProjection
 
     public var displayExcerpt: String { String(text.prefix(240)) }
 
@@ -2047,7 +2112,8 @@ public struct MotionDraftFactSource: Sendable, Equatable, Identifiable {
         locator: String,
         text: String,
         isReady: Bool,
-        blockingReason: String?
+        blockingReason: String?,
+        readiness: DocumentReadinessConsumerProjection
     ) {
         self.chunkID = chunkID
         self.documentID = documentID
@@ -2058,6 +2124,7 @@ public struct MotionDraftFactSource: Sendable, Equatable, Identifiable {
         self.text = text
         self.isReady = isReady
         self.blockingReason = blockingReason
+        self.readiness = readiness
     }
 }
 
@@ -2096,13 +2163,22 @@ public struct MotionDraftReadiness: Sendable, Equatable {
     public let selectedFactCount: Int
     public let selectedAuthorityCount: Int
     public let blockingReasons: [String]
+    /// One projection per displayed fact document. Base readiness is the exact
+    /// Store receipt; missing input selection is an additive drafting policy.
+    public let factDocumentReadiness: [DocumentReadinessConsumerProjection]
 
     public var canGenerate: Bool { blockingReasons.isEmpty }
 
-    public init(selectedFactCount: Int, selectedAuthorityCount: Int, blockingReasons: [String]) {
+    public init(
+        selectedFactCount: Int,
+        selectedAuthorityCount: Int,
+        blockingReasons: [String],
+        factDocumentReadiness: [DocumentReadinessConsumerProjection] = []
+    ) {
         self.selectedFactCount = selectedFactCount
         self.selectedAuthorityCount = selectedAuthorityCount
         self.blockingReasons = blockingReasons
+        self.factDocumentReadiness = factDocumentReadiness
     }
 }
 
