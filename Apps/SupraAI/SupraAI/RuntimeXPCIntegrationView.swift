@@ -826,6 +826,13 @@ private struct RuntimeXPCIntegrationRunner {
         try FileManager.default.createDirectory(at: recreatedModel, withIntermediateDirectories: true)
         try FileManager.default.createSymbolicLink(at: symlinkEscape, withDestinationURL: escape)
         try Self.markerData.write(to: model.appendingPathComponent(Self.markerName), options: .atomic)
+        let configData = Data(#"{"hidden_size":98,"max_position_embeddings":713,"model_type":"synthetic-xpc-lifecycle","num_attention_heads":14,"num_hidden_layers":7,"num_key_value_heads":2,"torch_dtype":"bfloat16"}"#.utf8)
+        let weightData = Data("SUPRA-XPC-LIFECYCLE-WEIGHT-WIRE-713".utf8)
+        try configData.write(to: model.appendingPathComponent("config.json"), options: .atomic)
+        try weightData.write(
+            to: model.appendingPathComponent("model.safetensors"),
+            options: .atomic
+        )
         try Self.markerData.write(to: escape.appendingPathComponent(Self.markerName), options: .atomic)
         try Self.markerData.write(to: staleOriginal.appendingPathComponent(Self.markerName), options: .atomic)
         try Self.markerData.write(to: recreatedModel.appendingPathComponent(Self.markerName), options: .atomic)
@@ -845,6 +852,12 @@ private struct RuntimeXPCIntegrationRunner {
         let markerSHA256 = SHA256.hash(data: Self.markerData)
             .map { String(format: "%02x", $0) }
             .joined()
+        let configSHA256 = SHA256.hash(data: configData)
+            .map { String(format: "%02x", $0) }
+            .joined()
+        let weightSHA256 = SHA256.hash(data: weightData)
+            .map { String(format: "%02x", $0) }
+            .joined()
         let contentFiles = [
             RuntimeModelContentBinding.File(
                 path: Self.markerName,
@@ -852,6 +865,20 @@ private struct RuntimeXPCIntegrationRunner {
                 declaredDigestAlgorithm: "sha256",
                 declaredDigest: markerSHA256,
                 actualSHA256: markerSHA256
+            ),
+            RuntimeModelContentBinding.File(
+                path: "config.json",
+                size: Int64(configData.count),
+                declaredDigestAlgorithm: "sha256",
+                declaredDigest: configSHA256,
+                actualSHA256: configSHA256
+            ),
+            RuntimeModelContentBinding.File(
+                path: "model.safetensors",
+                size: Int64(weightData.count),
+                declaredDigestAlgorithm: "sha256",
+                declaredDigest: weightSHA256,
+                actualSHA256: weightSHA256
             ),
         ]
         let contentFingerprint = try RuntimeModelContentBinding.canonicalFingerprintSHA256(

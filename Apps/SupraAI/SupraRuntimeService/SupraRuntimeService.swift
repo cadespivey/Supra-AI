@@ -855,6 +855,64 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
     private static func chatResourceProfile(
         for request: LoadModelRequest
     ) throws -> ModelResourceProfile {
+        let identifier = request.modelID.rawValue.uuidString.lowercased()
+        if let binding = request.contentBinding {
+            let configData = try verifiedModelConfigData(for: request)
+            return try RuntimeModelResourceProfileBuilder(
+                calibration: .productionChat
+            ).buildChatProfile(
+                profileID: "runtime-chat-\(identifier)",
+                modelID: request.modelID,
+                binding: binding,
+                configData: configData
+            )
+        }
+
+        return try legacyUnboundChatResourceProfile(
+            request: request,
+            identifier: identifier
+        )
+    }
+
+    private static func verifiedModelConfigData(
+        for request: LoadModelRequest
+    ) throws -> Data {
+        guard let binding = request.contentBinding,
+              let config = binding.files.first(where: { $0.path == "config.json" }),
+              config.size >= 0,
+              config.size <= 10 * 1_024 * 1_024 else {
+            throw RuntimeServiceResourceAdmissionError.invalidWeightCardinality
+        }
+        let access = try RuntimeModelDirectoryAccess(
+            bookmark: request.modelBookmark,
+            requestedPath: request.modelPath,
+            managedRootPath: request.managedRootPath,
+            expectedIdentity: request.modelDirectoryIdentity
+        )
+        defer { access.close() }
+        let configURL = access.url.appendingPathComponent(
+            "config.json",
+            isDirectory: false
+        )
+        let values = try configURL.resourceValues(forKeys: [
+            .isRegularFileKey,
+            .isSymbolicLinkKey,
+            .fileSizeKey,
+        ])
+        guard values.isRegularFile == true,
+              values.isSymbolicLink != true,
+              values.fileSize == Int(config.size) else {
+            throw RuntimeServiceResourceAdmissionError.invalidWeightCardinality
+        }
+        let data = try Data(contentsOf: configURL, options: [.mappedIfSafe])
+        try access.validateIdentity()
+        return data
+    }
+
+    private static func legacyUnboundChatResourceProfile(
+        request: LoadModelRequest,
+        identifier: String
+    ) throws -> ModelResourceProfile {
         var weightBytes = 0
         for file in request.contentBinding?.files ?? [] {
             guard file.size <= Int64(Int.max) else {
@@ -867,23 +925,20 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
             weightBytes = next
         }
 
-        let identifier = request.modelID.rawValue.uuidString.lowercased()
-        let binding = request.contentBinding
         return ModelResourceProfile(
             profileID: "runtime-chat-\(identifier)",
             modelID: request.modelID,
-            modelArtifactID: binding?.repositoryID ?? "unbound-chat-\(identifier)",
-            modelRevision: binding?.revision ?? "unbound",
-            contentFingerprintSHA256: binding?.fingerprintSHA256
-                ?? unboundFingerprint(for: request.modelID.rawValue),
+            modelArtifactID: "unbound-chat-\(identifier)",
+            modelRevision: "unbound",
+            contentFingerprintSHA256: unboundFingerprint(for: request.modelID.rawValue),
             weightBytes: weightBytes,
-            layerCount: 32,
-            keyValueHeadCount: 8,
-            headDimension: 128,
-            scalarBytes: 2,
-            supportedContextTokens: 131_072,
+            layerCount: LegacyUnboundChatResourcePolicy.layerCount,
+            keyValueHeadCount: LegacyUnboundChatResourcePolicy.keyValueHeadCount,
+            headDimension: LegacyUnboundChatResourcePolicy.headDimension,
+            scalarBytes: LegacyUnboundChatResourcePolicy.scalarBytes,
+            supportedContextTokens: LegacyUnboundChatResourcePolicy.supportedContextTokens,
             nonWeightOverheadBytes: max(64 * 1_024 * 1_024, weightBytes / 10),
-            activationBytesPerToken: 4_096
+            activationBytesPerToken: LegacyUnboundChatResourcePolicy.activationBytesPerToken
         )
     }
 
@@ -961,6 +1016,15 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
         guard getrusage(RUSAGE_SELF, &usage) == 0 else { return 0 }
         return Int(usage.ru_maxrss / (1_024 * 1_024))
     }
+}
+
+private enum LegacyUnboundChatResourcePolicy {
+    static let layerCount = 32
+    static let keyValueHeadCount = 8
+    static let headDimension = 128
+    static let scalarBytes = 2
+    static let supportedContextTokens = 131_072
+    static let activationBytesPerToken = 4_096
 }
 
 private enum RuntimeServiceResourceAdmissionError: LocalizedError {
