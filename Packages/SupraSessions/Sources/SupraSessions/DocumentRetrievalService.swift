@@ -1,5 +1,6 @@
 import Foundation
 import SupraCore
+import SupraDiagnostics
 import SupraDocuments
 import SupraStore
 
@@ -113,6 +114,7 @@ public struct RetrievalResult: Sendable {
     public var usedSemantic: Bool
     public var query: String
     public var scopeDocumentIDs: [String]
+    public var executionReceipt: RAGExecutionReceipt?
 }
 
 /// How hard a retrieval pass works (spec §3.1). `.fast` keeps the candidate pool
@@ -245,6 +247,8 @@ public final class DocumentRetrievalService: @unchecked Sendable {
     }
 
     public func retrieve(matterID: String, query: String, scope: RetrievalScope, limit: Int = 12, depth: RetrievalDepth = .deep) async throws -> RetrievalResult {
+        let startedAt = Date()
+        let startedAtUnixMilliseconds = Self.unixMilliseconds(startedAt)
         // The fast tier trades recall for precision: a higher semantic floor keeps
         // marginally-similar chunks out of the small preliminary packet (spec §3.1).
         let semanticFloor = depth == .fast
@@ -283,7 +287,11 @@ public final class DocumentRetrievalService: @unchecked Sendable {
         // Semantic candidates (cosine over normalized vectors == dot product).
         var semanticBucket: [String: String] = [:]
         var usedSemantic = false
+        var semanticScanMetrics: BoundedSemanticScanMetrics?
+        var cacheDisposition = RAGExecutionCacheDisposition.bypassed
         let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        var receiptQuerySHA256 = DocumentStorage.sha256Hex(of: Data(trimmedQuery.utf8))
+        var embeddingArtifactIdentitySHA256: String?
         if let embedder,
            !scopeIDs.isEmpty,
            !trimmedQuery.isEmpty {
@@ -307,6 +315,10 @@ public final class DocumentRetrievalService: @unchecked Sendable {
                 trimmedQuery,
                 forModelID: embedder.modelRepoID
             )
+            receiptQuerySHA256 = DocumentStorage.sha256Hex(of: Data(preparedQuery.utf8))
+            if Self.isLowercaseSHA256(embedder.artifactIdentitySHA256) {
+                embeddingArtifactIdentitySHA256 = embedder.artifactIdentitySHA256
+            }
             let key = RAGDerivedCacheKey(
                 querySHA256: DocumentStorage.sha256Hex(of: Data(preparedQuery.utf8)),
                 matterID: matterID,
@@ -345,6 +357,7 @@ public final class DocumentRetrievalService: @unchecked Sendable {
                             minimumSimilarity: semanticFloor
                         )
                     )
+                    semanticScanMetrics = scan.metrics
                     return RAGSemanticCandidateCacheValue(
                         candidates: scan.candidates.map {
                             RAGCachedSemanticCandidate(
@@ -357,6 +370,7 @@ public final class DocumentRetrievalService: @unchecked Sendable {
                 }
             ) {
                 usedSemantic = true
+                cacheDisposition = resolution.source == .cache ? .hit : .computed
                 for (position, entry) in resolution.value.candidates.enumerated() {
                     scores[entry.chunkID, default: 0] += Self.rrfContribution(
                         rank: position + 1
@@ -509,9 +523,27 @@ public final class DocumentRetrievalService: @unchecked Sendable {
         }
         let warning = warnings.isEmpty ? nil : warnings.joined(separator: " ")
 
+        let receipt = try Self.executionReceipt(
+            startedAt: startedAt,
+            startedAtUnixMilliseconds: startedAtUnixMilliseconds,
+            depth: depth,
+            querySHA256: receiptQuerySHA256,
+            matterID: matterID,
+            scopeDocumentIDs: scopeIDs,
+            readiness: readiness,
+            embeddingArtifactIdentitySHA256: embeddingArtifactIdentitySHA256,
+            lexicalCandidateCount: ftsHits.count,
+            semanticScanMetrics: semanticScanMetrics,
+            semanticScanPageSize: semanticScanPageSize,
+            semanticCandidateLimit: semanticCandidateLimit,
+            cacheDisposition: cacheDisposition,
+            sources: sources
+        )
+
         return RetrievalResult(
             sources: sources, readiness: readiness, incompleteScopeWarning: warning,
-            usedSemantic: usedSemantic, query: query, scopeDocumentIDs: scopeIDs
+            usedSemantic: usedSemantic, query: query, scopeDocumentIDs: scopeIDs,
+            executionReceipt: receipt
         )
     }
 
@@ -685,6 +717,122 @@ public final class DocumentRetrievalService: @unchecked Sendable {
                 || (byte >= Character("a").asciiValue!
                     && byte <= Character("f").asciiValue!)
         }
+    }
+
+    private static func executionReceipt(
+        startedAt: Date,
+        startedAtUnixMilliseconds: Int64,
+        depth: RetrievalDepth,
+        querySHA256: String,
+        matterID: String,
+        scopeDocumentIDs: [String],
+        readiness: ScopeReadiness,
+        embeddingArtifactIdentitySHA256: String?,
+        lexicalCandidateCount: Int,
+        semanticScanMetrics: BoundedSemanticScanMetrics?,
+        semanticScanPageSize: Int,
+        semanticCandidateLimit: Int,
+        cacheDisposition: RAGExecutionCacheDisposition,
+        sources: [RetrievedSource]
+    ) throws -> RAGExecutionReceipt? {
+        let chunkerVersions = Set(
+            readiness.documentReadiness.map(\.baseReceipt.chunkerVersion)
+        )
+        guard chunkerVersions.count == 1,
+              let chunkerVersion = chunkerVersions.first,
+              chunkerVersion > 0 else { return nil }
+
+        let semantic: RAGExecutionSemanticFacts
+        if cacheDisposition == .computed, let metrics = semanticScanMetrics {
+            semantic = RAGExecutionSemanticFacts(
+                pageSize: metrics.pageSize,
+                candidateLimit: metrics.candidateLimit,
+                pageCount: metrics.pageCount,
+                scannedRows: metrics.scannedRows,
+                rejectedRows: metrics.rejectedRows,
+                maximumLivePageRows: metrics.maximumLivePageRows,
+                maximumHeapEntries: metrics.maximumHeapEntries,
+                maximumLiveVectorBytes: metrics.maximumLiveVectorBytes,
+                cacheDisposition: .computed
+            )
+        } else {
+            semantic = RAGExecutionSemanticFacts(
+                pageSize: semanticScanPageSize,
+                candidateLimit: semanticCandidateLimit,
+                pageCount: 0,
+                scannedRows: 0,
+                rejectedRows: 0,
+                maximumLivePageRows: 0,
+                maximumHeapEntries: 0,
+                maximumLiveVectorBytes: 0,
+                cacheDisposition: cacheDisposition
+            )
+        }
+
+        let ranks = sources.enumerated().map { offset, source in
+            let bucket: RAGExecutionScoreBucket
+            switch source.semanticBucket {
+            case "high": bucket = .high
+            case "medium": bucket = .medium
+            default: bucket = .low
+            }
+            return RAGExecutionRankFact(
+                candidateIdentitySHA256: DocumentStorage.sha256Hex(
+                    of: Data(source.chunkID.utf8)
+                ),
+                rank: offset + 1,
+                scoreBucket: bucket,
+                selected: true
+            )
+        }
+        let readinessReceiptIDs = readiness.documentReadiness
+            .map(\.baseReceiptID)
+            .sorted()
+        return try RAGExecutionReceipt(
+            executionID: "rag-\(UUID().uuidString.lowercased())",
+            retrievalAlgorithmVersion: Self.semanticCacheAlgorithmVersion,
+            querySHA256: querySHA256,
+            scopeSHA256: Self.contentFreeSetDigest(
+                domain: "rag-scope-v1",
+                values: [matterID] + scopeDocumentIDs
+            ),
+            readinessReceiptSetSHA256: Self.contentFreeSetDigest(
+                domain: "rag-readiness-v1",
+                values: readinessReceiptIDs
+            ),
+            embeddingArtifactIdentitySHA256: embeddingArtifactIdentitySHA256,
+            chunkerVersion: chunkerVersion,
+            retrievalDepth: depth.rawValue,
+            startedAtUnixMilliseconds: startedAtUnixMilliseconds,
+            elapsedMilliseconds: Self.elapsedMilliseconds(since: startedAt),
+            lexicalCandidateCount: lexicalCandidateCount,
+            semantic: semantic,
+            ranks: ranks
+        )
+    }
+
+    private static func contentFreeSetDigest(
+        domain: String,
+        values: [String]
+    ) -> String {
+        var data = Data()
+        for value in [domain] + Array(Set(values)).sorted() {
+            let bytes = Data(value.utf8)
+            var count = UInt64(bytes.count).bigEndian
+            withUnsafeBytes(of: &count) { data.append(contentsOf: $0) }
+            data.append(bytes)
+        }
+        return DocumentStorage.sha256Hex(of: data)
+    }
+
+    private static func unixMilliseconds(_ date: Date) -> Int64 {
+        let value = max(0, date.timeIntervalSince1970 * 1_000)
+        return Int64(min(value.rounded(.down), Double(Int64.max)))
+    }
+
+    private static func elapsedMilliseconds(since start: Date) -> Int {
+        let value = max(0, Date().timeIntervalSince(start) * 1_000)
+        return Int(min(value.rounded(.up), Double(Int.max)))
     }
 
     private func resolveScope(matterID: String, scope: RetrievalScope) throws -> [String] {
