@@ -209,6 +209,10 @@ final class ArchitectureUXTPubWork01Tests: XCTestCase {
             "ArchitectureUXTPubWorkController-\(UUID().uuidString)",
             isDirectory: true
         )
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: true
+        )
         defer { try? FileManager.default.removeItem(at: root) }
         let store = try SupraStore(url: root.appendingPathComponent("test.sqlite"))
         let identity = try seedArchitectureUXIdentityMatter(
