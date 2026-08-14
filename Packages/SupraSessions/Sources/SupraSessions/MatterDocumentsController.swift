@@ -94,6 +94,10 @@ public final class MatterDocumentsController: ObservableObject {
     /// `reload()`. Backs the classification-floor gate in `unclassifiedCount` so the
     /// property stays cheap for the view to read.
     private var documentCharCounts: [String: Int] = [:]
+    /// Documents-tab projections from one Store-owned readiness batch. A failed
+    /// refresh replaces the cache with an empty dictionary so an earlier green
+    /// receipt can never survive a Store error or an N+1 selection.
+    private var readinessByDocumentID: [String: DocumentReadinessConsumerProjection] = [:]
 
     public init(
         matterID: String,
@@ -251,6 +255,12 @@ public final class MatterDocumentsController: ObservableObject {
 
     public var setupReady: Bool { isImportReady() }
 
+    /// Canonical readiness for one visible document. Consumers can add task
+    /// policy elsewhere, but the Documents tab exposes the unchanged base receipt.
+    public func readiness(documentID: String) -> DocumentReadinessConsumerProjection? {
+        readinessByDocumentID[documentID]
+    }
+
     /// File-importer content types: every supported document type plus folders.
     public var allowedContentTypes: [UTType] {
         SupportedDocumentTypes.contentTypes() + [.folder]
@@ -291,6 +301,15 @@ public final class MatterDocumentsController: ObservableObject {
     public func reload() {
         folders = (try? store.documentLibrary.fetchFolders(matterID: matterID)) ?? []
         documents = (try? store.documentLibrary.fetchDocuments(matterID: matterID)) ?? []
+        let documentIDs = documents.map(\.id)
+        let documentProjections = try? CanonicalDocumentReadinessLedger(store: store)
+            .consumerProjections(matterID: matterID, documentIDs: documentIDs)
+            .filter { $0.consumer == .documents }
+        readinessByDocumentID = Dictionary(
+            uniqueKeysWithValues: (documentProjections ?? []).map {
+                ($0.documentID, $0)
+            }
+        )
         reconcileCorrectionBadgeVisibility()
         documentCharCounts = (try? store.documentIndex.fetchTotalCharCounts(matterID: matterID)) ?? [:]
         trashedDocuments = (try? store.documentLibrary.fetchSoftDeletedDocuments(matterID: matterID)) ?? []

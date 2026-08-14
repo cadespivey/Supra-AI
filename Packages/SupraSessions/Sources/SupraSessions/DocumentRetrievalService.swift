@@ -74,6 +74,10 @@ public struct ScopeReadiness: Sendable, Equatable {
     public var requiresSemanticIndex: Bool
     public var isFullyReady: Bool
     public var blockingReasons: [String]
+    /// Store-owned readiness receipts projected for Ask. The aggregate counts
+    /// above are derived from this exact batch rather than from document status
+    /// fields or the runtime embedder supplied by a caller.
+    public var documentReadiness: [DocumentReadinessConsumerProjection]
 
     public init(
         totalDocuments: Int,
@@ -83,7 +87,8 @@ public struct ScopeReadiness: Sendable, Equatable {
         needsReviewDocuments: Int = 0,
         requiresSemanticIndex: Bool,
         isFullyReady: Bool,
-        blockingReasons: [String] = []
+        blockingReasons: [String] = [],
+        documentReadiness: [DocumentReadinessConsumerProjection] = []
     ) {
         self.totalDocuments = totalDocuments
         self.readyDocuments = readyDocuments
@@ -93,6 +98,7 @@ public struct ScopeReadiness: Sendable, Equatable {
         self.requiresSemanticIndex = requiresSemanticIndex
         self.isFullyReady = isFullyReady
         self.blockingReasons = blockingReasons
+        self.documentReadiness = documentReadiness
     }
 
     public var summaryText: String {
@@ -125,6 +131,7 @@ public final class DocumentRetrievalService: @unchecked Sendable {
     static let defaultMinSemanticSimilarity = 0.15
     static let fastMinSemanticSimilarity = 0.25
     private let store: SupraStore
+    private let readinessLedger: CanonicalDocumentReadinessLedger
     private let embedder: (any TextEmbedder)?
     private let maxPerDocument: Int
     private let minSemanticSimilarity: Double
@@ -136,43 +143,53 @@ public final class DocumentRetrievalService: @unchecked Sendable {
         minSemanticSimilarity: Double = 0.15
     ) {
         self.store = store
+        self.readinessLedger = CanonicalDocumentReadinessLedger(store: store)
         self.embedder = embedder
         self.maxPerDocument = maxPerDocument
         self.minSemanticSimilarity = minSemanticSimilarity
     }
 
-    /// Whether the selected scope is fully indexed (text + semantic when an
-    /// embedder is configured). Immediate; no model work (plan §13.3).
+    /// Whether the selected scope is generally ready for grounded semantic work.
+    /// The Store-selected active model and its persisted vectors define base
+    /// truth. The injected runtime embedder is used only to execute retrieval and
+    /// cannot make a document appear ready (plan §13.3).
     public func scopeReadiness(matterID: String, scope: RetrievalScope) throws -> ScopeReadiness {
-        let docIDs = Set(try resolveScope(matterID: matterID, scope: scope))
+        let resolvedDocumentIDs = try resolveScope(matterID: matterID, scope: scope)
+        let docIDs = Set(resolvedDocumentIDs)
         let documents = try store.documentLibrary.fetchDocuments(matterID: matterID)
             .filter { docIDs.contains($0.id) }
-        let requiresSemantic = embedder != nil
-        var ready = 0
-        var failed = 0
-        var needsReview = 0
-        var blockers: [String] = []
-        for document in documents {
-            if document.extractionStatus == DocumentExtractionStatus.failed.rawValue
-                || document.status == MatterDocumentStatus.failed.rawValue {
-                failed += 1
-                blockers.append("\(document.displayName): \(Self.readinessDetail(for: document, fallback: "failed processing"))")
-                continue
+        let projections = try readinessLedger.consumerProjections(
+            matterID: matterID,
+            documentIDs: resolvedDocumentIDs
+        ).filter { $0.consumer == .ask }
+        let ready = projections.filter(\.isBaseReady).count
+        let failedReasons: Set<DocumentReadinessExclusionReason> = [
+            .extractionFailed,
+            .processingFailed,
+            .textIndexFailed,
+        ]
+        let failed = projections.filter {
+            !Set($0.baseReceipt.exclusions).isDisjoint(with: failedReasons)
+        }.count
+        let needsReview = projections.filter {
+            $0.baseReceipt.exclusions.contains(.reviewRequired)
+        }.count
+        let documentsByID = Dictionary(
+            uniqueKeysWithValues: documents.map { ($0.id, $0) }
+        )
+        let blockers = projections.compactMap { projection -> String? in
+            guard !projection.isBaseReady,
+                  let document = documentsByID[projection.documentID],
+                  let exclusion = projection.primaryBaseExclusion else { return nil }
+            let fallback = Self.readinessDescription(for: exclusion)
+            let detail: String
+            if exclusion == .extractionFailed || exclusion == .processingFailed
+                || exclusion == .reviewRequired {
+                detail = Self.readinessDetail(for: document, fallback: fallback)
+            } else {
+                detail = fallback
             }
-            if document.status == MatterDocumentStatus.needsReview.rawValue {
-                needsReview += 1
-                blockers.append("\(document.displayName): \(Self.readinessDetail(for: document, fallback: "needs review"))")
-                continue
-            }
-            guard Self.isTextReady(document) else { continue }
-            guard document.extractionMethod?.hasPrefix("converted_lossy@toolchain:") != true else { continue }
-            if let embedder {
-                guard try store.documentIndex.hasCompleteEmbeddings(
-                    documentID: document.id,
-                    embeddingModelID: embedder.modelID
-                ) else { continue }
-            }
-            ready += 1
+            return "\(document.displayName): \(detail)"
         }
         return ScopeReadiness(
             totalDocuments: documents.count,
@@ -184,12 +201,13 @@ public final class DocumentRetrievalService: @unchecked Sendable {
             pendingDocuments: max(0, documents.count - ready - failed),
             failedDocuments: failed,
             needsReviewDocuments: needsReview,
-            requiresSemanticIndex: requiresSemantic,
+            requiresSemanticIndex: true,
             isFullyReady: !documents.isEmpty
                 && ready == documents.count
                 && failed == 0
                 && needsReview == 0,
-            blockingReasons: blockers
+            blockingReasons: blockers,
+            documentReadiness: projections
         )
     }
 
@@ -574,17 +592,6 @@ public final class DocumentRetrievalService: @unchecked Sendable {
         )
     }
 
-    private static func isTextReady(_ document: MatterDocumentRecord) -> Bool {
-        switch DocumentIndexStatus(rawValue: document.indexStatus) {
-        case .ready:
-            return true
-        case .textIndexed:
-            return true
-        default:
-            return false
-        }
-    }
-
     private static func readinessDetail(
         for document: MatterDocumentRecord,
         fallback: String
@@ -602,6 +609,37 @@ public final class DocumentRetrievalService: @unchecked Sendable {
             return first
         }
         return fallback
+    }
+
+    private static func readinessDescription(
+        for exclusion: DocumentReadinessExclusionReason
+    ) -> String {
+        switch exclusion {
+        case .deleted:
+            "is in the Recycle Bin"
+        case .extractionFailed, .processingFailed:
+            "failed processing"
+        case .reviewRequired:
+            "needs review"
+        case .extractionIncomplete:
+            "is still extracting"
+        case .selectedRevisionIncoherent:
+            "has an inconsistent selected revision"
+        case .textIndexFailed:
+            "text indexing failed"
+        case .staleRevision:
+            "has changed since it was indexed"
+        case .textIndexIncomplete:
+            "is still text indexing"
+        case .activeEmbeddingModelMissing:
+            "needs an active embedding model"
+        case .selectionInconsistent:
+            "has an inconsistent embedding-model selection"
+        case .unverified:
+            "uses an embedding model that has not passed its local test"
+        case .semanticIndexIncomplete:
+            "is still semantic indexing"
+        }
     }
 }
 
