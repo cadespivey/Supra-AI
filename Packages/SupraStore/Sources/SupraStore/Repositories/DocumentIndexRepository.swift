@@ -297,6 +297,203 @@ public final class DocumentIndexRepository: @unchecked Sendable {
         }
     }
 
+    /// Returns only the current chunk identities whose vectors already satisfy
+    /// the exact active model binding. Vector payloads are inspected through a
+    /// cursor and are never returned to the caller, keeping relaunch progress
+    /// independent of document size.
+    public func fetchCompletedSemanticChunkIDs(
+        documentID: String,
+        expectedChunkIDs: [String],
+        expectedActiveModel: DocumentReadinessEmbeddingModelIdentity,
+        expectedModelVerifiedAt: Date
+    ) throws -> [String] {
+        try writer.read { database in
+            let context = try Self.semanticIndexContext(
+                database: database,
+                documentID: documentID,
+                expectedChunkIDs: expectedChunkIDs,
+                expectedActiveModel: expectedActiveModel,
+                expectedModelVerifiedAt: expectedModelVerifiedAt
+            )
+            return try Self.validatedCurrentEmbeddingChunkIDs(
+                database: database,
+                documentID: documentID,
+                chunks: context.chunks,
+                model: context.model
+            )
+        }
+    }
+
+    /// Atomically publishes one bounded semantic batch while deliberately
+    /// retaining a non-terminal text-index state. Each committed batch is a
+    /// durable relaunch checkpoint; terminal readiness is a separate exact
+    /// finalization step.
+    public func commitSemanticIndexBatch(
+        _ command: DocumentSemanticIndexBatchCommitCommand
+    ) throws -> DocumentSemanticIndexBatchCommitReceipt {
+        try writer.write { database in
+            let context = try Self.semanticIndexContext(
+                database: database,
+                documentID: command.documentID,
+                expectedChunkIDs: command.expectedChunkIDs,
+                expectedActiveModel: command.expectedActiveModel,
+                expectedModelVerifiedAt: command.expectedModelVerifiedAt
+            )
+            try Self.validateSemanticIndexSubset(
+                command.embeddings,
+                documentID: command.documentID,
+                chunks: context.chunks,
+                model: context.model
+            )
+            for embedding in command.embeddings {
+                try database.execute(
+                    sql: """
+                        DELETE FROM document_chunk_embeddings
+                        WHERE chunk_id = ? AND embedding_model_id = ?
+                        """,
+                    arguments: [embedding.chunkID, embedding.embeddingModelID]
+                )
+                try embedding.insert(database)
+            }
+            try database.execute(
+                sql: """
+                    UPDATE matter_documents
+                    SET index_status = ?,
+                        status = CASE
+                            WHEN status IN (?, ?, ?) THEN ?
+                            ELSE status
+                        END,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                arguments: [
+                    DocumentIndexStatus.textIndexed.rawValue,
+                    MatterDocumentStatus.ready.rawValue,
+                    MatterDocumentStatus.indexing.rawValue,
+                    MatterDocumentStatus.embedding.rawValue,
+                    MatterDocumentStatus.embedding.rawValue,
+                    Date(),
+                    command.documentID,
+                ]
+            )
+            let completed = try Self.validatedCurrentEmbeddingChunkIDs(
+                database: database,
+                documentID: command.documentID,
+                chunks: context.chunks,
+                model: context.model
+            )
+            guard let document = try MatterDocumentRecord.fetchOne(
+                database,
+                key: command.documentID
+            ) else {
+                throw DocumentReadinessTransitionError.documentNotFound(command.documentID)
+            }
+            let readiness = try DocumentReadinessRepository.deriveReceipt(
+                for: document,
+                in: database
+            )
+            guard !readiness.isBaseReady,
+                  readiness.chunkIDs == command.expectedChunkIDs,
+                  readiness.activeEmbeddingModel == command.expectedActiveModel else {
+                throw DocumentReadinessTransitionError.semanticIndexPostconditionFailed(
+                    command.documentID
+                )
+            }
+            return DocumentSemanticIndexBatchCommitReceipt(
+                documentID: command.documentID,
+                committedChunkIDs: command.embeddings.map(\.chunkID),
+                completedChunkCount: completed.count,
+                totalChunkCount: context.chunks.count,
+                readinessReceipt: readiness
+            )
+        }
+    }
+
+    /// Completes a streamed semantic projection without accepting vector bytes
+    /// from the caller. The Store walks persisted rows one at a time, then
+    /// promotes terminal flags in the same transaction.
+    public func finalizeSemanticIndex(
+        _ command: DocumentSemanticIndexFinalizationCommand
+    ) throws -> DocumentSemanticIndexCommitReceipt {
+        try writer.write { database in
+            let context = try Self.semanticIndexContext(
+                database: database,
+                documentID: command.documentID,
+                expectedChunkIDs: command.expectedChunkIDs,
+                expectedActiveModel: command.expectedActiveModel,
+                expectedModelVerifiedAt: command.expectedModelVerifiedAt
+            )
+            let completed = try Self.validatedCurrentEmbeddingChunkIDs(
+                database: database,
+                documentID: command.documentID,
+                chunks: context.chunks,
+                model: context.model
+            )
+            guard completed == command.expectedChunkIDs else {
+                throw DocumentReadinessTransitionError.invalidEmbeddingBatch(
+                    "the complete current vector set has not been persisted"
+                )
+            }
+            try database.execute(
+                sql: """
+                    UPDATE matter_documents
+                    SET index_status = ?,
+                        status = CASE
+                            WHEN status IN (?, ?) THEN ?
+                            ELSE status
+                        END,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                arguments: [
+                    DocumentIndexStatus.ready.rawValue,
+                    MatterDocumentStatus.indexing.rawValue,
+                    MatterDocumentStatus.embedding.rawValue,
+                    MatterDocumentStatus.ready.rawValue,
+                    Date(),
+                    command.documentID,
+                ]
+            )
+            guard let document = try MatterDocumentRecord.fetchOne(
+                database,
+                key: command.documentID
+            ) else {
+                throw DocumentReadinessTransitionError.documentNotFound(command.documentID)
+            }
+            let readiness = try DocumentReadinessRepository.deriveReceipt(
+                for: document,
+                in: database
+            )
+            guard readiness.activeEmbeddingModel == command.expectedActiveModel,
+                  readiness.chunkIDs == command.expectedChunkIDs,
+                  readiness.semanticIndexedChunkCount == context.chunks.count,
+                  !readiness.exclusions.contains(.semanticIndexIncomplete) else {
+                throw DocumentReadinessTransitionError.semanticIndexPostconditionFailed(
+                    command.documentID
+                )
+            }
+            let embeddingIDs = try String.fetchAll(
+                database,
+                sql: """
+                    SELECT e.id
+                    FROM document_chunk_embeddings e
+                    JOIN document_chunks c ON c.id = e.chunk_id
+                    WHERE c.document_id = ? AND e.embedding_model_id = ?
+                    ORDER BY c.chunk_index, c.id
+                    """,
+                arguments: [command.documentID, command.expectedActiveModel.id]
+            )
+            return DocumentSemanticIndexCommitReceipt(
+                documentID: command.documentID,
+                chunkIDs: command.expectedChunkIDs,
+                activeModel: command.expectedActiveModel,
+                verifiedAt: command.expectedModelVerifiedAt,
+                embeddingIDs: embeddingIDs,
+                readinessReceipt: readiness
+            )
+        }
+    }
+
     /// Replaces the selected model's vectors for one exact current chunk set and
     /// promotes terminal flags only after the complete, verified batch exists.
     public func commitSemanticIndex(
@@ -527,6 +724,164 @@ public final class DocumentIndexRepository: @unchecked Sendable {
                 arguments: [matterID, embeddingModelID]
             )
         }
+    }
+
+    private struct SemanticIndexContext {
+        let document: MatterDocumentRecord
+        let chunks: [DocumentChunkRecord]
+        let model: DocumentEmbeddingModelRecord
+    }
+
+    private static func semanticIndexContext(
+        database: Database,
+        documentID: String,
+        expectedChunkIDs: [String],
+        expectedActiveModel: DocumentReadinessEmbeddingModelIdentity,
+        expectedModelVerifiedAt: Date
+    ) throws -> SemanticIndexContext {
+        guard let document = try MatterDocumentRecord.fetchOne(database, key: documentID) else {
+            throw DocumentReadinessTransitionError.documentNotFound(documentID)
+        }
+        let chunks = try DocumentChunkRecord.fetchAll(
+            database,
+            sql: """
+                SELECT *
+                FROM document_chunks
+                WHERE document_id = ?
+                ORDER BY chunk_index, id
+                """,
+            arguments: [documentID]
+        )
+        guard !chunks.isEmpty,
+              chunks.map(\.id) == expectedChunkIDs else {
+            throw DocumentReadinessTransitionError.chunksChanged(documentID)
+        }
+        guard let settings = try DocumentIntelligenceSettingsRecord.fetchOne(
+            database,
+            key: DocumentIntelligenceSettingsRecord.singletonID
+        ) else {
+            throw DocumentReadinessTransitionError.settingsNotFound
+        }
+        guard settings.selectedEmbeddingModelID == expectedActiveModel.id else {
+            throw DocumentReadinessTransitionError.modelSelectionInconsistent(
+                expectedActiveModel.id
+            )
+        }
+        guard let model = try DocumentEmbeddingModelRecord.fetchOne(
+            database,
+            key: expectedActiveModel.id
+        ) else {
+            throw DocumentReadinessTransitionError.modelNotFound(expectedActiveModel.id)
+        }
+        let persistedIdentity = DocumentReadinessEmbeddingModelIdentity(
+            id: model.id,
+            repoID: model.repoID,
+            revision: model.revision,
+            dimension: model.dimension
+        )
+        guard persistedIdentity == expectedActiveModel,
+              model.dimension > 0 else {
+            throw DocumentReadinessTransitionError.modelIdentityChanged(model.id)
+        }
+        guard model.lastTestLoadResult == "passed",
+              model.lastTestLoadAt != nil else {
+            throw DocumentReadinessTransitionError.modelNotVerified(model.id)
+        }
+        guard model.lastTestLoadAt == expectedModelVerifiedAt,
+              settings.embeddingModelLastTestedAt == expectedModelVerifiedAt else {
+            throw DocumentReadinessTransitionError.modelVerificationChanged(model.id)
+        }
+        let selectedModelIDs = try String.fetchAll(
+            database,
+            sql: """
+                SELECT id
+                FROM document_embedding_models
+                WHERE is_selected = 1
+                ORDER BY id
+                """
+        )
+        guard selectedModelIDs == [model.id] else {
+            throw DocumentReadinessTransitionError.modelSelectionInconsistent(model.id)
+        }
+        let readiness = try DocumentReadinessRepository.deriveReceipt(
+            for: document,
+            in: database
+        )
+        guard readiness.activeEmbeddingModel == persistedIdentity,
+              !readiness.exclusions.contains(.staleRevision),
+              !readiness.exclusions.contains(.textIndexIncomplete),
+              !readiness.exclusions.contains(.selectionInconsistent),
+              !readiness.exclusions.contains(.unverified) else {
+            throw DocumentReadinessTransitionError.chunksChanged(documentID)
+        }
+        return SemanticIndexContext(document: document, chunks: chunks, model: model)
+    }
+
+    private static func validateSemanticIndexSubset(
+        _ embeddings: [DocumentChunkEmbeddingRecord],
+        documentID: String,
+        chunks: [DocumentChunkRecord],
+        model: DocumentEmbeddingModelRecord
+    ) throws {
+        let currentChunkIDs = Set(chunks.map(\.id))
+        guard !embeddings.isEmpty,
+              Set(embeddings.map(\.id)).count == embeddings.count,
+              Set(embeddings.map(\.chunkID)).count == embeddings.count,
+              Set(embeddings.map(\.chunkID)).isSubset(of: currentChunkIDs) else {
+            throw DocumentReadinessTransitionError.invalidEmbeddingBatch(
+                "the bounded batch must contain one unique vector per included current chunk"
+            )
+        }
+        for embedding in embeddings {
+            guard !embedding.id.isEmpty,
+                  embedding.documentID == documentID,
+                  embedding.embeddingModelID == model.id,
+                  embedding.modelDisplayName == model.displayName,
+                  embedding.modelRevision == model.revision,
+                  embedding.dimension == model.dimension,
+                  embedding.normalized,
+                  isFiniteUnitVector(embedding.vector, dimension: model.dimension) else {
+                throw DocumentReadinessTransitionError.invalidEmbeddingBatch(
+                    "a vector's document, chunk, model, dimension, or normalization proof is invalid"
+                )
+            }
+        }
+    }
+
+    private static func validatedCurrentEmbeddingChunkIDs(
+        database: Database,
+        documentID: String,
+        chunks: [DocumentChunkRecord],
+        model: DocumentEmbeddingModelRecord
+    ) throws -> [String] {
+        let cursor = try DocumentChunkEmbeddingRecord.fetchCursor(
+            database,
+            sql: """
+                SELECT e.*
+                FROM document_chunks c
+                JOIN document_chunk_embeddings e
+                  ON e.chunk_id = c.id AND e.embedding_model_id = ?
+                WHERE c.document_id = ?
+                ORDER BY c.chunk_index, c.id
+                """,
+            arguments: [model.id, documentID]
+        )
+        let currentChunkIDs = Set(chunks.map(\.id))
+        var completed: [String] = []
+        while let embedding = try cursor.next() {
+            guard currentChunkIDs.contains(embedding.chunkID),
+                  embedding.documentID == documentID,
+                  embedding.embeddingModelID == model.id,
+                  embedding.modelDisplayName == model.displayName,
+                  embedding.modelRevision == model.revision,
+                  embedding.dimension == model.dimension,
+                  embedding.normalized,
+                  isFiniteUnitVector(embedding.vector, dimension: model.dimension) else {
+                continue
+            }
+            completed.append(embedding.chunkID)
+        }
+        return completed
     }
 
     private static func validateTextIndexBatch(

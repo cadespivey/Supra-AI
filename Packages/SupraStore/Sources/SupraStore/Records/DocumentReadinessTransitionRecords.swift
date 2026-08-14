@@ -189,6 +189,74 @@ public struct DocumentSemanticIndexCommitReceipt: Sendable {
     }
 }
 
+/// Persists one bounded prefix of the current semantic projection without
+/// publishing terminal readiness. Completed batches are intentionally durable
+/// so a crash or cancellation can resume at the first uncommitted chunk.
+public struct DocumentSemanticIndexBatchCommitCommand: Sendable {
+    public let documentID: String
+    public let expectedChunkIDs: [String]
+    public let expectedActiveModel: DocumentReadinessEmbeddingModelIdentity
+    public let expectedModelVerifiedAt: Date
+    public let embeddings: [DocumentChunkEmbeddingRecord]
+
+    public init(
+        documentID: String,
+        expectedChunkIDs: [String],
+        expectedActiveModel: DocumentReadinessEmbeddingModelIdentity,
+        expectedModelVerifiedAt: Date,
+        embeddings: [DocumentChunkEmbeddingRecord]
+    ) {
+        self.documentID = documentID
+        self.expectedChunkIDs = expectedChunkIDs
+        self.expectedActiveModel = expectedActiveModel
+        self.expectedModelVerifiedAt = expectedModelVerifiedAt
+        self.embeddings = embeddings
+    }
+}
+
+public struct DocumentSemanticIndexBatchCommitReceipt: Sendable {
+    public let documentID: String
+    public let committedChunkIDs: [String]
+    public let completedChunkCount: Int
+    public let totalChunkCount: Int
+    public let readinessReceipt: DocumentReadinessReceipt
+
+    init(
+        documentID: String,
+        committedChunkIDs: [String],
+        completedChunkCount: Int,
+        totalChunkCount: Int,
+        readinessReceipt: DocumentReadinessReceipt
+    ) {
+        self.documentID = documentID
+        self.committedChunkIDs = committedChunkIDs
+        self.completedChunkCount = completedChunkCount
+        self.totalChunkCount = totalChunkCount
+        self.readinessReceipt = readinessReceipt
+    }
+}
+
+/// Promotes terminal semantic readiness only after every current chunk has a
+/// validated vector for the still-selected, still-verified model identity.
+public struct DocumentSemanticIndexFinalizationCommand: Sendable {
+    public let documentID: String
+    public let expectedChunkIDs: [String]
+    public let expectedActiveModel: DocumentReadinessEmbeddingModelIdentity
+    public let expectedModelVerifiedAt: Date
+
+    public init(
+        documentID: String,
+        expectedChunkIDs: [String],
+        expectedActiveModel: DocumentReadinessEmbeddingModelIdentity,
+        expectedModelVerifiedAt: Date
+    ) {
+        self.documentID = documentID
+        self.expectedChunkIDs = expectedChunkIDs
+        self.expectedActiveModel = expectedActiveModel
+        self.expectedModelVerifiedAt = expectedModelVerifiedAt
+    }
+}
+
 public enum DocumentReadinessTransitionError: Error, LocalizedError, Equatable, Sendable {
     case documentNotFound(String)
     case settingsNotFound
