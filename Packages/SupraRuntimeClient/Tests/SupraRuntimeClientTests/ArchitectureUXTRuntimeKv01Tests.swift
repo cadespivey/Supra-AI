@@ -116,6 +116,74 @@ final class ArchitectureUXTRuntimeKv01Tests: XCTestCase {
         assertCanonicalBinding(decision)
     }
 
+    func testAdmissionReservesOutputKVAndHonorsTheRequestedPromptCeiling() throws {
+        // Expected RED: RuntimeContextAdmissionRequest has no reserved-output
+        // field, so admission estimates prompt allowance alone and exposes no
+        // prompt ceiling after subtracting the output reservation.
+        let profile = ModelResourceProfile(
+            profileID: "T_RUNTIME_KV_01_WIRE_731",
+            modelID: ArchitectureUXRuntimeBudgetWire.modelID,
+            modelArtifactID: "model-wire-713",
+            modelRevision: "rev-7",
+            contentFingerprintSHA256: ArchitectureUXRuntimeBudgetWire.modelFingerprint,
+            weightBytes: 0,
+            layerCount: 1,
+            keyValueHeadCount: 1,
+            headDimension: 1,
+            scalarBytes: 1,
+            supportedContextTokens: 7,
+            nonWeightOverheadBytes: 0,
+            activationBytesPerToken: 0
+        )
+        let planner = RuntimeContextAdmissionPlanner(
+            resourcePlanner: RuntimeResourceAdmissionPlanner(
+                envelope: RuntimeMemoryEnvelope(
+                    unifiedMemoryCeilingBytes: 8,
+                    appResidentBytes: 0,
+                    runtimeResidentBytesExcludingModels: 0,
+                    embeddingResidentBytes: 0,
+                    rerankerResidentBytes: 0,
+                    safetyMarginBytes: 0,
+                    currentPressureReserveBytes: 0
+                )
+            )
+        )
+
+        // Hardware could hold four total KV tokens, but this invocation asked
+        // for a two-token prompt plus one reserved output token. A three-token
+        // prepared prompt must therefore repack instead of being admitted just
+        // because it fits the larger hardware envelope.
+        let decision = try planner.evaluate(
+            RuntimeContextAdmissionRequest(
+                wireID: "T_RUNTIME_KV_01_WIRE_731",
+                modelID: ArchitectureUXRuntimeBudgetWire.modelID,
+                modelArtifactID: "model-wire-713",
+                modelRevision: "rev-7",
+                expectedModelSHA256: ArchitectureUXRuntimeBudgetWire.modelFingerprint,
+                requestedContextTokens: 2,
+                actualPromptTokens: 3,
+                reservedOutputTokens: 1,
+                workload: .groundedExactEvidence,
+                allowsExactSourceRepacking: true
+            ),
+            profile: profile
+        )
+
+        XCTAssertEqual(decision.disposition, .repackExactSources)
+        XCTAssertEqual(decision.reservedOutputTokens, 1)
+        XCTAssertEqual(decision.requestedKVTokens, 3)
+        XCTAssertEqual(decision.actualPeakKVTokens, 4)
+        XCTAssertEqual(decision.maximumAdmittedContextTokens, 4)
+        XCTAssertEqual(decision.maximumAdmittedPromptTokens, 2)
+        XCTAssertEqual(
+            decision.correctiveAction,
+            .repackExactSources(maximumContextTokens: 2)
+        )
+        XCTAssertTrue(decision.preservesExactEvidence)
+        XCTAssertFalse(decision.didSilentlyTruncateExactEvidence)
+        assertCanonicalBinding(decision)
+    }
+
     func testHostCountsPreparedPromptAndAdmitsItBeforeMLXGeneration() throws {
         let source = try ArchitectureUXRuntimeBudgetWire.source(
             "Apps/SupraAI/SupraRuntimeService/MLXModelController.swift"
@@ -133,6 +201,8 @@ final class ArchitectureUXTRuntimeKv01Tests: XCTestCase {
 
         XCTAssertLessThan(countOffset, admissionOffset)
         XCTAssertLessThan(admissionOffset, generationOffset)
+        XCTAssertTrue(source.contains("reservedOutputTokens: options.maxOutputTokens"))
+        XCTAssertTrue(source.contains("admission.maximumAdmittedPromptTokens"))
         XCTAssertTrue(source.contains("didSilentlyTruncateExactEvidence: false"))
         XCTAssertFalse(source.contains(forbiddenDefault))
     }

@@ -170,4 +170,124 @@ final class ArchitectureUXTRuntimeBind01Tests: XCTestCase {
         XCTAssertTrue(base.countModelIDs.isEmpty, "wrong model must not reach XPC")
         XCTAssertTrue(base.generateRequests.isEmpty, "wrong fingerprint must not reach XPC")
     }
+
+    func testEmbeddingLoadRequiresTheSameExactArtifactBindingAsItsPermit() async throws {
+        // Expected RED: embedding-load requests carry no content binding and
+        // ModelExecutionPermit forwards them without exact artifact validation.
+        let contentBinding = try embeddingContentBinding()
+        let executionBinding = ModelExecutionModelBinding(
+            modelID: ArchitectureUXRuntimeWire.modelID,
+            repositoryID: contentBinding.repositoryID,
+            revision: contentBinding.revision,
+            artifactFingerprintSHA256: contentBinding.fingerprintSHA256
+        )
+        let base = ArchitectureUXImmediateRuntimeClient()
+        let coordinator = architectureUXRuntimeCoordinator(base: base)
+        let request = ArchitectureUXRuntimeWire.request(
+            "binding-embedding-1301",
+            operation: .embeddingBatch,
+            priority: .backgroundMaintenance,
+            binding: executionBinding
+        )
+
+        _ = try await coordinator.execute(request) { permit in
+            let response = try await permit.loadEmbeddingModel(
+                LoadEmbeddingModelRequest(
+                    embeddingModelID: DocumentEmbeddingModelID(
+                        ArchitectureUXRuntimeWire.modelID.rawValue
+                    ),
+                    modelPath: "/synthetic/T_RUNTIME_BIND_01_WIRE_731",
+                    displayName: "Embedding model-wire-713",
+                    revision: "rev-7",
+                    expectedDimension: 7,
+                    contentBinding: contentBinding
+                )
+            )
+            XCTAssertEqual(response.state, .loaded)
+            return response
+        }
+
+        XCTAssertEqual(base.embeddingLoadRequests.count, 1)
+        XCTAssertEqual(
+            base.embeddingLoadRequests.only?.contentBinding?.fingerprintSHA256,
+            contentBinding.fingerprintSHA256
+        )
+
+        let wrongBinding = try embeddingContentBinding(repositoryID: "wrong-model-wire-811")
+        let wrongRequest = ArchitectureUXRuntimeWire.request(
+            "binding-embedding-wrong-1319",
+            operation: .embeddingBatch,
+            priority: .backgroundMaintenance,
+            binding: executionBinding
+        )
+        do {
+            _ = try await coordinator.execute(wrongRequest) { permit in
+                try await permit.loadEmbeddingModel(
+                    LoadEmbeddingModelRequest(
+                        embeddingModelID: DocumentEmbeddingModelID(
+                            ArchitectureUXRuntimeWire.modelID.rawValue
+                        ),
+                        modelPath: "/synthetic/wrong-model-wire-811",
+                        displayName: "Wrong embedding model",
+                        revision: "rev-7",
+                        expectedDimension: 7,
+                        contentBinding: wrongBinding
+                    )
+                )
+            }
+            XCTFail("A different embedding artifact must not cross the permit boundary")
+        } catch {
+            XCTAssertEqual(error as? ModelExecutionError, .modelBindingMismatch)
+        }
+        XCTAssertEqual(
+            base.embeddingLoadRequests.count,
+            1,
+            "the mismatched embedding artifact must not reach XPC"
+        )
+        XCTAssertFalse(
+            String(describing: base.embeddingLoadRequests).contains(
+                ArchitectureUXRuntimeWire.forbiddenDefault
+            )
+        )
+    }
+
+    private func embeddingContentBinding(
+        repositoryID: String = "model-wire-713"
+    ) throws -> RuntimeModelContentBinding {
+        let files = [
+            RuntimeModelContentBinding.File(
+                path: "config.json",
+                size: 7,
+                declaredDigestAlgorithm: "sha256",
+                declaredDigest: String(repeating: "1", count: 64),
+                actualSHA256: String(repeating: "2", count: 64)
+            ),
+            RuntimeModelContentBinding.File(
+                path: "model.safetensors",
+                size: 713,
+                declaredDigestAlgorithm: "sha256",
+                declaredDigest: String(repeating: "3", count: 64),
+                actualSHA256: String(repeating: "4", count: 64)
+            ),
+        ]
+        let fingerprint = try RuntimeModelContentBinding.canonicalFingerprintSHA256(
+            algorithm: RuntimeModelContentBinding.fingerprintAlgorithm,
+            schemaVersion: RuntimeModelContentBinding.supportedManifestSchemaVersion,
+            repositoryID: repositoryID,
+            revision: String(repeating: "7", count: 40),
+            files: files
+        )
+        return try RuntimeModelContentBinding(
+            algorithm: RuntimeModelContentBinding.fingerprintAlgorithm,
+            schemaVersion: RuntimeModelContentBinding.supportedManifestSchemaVersion,
+            repositoryID: repositoryID,
+            revision: String(repeating: "7", count: 40),
+            files: files,
+            fingerprintSHA256: fingerprint
+        )
+    }
+}
+
+private extension Array {
+    var only: Element? { count == 1 ? first : nil }
 }
