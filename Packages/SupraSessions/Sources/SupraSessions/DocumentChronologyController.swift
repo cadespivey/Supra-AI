@@ -74,7 +74,51 @@ public final class DocumentChronologyController: ObservableObject {
     }
 
     public func scopeReadiness(scope: RetrievalScope) -> ScopeReadiness? {
-        try? retrieval.scopeReadiness(matterID: matterID, scope: scope)
+        guard var readiness = try? retrieval.scopeReadiness(
+            matterID: matterID,
+            scope: scope
+        ) else {
+            return nil
+        }
+
+        let scopedDocumentIDs = Set(readiness.documentReadiness.map(\.documentID))
+        guard let documents = try? store.documentLibrary.fetchDocuments(matterID: matterID) else {
+            return nil
+        }
+        let documentsByID = Dictionary(
+            uniqueKeysWithValues: documents
+                .filter { scopedDocumentIDs.contains($0.id) }
+                .map { ($0.id, $0) }
+        )
+        guard documentsByID.count == scopedDocumentIDs.count else {
+            return nil
+        }
+
+        var dateEvidenceByDocumentID: [String: Bool] = [:]
+        for documentID in scopedDocumentIDs {
+            guard let document = documentsByID[documentID],
+                  let chunks = try? store.documentIndex.fetchChunks(documentID: documentID)
+            else {
+                return nil
+            }
+            dateEvidenceByDocumentID[documentID] = document.metadataCreatedAt != nil
+                || chunks.contains { DateExtraction.containsDate($0.normalizedText) }
+        }
+
+        readiness.documentReadiness = readiness.documentReadiness.map { projection in
+            let taskExclusions: [DocumentTaskEligibilityExclusion]
+            if dateEvidenceByDocumentID[projection.documentID] == true {
+                taskExclusions = []
+            } else {
+                taskExclusions = [.missingChronologyDateEvidence]
+            }
+            return DocumentReadinessConsumerProjection(
+                consumer: .chronology,
+                baseReceipt: projection.baseReceipt,
+                taskExclusions: taskExclusions
+            )
+        }
+        return readiness
     }
 
     @discardableResult
