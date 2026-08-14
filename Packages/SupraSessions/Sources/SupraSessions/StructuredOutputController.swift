@@ -99,6 +99,19 @@ public final class StructuredOutputController: ObservableObject {
         }
     }
 
+    /// Returns the matter's legal identity as one immutable, Store-bound read.
+    /// Callers must consume the typed court/party projections rather than
+    /// interpreting the snapshot's legacy evidence strings.
+    public func legalIdentityReadProjection() throws -> MatterLegalIdentityReadProjection {
+        guard let snapshot = try store.matterIdentity.fetchSnapshot(matterID: matterID) else {
+            throw MatterIdentityRepositoryError.matterUnavailable
+        }
+        return MatterLegalIdentityReadProjectionBuilder(
+            courtPresentationBuilder: MatterCourtPresentationBuilder(catalog: .shared),
+            draftPartyDefaultsBuilder: DraftPartyDefaultsBuilder()
+        ).makeProjection(for: snapshot)
+    }
+
     /// Converts one completed grounded chat answer into an ordinary document-Q&A
     /// output. The store owns the atomic boundary; this layer reconstructs the
     /// exact persisted verification and assurance contract from the message packet.
@@ -493,6 +506,22 @@ public final class StructuredOutputController: ObservableObject {
             }
             return false
         }
+        let identity: MatterLegalIdentityReadProjection
+        do {
+            identity = try legalIdentityReadProjection()
+        } catch {
+            message = "This matter's legal identity is unavailable. Reopen the matter, then resolve its court and parties before generating an output."
+            return false
+        }
+        // The remaining creatable templates are authority-neutral scaffolds. An
+        // unresolved court or incomplete party graph is therefore represented as
+        // an explicit non-inference constraint in the prompt, not silently filled
+        // from legacy strings and not used to block generic issue/fact work.
+        let identityContext = Self.canonicalIdentityContext(identity)
+        let taskContext = context
+        let canonicalTaskContext = identityContext
+            + "\n\nUSER-PROVIDED TASK OR CONTEXT:\n"
+            + taskContext
         // Re-entrancy guard: claim the flag synchronously (no await before this)
         // so a second concurrent call cannot start a parallel generation.
         guard !isGenerating else {
@@ -506,7 +535,7 @@ public final class StructuredOutputController: ObservableObject {
         do {
             // When the output is scoped to documents, retrieve the most relevant
             // passages and prepend them as cited grounding (mirrors Document Q&A).
-            var groundedContext = context
+            var groundedContext = canonicalTaskContext
             var prepared: [PreparedDocSource] = []
             var scopeWasFullyIndexed = false
             let retrievalQuery = context.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -525,7 +554,9 @@ public final class StructuredOutputController: ObservableObject {
                     message = "No matching content was found in the selected documents."
                     return false
                 }
-                groundedContext = groundingBlock(prepared) + "\n\n---\n\nADDITIONAL CONTEXT:\n" + context
+                groundedContext = groundingBlock(prepared)
+                    + "\n\n---\n\nADDITIONAL CONTEXT:\n"
+                    + canonicalTaskContext
             }
 
             let prompt = try StructuredOutputPromptBuilder.buildPrompt(for: contract, context: groundedContext)
@@ -606,6 +637,32 @@ public final class StructuredOutputController: ObservableObject {
     /// Automatic structure-repair passes after generation before leaving an output as
     /// needs-review.
     static let maxAutoRepairPasses = 2
+
+    private nonisolated static func canonicalIdentityContext(
+        _ identity: MatterLegalIdentityReadProjection
+    ) -> String {
+        let court = identity.courtPresentation
+        var lines = [
+            "CANONICAL MATTER IDENTITY (Store revision \(identity.snapshot.identityRevision)):",
+        ]
+        if court.canRunCourtScopedResearch,
+           let resolvedJurisdictionName = court.resolvedJurisdictionName,
+           let resolvedCourtName = court.resolvedCourtName {
+            lines.append("Jurisdiction: \(resolvedJurisdictionName)")
+            lines.append("Court: \(resolvedCourtName)")
+        } else {
+            lines.append("Jurisdiction: unresolved — do not infer or apply jurisdiction-specific law.")
+            lines.append("Court: unresolved — do not infer a court, venue, or court-specific rule.")
+        }
+        switch identity.draftParties {
+        case let .available(parties):
+            lines.append("Represented client: \(parties.representedClientName) (\(parties.representedDesignation))")
+            lines.append("Opposing party: \(parties.opposingPartyName) (\(parties.opposingDesignation))")
+        case .blocked:
+            lines.append("Structured party identity: incomplete — do not infer a client, opposing party, caption, or service recipient.")
+        }
+        return lines.joined(separator: "\n")
+    }
 
     private func autoRepairIfNeeded(outputID: String, missing: [String], modelID: ModelID) async {
         var remaining = missing

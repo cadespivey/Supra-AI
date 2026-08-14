@@ -24,7 +24,7 @@ struct MatterOutputsView: View {
             }
         }
         .sheet(isPresented: $showNew) {
-            NewOutputSheet(controller: controller, library: library, matter: matter)
+            NewOutputSheet(controller: controller, library: library)
         }
         .onAppear { controller.loadOutputs() }
         #if DEBUG
@@ -83,7 +83,6 @@ enum StructuredOutputLabels {
 private struct NewOutputSheet: View {
     @ObservedObject var controller: StructuredOutputController
     @ObservedObject var library: ModelLibrary
-    let matter: MatterSummary
 
     @Environment(\.dismiss) private var dismiss
     @State private var type: StructuredOutputType = .legalIssueSpotting
@@ -92,6 +91,8 @@ private struct NewOutputSheet: View {
     @State private var selectedDocIDs: Set<String> = []
     @State private var documents: [StructuredOutputController.DocumentChoice] = []
     @State private var routingMessage: String?
+    @State private var identityProjection: MatterLegalIdentityReadProjection?
+    @State private var identityMessage: String?
     /// The model the user picks to generate this output. Defaults to the routed
     /// model for the output type, but any registered (non-embedding) model can be
     /// chosen. Empty only when no models are registered.
@@ -119,6 +120,40 @@ private struct NewOutputSheet: View {
                 .padding(.horizontal)
                 .padding(.top, 2)
             Form {
+                Section("Matter identity") {
+                    if let courtPresentation {
+                        if let resolvedJurisdictionName = courtPresentation.resolvedJurisdictionName,
+                           let resolvedCourtName = courtPresentation.resolvedCourtName {
+                            LabeledContent("Jurisdiction", value: resolvedJurisdictionName)
+                            LabeledContent("Court", value: resolvedCourtName)
+                        } else {
+                            Label("Choose a court in Matter Edit", systemImage: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange)
+                            if let savedCourtText = courtPresentation.savedCourtText,
+                               !savedCourtText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                Text("Imported court text “\(savedCourtText)” is retained as evidence, but is not a resolved court.")
+                                    .font(.supraCaption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    if let draftPartyDefaults {
+                        LabeledContent(
+                            "Represented client",
+                            value: "\(draftPartyDefaults.representedClientName) (\(draftPartyDefaults.representedDesignation))"
+                        )
+                        LabeledContent(
+                            "Opposing party",
+                            value: "\(draftPartyDefaults.opposingPartyName) (\(draftPartyDefaults.opposingDesignation))"
+                        )
+                    } else if identityProjection != nil {
+                        Label("Resolve the represented client, opposing party, and service contact in Matter Edit", systemImage: "person.crop.circle.badge.exclamationmark")
+                            .foregroundStyle(.orange)
+                    }
+                    if let identityMessage {
+                        Text(identityMessage).font(.supraCaption).foregroundStyle(.orange)
+                    }
+                }
                 Picker("Type", selection: $type) {
                     // Document Q&A / chronology outputs are generated from the
                     // Documents tab, so they are excluded from this research sheet.
@@ -202,7 +237,7 @@ private struct NewOutputSheet: View {
                 if controller.isGenerating { ProgressView().controlSize(.small) }
                 Button("Generate") { Task { await generate() } }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(selectedModelID.isEmpty || controller.isGenerating)
+                    .disabled(selectedModelID.isEmpty || controller.isGenerating || !identitySnapshotAvailable)
             }
             .padding()
         }
@@ -210,6 +245,7 @@ private struct NewOutputSheet: View {
         .onAppear {
             library.refresh()
             documents = controller.documentChoices()
+            refreshIdentity()
             // Default the picker to the model routed for this output type, falling
             // back to any registered model.
             if selectedModelID.isEmpty || !library.models.contains(where: { $0.id == selectedModelID }) {
@@ -217,7 +253,9 @@ private struct NewOutputSheet: View {
             }
             // Warm the routed model (structured outputs often use the high-quality
             // reasoning role) while the user fills the form.
-            if !AppEnvironment.isUITestMode, let role = route?.role { library.prewarm(role: role) }
+            if identitySnapshotAvailable, !AppEnvironment.isUITestMode, let role = route?.role {
+                library.prewarm(role: role)
+            }
         }
         // Re-default when the output type changes the routed model (only if the user
         // hasn't picked something still valid).
@@ -228,6 +266,12 @@ private struct NewOutputSheet: View {
 
     private func generate() async {
         routingMessage = nil
+        refreshIdentity()
+        guard identitySnapshotAvailable else {
+            routingMessage = identityMessage
+                ?? "The matter identity snapshot is unavailable. Your context has been kept."
+            return
+        }
         guard let route else { return }
         guard !selectedModelID.isEmpty else {
             routingMessage = "Select a model to generate this output."
@@ -247,10 +291,9 @@ private struct NewOutputSheet: View {
         }
         let modelID = ModelID(chosenUUID)
 
-        let prefix = matterContextPrefix
         let ok = await controller.createOutput(
             type: type,
-            context: prefix + context,
+            context: context,
             scope: scope,
             modelID: modelID,
             route: route
@@ -258,31 +301,29 @@ private struct NewOutputSheet: View {
         if ok { dismiss() }
     }
 
-    private var matterContextPrefix: String {
-        var lines = [
-            "Matter: \(matter.name)",
-            "Jurisdiction: \(matter.jurisdiction)",
-            "Party perspective: \(matter.partyPerspective.rawValue)"
-        ]
-        if let court = nonEmpty(matter.court) {
-            lines.append("Court: \(court)")
-        }
-        if let clientNames = nonEmpty(matter.clientNames) {
-            lines.append("Client name(s): \(clientNames)")
-        }
-        if let internalMatterID = nonEmpty(matter.internalMatterID) {
-            lines.append("Internal matter ID: \(internalMatterID)")
-        }
-        if let matterDescription = nonEmpty(matter.matterDescription) {
-            lines.append("Matter description: \(matterDescription)")
-        }
-        return lines.joined(separator: "\n") + "\n\n"
+    private var courtPresentation: MatterCourtPresentation? {
+        identityProjection?.courtPresentation
     }
 
-    private func nonEmpty(_ value: String?) -> String? {
-        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else {
+    private var draftPartyDefaults: DraftPartyDefaults? {
+        guard let identityProjection,
+              case let .available(defaults) = identityProjection.draftParties else {
             return nil
         }
-        return trimmed
+        return defaults
+    }
+
+    private var identitySnapshotAvailable: Bool {
+        identityProjection != nil
+    }
+
+    private func refreshIdentity() {
+        do {
+            identityProjection = try controller.legalIdentityReadProjection()
+            identityMessage = nil
+        } catch {
+            identityProjection = nil
+            identityMessage = "This matter's legal identity is unavailable. Reopen the matter and try again."
+        }
     }
 }

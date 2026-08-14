@@ -166,6 +166,19 @@ enum MatterChatDocumentIntent: Equatable {
         }
     }
 
+    /// Party-name anchors from the canonical party graph — lowercased,
+    /// apostrophe-stripped, and free of corporate suffixes. Caption and display
+    /// names are both retained because either may be the form used in a document.
+    static func partyAnchors(parties: [MatterPartyIdentity]) -> [String] {
+        normalizedPartyAnchors(
+            parties.flatMap { [$0.captionName, $0.displayName] }
+        )
+    }
+
+    /// Compatibility helper for the deterministic classifier tests. Matter-scoped
+    /// production grounding must use the structured party identities above; legacy
+    /// caption/client strings are retained here only as explicit input to this pure
+    /// text-normalization seam.
     /// Party-name anchors from the matter's caption and client names — lowercased,
     /// apostrophe-stripped, and free of corporate suffixes — used to tell a question
     /// about THIS case's substance apart from a general legal question. Order:
@@ -179,6 +192,10 @@ enum MatterChatDocumentIntent: Equatable {
                 .split(whereSeparator: { $0 == "," || $0 == ";" })
                 .map(String.init))
         }
+        return normalizedPartyAnchors(raw)
+    }
+
+    private static func normalizedPartyAnchors(_ raw: [String]) -> [String] {
         var seen = Set<String>()
         var anchors: [String] = []
         for candidate in raw {
@@ -403,12 +420,12 @@ final class MatterChatDocumentGrounding {
         guard !trimmed.isEmpty else { return nil }
 
         let folders = (try? store.documentLibrary.fetchFolders(matterID: matterID)) ?? []
-        // Party names from the matter's caption / client list let a question about
-        // THIS case's substance ("what did OVD sue Lowe's for?") ground in the
-        // matter's documents instead of falling through to CourtListener research.
-        let matter = (try? store.matters.fetchMatter(id: matterID)) ?? nil
-        let partyAnchors: [String] = matter
-            .map { MatterChatDocumentIntent.partyAnchors(matterName: $0.name, clientNames: $0.clientNames) }
+        // Party anchors come from one canonical identity snapshot. If that graph is
+        // unavailable, fail closed with no party-derived anchor instead of treating
+        // migrated matter-name/client strings as resolved legal identity.
+        let snapshot = (try? store.matterIdentity.fetchSnapshot(matterID: matterID)) ?? nil
+        let partyAnchors: [String] = snapshot
+            .map { snapshot in MatterChatDocumentIntent.partyAnchors(parties: snapshot.parties) }
             ?? []
         let intent = MatterChatDocumentIntent.classify(
             trimmed, folderNames: folders.map(\.name), partyAnchors: partyAnchors

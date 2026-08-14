@@ -178,6 +178,19 @@ public final class ResearchSessionController: ObservableObject {
         )
     }
 
+    /// Returns the matter's court and parties from one immutable Store snapshot.
+    /// Legacy jurisdiction/court/perspective strings remain migration evidence and
+    /// are never promoted to resolved truth by this read seam.
+    public func legalIdentityReadProjection() throws -> MatterLegalIdentityReadProjection {
+        guard let snapshot = try store.matterIdentity.fetchSnapshot(matterID: matterID) else {
+            throw MatterIdentityRepositoryError.matterUnavailable
+        }
+        return MatterLegalIdentityReadProjectionBuilder(
+            courtPresentationBuilder: MatterCourtPresentationBuilder(catalog: .shared),
+            draftPartyDefaultsBuilder: DraftPartyDefaultsBuilder()
+        ).makeProjection(for: snapshot)
+    }
+
     public var hasCourtListenerToken: Bool {
         (try? tokenStore.hasCourtListenerToken()) ?? false
     }

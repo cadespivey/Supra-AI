@@ -1,6 +1,7 @@
 import Foundation
 import SupraCore
 import SupraDocuments
+import SupraResearch
 import SupraRuntimeClient
 import SupraRuntimeInterface
 @testable import SupraSessions
@@ -752,15 +753,75 @@ final class MatterChatGroundingTests: XCTestCase {
         // captured prompt is the research planner's (no grounded source packet)
         // and the persisted answer is the canned CourtListener miss.
         let store = try makeStore()
-        let matter = try store.matters.createMatter(
-            name: "OVD v. Lowe's",
-            jurisdiction: "Federal",
-            court: "United States Court of Appeals for the Ninth Circuit",
-            clientNames: "Lowe's Home Centers LLC"
+        let matterID = "matter-grounding-identity-1801"
+        let ovdPartyID = "party-ovd-canonical-1811"
+        let lowesPartyID = "party-lowes-canonical-1817"
+        let representationID = "representation-ovd-counsel-1823"
+        let legacyClientCanary = "LEGACY-CLIENT-GROUNDING-1829"
+        let forbiddenDefault = "DEFAULT-000"
+        let snapshot = try store.matterIdentity.createMatter(
+            command: MatterIdentityCreateCommand(
+                matterID: matterID,
+                name: "Legacy Caption Canary 1801",
+                legacyJurisdictionText: "LEGACY-JURISDICTION-GROUNDING-1831",
+                legacyCourtText: "LEGACY-COURT-GROUNDING-1837",
+                legacyPartyPerspective: .defendant,
+                legacyClientNames: legacyClientCanary,
+                courtResolutionState: .court,
+                canonicalCatalogVersion: JurisdictionCatalog.shared.catalogVersion,
+                canonicalCatalogDigestSHA256: JurisdictionCatalog.shared.identityDigestSHA256,
+                canonicalJurisdictionID: CanonicalJurisdictionID(
+                    rawValue: "federal-united-states-court-of-appeals-for-the-eleventh-circuit"
+                ),
+                canonicalCourtID: CanonicalCourtID(
+                    rawValue: "federal-florida-united-states-district-court-for-the-southern-district-of-florida"
+                ),
+                parties: [
+                    MatterPartyIdentity(
+                        id: ovdPartyID,
+                        matterID: matterID,
+                        displayName: "OVD Patent Holdings Canonical 1811",
+                        captionName: "OVD",
+                        baseRole: .plaintiff,
+                        captionOrder: 0,
+                        clientStatus: .notRepresented
+                    ),
+                    MatterPartyIdentity(
+                        id: lowesPartyID,
+                        matterID: matterID,
+                        displayName: "Lowe's Home Centers Canonical 1817",
+                        captionName: "LOWE'S",
+                        baseRole: .defendant,
+                        captionOrder: 1,
+                        clientStatus: .represented
+                    ),
+                ],
+                representations: [
+                    MatterRepresentationIdentity(
+                        id: representationID,
+                        matterID: matterID,
+                        representedPartyID: ovdPartyID,
+                        relationshipKind: .counsel,
+                        representativeName: "Morgan Synthetic Counsel 1823, Esq.",
+                        firmName: "Patent Wire Law 1847",
+                        serviceAddress: MatterServiceAddress(
+                            street: "1849 Canonical Avenue",
+                            city: "Miami",
+                            state: "Florida",
+                            postalCode: "33131"
+                        ),
+                        serviceEmails: ["service+grounding-1853@example.test"],
+                        serviceOrder: 0
+                    ),
+                ]
+            )
         )
+        XCTAssertEqual(snapshot.parties.map(\.id), [ovdPartyID, lowesPartyID])
+        XCTAssertEqual(snapshot.representations.map(\.id), [representationID])
+        XCTAssertFalse(snapshot.parties.map(\.displayName).contains(forbiddenDefault))
         try await indexDocument(
             store,
-            matterID: matter.id,
+            matterID: snapshot.matterID,
             name: "complaint.pdf",
             text: "COMPLAINT. COUNT I — INFRINGEMENT OF U.S. PATENT NO. 6,144,702. "
                 + "OVD alleges that Lowe's infringed the patent by selling the accused product."
@@ -775,7 +836,7 @@ final class MatterChatGroundingTests: XCTestCase {
             ])
         }
         let controller = makeGlobalChatController(
-            store: store, runtimeClient: stub, scope: .matter(id: matter.id), embedder: nil
+            store: store, runtimeClient: stub, scope: .matter(id: snapshot.matterID), embedder: nil
         )
         controller.loadChats()
 
@@ -797,6 +858,8 @@ final class MatterChatGroundingTests: XCTestCase {
             "expected a grounded source packet, got: \(prompt.prefix(200))"
         )
         XCTAssertTrue(prompt.contains("COUNT I"), "the complaint's counts must reach the model")
+        XCTAssertFalse(prompt.contains(legacyClientCanary))
+        XCTAssertFalse(prompt.contains(forbiddenDefault))
         let answer = try XCTUnwrap(controller.messages.last?.content)
         XCTAssertFalse(
             answer.contains("I searched CourtListener"),
