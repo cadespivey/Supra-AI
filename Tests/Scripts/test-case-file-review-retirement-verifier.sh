@@ -87,6 +87,12 @@ make_shipping_fixture() {
   cp \
     "${repo_root}/Packages/SupraStore/Sources/SupraStore/Database/SupraMigrator.swift" \
     "${fixture_root}/Packages/SupraStore/Sources/SupraStore/Database/SupraMigrator.swift"
+  cp \
+    "${repo_root}/Packages/SupraStore/Sources/SupraStore/Database/SupraMigrationV072.swift" \
+    "${fixture_root}/Packages/SupraStore/Sources/SupraStore/Database/SupraMigrationV072.swift"
+  cp \
+    "${repo_root}/Packages/SupraStore/Sources/SupraStore/Database/SupraMigrationV073.swift" \
+    "${fixture_root}/Packages/SupraStore/Sources/SupraStore/Database/SupraMigrationV073.swift"
 
   write_file "${fixture_root}/Scripts/run-app-smoke-tests.sh" \
     '#!/usr/bin/env bash' \
@@ -113,7 +119,7 @@ make_shipping_fixture "$base_fixture"
 # contains retired storage names, and that exact compatibility body must not make
 # the absence verifier fail.
 if ! grep -Fq 'case_file_review_projects' \
-    "${base_fixture}/Packages/SupraStore/Sources/SupraStore/Database/SupraMigrator.swift"; then
+    "${base_fixture}/Packages/SupraStore/Sources/SupraStore/Database/SupraMigrationV073.swift"; then
   printf '%s\n' 'FAIL: migration fixture does not exercise the compatibility allowlist' >&2
   failures=$((failures + 1))
 fi
@@ -168,7 +174,7 @@ mkdir -p "$stale_migrator_fixture"
 cp -R "${base_fixture}/." "$stale_migrator_fixture"
 printf '%s\n' \
   'extension SupraMigrator { static let staleBackdoor = "case_file_review_backdoor" }' \
-  >>"${stale_migrator_fixture}/Packages/SupraStore/Sources/SupraStore/Database/SupraMigrator.swift"
+  >>"${stale_migrator_fixture}/Packages/SupraStore/Sources/SupraStore/Database/SupraMigrationV073.swift"
 run_case \
   'retired capability outside the migration body fails closed' \
   1 \

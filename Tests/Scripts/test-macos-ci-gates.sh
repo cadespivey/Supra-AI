@@ -93,6 +93,31 @@ run_case \
   "Migration sequence passed: v001 through v003 (3 migrations)." \
   bash "${scripts}/verify-migration-sequence.sh" "$migration_file"
 
+migration_source_dir="${temporary_dir}/MigrationSources"
+mkdir -p "$migration_source_dir"
+printf '%s\n' \
+  'migrator.registerMigration("v001_first") { _ in }' \
+  'migrator.registerMigration("v002_second") { _ in }' \
+  >"${migration_source_dir}/SupraMigrationsV001V002.swift"
+printf '%s\n' \
+  'migrator.registerMigration("v003_third") { _ in }' \
+  >"${migration_source_dir}/SupraMigrationV003.swift"
+run_case \
+  "contiguous split migration sources are derived dynamically" \
+  0 \
+  "Migration sequence passed: v001 through v003 (3 migrations)." \
+  bash "${scripts}/verify-migration-sequence.sh" "$migration_source_dir"
+
+printf '%s\n' \
+  'migrator.registerMigration("v001_duplicate") { _ in }' \
+  >"${migration_source_dir}/SupraMigrationV001Duplicate.swift"
+run_case \
+  "a duplicate split migration fails" \
+  1 \
+  "migration sequence gap: expected v002, found v001" \
+  bash "${scripts}/verify-migration-sequence.sh" "$migration_source_dir"
+find "${migration_source_dir}/SupraMigrationV001Duplicate.swift" -delete
+
 printf '%s\n' \
   'migrator.registerMigration("v001_first") { _ in }' \
   'migrator.registerMigration("v003_third") { _ in }' >"$migration_file"
