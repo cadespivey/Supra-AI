@@ -11,10 +11,10 @@ final class ArchitectureUXTXpcBudget05Tests: XCTestCase {
     private let forbiddenDefault = "DEFAULT-000"
 
     func testNonDefaultModelProfileAndHardwareCeilingAdmitNRejectNPlusOne() throws {
-        let profile = modelProfile()
+        let profile = Self.modelProfile()
         let exactCeiling = 1_035
         let admittedPlanner = RuntimeResourceAdmissionPlanner(
-            envelope: memoryEnvelope(unifiedMemoryCeilingBytes: exactCeiling)
+            envelope: Self.memoryEnvelope(unifiedMemoryCeilingBytes: exactCeiling)
         )
         let estimate = try admittedPlanner.estimate(
             profile: profile,
@@ -41,7 +41,7 @@ final class ArchitectureUXTXpcBudget05Tests: XCTestCase {
         )
 
         let rejectedPlanner = RuntimeResourceAdmissionPlanner(
-            envelope: memoryEnvelope(unifiedMemoryCeilingBytes: exactCeiling - 1)
+            envelope: Self.memoryEnvelope(unifiedMemoryCeilingBytes: exactCeiling - 1)
         )
         let rejected = try rejectedPlanner.evaluate(profile: profile, contextTokens: 1)
         XCTAssertEqual(rejected.disposition, .defer)
