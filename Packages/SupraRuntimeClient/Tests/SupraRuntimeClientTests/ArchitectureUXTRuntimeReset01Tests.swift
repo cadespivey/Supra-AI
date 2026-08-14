@@ -40,7 +40,8 @@ final class ArchitectureUXTRuntimeReset01Tests: XCTestCase {
                 .activeWorkPreventsReset(activeTaskCount: 1)
             )
         }
-        XCTAssertEqual(await controlPlane.snapshotForAssertion(), before)
+        let after = await controlPlane.snapshotForAssertion()
+        XCTAssertEqual(after, before)
     }
 
     func testIdleResetClearsResidencyBuffersCachesAndAdvancesEpochOnce() async throws {
