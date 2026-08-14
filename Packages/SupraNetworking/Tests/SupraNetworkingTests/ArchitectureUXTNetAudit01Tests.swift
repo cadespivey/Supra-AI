@@ -95,7 +95,7 @@ final class ArchitectureUXTNetAudit01Tests: XCTestCase {
         XCTAssertEqual(metadataObject["query"] as? String, "q=#wire:719&version=#wire:7")
         let headers = try XCTUnwrap(metadataObject["headers"] as? [String: String])
         XCTAssertEqual(headers, [
-            "X-Api-Key": "#redacted",
+            "X-API-Key": "#redacted",
             "X-Supra-Grant-Version": "7",
         ])
         XCTAssertFalse(metadata.contains(queryCanary))
