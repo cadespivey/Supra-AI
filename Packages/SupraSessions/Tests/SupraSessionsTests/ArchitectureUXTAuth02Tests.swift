@@ -386,6 +386,92 @@ final class ArchitectureUXTAuth02Tests: XCTestCase {
         )
     }
 
+    func testWhollyForgedReceiptWithRecomputedPublicDigestCannotRegister() async throws {
+        let fixture = try ArchitectureUXAuthorityWorkFixture.make(prefix: "forged-egress")
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let consumed = try await fixture.consumeEgress(
+            grantVersion: ArchitectureUXAuthorityWorkWire.firstGrantVersion,
+            timeOffset: 0
+        )
+        let encoded = String(decoding: try JSONEncoder().encode(consumed), as: UTF8.self)
+        let forgedID = "t-auth-02-wholly-forged-receipt-1059"
+        let forgedProviderID = "provider-wholly-forged-1061"
+        let forgedQueryDigest = ArchitectureUXAuthorityWorkWire.rawDigest(
+            "QUERY-CANARY-719-WHOLLY-FORGED"
+        )
+        let recomputedPublicDigest = ArchitectureUXAuthorityWorkWire.digest(
+            lengthPrefixed: [
+                "legal-query-egress-consumption-v1",
+                forgedID,
+                forgedProviderID,
+                String(consumed.grantVersion),
+                consumed.origin.rawValue,
+                consumed.matterID ?? "",
+                consumed.researchSessionID ?? "",
+                consumed.classification.rawValue,
+                forgedQueryDigest,
+                consumed.purposeSHA256,
+                consumed.sourceSetDigest ?? "",
+                String(consumed.approvedAt.timeIntervalSinceReferenceDate.bitPattern),
+                String(consumed.expiresAt.timeIntervalSinceReferenceDate.bitPattern),
+                String(consumed.consumedAt.timeIntervalSinceReferenceDate.bitPattern),
+            ]
+        )
+        let forgedJSON = encoded
+            .replacingOccurrences(of: consumed.id, with: forgedID)
+            .replacingOccurrences(
+                of: consumed.providerID.rawValue,
+                with: forgedProviderID
+            )
+            .replacingOccurrences(of: consumed.querySHA256, with: forgedQueryDigest)
+            .replacingOccurrences(
+                of: consumed.bindingDigestSHA256,
+                with: recomputedPublicDigest
+            )
+        XCTAssertNotEqual(forgedJSON, encoded)
+        XCTAssertTrue(forgedJSON.contains(forgedID))
+        XCTAssertTrue(forgedJSON.contains(forgedProviderID))
+        XCTAssertTrue(forgedJSON.contains(forgedQueryDigest))
+        XCTAssertFalse(forgedJSON.contains("QUERY-CANARY-719"))
+        XCTAssertFalse(
+            forgedJSON.contains(ArchitectureUXAuthorityWorkWire.unrelatedMatterBody)
+        )
+        let forged = try JSONDecoder().decode(
+            LegalQueryEgressConsumptionReceipt.self,
+            from: Data(forgedJSON.utf8)
+        )
+        XCTAssertEqual(forged.id, forgedID)
+        XCTAssertEqual(forged.providerID.rawValue, forgedProviderID)
+        XCTAssertEqual(forged.querySHA256, forgedQueryDigest)
+        XCTAssertEqual(forged.bindingDigestSHA256, recomputedPublicDigest)
+        let before = try authoritySideEffectSnapshot(
+            fixture.store,
+            egressReceiptID: forgedID
+        )
+        let transportBefore = fixture.transport.requests
+        let registrar = ResearchPacketEgressReceiptRegistrar(store: fixture.store)
+
+        XCTAssertThrowsError(try registrar.register(.consumed(forged))) { error in
+            XCTAssertEqual(
+                error as? ResearchPacketEgressReceiptRegistrationError,
+                .bindingDigestMismatch
+            )
+        }
+        XCTAssertNil(
+            try fixture.store.researchPackets.egressConsumptionRegistration(id: forgedID)
+        )
+        XCTAssertEqual(
+            try authoritySideEffectSnapshot(fixture.store, egressReceiptID: forgedID),
+            before,
+            "a wholly forged receipt must make zero Store mutations"
+        )
+        XCTAssertEqual(
+            fixture.transport.requests,
+            transportBefore,
+            "receipt verification must make no additional provider call"
+        )
+    }
+
     func testExplicitProvisionalIssueOutlineIsLabeledNonexportableAndNonpromotable() async throws {
         let fixture = try ArchitectureUXAuthorityWorkFixture.make(prefix: "provisional")
         defer { try? FileManager.default.removeItem(at: fixture.root) }
