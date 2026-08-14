@@ -76,13 +76,23 @@ final class ArchitectureUXTRuntimeEmbeddingProfileTests: XCTestCase {
         let host = try source(
             "Apps/SupraAI/SupraRuntimeService/SupraRuntimeService.swift"
         )
+        let profileStart = try XCTUnwrap(
+            host.range(of: "private static func embeddingResourceProfile(")
+        )
+        let profileEnd = try XCTUnwrap(
+            host.range(
+                of: "private static func productionMemoryEnvelope()",
+                range: profileStart.upperBound..<host.endIndex
+            )
+        )
+        let profileSource = String(host[profileStart.lowerBound..<profileEnd.lowerBound])
 
         XCTAssertTrue(host.contains("verifiedEmbeddingModelConfigData(for: request)"))
         XCTAssertTrue(host.contains("buildEmbeddingProfile("))
-        XCTAssertTrue(host.contains("guard request.contentBinding != nil"))
-        XCTAssertFalse(host.contains("let dimension = request.expectedDimension ?? 384"))
-        XCTAssertFalse(host.contains("layerCount: 1"))
-        XCTAssertFalse(host.contains("supportedContextTokens: 32_768"))
+        XCTAssertTrue(profileSource.contains("guard let binding = request.contentBinding"))
+        XCTAssertFalse(profileSource.contains("let dimension = request.expectedDimension ?? 384"))
+        XCTAssertFalse(profileSource.contains("layerCount: 1"))
+        XCTAssertFalse(profileSource.contains("supportedContextTokens: 32_768"))
         XCTAssertFalse(host.contains(Self.forbiddenDefault))
     }
 
