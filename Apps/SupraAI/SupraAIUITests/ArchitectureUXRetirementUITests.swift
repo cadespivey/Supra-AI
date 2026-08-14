@@ -154,6 +154,37 @@ final class ArchitectureUXRetirementUITests: XCTestCase {
         XCTAssertFalse(diagnostics.contains("Case File Review"))
     }
 
+    func testTIASidebar01UsesStableAttorneyFacingGroups() throws {
+        // T-IA-SIDEBAR-01 expected RED: the sidebar still renders one flat
+        // AppRoute.allCases list above Matters, and its two everyday labels use
+        // internal product names instead of attorney-facing destinations.
+        let routes = try appSource(relativePath: "SupraAI/Navigation/AppRoute.swift")
+        let sidebar = try appSource(relativePath: "SupraAI/SidebarView.swift")
+        let notesAndTime = try appSource(
+            relativePath: "SupraAI/ScratchPad/ScratchPadView.swift"
+        )
+
+        XCTAssertTrue(routes.contains("static let workRoutes: [AppRoute]"))
+        XCTAssertTrue(routes.contains("[.globalChats, .scratchpad, .publicRecords]"))
+        XCTAssertTrue(routes.contains("static let utilityRoutes: [AppRoute]"))
+        XCTAssertTrue(routes.contains("[.models, .settings, .diagnostics]"))
+        XCTAssertTrue(routes.contains("\"Chats\""))
+        XCTAssertTrue(routes.contains("\"Notes & Time\""))
+
+        XCTAssertTrue(sidebar.contains("Section(\"Work\")"))
+        XCTAssertTrue(sidebar.contains("Section(\"Utilities\")"))
+        XCTAssertTrue(sidebar.contains("ForEach(AppRoute.workRoutes)"))
+        XCTAssertTrue(sidebar.contains("ForEach(AppRoute.utilityRoutes)"))
+        XCTAssertFalse(sidebar.contains("ForEach(AppRoute.allCases)"))
+        XCTAssertTrue(notesAndTime.contains("Text(\"Notes & Time\")"))
+
+        // Preserve route/storage identities and the truthful advanced label.
+        XCTAssertTrue(routes.contains("case globalChats"))
+        XCTAssertTrue(routes.contains("case scratchpad"))
+        XCTAssertTrue(routes.contains("case diagnostics"))
+        XCTAssertTrue(routes.contains("\"Diagnostics\""))
+    }
+
     private func appSource(relativePath: String) throws -> String {
         try source(at: appRoot.appendingPathComponent(relativePath))
     }
