@@ -15,37 +15,14 @@ import XCTest
 /// immutable v074 closure itself freezes the one approved compatibility mapping.
 final class ArchitectureUXTDataMigrate01Tests: XCTestCase {
     func testV074AppendsCanonicalMatterIdentityWithoutRewritingV072OrV073() throws {
-        let sourceURL = packageRoot
-            .appendingPathComponent("Sources/SupraStore/Database/SupraMigrator.swift")
-        let sourceData = try Data(contentsOf: sourceURL)
-        let source = try XCTUnwrap(String(data: sourceData, encoding: .utf8))
-
-        let v072Anchor =
-            #"        migrator.registerMigration("v072_harden_corpus_review_integrity") { db in"#
-        let v073Anchor =
-            #"        migrator.registerMigration("v073_create_case_file_review_projects") { db in"#
-        let v074Anchor =
-            #"        migrator.registerMigration("v074_create_canonical_matter_identity") { db in"#
-        let v075Anchor =
-            #"        migrator.registerMigration("v075_create_grounded_chat_publications") { db in"#
-
-        let v072Start = try XCTUnwrap(source.range(of: v072Anchor)?.lowerBound)
-        let v073Start = try XCTUnwrap(source.range(of: v073Anchor)?.lowerBound)
-        let v074Start = try XCTUnwrap(source.range(of: v074Anchor)?.lowerBound)
-        let v075Start = try XCTUnwrap(source.range(of: v075Anchor)?.lowerBound)
-        XCTAssertLessThan(v072Start, v073Start)
-        XCTAssertLessThan(v073Start, v074Start)
-        XCTAssertLessThan(v074Start, v075Start)
-
-        let v072WithSeparator = source[v072Start..<v073Start]
-        let v073WithSeparator = source[v073Start..<v074Start]
-        XCTAssertTrue(v072WithSeparator.hasSuffix("\n\n"))
-        XCTAssertTrue(v073WithSeparator.hasSuffix("\n\n"))
-
-        // Include the newline terminating each registration, but not the blank
-        // separator line. This is the pre-v074 immutable byte-slice definition.
-        let v072 = Data(v072WithSeparator.dropLast().utf8)
-        let v073 = Data(v073WithSeparator.dropLast().utf8)
+        let v072 = try migrationClosureData(
+            version: 72,
+            identifier: "v072_harden_corpus_review_integrity"
+        )
+        let v073 = try migrationClosureData(
+            version: 73,
+            identifier: "v073_create_case_file_review_projects"
+        )
         XCTAssertEqual(v072.count, 110_753)
         XCTAssertEqual(v072.filter { $0 == 0x0a }.count, 1_924)
         XCTAssertEqual(
@@ -58,6 +35,23 @@ final class ArchitectureUXTDataMigrate01Tests: XCTestCase {
             sha256(v073),
             "819515bfe405e1459adbbce65288754f241b94239543fe077793c624f4c4d14f"
         )
+
+        let orchestrator = try String(
+            contentsOf: packageRoot.appendingPathComponent(
+                "Sources/SupraStore/Database/SupraMigrator.swift"
+            ),
+            encoding: .utf8
+        )
+        var cursor = orchestrator.startIndex
+        for call in [
+            "registerMigrationV072(&migrator)",
+            "registerMigrationV073(&migrator)",
+            "registerMigrationV074(&migrator)",
+            "registerMigrationV075(&migrator)",
+        ] {
+            let range = try XCTUnwrap(orchestrator.range(of: call, range: cursor..<orchestrator.endIndex))
+            cursor = range.upperBound
+        }
 
         let migrations = SupraMigrator.makeMigrator().migrations
         XCTAssertEqual(migrations.count, 78)
@@ -173,6 +167,21 @@ final class ArchitectureUXTDataMigrate01Tests: XCTestCase {
             .deletingLastPathComponent() // SupraStoreTests
             .deletingLastPathComponent() // Tests
             .deletingLastPathComponent() // SupraStore
+    }
+
+    private func migrationClosureData(version: Int, identifier: String) throws -> Data {
+        let source = try String(
+            contentsOf: packageRoot.appendingPathComponent(
+                String(format: "Sources/SupraStore/Database/SupraMigrationV%03d.swift", version)
+            ),
+            encoding: .utf8
+        )
+        let anchor = #"        migrator.registerMigration("\#(identifier)") { db in"#
+        let start = try XCTUnwrap(source.range(of: anchor)?.lowerBound)
+        let wrapper = try XCTUnwrap(source.range(of: "    }\n}", options: .backwards)?.lowerBound)
+        let withSeparator = source[start..<wrapper]
+        XCTAssertTrue(withSeparator.hasSuffix("\n\n"))
+        return Data(withSeparator.dropLast().utf8)
     }
 
     private func seedSelectedV073Graph(_ queue: DatabaseQueue) throws {

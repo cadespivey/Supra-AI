@@ -16,65 +16,49 @@ final class ArchitectureUXReviewRetirementSchemaTests: XCTestCase {
         // separate public-capability retirement gate owns the observable RED.
         // This test must fail if implementation work rewrites shared migration
         // history or removes the exact DEBUG reset compatibility entries.
-        let sourceURL = packageRoot
-            .appendingPathComponent("Sources/SupraStore/Database/SupraMigrator.swift")
-        let sourceData = try Data(contentsOf: sourceURL)
-        let source = try XCTUnwrap(String(data: sourceData, encoding: .utf8))
-
-        let v072Anchor =
-            #"        migrator.registerMigration("v072_harden_corpus_review_integrity") { db in"#
-        let v073Anchor =
-            #"        migrator.registerMigration("v073_create_case_file_review_projects") { db in"#
-        let v074Anchor =
-            #"        migrator.registerMigration("v074_create_canonical_matter_identity") { db in"#
-        let v075Anchor =
-            #"        migrator.registerMigration("v075_create_grounded_chat_publications") { db in"#
-        let v076Anchor =
-            #"        migrator.registerMigration("v076_link_export_publication_intents") { db in"#
-        let v077Anchor =
-            #"        migrator.registerMigration("v077_create_accepted_research_packets") { db in"#
-        let v078Anchor =
-            #"        migrator.registerMigration("v078_govern_structured_work_publication") { db in"#
-        let returnAnchor = "        return migrator"
+        let source = try String(
+            contentsOf: packageRoot.appendingPathComponent(
+                "Sources/SupraStore/Database/SupraMigrator.swift"
+            ),
+            encoding: .utf8
+        )
+        let registrationCalls = (72...78).map {
+            String(format: "        registerMigrationV%03d(&migrator)", $0)
+        }
         let resetAnchor =
             "            // Case File Review: children before project/matter ownership."
         let resetEndAnchor =
             "            // Draft artifact intents are children of matters and must be gone"
 
-        let v072Start = try XCTUnwrap(source.range(of: v072Anchor)?.lowerBound)
-        let v073Start = try XCTUnwrap(source.range(of: v073Anchor)?.lowerBound)
-        let v074Start = try XCTUnwrap(source.range(of: v074Anchor)?.lowerBound)
-        let v075Start = try XCTUnwrap(source.range(of: v075Anchor)?.lowerBound)
-        let v076Start = try XCTUnwrap(source.range(of: v076Anchor)?.lowerBound)
-        let v077Start = try XCTUnwrap(source.range(of: v077Anchor)?.lowerBound)
-        let v078Start = try XCTUnwrap(source.range(of: v078Anchor)?.lowerBound)
-        let migratorReturn = try XCTUnwrap(source.range(of: returnAnchor)?.lowerBound)
+        var cursor = source.startIndex
+        var callStarts: [String.Index] = []
+        for call in registrationCalls {
+            let range = try XCTUnwrap(source.range(of: call, range: cursor..<source.endIndex))
+            callStarts.append(range.lowerBound)
+            cursor = range.upperBound
+        }
+        let migratorReturn = try XCTUnwrap(
+            source.range(of: "        return migrator", range: cursor..<source.endIndex)?.lowerBound
+        )
         let resetStart = try XCTUnwrap(source.range(of: resetAnchor)?.lowerBound)
         let resetEnd = try XCTUnwrap(source.range(of: resetEndAnchor)?.lowerBound)
 
-        XCTAssertLessThan(v072Start, v073Start)
-        XCTAssertLessThan(v073Start, v074Start)
-        XCTAssertLessThan(v074Start, v075Start)
-        XCTAssertLessThan(v075Start, v076Start)
-        XCTAssertLessThan(v076Start, v077Start)
-        XCTAssertLessThan(v077Start, v078Start)
-        XCTAssertLessThan(v078Start, migratorReturn)
+        XCTAssertEqual(callStarts, callStarts.sorted())
+        XCTAssertLessThan(try XCTUnwrap(callStarts.last), migratorReturn)
         XCTAssertLessThan(migratorReturn, resetStart)
         XCTAssertLessThan(resetStart, resetEnd)
 
-        let v072WithSeparator = source[v072Start..<v073Start]
-        let v073WithSeparator = source[v073Start..<v074Start]
-        let orderedWithSeparator = source[v072Start..<v074Start]
-        XCTAssertTrue(v072WithSeparator.hasSuffix("\n\n"))
-        XCTAssertTrue(v073WithSeparator.hasSuffix("\n\n"))
-        XCTAssertTrue(orderedWithSeparator.hasSuffix("\n\n"))
-
-        // Keep the newline terminating each registration's closing brace, but
-        // exclude the one blank separator line. This is the exact byte-slice
-        // definition used to freeze the hashes below.
-        let v072 = Data(v072WithSeparator.dropLast().utf8)
-        let v073 = Data(v073WithSeparator.dropLast().utf8)
-        let ordered = Data(orderedWithSeparator.dropLast().utf8)
+        let v072 = try migrationClosureData(
+            version: 72,
+            identifier: "v072_harden_corpus_review_integrity"
+        )
+        let v073 = try migrationClosureData(
+            version: 73,
+            identifier: "v073_create_case_file_review_projects"
+        )
+        var ordered = v072
+        ordered.append(contentsOf: "\n".utf8)
+        ordered.append(v073)
         let resetEntries = Data(source[resetStart..<resetEnd].utf8)
 
         XCTAssertEqual(v072.count, 110_753)
@@ -564,6 +548,21 @@ final class ArchitectureUXReviewRetirementSchemaTests: XCTestCase {
             .deletingLastPathComponent() // SupraStoreTests
             .deletingLastPathComponent() // Tests
             .deletingLastPathComponent() // SupraStore
+    }
+
+    private func migrationClosureData(version: Int, identifier: String) throws -> Data {
+        let source = try String(
+            contentsOf: packageRoot.appendingPathComponent(
+                String(format: "Sources/SupraStore/Database/SupraMigrationV%03d.swift", version)
+            ),
+            encoding: .utf8
+        )
+        let anchor = #"        migrator.registerMigration("\#(identifier)") { db in"#
+        let start = try XCTUnwrap(source.range(of: anchor)?.lowerBound)
+        let wrapper = try XCTUnwrap(source.range(of: "    }\n}", options: .backwards)?.lowerBound)
+        let withSeparator = source[start..<wrapper]
+        XCTAssertTrue(withSeparator.hasSuffix("\n\n"))
+        return Data(withSeparator.dropLast().utf8)
     }
 
     private func assertHealthyDormantCompatibilityState(
