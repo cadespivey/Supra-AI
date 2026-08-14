@@ -8,9 +8,9 @@ import XCTest
 final class ArchitectureUXTArchEdge01Tests: XCTestCase {
     private let recordID = "record-713"
     private let wireID = "T_ARCH_EDGE_01_WIRE_731"
-    private let policyVersion = 7
+    private let policyVersion = 8
 
-    func testRepositoryGraphMatchesTheVersionSevenPolicyAndExactInventory() throws {
+    func testRepositoryGraphMatchesTheVersionEightPolicyAndExactInventory() throws {
         // Expected RED: RepositoryArchitecturePolicy and its manifest-backed
         // audit receipt do not exist yet.
         let policy = RepositoryArchitecturePolicy.current
@@ -26,7 +26,7 @@ final class ArchitectureUXTArchEdge01Tests: XCTestCase {
         XCTAssertEqual(graph.packageNames, Self.expectedPackageNames)
         XCTAssertEqual(graph.edges, Self.expectedEdges)
         XCTAssertEqual(graph.packageNames.count, 14)
-        XCTAssertEqual(graph.edges.count, 37)
+        XCTAssertEqual(graph.edges.count, 36)
         XCTAssertEqual(policy.approvedExceptions.map(\.edge), Self.expectedExceptionEdges)
         XCTAssertEqual(policy.approvedExceptions.count, 7)
 
@@ -35,17 +35,17 @@ final class ArchitectureUXTArchEdge01Tests: XCTestCase {
         XCTAssertEqual(receipt.wireID, wireID)
         XCTAssertEqual(receipt.policyVersion, policyVersion)
         XCTAssertEqual(receipt.packageCount, 14)
-        XCTAssertEqual(receipt.edgeCount, 37)
+        XCTAssertEqual(receipt.edgeCount, 36)
         XCTAssertEqual(receipt.approvedExceptionCount, 7)
         XCTAssertEqual(
             receipt.graphSHA256,
-            "7f7100f0d34d5be16918fd6b6d7868ecd9345ca6b6fdae02e1dcad319d75666d"
+            "4a1cce833b7b78357dc02562c32bd9481f6f37f6c671b216c4a76e632e75dcb2"
         )
 
         let exactReceiptElement = String(decoding: try JSONEncoder().encode(receipt), as: UTF8.self)
         XCTAssertTrue(exactReceiptElement.contains(recordID))
         XCTAssertTrue(exactReceiptElement.contains(wireID))
-        XCTAssertTrue(exactReceiptElement.contains("\"policyVersion\":7"))
+        XCTAssertTrue(exactReceiptElement.contains("\"policyVersion\":8"))
         XCTAssertFalse(exactReceiptElement.contains("DEFAULT-000"))
     }
 
@@ -107,13 +107,17 @@ final class ArchitectureUXTArchEdge01Tests: XCTestCase {
         let graph = try loadCurrentGraph(policy)
         let cycleEdge = ArchitecturePackageEdge(source: "SupraCore", destination: "SupraSessions")
         let databaseEdge = ArchitecturePackageEdge(source: "SupraDocuments", destination: "SupraStore")
+        let networkingDatabaseEdge = ArchitecturePackageEdge(
+            source: "SupraNetworking",
+            destination: "SupraStore"
+        )
         let networkEdge = ArchitecturePackageEdge(source: "SupraDocuments", destination: "SupraNetworking")
         let drifted = ArchitecturePackageGraph(
             recordID: graph.recordID,
             wireID: graph.wireID,
             policyVersion: graph.policyVersion,
             packageNames: graph.packageNames,
-            edges: graph.edges.union([cycleEdge, databaseEdge, networkEdge])
+            edges: graph.edges.union([cycleEdge, databaseEdge, networkingDatabaseEdge, networkEdge])
         )
 
         let audit = policy.audit(drifted)
@@ -128,32 +132,37 @@ final class ArchitectureUXTArchEdge01Tests: XCTestCase {
         )
         XCTAssertTrue(
             audit.violations.contains(
+                .forbiddenCapabilityEdge(networkingDatabaseEdge, capabilityOwner: "SupraStore")
+            )
+        )
+        XCTAssertTrue(
+            audit.violations.contains(
                 .forbiddenCapabilityEdge(networkEdge, capabilityOwner: "SupraNetworking")
             )
         )
         XCTAssertFalse(String(describing: audit.violations).contains("DEFAULT-000"))
     }
 
-    func testUnknownVersionEightCannotReuseTheVersionSevenReceipt() throws {
+    func testUnknownVersionNineCannotReuseTheVersionEightReceipt() throws {
         // Expected RED: graph receipts are not yet bound to a fail-closed
         // versioned policy identity.
         let policy = RepositoryArchitecturePolicy.current
         let graph = try loadCurrentGraph(policy)
-        let versionEight = ArchitecturePackageGraph(
+        let versionNine = ArchitecturePackageGraph(
             recordID: graph.recordID,
             wireID: graph.wireID,
-            policyVersion: 8,
+            policyVersion: 9,
             packageNames: graph.packageNames,
             edges: graph.edges
         )
 
-        let audit = policy.audit(versionEight)
+        let audit = policy.audit(versionNine)
 
         XCTAssertFalse(audit.isApproved)
         XCTAssertNil(audit.receipt)
         XCTAssertTrue(
             audit.violations.contains(
-                .unsupportedPolicyVersion(expected: 7, actual: 8)
+                .unsupportedPolicyVersion(expected: 8, actual: 9)
             )
         )
         XCTAssertFalse(String(describing: audit.violations).contains("DEFAULT-000"))
@@ -204,7 +213,6 @@ final class ArchitectureUXTArchEdge01Tests: XCTestCase {
         .init(source: "SupraDraftingCore", destination: "SupraCore"),
         .init(source: "SupraExports", destination: "SupraDraftingCore"),
         .init(source: "SupraNetworking", destination: "SupraCore"),
-        .init(source: "SupraNetworking", destination: "SupraStore"),
         .init(source: "SupraResearch", destination: "SupraCore"),
         .init(source: "SupraResearch", destination: "SupraNetworking"),
         .init(source: "SupraRuntimeClient", destination: "SupraCore"),
