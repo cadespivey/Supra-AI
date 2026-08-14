@@ -4240,14 +4240,8 @@ public final class GlobalChatController: ObservableObject {
         return records.map(MessageCitation.init)
     }
 
-    private struct GroundedTerminalPublication {
-        var receipt: GroundedChatTerminalPublicationReceipt
-        var citations: [MessageCitation]
-    }
-
-    /// Forms the entire source-bearing terminal aggregate in memory, then hands it
-    /// to the Store's single all-or-nothing publication boundary. Streaming text
-    /// remains transient and every durable owner remains pending until this succeeds.
+    /// Delegates the controller-domain request to the extracted publication use
+    /// case. Streaming/UI recovery stays here; source and Store semantics do not.
     private func publishGroundedTerminalAnswer(
         question: String,
         answerText: String,
@@ -4259,224 +4253,28 @@ public final class GlobalChatController: ObservableObject {
         variant: MessageVariantRecord,
         session: GenerationSessionRecord,
         metrics: StoredRuntimeMetrics
-    ) throws -> GroundedTerminalPublication {
-        guard let matterID = scopedMatterID,
-              !context.sources.isEmpty,
-              let packingReport = context.sourceSetPackingReport,
-              let scope = context.sourceScope,
-              let configuration = context.retrievalConfiguration else {
+    ) throws -> GroundedChatTerminalPublicationResult {
+        guard let matterID = scopedMatterID else {
             throw GroundedChatTerminalPublicationError.invalidCommand(
-                "grounded context lineage"
+                "matter identity"
             )
         }
-        let lineage = try DocumentSourceLineageBuilder.make(
-            store: store,
-            matterID: matterID,
-            scope: scope,
-            configuration: configuration,
-            packingReport: packingReport
-        )
-        // GRDB's database date encoding retains millisecond precision. Canonicalize
-        // before hashing so the command and its persisted reconstruction are exact.
-        let publicationDate = Date(
-            timeIntervalSinceReferenceDate: floor(
-                assistant.createdAt.timeIntervalSinceReferenceDate * 1_000
-            ) / 1_000
-        )
-        let sourceSet = DocumentSourceSetRecord(
-            id: "grounded-chat-source-set:\(assistant.id)",
-            matterID: matterID,
-            mode: DocumentSourceSetMode.autoSource.rawValue,
-            scopeJSON: try Self.canonicalJSON(scope),
-            retrievalQuery: question,
-            retrievalDepth: context.depth.rawValue,
-            packingReportJSON: lineage.packingReportJSON,
-            embeddingModelID: lineage.embeddingModelID,
-            embeddingModelRevision: lineage.embeddingModelRevision,
-            chunkerVersion: lineage.chunkerVersion,
-            retrievalConfigJSON: lineage.retrievalConfigJSON,
-            corpusSnapshotHash: lineage.corpusSnapshotHash,
-            messageID: assistant.id,
-            createdAt: publicationDate
-        )
-        var rows = context.sources.enumerated().map { index, source in
-            DocumentOutputSourceRecord(
-                id: "grounded-chat-source:\(assistant.id):\(index)",
-                sourceSetID: sourceSet.id,
-                documentID: source.documentID,
-                chunkID: source.chunkID,
-                revisionID: source.revisionID,
-                citationLabel: source.label,
-                locatorJSON: source.locator.encodedJSON(),
-                excerpt: source.excerpt,
-                rank: index,
-                createdAt: publicationDate
-            )
-        }
-
-        // The verifier reasons over retrieval identities (matter/chunk); terminal
-        // evidence is rebound to the exact output-source rows the receipt owns.
-        let rowByLabel = Dictionary(
-            rows.map { ($0.citationLabel, $0) },
-            uniquingKeysWith: { first, _ in first }
-        )
-        let normalizedResults = try (verification?.results ?? []).map { result in
-            let evidence = try result.evidence.map { item -> SupportEvidence in
-                guard let row = rowByLabel[item.sourceLabel],
-                      context.sources.contains(where: {
-                          $0.label == item.sourceLabel && $0.sourceID == item.sourceID
-                      }) else {
-                    throw GroundedChatTerminalPublicationError.invalidCommand(
-                        "verification evidence"
-                    )
-                }
-                return SupportEvidence(
-                    sourceID: row.id,
-                    sourceLabel: row.citationLabel,
-                    locator: row.locatorJSON,
-                    retainedExcerpt: item.retainedExcerpt,
-                    verifierName: item.verifierName,
-                    verifierVersion: item.verifierVersion
-                )
-            }
-            return try PropositionSupportResult(
-                propositionID: result.propositionID,
-                status: result.status,
-                reasons: result.reasons,
-                evidence: evidence,
-                timestamp: result.timestamp
-            )
-        }
-        let verificationJSON = try Self.canonicalDateJSON(normalizedResults)
-        for index in rows.indices {
-            rows[index].warningsJSON = verificationJSON
-        }
-
-        let answerLabels = Self.citationLabels(in: answerText)
-        let terminalLabels = Self.citationLabels(in: terminalContent)
-        guard terminalLabels.allSatisfy({ rowByLabel[$0] != nil }) else {
-            throw GroundedChatTerminalPublicationError.invalidCommand(
-                "terminal citation labels"
-            )
-        }
-        let citationRecords = rows.compactMap { row -> MessageCitationRecord? in
-            guard terminalLabels.contains(row.citationLabel),
-                  let source = context.sources.first(where: {
-                      $0.label == row.citationLabel
-                  }) else { return nil }
-            return MessageCitationRecord(
-                id: "grounded-chat-citation:\(assistant.id):\(row.rank)",
-                messageID: assistant.id,
-                label: row.citationLabel,
-                kind: MessageCitation.Kind.source.rawValue,
-                documentID: row.documentID,
-                locatorJSON: row.locatorJSON,
-                displayName: source.documentName,
-                matchText: row.excerpt,
-                rank: row.rank,
-                createdAt: publicationDate
-            )
-        }
-
-        let usedLabels = verification?.usedLabels ?? rows.compactMap {
-            answerLabels.contains($0.citationLabel) ? $0.citationLabel : nil
-        }
-        let unresolvedLabels = verification?.unresolvedLabels ?? usedLabels.filter {
-            rowByLabel[$0] == nil
-        }
-        let mappedDimensions = VerificationDimensionsMapper.dimensions(
-            verificationResults: normalizedResults,
-            usedLabels: usedLabels,
-            unresolvedLabels: unresolvedLabels,
-            warnings: verification?.warnings ?? ["Grounded verification did not complete."]
-        )
-        let exactDimensions = try VerificationDimensions(
-            schemaVersion: mappedDimensions.schemaVersion,
-            results: mappedDimensions.results.map { result in
-                let exactEvidence = try result.evidence.map { item -> VerificationDimensionEvidence in
-                    guard let row = rowByLabel[item.sourceLabel ?? ""],
-                          row.id == item.sourceID else {
-                        throw GroundedChatTerminalPublicationError.invalidCommand(
-                            "verification dimension evidence"
-                        )
-                    }
-                    return VerificationDimensionEvidence(
-                        sourceID: row.id,
-                        sourceLabel: row.citationLabel,
-                        locator: row.locatorJSON,
-                        excerpt: row.excerpt
-                    )
-                }
-                let evidence = Array(Set(exactEvidence)).sorted {
-                    ($0.sourceLabel ?? "", $0.sourceID) < ($1.sourceLabel ?? "", $1.sourceID)
-                }
-                if result.dimension == .criticalValueFidelity,
-                   result.status == .notRun {
-                    return VerificationDimensionResult(
-                        dimension: result.dimension,
-                        status: .failed,
-                        reason: "Critical-value fidelity was not established.",
-                        evidence: evidence
-                    )
-                }
-                return VerificationDimensionResult(
-                    dimension: result.dimension,
-                    status: result.status,
-                    reason: result.reason,
-                    evidence: evidence
-                )
-            }
-        )
-        let assurance = Self.groundedAssurance(
-            depth: context.depth,
-            verificationStatus: verification?.verificationStatus
-        )
-        let authorizationEvidence = try Self.canonicalJSON([
-            "basis": "local_matter_documents",
-            "policy_version": "grounded-chat-terminal-v1",
-            "scope": "matter_chat",
-        ])
-        let auditMetadata = try Self.canonicalJSON([
-            "schema_version": "1",
-            "retrieval_depth": context.depth.rawValue,
-            "source_count": String(rows.count),
-            "citation_count": String(citationRecords.count),
-        ])
-        let audit = AuditEventRecord(
-            id: "grounded-chat-audit:\(assistant.id)",
-            matterID: matterID,
-            timestamp: publicationDate,
-            eventType: "grounded_chat_terminal_published",
-            actor: "local_grounded_chat_controller",
-            summary: "Published a grounded matter-chat terminal aggregate.",
-            relatedTable: "messages",
-            relatedID: assistant.id,
-            metadataJSON: auditMetadata
-        )
-        let command = GroundedChatTerminalPublicationCommand(
-            idempotencyKey: "grounded-chat-terminal-v1:\(assistant.id):\(variant.id):\(session.id)",
-            matterID: matterID,
-            chatID: chatID,
-            messageID: assistant.id,
-            variantID: variant.id,
-            generationSessionID: session.id,
-            terminalContent: terminalContent,
-            runtimeMetrics: metrics,
-            sourceSet: sourceSet,
-            orderedSources: rows,
-            citations: citationRecords,
-            verificationDimensions: exactDimensions,
-            assuranceState: assurance,
-            authorizationEvidenceJSON: authorizationEvidence,
-            auditEvent: audit
-        )
         let cancellationSignal = groundedPublicationCancellation
-        let receipt = try store.groundedChatPublications.finalize(command) {
-            cancellationSignal.isCancellationRequested
-        }
-        return GroundedTerminalPublication(
-            receipt: receipt,
-            citations: citationRecords.map(MessageCitation.init)
+        return try GroundedChatTerminalPublicationUseCase(store: store).publish(
+            GroundedChatTerminalPublicationRequest(
+                matterID: matterID,
+                question: question,
+                answerText: answerText,
+                terminalContent: terminalContent,
+                context: context,
+                verification: verification,
+                chatID: chatID,
+                assistant: assistant,
+                variant: variant,
+                session: session,
+                metrics: metrics
+            ),
+            cancellationCheck: { cancellationSignal.isCancellationRequested }
         )
     }
 
