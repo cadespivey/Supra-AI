@@ -40,7 +40,16 @@ final class ArchitectureUXTRuntimeEmbeddingBindingOwnershipTests: XCTestCase {
 
     func testSetupVerificationAndPrewarmLoadTheExactManagedArtifactBinding() async throws {
         let fixture = try makeFixture(suffix: "setup")
-        let store = try SupraStore(url: fixture.base.appendingPathComponent("test.sqlite"))
+        let storeRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "ArchitectureUXTRuntimeEmbeddingBindingStore-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: storeRoot,
+            withIntermediateDirectories: true
+        )
+        addTeardownBlock { try? FileManager.default.removeItem(at: storeRoot) }
+        let store = try SupraStore(url: storeRoot.appendingPathComponent("test.sqlite"))
         try store.documentSettings.upsertEmbeddingModel(fixture.model)
         try store.documentSettings.selectEmbeddingModel(id: fixture.model.id)
         let runtime = EmbeddingBindingRuntimeRecorder(dimension: 7)
