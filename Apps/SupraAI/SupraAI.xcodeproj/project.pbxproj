@@ -86,6 +86,7 @@
 		D1E707070000000000000007 /* CanonicalMatterIdentityUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1E707070000000000000107 /* CanonicalMatterIdentityUITests.swift */; };
 		D1E708080000000000000008 /* ArchitectureUXTAttachNativeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1E708080000000000000108 /* ArchitectureUXTAttachNativeTests.swift */; };
 		D1E709090000000000000009 /* ArchitectureUXTDataIdentityConsumerSourceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1E709090000000000000109 /* ArchitectureUXTDataIdentityConsumerSourceTests.swift */; };
+		D1E70A0A000000000000000A /* ArchitectureUXTMutationNativeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1E70A0A000000000000010A /* ArchitectureUXTMutationNativeTests.swift */; };
 		D8049735424078FD470EAD6B /* RecycleBinView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF9D6D522EA0F7997D75B63B /* RecycleBinView.swift */; };
 		F56264303FD9BE608870FB9F /* MultilineField.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E06DCE8DB8B78E41F939F2C /* MultilineField.swift */; };
 /* End PBXBuildFile section */
@@ -134,6 +135,7 @@
 		D1E707070000000000000107 /* CanonicalMatterIdentityUITests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CanonicalMatterIdentityUITests.swift; sourceTree = "<group>"; };
 		D1E708080000000000000108 /* ArchitectureUXTAttachNativeTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ArchitectureUXTAttachNativeTests.swift; sourceTree = "<group>"; };
 		D1E709090000000000000109 /* ArchitectureUXTDataIdentityConsumerSourceTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ArchitectureUXTDataIdentityConsumerSourceTests.swift; sourceTree = "<group>"; };
+		D1E70A0A000000000000010A /* ArchitectureUXTMutationNativeTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ArchitectureUXTMutationNativeTests.swift; sourceTree = "<group>"; };
 		45DF0346474345DA98F88B95 /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/Cocoa.framework; sourceTree = DEVELOPER_DIR; };
 		5A0000000000000000000101 /* SupraAIApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupraAIApp.swift; sourceTree = "<group>"; };
 		5A0000000000000000000102 /* AppEnvironment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppEnvironment.swift; sourceTree = "<group>"; };
@@ -389,6 +391,7 @@
 				D1E707070000000000000107 /* CanonicalMatterIdentityUITests.swift */,
 				D1E708080000000000000108 /* ArchitectureUXTAttachNativeTests.swift */,
 				D1E709090000000000000109 /* ArchitectureUXTDataIdentityConsumerSourceTests.swift */,
+				D1E70A0A000000000000010A /* ArchitectureUXTMutationNativeTests.swift */,
 			);
 			path = SupraAIUITests;
 			sourceTree = "<group>";
@@ -689,6 +692,7 @@
 				D1E707070000000000000007 /* CanonicalMatterIdentityUITests.swift in Sources */,
 				D1E708080000000000000008 /* ArchitectureUXTAttachNativeTests.swift in Sources */,
 				D1E709090000000000000009 /* ArchitectureUXTDataIdentityConsumerSourceTests.swift in Sources */,
+				D1E70A0A000000000000000A /* ArchitectureUXTMutationNativeTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
