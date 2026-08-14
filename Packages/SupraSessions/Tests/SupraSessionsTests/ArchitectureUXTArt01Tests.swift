@@ -67,7 +67,7 @@ final class ArchitectureUXTArt01Tests: XCTestCase {
         })
         for url in concurrentURLs {
             let bytes = try Data(contentsOf: url)
-            XCTAssertTrue(String(decoding: bytes, as: UTF8.self).contains("T_ART_01_SAVED_WORK_731"))
+            XCTAssertTrue(String(decoding: bytes, as: UTF8.self).contains("T-ART-01_SAVED_WORK_731"))
             XCTAssertFalse(String(decoding: bytes, as: UTF8.self).contains(
                 ArchitectureUXArtifactWire.forbiddenDefault
             ))
@@ -90,7 +90,7 @@ final class ArchitectureUXTArt01Tests: XCTestCase {
         )
         for url in concurrentURLs {
             let reopened = String(decoding: try Data(contentsOf: url), as: UTF8.self)
-            XCTAssertTrue(reopened.contains("T_ART_01_SAVED_WORK_731"))
+            XCTAssertTrue(reopened.contains("T-ART-01_SAVED_WORK_731"))
             XCTAssertFalse(reopened.contains("T_ART_01_RESAVED_VERSION_739"))
         }
 
