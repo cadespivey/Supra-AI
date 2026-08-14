@@ -238,7 +238,7 @@ final class ArchitectureUXTPubWork01Tests: XCTestCase {
             publicationMode: .ordinary,
             acceptedResearchPacket: nil
         )
-        try store.database.writer.write { db in
+        try await store.database.writer.write { db in
             try db.execute(sql: """
                 CREATE TRIGGER t_pub_work_controller_audit_failure
                 BEFORE INSERT ON audit_events
