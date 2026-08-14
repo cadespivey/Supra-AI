@@ -84,6 +84,12 @@ Dependency rules that are enforced by package boundaries:
 - The runtime service depends only on `SupraRuntimeInterface` (the shared contract) and the
   MLX packages — not on the store, networking, or UI.
 
+`SupraTestKit.RepositoryArchitecturePolicy` version 7 reads the fourteen local manifests and
+pins the exact acyclic 37-edge graph. `SupraTestKit` is isolated from the app product; its seven
+higher-layer package dependencies are reviewed test-harness exceptions beyond `SupraCore`, and
+an eighth exception fails closed. The same policy rejects inventory drift, undeclared or missing
+edges, cycles, and direct Store/network capability edges from packages that must remain isolated.
+
 ## The runtime boundary
 
 `SupraRuntimeService` is a Swift-only XPC service that owns MLX model loading and execution.
