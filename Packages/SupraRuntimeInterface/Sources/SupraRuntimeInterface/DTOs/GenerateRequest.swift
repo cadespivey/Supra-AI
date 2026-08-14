@@ -29,6 +29,12 @@ public struct GenerateRequest: Codable, Sendable {
     /// Prior turns (oldest→newest) prepended to the chat template so the model can
     /// answer follow-ups in context. Empty for a fresh conversation or a one-shot.
     public let history: [Turn]
+    /// Declares whether context contains exact grounded evidence that must never
+    /// be silently evicted by the rotating KV cache.
+    public let contextWorkload: RuntimeContextWorkload
+    /// True only when the caller can deterministically repack the same exact
+    /// source set and retry after a bounded context-admission response.
+    public let allowsExactSourceRepacking: Bool
     public let options: GenerationOptions
 
     public init(
@@ -38,6 +44,8 @@ public struct GenerateRequest: Codable, Sendable {
         prompt: String,
         systemPrompt: String?,
         history: [Turn] = [],
+        contextWorkload: RuntimeContextWorkload = .ordinaryConversation,
+        allowsExactSourceRepacking: Bool = false,
         options: GenerationOptions
     ) {
         self.generationID = generationID
@@ -46,6 +54,8 @@ public struct GenerateRequest: Codable, Sendable {
         self.prompt = prompt
         self.systemPrompt = systemPrompt
         self.history = history
+        self.contextWorkload = contextWorkload
+        self.allowsExactSourceRepacking = allowsExactSourceRepacking
         self.options = options
     }
 
@@ -62,6 +72,14 @@ public struct GenerateRequest: Codable, Sendable {
         self.systemPrompt = try container.decodeIfPresent(String.self, forKey: .systemPrompt)
         // Tolerate requests encoded before `history` existed.
         self.history = try container.decodeIfPresent([Turn].self, forKey: .history) ?? []
+        self.contextWorkload = try container.decodeIfPresent(
+            RuntimeContextWorkload.self,
+            forKey: .contextWorkload
+        ) ?? .ordinaryConversation
+        self.allowsExactSourceRepacking = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .allowsExactSourceRepacking
+        ) ?? false
         self.options = try container.decode(GenerationOptions.self, forKey: .options)
     }
 }

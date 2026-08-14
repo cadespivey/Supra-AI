@@ -5,9 +5,14 @@ import SupraRuntimeInterface
 
 final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @unchecked Sendable {
     private let stateLock = NSLock()
-    private let eventBuffer = GenerationEventBuffer()
-    private let modelController: any ChatModelController = MLXModelController()
-    private let embeddingController: any EmbeddingModelController = MLXEmbeddingModelController()
+    private let budgetPolicy: RuntimeBudgetPolicy
+    private let requestBudgetValidator: RuntimeRequestBudgetValidator
+    private let responseBudgetValidator: RuntimeResponseBudgetValidator
+    private let resourceAdmissionPlanner: RuntimeResourceAdmissionPlanner
+    private let modelSwitchPlanner: RuntimeModelSwitchPlanner
+    private let eventBuffer: GenerationEventBuffer
+    private let modelController: any ChatModelController
+    private let embeddingController: any EmbeddingModelController
     /// Orders chat-model mutations by XPC arrival order. Without this, an async
     /// load could commit after a later unload and leave reported/runtime state split.
     private let modelOperations = RuntimeSerialOperationQueue()
@@ -28,6 +33,7 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
 
     private var loadedModelID: ModelID?
     private var currentModelRequest: LoadModelRequest?
+    private var loadedModelResourceProfile: ModelResourceProfile?
     /// One state lock owns both model mutations and generation reservations. A
     /// request reserves its transition synchronously, before any actor hop, so
     /// load/unload can never slip underneath an accepted generation (or vice versa).
@@ -39,6 +45,27 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
     // Milestone 3 embedding state, guarded by stateLock.
     private var loadedEmbeddingModelID: DocumentEmbeddingModelID?
     private var embeddingDimension: Int?
+    private var loadedEmbeddingResourceProfile: ModelResourceProfile?
+
+    init(budgetPolicy: RuntimeBudgetPolicy = .production) {
+        let memoryEnvelope = Self.productionMemoryEnvelope()
+        self.budgetPolicy = budgetPolicy
+        self.requestBudgetValidator = RuntimeRequestBudgetValidator(policy: budgetPolicy)
+        self.responseBudgetValidator = RuntimeResponseBudgetValidator(policy: budgetPolicy)
+        self.resourceAdmissionPlanner = RuntimeResourceAdmissionPlanner(
+            envelope: memoryEnvelope
+        )
+        self.modelSwitchPlanner = RuntimeModelSwitchPlanner(envelope: memoryEnvelope)
+        self.eventBuffer = GenerationEventBuffer(
+            budgetPolicy: budgetPolicy,
+            streamPolicy: .production
+        )
+        self.modelController = MLXModelController()
+        self.embeddingController = MLXEmbeddingModelController(
+            budgetPolicy: budgetPolicy
+        )
+        super.init()
+    }
 
     func loadChatModel(
         _ request: LoadModelRequest,
@@ -50,6 +77,38 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
                     status: .failed,
                     modelID: request.modelID,
                     error: RuntimeErrorMapper.invalidRequest("A model path is required.")
+                )
+            )
+            return
+        }
+
+        let replacementProfile: ModelResourceProfile
+        do {
+            replacementProfile = try Self.chatResourceProfile(for: request)
+            let admission = try resourceAdmissionPlanner.evaluate(
+                profile: replacementProfile,
+                contextTokens: 0
+            )
+            guard admission.disposition == .admit else {
+                reply(
+                    LoadModelResponse(
+                        status: .failed,
+                        modelID: request.modelID,
+                        error: RuntimeErrorMapper.invalidRequest(
+                            "The model exceeds the bounded runtime memory envelope."
+                        )
+                    )
+                )
+                return
+            }
+        } catch {
+            reply(
+                LoadModelResponse(
+                    status: .failed,
+                    modelID: request.modelID,
+                    error: RuntimeErrorMapper.invalidRequest(
+                        "The model resource profile could not be admitted: \(error.localizedDescription)"
+                    )
                 )
             )
             return
@@ -67,17 +126,40 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
         }
 
         let reply = RuntimeReply(reply)
-        modelOperations.enqueue { [self, modelController, reply] in
+        modelOperations.enqueue { [self, modelController, reply, replacementProfile] in
             defer { finishModelMutation() }
             do {
+                if let currentProfile = currentChatResourceProfile() {
+                    let switchPlan = try modelSwitchPlanner.plan(
+                        RuntimeModelSwitchRequest(
+                            wireID: "runtime-chat-model-switch",
+                            current: currentProfile,
+                            replacement: replacementProfile
+                        )
+                    )
+                    switch switchPlan.strategy {
+                    case .unloadCurrentThenLoadReplacement:
+                        try await modelController.unload()
+                        clearLoadedModel()
+                    case .transactionalSwap:
+                        break
+                    case .defer:
+                        throw RuntimeServiceResourceAdmissionError.modelSwitchDeferred
+                    }
+                }
+
                 let result = try await modelController.loadModel(
                     bookmark: request.modelBookmark,
                     path: request.modelPath,
                     managedRootPath: request.managedRootPath,
                     expectedIdentity: request.modelDirectoryIdentity,
-                    contentBinding: request.contentBinding
+                    contentBinding: request.contentBinding,
+                    resourceProfile: replacementProfile,
+                    contextAdmissionPlanner: RuntimeContextAdmissionPlanner(
+                        resourcePlanner: resourceAdmissionPlanner
+                    )
                 )
-                setLoadedModel(request)
+                setLoadedModel(request, resourceProfile: replacementProfile)
                 reply(
                     LoadModelResponse(
                         status: .loaded,
@@ -131,10 +213,18 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
         }
 
         let reply = RuntimeReply(reply)
-        modelOperations.enqueue { [modelController, reply] in
+        modelOperations.enqueue { [modelController, reply, responseBudgetValidator] in
             do {
                 let counts = try await modelController.countTokens(texts: request.texts)
-                reply(CountTokensResponse(modelID: request.modelID, counts: counts))
+                let response = CountTokensResponse(
+                    modelID: request.modelID,
+                    counts: counts
+                )
+                try responseBudgetValidator.validate(
+                    response,
+                    expectedRequestItemCount: request.texts.count
+                )
+                reply(response)
             } catch {
                 reply(CountTokensResponse(
                     modelID: request.modelID,
@@ -479,10 +569,56 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
             return
         }
 
+        let replacementProfile = Self.embeddingResourceProfile(for: request)
+        do {
+            let admission = try resourceAdmissionPlanner.evaluate(
+                profile: replacementProfile,
+                contextTokens: 0
+            )
+            guard admission.disposition == .admit else {
+                reply(LoadEmbeddingModelResponse(
+                    state: .failed,
+                    embeddingModelID: request.embeddingModelID,
+                    error: RuntimeErrorMapper.invalidRequest(
+                        "The embedding model exceeds the bounded runtime memory envelope."
+                    )
+                ))
+                return
+            }
+        } catch {
+            reply(LoadEmbeddingModelResponse(
+                state: .failed,
+                embeddingModelID: request.embeddingModelID,
+                error: RuntimeErrorMapper.invalidRequest(
+                    "The embedding resource profile could not be admitted: \(error.localizedDescription)"
+                )
+            ))
+            return
+        }
+
         let reply = RuntimeReply(reply)
-        embeddingModelOperations.enqueue { [self, embeddingController, reply] in
+        embeddingModelOperations.enqueue { [self, embeddingController, reply, replacementProfile] in
             let startedAt = Date()
             do {
+                if let currentProfile = currentEmbeddingResourceProfile() {
+                    let switchPlan = try modelSwitchPlanner.plan(
+                        RuntimeModelSwitchRequest(
+                            wireID: "runtime-embedding-model-switch",
+                            current: currentProfile,
+                            replacement: replacementProfile
+                        )
+                    )
+                    switch switchPlan.strategy {
+                    case .unloadCurrentThenLoadReplacement:
+                        await embeddingController.unload()
+                        clearLoadedEmbeddingModel()
+                    case .transactionalSwap:
+                        break
+                    case .defer:
+                        throw RuntimeServiceResourceAdmissionError.modelSwitchDeferred
+                    }
+                }
+
                 let dimension = try await embeddingController.loadModel(
                     bookmark: request.modelBookmark,
                     path: request.modelPath,
@@ -490,7 +626,11 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
                     expectedIdentity: request.modelDirectoryIdentity,
                     expectedDimension: request.expectedDimension
                 )
-                setLoadedEmbeddingModel(request.embeddingModelID, dimension: dimension)
+                setLoadedEmbeddingModel(
+                    request.embeddingModelID,
+                    dimension: dimension,
+                    resourceProfile: replacementProfile
+                )
                 reply(LoadEmbeddingModelResponse(
                     state: .loaded,
                     embeddingModelID: request.embeddingModelID,
@@ -543,19 +683,24 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
         }
 
         let reply = RuntimeReply(reply)
-        Task { [embeddingController, reply] in
+        Task { [embeddingController, reply, responseBudgetValidator] in
             do {
                 let rawVectors = try await embeddingController.embed(texts: request.texts, normalize: request.normalize)
                 // JSONEncoder throws on non-finite Floats; map NaN/±Inf to 0 so a
                 // degenerate vector becomes a usable (if zeroed) response instead of
                 // an encode failure that the client sees as a generic decode error.
                 let vectors = rawVectors.map { $0.map { $0.isFinite ? $0 : 0 } }
-                reply(EmbedTextResponse(
+                let response = EmbedTextResponse(
                     state: .loaded,
                     vectors: vectors,
                     dimension: vectors.first?.count ?? embeddingDimension,
                     normalized: request.normalize
-                ))
+                )
+                try responseBudgetValidator.validate(
+                    response,
+                    expectedVectorCount: request.texts.count
+                )
+                reply(response)
             } catch {
                 reply(EmbedTextResponse(
                     state: .failed,
@@ -579,16 +724,33 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
         ))
     }
 
-    private func setLoadedEmbeddingModel(_ id: DocumentEmbeddingModelID, dimension: Int) {
+    private func setLoadedEmbeddingModel(
+        _ id: DocumentEmbeddingModelID,
+        dimension: Int,
+        resourceProfile: ModelResourceProfile
+    ) {
         stateLock.lock()
         loadedEmbeddingModelID = id
         embeddingDimension = dimension
+        loadedEmbeddingResourceProfile = resourceProfile
         stateLock.unlock()
     }
 
-    private func setLoadedModel(_ request: LoadModelRequest) {
+    private func clearLoadedEmbeddingModel() {
+        stateLock.lock()
+        loadedEmbeddingModelID = nil
+        embeddingDimension = nil
+        loadedEmbeddingResourceProfile = nil
+        stateLock.unlock()
+    }
+
+    private func setLoadedModel(
+        _ request: LoadModelRequest,
+        resourceProfile: ModelResourceProfile
+    ) {
         stateLock.lock()
         loadedModelID = request.modelID
+        loadedModelResourceProfile = resourceProfile
         // The plain bookmark carries a single-use sandbox extension that is dead
         // once the app releases its access, so it must not be replayed on reload.
         // Retain only the path; a sandboxed reload must be re-driven by the app
@@ -609,7 +771,20 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
         stateLock.lock()
         loadedModelID = nil
         currentModelRequest = nil
+        loadedModelResourceProfile = nil
         stateLock.unlock()
+    }
+
+    private func currentChatResourceProfile() -> ModelResourceProfile? {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return loadedModelResourceProfile
+    }
+
+    private func currentEmbeddingResourceProfile() -> ModelResourceProfile? {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return loadedEmbeddingResourceProfile
     }
 
     private func reserveModelMutation() -> Bool {
@@ -663,10 +838,106 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
         return loadedModelID != nil
     }
 
+    private static func chatResourceProfile(
+        for request: LoadModelRequest
+    ) throws -> ModelResourceProfile {
+        var weightBytes = 0
+        for file in request.contentBinding?.files ?? [] {
+            guard file.size <= Int64(Int.max) else {
+                throw RuntimeServiceResourceAdmissionError.invalidWeightCardinality
+            }
+            let (next, overflow) = weightBytes.addingReportingOverflow(Int(file.size))
+            guard !overflow else {
+                throw RuntimeServiceResourceAdmissionError.invalidWeightCardinality
+            }
+            weightBytes = next
+        }
+
+        let identifier = request.modelID.rawValue.uuidString.lowercased()
+        let binding = request.contentBinding
+        return ModelResourceProfile(
+            profileID: "runtime-chat-\(identifier)",
+            modelID: request.modelID,
+            modelArtifactID: binding?.repositoryID ?? "unbound-chat-\(identifier)",
+            modelRevision: binding?.revision ?? "unbound",
+            contentFingerprintSHA256: binding?.fingerprintSHA256
+                ?? unboundFingerprint(for: request.modelID.rawValue),
+            weightBytes: weightBytes,
+            layerCount: 32,
+            keyValueHeadCount: 8,
+            headDimension: 128,
+            scalarBytes: 2,
+            supportedContextTokens: 131_072,
+            nonWeightOverheadBytes: max(64 * 1_024 * 1_024, weightBytes / 10),
+            activationBytesPerToken: 4_096
+        )
+    }
+
+    private static func embeddingResourceProfile(
+        for request: LoadEmbeddingModelRequest
+    ) -> ModelResourceProfile {
+        let identifier = request.embeddingModelID.rawValue.uuidString.lowercased()
+        let estimatedWeights = max(
+            64 * 1_024 * 1_024,
+            (request.expectedDimension ?? 384) * 256 * MemoryLayout<Float>.size
+        )
+        return ModelResourceProfile(
+            profileID: "runtime-embedding-\(identifier)",
+            modelID: ModelID(request.embeddingModelID.rawValue),
+            modelArtifactID: "embedding-\(identifier)",
+            modelRevision: request.revision ?? "unbound",
+            contentFingerprintSHA256: unboundFingerprint(
+                for: request.embeddingModelID.rawValue
+            ),
+            weightBytes: estimatedWeights,
+            layerCount: 1,
+            keyValueHeadCount: 1,
+            headDimension: max(1, request.expectedDimension ?? 384),
+            scalarBytes: MemoryLayout<Float>.size,
+            supportedContextTokens: 32_768,
+            nonWeightOverheadBytes: 32 * 1_024 * 1_024,
+            activationBytesPerToken: 1_024
+        )
+    }
+
+    private static func productionMemoryEnvelope() -> RuntimeMemoryEnvelope {
+        let physicalBytes = Int(
+            min(UInt64(Int.max), ProcessInfo.processInfo.physicalMemory)
+        )
+        return RuntimeMemoryEnvelope(
+            unifiedMemoryCeilingBytes: max(1, physicalBytes - physicalBytes / 10),
+            appResidentBytes: 512 * 1_024 * 1_024,
+            runtimeResidentBytesExcludingModels: 256 * 1_024 * 1_024,
+            embeddingResidentBytes: 0,
+            rerankerResidentBytes: 0,
+            safetyMarginBytes: physicalBytes / 10,
+            currentPressureReserveBytes: physicalBytes / 20
+        )
+    }
+
+    private static func unboundFingerprint(for id: UUID) -> String {
+        let compact = id.uuidString.lowercased().replacingOccurrences(of: "-", with: "")
+        return compact + compact
+    }
+
     private static func maximumResidentMiB() -> Int {
         var usage = rusage()
         guard getrusage(RUSAGE_SELF, &usage) == 0 else { return 0 }
         return Int(usage.ru_maxrss / (1_024 * 1_024))
+    }
+}
+
+private enum RuntimeServiceResourceAdmissionError: LocalizedError {
+    case invalidWeightCardinality
+    case modelSwitchDeferred
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidWeightCardinality:
+            "The authorized model manifest has an invalid aggregate byte count."
+        case .modelSwitchDeferred:
+            "The replacement model cannot fit within the current bounded memory envelope."
+        }
     }
 }
 
@@ -706,7 +977,11 @@ extension SupraRuntimeService: SupraRuntimeXPCServiceProtocol {
         withReply reply: @escaping (Data) -> Void
     ) {
         do {
-            let request = try RuntimeXPCCodec.decode(LoadModelRequest.self, from: requestData)
+            let request = try RuntimeXPCCodec.decodeRequest(
+                LoadModelRequest.self,
+                from: requestData,
+                policy: budgetPolicy
+            )
             loadChatModel(request) { response in
                 reply(Self.encoded(response))
             }
@@ -732,7 +1007,12 @@ extension SupraRuntimeService: SupraRuntimeXPCServiceProtocol {
         withReply reply: @escaping (Data) -> Void
     ) {
         do {
-            let request = try RuntimeXPCCodec.decode(GenerateRequest.self, from: requestData)
+            let request = try RuntimeXPCCodec.decodeRequest(
+                GenerateRequest.self,
+                from: requestData,
+                policy: budgetPolicy
+            )
+            try requestBudgetValidator.validate(request)
             guard let connection = NSXPCConnection.current() else {
                 reply(
                     Self.encoded(
@@ -773,7 +1053,12 @@ extension SupraRuntimeService: SupraRuntimeXPCServiceProtocol {
 
     func countTokens(_ requestData: Data, withReply reply: @escaping (Data) -> Void) {
         do {
-            let request = try RuntimeXPCCodec.decode(CountTokensRequest.self, from: requestData)
+            let request = try RuntimeXPCCodec.decodeRequest(
+                CountTokensRequest.self,
+                from: requestData,
+                policy: budgetPolicy
+            )
+            try requestBudgetValidator.validate(request)
             countTokens(request) { response in
                 reply(Self.encoded(response))
             }
@@ -793,7 +1078,11 @@ extension SupraRuntimeService: SupraRuntimeXPCServiceProtocol {
         withReply reply: @escaping (Data) -> Void
     ) {
         do {
-            let generationID = try RuntimeXPCCodec.decode(GenerationID.self, from: generationIDData)
+            let generationID = try RuntimeXPCCodec.decodeRequest(
+                GenerationID.self,
+                from: generationIDData,
+                policy: budgetPolicy
+            )
             guard let connection = NSXPCConnection.current() else {
                 reply(
                     Self.encoded(
@@ -834,7 +1123,11 @@ extension SupraRuntimeService: SupraRuntimeXPCServiceProtocol {
         withReply reply: @escaping (Data) -> Void
     ) {
         do {
-            let generationID = try RuntimeXPCCodec.decode(GenerationID.self, from: generationIDData)
+            let generationID = try RuntimeXPCCodec.decodeRequest(
+                GenerationID.self,
+                from: generationIDData,
+                policy: budgetPolicy
+            )
             recentEvents(for: generationID, after: sequenceNumber) { events in
                 reply(Self.encoded(events))
             }
@@ -870,9 +1163,10 @@ extension SupraRuntimeService: SupraRuntimeXPCServiceProtocol {
         _ generationIDData: Data,
         withReply reply: @escaping (Data) -> Void
     ) {
-        guard let generationID = try? RuntimeXPCCodec.decode(
+        guard let generationID = try? RuntimeXPCCodec.decodeRequest(
             GenerationID.self,
-            from: generationIDData
+            from: generationIDData,
+            policy: budgetPolicy
         ),
         let caller = NSXPCConnection.current(),
         let capturedOwner = RuntimeLifecycleTestHooks.shared.reservationOwner(
@@ -894,7 +1188,11 @@ extension SupraRuntimeService: SupraRuntimeXPCServiceProtocol {
 
     func loadEmbeddingModel(_ requestData: Data, withReply reply: @escaping (Data) -> Void) {
         do {
-            let request = try RuntimeXPCCodec.decode(LoadEmbeddingModelRequest.self, from: requestData)
+            let request = try RuntimeXPCCodec.decodeRequest(
+                LoadEmbeddingModelRequest.self,
+                from: requestData,
+                policy: budgetPolicy
+            )
             loadEmbeddingModel(request) { response in
                 reply(Self.encoded(response))
             }
@@ -916,7 +1214,12 @@ extension SupraRuntimeService: SupraRuntimeXPCServiceProtocol {
 
     func embedTexts(_ requestData: Data, withReply reply: @escaping (Data) -> Void) {
         do {
-            let request = try RuntimeXPCCodec.decode(EmbedTextRequest.self, from: requestData)
+            let request = try RuntimeXPCCodec.decodeRequest(
+                EmbedTextRequest.self,
+                from: requestData,
+                policy: budgetPolicy
+            )
+            try requestBudgetValidator.validate(request)
             embedTexts(request) { response in
                 reply(Self.encoded(response))
             }

@@ -44,8 +44,13 @@ enum EmbeddingModelControllerError: LocalizedError {
 }
 
 actor MLXEmbeddingModelController: EmbeddingModelController {
+    private let budgetValidator: RuntimeRequestBudgetValidator
     private var container: EmbedderModelContainer?
     private var dimension: Int?
+
+    init(budgetPolicy: RuntimeBudgetPolicy = .production) {
+        self.budgetValidator = RuntimeRequestBudgetValidator(policy: budgetPolicy)
+    }
 
     func loadModel(
         bookmark: Data?,
@@ -68,7 +73,12 @@ actor MLXEmbeddingModelController: EmbeddingModelController {
             using: TokenizersLoader()
         )
         // Determine the output dimension with a tiny probe embedding.
-        let probe = try await Self.embed(container: loaded, texts: ["dimension probe"], normalize: true)
+        let probe = try await Self.embed(
+            container: loaded,
+            texts: ["dimension probe"],
+            normalize: true,
+            budgetValidator: budgetValidator
+        )
         guard let first = probe.first, !first.isEmpty else {
             throw EmbeddingModelControllerError.emptyEmbedding
         }
@@ -92,7 +102,12 @@ actor MLXEmbeddingModelController: EmbeddingModelController {
     func embed(texts: [String], normalize: Bool) async throws -> [[Float]] {
         guard let container else { throw EmbeddingModelControllerError.modelNotLoaded }
         guard !texts.isEmpty else { return [] }
-        return try await Self.embed(container: container, texts: texts, normalize: normalize)
+        return try await Self.embed(
+            container: container,
+            texts: texts,
+            normalize: normalize,
+            budgetValidator: budgetValidator
+        )
     }
 
     func unload() async {
@@ -105,13 +120,17 @@ actor MLXEmbeddingModelController: EmbeddingModelController {
     private static func embed(
         container: EmbedderModelContainer,
         texts: [String],
-        normalize: Bool
+        normalize: Bool,
+        budgetValidator: RuntimeRequestBudgetValidator
     ) async throws -> [[Float]] {
-        await container.perform { context in
+        try await container.perform { context in
             let tokenizer = context.tokenizer
             let padToken = tokenizer.eosTokenId ?? 0
 
             let encoded = texts.map { tokenizer.encode(text: $0, addSpecialTokens: true) }
+            try budgetValidator.validateEmbeddingTokenShape(
+                tokenCounts: encoded.map { max(16, $0.count) }
+            )
             let maxLength = encoded.reduce(into: 16) { $0 = max($0, $1.count) }
 
             let padded = stacked(
