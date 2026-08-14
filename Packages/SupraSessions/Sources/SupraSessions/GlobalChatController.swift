@@ -69,6 +69,9 @@ public final class GlobalChatController: ObservableObject {
     /// relaunch; durable matter grounding remains owned by source packets.
     private var quickAttachmentsByMessageID: [String: [QuickAttachmentPresentation]] = [:]
     private var activeGenerationID: GenerationID?
+    /// A lock-backed cancellation signal that the synchronous Store transaction
+    /// may inspect without crossing the controller's MainActor isolation.
+    private let groundedPublicationCancellation = GroundedPublicationCancellationSignal()
     /// Set by `cancel()`, checked cooperatively where in-flight work runs under its own
     /// untracked generation ID that `cancelGeneration(activeGenerationID)` can't reach: the
     /// fast→deep escalation boundary (a deep-retrieval LLM rerank) and the typed-generation
@@ -875,6 +878,7 @@ public final class GlobalChatController: ObservableObject {
         // retrieval/escalation await or typed generation), so the escalation and
         // typed-generation boundaries can honor it.
         cancelRequested = true
+        groundedPublicationCancellation.requestCancellation()
         guard let activeGenerationID else { return }
         let runtimeClient = runtimeClient
         Task { _ = try? await runtimeClient.cancelGeneration(activeGenerationID) }
@@ -912,10 +916,14 @@ public final class GlobalChatController: ObservableObject {
         // A Cancel pressed during the (bounded) typed generation can't reach its untracked
         // generations; honor it here by discarding the result and marking the turn cancelled
         // rather than committing a completed answer.
-        if cancelRequested {
-            try? store.chats.markVariantCancelled(variant.id)
-            try? store.generation.cancelGeneration(generationID: session.id)
-            updateMessage(id: assistant.id, content: "", status: .cancelled)
+        if cancelRequested || groundedPublicationCancellation.isCancellationRequested {
+            resolveGroundedPublicationFailure(
+                GroundedChatTerminalPublicationError.cancelled,
+                assistant: assistant,
+                variant: variant,
+                session: session,
+                metrics: StoredRuntimeMetrics()
+            )
             reloadMessages()
             return true
         }
@@ -934,61 +942,62 @@ public final class GlobalChatController: ObservableObject {
         }
         var content = answerText
 
-        do {
-            try store.chats.appendToken(to: variant.id, token: answerText)
-            // Source-key trailer, entity-grounding banner, and support-verification banner are
-            // appended out-of-band exactly as on the streamed path.
-            if let groundingTrailer, !groundingTrailer.isEmpty {
-                try? store.chats.appendToken(to: variant.id, token: groundingTrailer)
-                content += groundingTrailer
-            }
-            if !groundingSourceTexts.isEmpty {
-                let entityIssues = LegalCitationVerifier.verifyGroundedEntities(
-                    answer: answerText, sourceTexts: groundingSourceTexts
-                )
-                if let banner = Self.entityGroundingBanner(entityIssues) {
-                    try? store.chats.appendToken(to: variant.id, token: banner)
-                    content += banner
-                }
-            }
-            let verification = try? DocumentSupportVerifier.verify(
-                answer: answerText,
-                sources: groundingSources.map {
-                    DocumentSupportSource(
-                        sourceID: $0.sourceID, label: $0.label, locator: $0.locator.encodedJSON(),
-                        text: $0.supportText, lowConfidence: $0.lowConfidence
-                    )
-                },
-                scopeFullyIndexed: groundingScopeFullyIndexed
+        // Source-key trailer, entity-grounding banner, and support-verification banner are
+        // assembled in memory. None may reach the pending owner before the atomic Store command.
+        if let groundingTrailer, !groundingTrailer.isEmpty {
+            content += groundingTrailer
+        }
+        if !groundingSourceTexts.isEmpty {
+            let entityIssues = LegalCitationVerifier.verifyGroundedEntities(
+                answer: answerText, sourceTexts: groundingSourceTexts
             )
-            let banner = verification.flatMap(Self.documentSupportBanner)
-                ?? Self.verificationUnavailableBanner
-            if verification == nil || verification?.requiresReview == true {
-                try? store.chats.appendToken(to: variant.id, token: banner)
+            if let banner = Self.entityGroundingBanner(entityIssues) {
                 content += banner
             }
-            try store.chats.completeVariant(variant.id)
-            try store.generation.completeGeneration(generationID: session.id)
-            try persistGroundedDocumentPacket(
-                messageID: assistant.id, question: question, context: grounded, verification: verification
+        }
+        let verification = try? DocumentSupportVerifier.verify(
+            answer: answerText,
+            sources: groundingSources.map {
+                DocumentSupportSource(
+                    sourceID: $0.sourceID, label: $0.label, locator: $0.locator.encodedJSON(),
+                    text: $0.supportText, lowConfidence: $0.lowConfidence
+                )
+            },
+            scopeFullyIndexed: groundingScopeFullyIndexed
+        )
+        let banner = verification.flatMap(Self.documentSupportBanner)
+            ?? Self.verificationUnavailableBanner
+        if verification == nil || verification?.requiresReview == true {
+            content += banner
+        }
+
+        do {
+            let publication = try publishGroundedTerminalAnswer(
+                question: question,
+                answerText: answerText,
+                terminalContent: content,
+                context: grounded,
+                verification: verification,
+                chatID: chatID,
+                assistant: assistant,
+                variant: variant,
+                session: session,
+                metrics: StoredRuntimeMetrics()
             )
-            updateMessageAssurance(
-                id: assistant.id,
-                state: Self.groundedAssurance(depth: grounded.depth, verificationStatus: verification?.verificationStatus)
-            )
-            let citations = persistSourceCitations(messageID: assistant.id, answer: answerText, sources: groundingSources)
             updateMessage(id: assistant.id, content: content, status: .completed)
-            attachCitations(citations, toMessage: assistant.id)
+            updateMessageAssurance(id: assistant.id, state: publication.receipt.assuranceState)
+            attachCitations(publication.citations, toMessage: assistant.id)
             if grounded.depth == .fast, !groundingSources.isEmpty {
                 deeperSearchOffer = DeeperSearchOffer(kind: .documents, chatID: chatID, question: question)
             }
         } catch {
-            try? store.chats.markVariantFailed(variant.id, reason: error.localizedDescription)
-            try? store.generation.failGeneration(
-                generationID: session.id, errorSummary: error.localizedDescription, diagnosticEventID: nil
+            resolveGroundedPublicationFailure(
+                error,
+                assistant: assistant,
+                variant: variant,
+                session: session,
+                metrics: StoredRuntimeMetrics()
             )
-            errorMessage = error.localizedDescription
-            updateMessage(id: assistant.id, content: content, status: .failed)
         }
         reloadMessages()
         return true
@@ -1011,6 +1020,7 @@ public final class GlobalChatController: ObservableObject {
         errorMessage = nil
         deeperSearchOffer = nil
         cancelRequested = false
+        groundedPublicationCancellation.reset()
         defer {
             isGenerating = false
             activeGenerationID = nil
@@ -1251,16 +1261,64 @@ public final class GlobalChatController: ObservableObject {
                     case .generationCompleted:
                         sawTerminal = true
                         finalMetrics = event.metrics ?? finalMetrics
-                        if context != nil, finalMetrics?.contextOverflowed == true {
+                        if let context, finalMetrics?.contextOverflowed == true {
                             streamedContent = Self.groundedContextOverflowRefusal
-                            try store.chats.appendToken(to: activeVariant.id, token: streamedContent)
-                            try store.chats.completeVariant(activeVariant.id)
-                            try store.generation.completeGeneration(
-                                generationID: session.id,
-                                metrics: storedMetrics(from: finalMetrics)
-                            )
+                            if context.sources.isEmpty {
+                                // Inventory/no-source grounding owns no provenance packet, so it
+                                // retains the ordinary terminal path.
+                                try store.chats.appendToken(to: activeVariant.id, token: streamedContent)
+                                try store.chats.completeVariant(activeVariant.id)
+                                try store.generation.completeGeneration(
+                                    generationID: session.id,
+                                    metrics: storedMetrics(from: finalMetrics)
+                                )
+                                updateMessage(id: assistant.id, content: streamedContent, status: .completed)
+                            } else {
+                                // Even the bounded overflow refusal is an answer about an exact
+                                // retrieved packet. Publish it through the same atomic boundary.
+                                let verification = try? DocumentSupportVerifier.verify(
+                                    answer: streamedContent,
+                                    sources: context.sources.map {
+                                        DocumentSupportSource(
+                                            sourceID: $0.sourceID,
+                                            label: $0.label,
+                                            locator: $0.locator.encodedJSON(),
+                                            text: $0.supportText,
+                                            lowConfidence: $0.lowConfidence
+                                        )
+                                    },
+                                    scopeFullyIndexed: context.scopeFullyIndexed
+                                )
+                                do {
+                                    let publication = try publishGroundedTerminalAnswer(
+                                        question: prompt,
+                                        answerText: streamedContent,
+                                        terminalContent: streamedContent,
+                                        context: context,
+                                        verification: verification,
+                                        chatID: chatID,
+                                        assistant: assistant,
+                                        variant: activeVariant,
+                                        session: session,
+                                        metrics: storedMetrics(from: finalMetrics)
+                                    )
+                                    updateMessage(id: assistant.id, content: streamedContent, status: .completed)
+                                    updateMessageAssurance(
+                                        id: assistant.id,
+                                        state: publication.receipt.assuranceState
+                                    )
+                                    attachCitations(publication.citations, toMessage: assistant.id)
+                                } catch {
+                                    resolveGroundedPublicationFailure(
+                                        error,
+                                        assistant: assistant,
+                                        variant: activeVariant,
+                                        session: session,
+                                        metrics: storedMetrics(from: finalMetrics)
+                                    )
+                                }
+                            }
                             logGenerationTiming(finalMetrics, generationID: session.id)
-                            updateMessage(id: assistant.id, content: streamedContent, status: .completed)
                             break generationEvents
                         }
                         // Normalize the model's citation-marker variants ([CITE: S1, S8], [S1, S8],
@@ -1315,19 +1373,12 @@ public final class GlobalChatController: ObservableObject {
                             // No genuinely deeper packet — fall through and finalize the
                             // fast refusal as the answer.
                         }
-                        if context != nil, !streamedContent.isEmpty {
-                            try store.chats.appendToken(to: activeVariant.id, token: streamedContent)
-                        }
-                        // The runtime dropped oldest turns to fit the window — tell the
-                        // user (persist it too) rather than silently losing context.
+                        // Assemble the terminal value in memory. For source-bearing grounding,
+                        // none of it may reach the message owner before the atomic Store command.
                         if finalMetrics?.contextTrimmed == true {
-                            try? store.chats.appendToken(to: activeVariant.id, token: Self.contextTrimmedNotice)
                             streamedContent += Self.contextTrimmedNotice
                         }
-                        // Append the grounded answer's source key so inline [S#] citations
-                        // resolve to document names for the reader. Only on success.
                         if let groundingTrailer, !groundingTrailer.isEmpty {
-                            try? store.chats.appendToken(to: activeVariant.id, token: groundingTrailer)
                             streamedContent += groundingTrailer
                         }
                         // Post-generation grounding check: flag any name / email / phone the
@@ -1340,7 +1391,6 @@ public final class GlobalChatController: ObservableObject {
                                 sourceTexts: groundingSourceTexts
                             )
                             if let banner = Self.entityGroundingBanner(entityIssues) {
-                                try? store.chats.appendToken(to: activeVariant.id, token: banner)
                                 streamedContent += banner
                             }
                         }
@@ -1383,44 +1433,67 @@ public final class GlobalChatController: ObservableObject {
                             let banner = report.flatMap(Self.documentSupportBanner)
                                 ?? Self.verificationUnavailableBanner
                             if report == nil || report?.requiresReview == true {
-                                try? store.chats.appendToken(to: activeVariant.id, token: banner)
                                 streamedContent += banner
                             }
                         }
-                        try store.chats.completeVariant(activeVariant.id)
-                        try store.generation.completeGeneration(
-                            generationID: session.id,
-                            metrics: storedMetrics(from: finalMetrics)
-                        )
-                        logGenerationTiming(finalMetrics, generationID: session.id)
-                        if let context {
-                            try persistGroundedDocumentPacket(
-                                messageID: assistant.id,
-                                question: prompt,
-                                context: context,
-                                verification: groundingVerification
-                            )
-                            updateMessageAssurance(
-                                id: assistant.id,
-                                state: Self.groundedAssurance(
-                                    depth: context.depth,
-                                    verificationStatus: groundingVerification?.verificationStatus
+                        if let context, !groundingSources.isEmpty {
+                            do {
+                                let publication = try publishGroundedTerminalAnswer(
+                                    question: prompt,
+                                    answerText: answerText,
+                                    terminalContent: streamedContent,
+                                    context: context,
+                                    verification: groundingVerification,
+                                    chatID: chatID,
+                                    assistant: assistant,
+                                    variant: activeVariant,
+                                    session: session,
+                                    metrics: storedMetrics(from: finalMetrics)
                                 )
+                                updateMessage(id: assistant.id, content: streamedContent, status: .completed)
+                                updateMessageAssurance(
+                                    id: assistant.id,
+                                    state: publication.receipt.assuranceState
+                                )
+                                attachCitations(publication.citations, toMessage: assistant.id)
+                                if context.depth == .fast {
+                                    deeperSearchOffer = DeeperSearchOffer(
+                                        kind: .documents,
+                                        chatID: chatID,
+                                        question: prompt
+                                    )
+                                }
+                            } catch {
+                                resolveGroundedPublicationFailure(
+                                    error,
+                                    assistant: assistant,
+                                    variant: activeVariant,
+                                    session: session,
+                                    metrics: storedMetrics(from: finalMetrics)
+                                )
+                            }
+                        } else {
+                            // Ordinary chat and deterministic inventory/no-match grounding own
+                            // no document packet and retain the existing terminal writes.
+                            if context != nil, !streamedContent.isEmpty {
+                                try store.chats.appendToken(to: activeVariant.id, token: streamedContent)
+                            } else if finalMetrics?.contextTrimmed == true {
+                                // Ordinary chat tokens were already persisted as they streamed;
+                                // only the terminal truncation notice remains to append.
+                                try store.chats.appendToken(
+                                    to: activeVariant.id,
+                                    token: Self.contextTrimmedNotice
+                                )
+                            }
+                            try store.chats.completeVariant(activeVariant.id)
+                            try store.generation.completeGeneration(
+                                generationID: session.id,
+                                metrics: storedMetrics(from: finalMetrics)
                             )
+                            updateMessage(id: assistant.id, content: streamedContent, status: .completed)
                         }
-                        let citations = persistSourceCitations(
-                            messageID: assistant.id,
-                            answer: answerText,
-                            sources: groundingSources
-                        )
-                        updateMessage(id: assistant.id, content: streamedContent, status: .completed)
-                        attachCitations(citations, toMessage: assistant.id)
-                        // A fast-tier grounded answer is preliminary: offer the deep pass
-                        // for the same question (spec §3.2). Auto-escalated or deep passes
-                        // carry .deep and offer nothing.
-                        if context?.depth == .fast, !groundingSources.isEmpty {
-                            deeperSearchOffer = DeeperSearchOffer(kind: .documents, chatID: chatID, question: prompt)
-                        }
+                        logGenerationTiming(finalMetrics, generationID: session.id)
+                        break generationEvents
 
                     case .generationCancelled:
                         sawTerminal = true
@@ -3996,54 +4069,35 @@ public final class GlobalChatController: ObservableObject {
         return records.map(MessageCitation.init)
     }
 
-    /// Persists `[S#]` matter-document sources for a finalized message, so a tapped
-    /// marker opens the in-app preview at the cited page. Only labels present in the
-    /// answer are stored. Returns the domain citations. Chat-attachment `[S#]` (which
-    /// carry no document reference) pass an empty `sources` and so persist nothing.
-    @discardableResult
-    private func persistSourceCitations(
-        messageID: String,
-        answer: String,
-        sources: [GroundedSourceRef]
-    ) -> [MessageCitation] {
-        guard !sources.isEmpty else { return [] }
-        let present = Self.citationLabels(in: answer)
-        var records: [MessageCitationRecord] = []
-        for (index, source) in sources.enumerated() {
-            guard present.contains(source.label) else { continue }
-            records.append(
-                MessageCitationRecord(
-                    messageID: messageID,
-                    label: source.label,
-                    kind: MessageCitation.Kind.source.rawValue,
-                    documentID: source.documentID,
-                    locatorJSON: source.locator.encodedJSON(),
-                    displayName: source.documentName,
-                    matchText: source.excerpt,
-                    rank: index
-                )
-            )
-        }
-        guard !records.isEmpty else { return [] }
-        try? store.chats.replaceCitations(messageID: messageID, records)
-        return records.map(MessageCitation.init)
+    private struct GroundedTerminalPublication {
+        var receipt: GroundedChatTerminalPublicationReceipt
+        var citations: [MessageCitation]
     }
 
-    /// Persists the complete grounded packet, including candidates omitted from
-    /// the prompt, under the exact assistant message. Inline citations remain a
-    /// reader convenience; this pending source set is the durable promotion and
-    /// verification record.
-    private func persistGroundedDocumentPacket(
-        messageID: String,
+    /// Forms the entire source-bearing terminal aggregate in memory, then hands it
+    /// to the Store's single all-or-nothing publication boundary. Streaming text
+    /// remains transient and every durable owner remains pending until this succeeds.
+    private func publishGroundedTerminalAnswer(
         question: String,
+        answerText: String,
+        terminalContent: String,
         context: GroundedChatContext,
-        verification: DocumentSupportReport?
-    ) throws {
+        verification: DocumentSupportReport?,
+        chatID: String,
+        assistant: MessageRecord,
+        variant: MessageVariantRecord,
+        session: GenerationSessionRecord,
+        metrics: StoredRuntimeMetrics
+    ) throws -> GroundedTerminalPublication {
         guard let matterID = scopedMatterID,
               !context.sources.isEmpty,
               let packingReport = context.sourceSetPackingReport,
               let scope = context.sourceScope,
-              let configuration = context.retrievalConfiguration else { return }
+              let configuration = context.retrievalConfiguration else {
+            throw GroundedChatTerminalPublicationError.invalidCommand(
+                "grounded context lineage"
+            )
+        }
         let lineage = try DocumentSourceLineageBuilder.make(
             store: store,
             matterID: matterID,
@@ -4051,9 +4105,17 @@ public final class GlobalChatController: ObservableObject {
             configuration: configuration,
             packingReport: packingReport
         )
-        let sourceSet = try store.documentSources.createSourceSet(
+        // GRDB's database date encoding retains millisecond precision. Canonicalize
+        // before hashing so the command and its persisted reconstruction are exact.
+        let publicationDate = Date(
+            timeIntervalSinceReferenceDate: floor(
+                assistant.createdAt.timeIntervalSinceReferenceDate * 1_000
+            ) / 1_000
+        )
+        let sourceSet = DocumentSourceSetRecord(
+            id: "grounded-chat-source-set:\(assistant.id)",
             matterID: matterID,
-            mode: .autoSource,
+            mode: DocumentSourceSetMode.autoSource.rawValue,
             scopeJSON: try Self.canonicalJSON(scope),
             retrievalQuery: question,
             retrievalDepth: context.depth.rawValue,
@@ -4063,11 +4125,12 @@ public final class GlobalChatController: ObservableObject {
             chunkerVersion: lineage.chunkerVersion,
             retrievalConfigJSON: lineage.retrievalConfigJSON,
             corpusSnapshotHash: lineage.corpusSnapshotHash,
-            messageID: messageID
+            messageID: assistant.id,
+            createdAt: publicationDate
         )
-        let verificationJSON = try Self.canonicalJSON(verification?.results ?? [])
-        let rows = context.sources.enumerated().map { index, source in
+        var rows = context.sources.enumerated().map { index, source in
             DocumentOutputSourceRecord(
+                id: "grounded-chat-source:\(assistant.id):\(index)",
                 sourceSetID: sourceSet.id,
                 documentID: source.documentID,
                 chunkID: source.chunkID,
@@ -4076,14 +4139,219 @@ public final class GlobalChatController: ObservableObject {
                 locatorJSON: source.locator.encodedJSON(),
                 excerpt: source.excerpt,
                 rank: index,
-                warningsJSON: verificationJSON
+                createdAt: publicationDate
             )
         }
-        try store.documentSources.addOutputSources(rows)
+
+        // The verifier reasons over retrieval identities (matter/chunk); terminal
+        // evidence is rebound to the exact output-source rows the receipt owns.
+        let rowByLabel = Dictionary(
+            rows.map { ($0.citationLabel, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let normalizedResults = try (verification?.results ?? []).map { result in
+            let evidence = try result.evidence.map { item -> SupportEvidence in
+                guard let row = rowByLabel[item.sourceLabel],
+                      context.sources.contains(where: {
+                          $0.label == item.sourceLabel && $0.sourceID == item.sourceID
+                      }) else {
+                    throw GroundedChatTerminalPublicationError.invalidCommand(
+                        "verification evidence"
+                    )
+                }
+                return SupportEvidence(
+                    sourceID: row.id,
+                    sourceLabel: row.citationLabel,
+                    locator: row.locatorJSON,
+                    retainedExcerpt: item.retainedExcerpt,
+                    verifierName: item.verifierName,
+                    verifierVersion: item.verifierVersion
+                )
+            }
+            return try PropositionSupportResult(
+                propositionID: result.propositionID,
+                status: result.status,
+                reasons: result.reasons,
+                evidence: evidence,
+                timestamp: result.timestamp
+            )
+        }
+        let verificationJSON = try Self.canonicalDateJSON(normalizedResults)
+        for index in rows.indices {
+            rows[index].warningsJSON = verificationJSON
+        }
+
+        let answerLabels = Self.citationLabels(in: answerText)
+        let terminalLabels = Self.citationLabels(in: terminalContent)
+        guard terminalLabels.allSatisfy({ rowByLabel[$0] != nil }) else {
+            throw GroundedChatTerminalPublicationError.invalidCommand(
+                "terminal citation labels"
+            )
+        }
+        let citationRecords = rows.compactMap { row -> MessageCitationRecord? in
+            guard terminalLabels.contains(row.citationLabel),
+                  let source = context.sources.first(where: {
+                      $0.label == row.citationLabel
+                  }) else { return nil }
+            return MessageCitationRecord(
+                id: "grounded-chat-citation:\(assistant.id):\(row.rank)",
+                messageID: assistant.id,
+                label: row.citationLabel,
+                kind: MessageCitation.Kind.source.rawValue,
+                documentID: row.documentID,
+                locatorJSON: row.locatorJSON,
+                displayName: source.documentName,
+                matchText: row.excerpt,
+                rank: row.rank,
+                createdAt: publicationDate
+            )
+        }
+
+        let usedLabels = verification?.usedLabels ?? rows.compactMap {
+            answerLabels.contains($0.citationLabel) ? $0.citationLabel : nil
+        }
+        let unresolvedLabels = verification?.unresolvedLabels ?? usedLabels.filter {
+            rowByLabel[$0] == nil
+        }
+        let mappedDimensions = VerificationDimensionsMapper.dimensions(
+            verificationResults: normalizedResults,
+            usedLabels: usedLabels,
+            unresolvedLabels: unresolvedLabels,
+            warnings: verification?.warnings ?? ["Grounded verification did not complete."]
+        )
+        let exactDimensions = try VerificationDimensions(
+            schemaVersion: mappedDimensions.schemaVersion,
+            results: mappedDimensions.results.map { result in
+                let exactEvidence = try result.evidence.map { item -> VerificationDimensionEvidence in
+                    guard let row = rowByLabel[item.sourceLabel ?? ""],
+                          row.id == item.sourceID else {
+                        throw GroundedChatTerminalPublicationError.invalidCommand(
+                            "verification dimension evidence"
+                        )
+                    }
+                    return VerificationDimensionEvidence(
+                        sourceID: row.id,
+                        sourceLabel: row.citationLabel,
+                        locator: row.locatorJSON,
+                        excerpt: row.excerpt
+                    )
+                }
+                let evidence = Array(Set(exactEvidence)).sorted {
+                    ($0.sourceLabel ?? "", $0.sourceID) < ($1.sourceLabel ?? "", $1.sourceID)
+                }
+                if result.dimension == .criticalValueFidelity,
+                   result.status == .notRun {
+                    return VerificationDimensionResult(
+                        dimension: result.dimension,
+                        status: .failed,
+                        reason: "Critical-value fidelity was not established.",
+                        evidence: evidence
+                    )
+                }
+                return VerificationDimensionResult(
+                    dimension: result.dimension,
+                    status: result.status,
+                    reason: result.reason,
+                    evidence: evidence
+                )
+            }
+        )
+        let assurance = Self.groundedAssurance(
+            depth: context.depth,
+            verificationStatus: verification?.verificationStatus
+        )
+        let authorizationEvidence = try Self.canonicalJSON([
+            "basis": "local_matter_documents",
+            "policy_version": "grounded-chat-terminal-v1",
+            "scope": "matter_chat",
+        ])
+        let auditMetadata = try Self.canonicalJSON([
+            "schema_version": "1",
+            "retrieval_depth": context.depth.rawValue,
+            "source_count": String(rows.count),
+            "citation_count": String(citationRecords.count),
+        ])
+        let audit = AuditEventRecord(
+            id: "grounded-chat-audit:\(assistant.id)",
+            matterID: matterID,
+            timestamp: publicationDate,
+            eventType: "grounded_chat_terminal_published",
+            actor: "local_grounded_chat_controller",
+            summary: "Published a grounded matter-chat terminal aggregate.",
+            relatedTable: "messages",
+            relatedID: assistant.id,
+            metadataJSON: auditMetadata
+        )
+        let command = GroundedChatTerminalPublicationCommand(
+            idempotencyKey: "grounded-chat-terminal-v1:\(assistant.id):\(variant.id):\(session.id)",
+            matterID: matterID,
+            chatID: chatID,
+            messageID: assistant.id,
+            variantID: variant.id,
+            generationSessionID: session.id,
+            terminalContent: terminalContent,
+            runtimeMetrics: metrics,
+            sourceSet: sourceSet,
+            orderedSources: rows,
+            citations: citationRecords,
+            verificationDimensions: exactDimensions,
+            assuranceState: assurance,
+            authorizationEvidenceJSON: authorizationEvidence,
+            auditEvent: audit
+        )
+        let cancellationSignal = groundedPublicationCancellation
+        let receipt = try store.groundedChatPublications.finalize(command) {
+            cancellationSignal.isCancellationRequested
+        }
+        return GroundedTerminalPublication(
+            receipt: receipt,
+            citations: citationRecords.map(MessageCitation.init)
+        )
+    }
+
+    /// Converts terminal publication faults into a content-safe, recoverable owner
+    /// state. The answer and source material remain absent because the Store command
+    /// rolled back before these ordinary status-only writes run.
+    private func resolveGroundedPublicationFailure(
+        _ error: Error,
+        assistant: MessageRecord,
+        variant: MessageVariantRecord,
+        session: GenerationSessionRecord,
+        metrics: StoredRuntimeMetrics
+    ) {
+        let publicationCancelled = (error as? GroundedChatTerminalPublicationError) == .cancelled
+            || cancelRequested
+            || groundedPublicationCancellation.isCancellationRequested
+        if publicationCancelled {
+            try? store.chats.markVariantCancelled(variant.id)
+            try? store.generation.cancelGeneration(
+                generationID: session.id,
+                metrics: metrics
+            )
+            errorMessage = nil
+            updateMessage(id: assistant.id, content: "", status: .cancelled)
+            return
+        }
+
+        let recovery = "Grounded answer could not be finalized. Retry this message."
+        try? store.chats.markVariantFailed(variant.id, reason: recovery)
+        try? store.generation.failGeneration(
+            generationID: session.id,
+            errorSummary: recovery,
+            diagnosticEventID: nil
+        )
+        errorMessage = recovery
+        updateMessage(id: assistant.id, content: "", status: .failed)
     }
 
     private static func canonicalJSON<T: Encodable>(_ value: T) throws -> String {
         let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        return String(decoding: try encoder.encode(value), as: UTF8.self)
+    }
+
+    private static func canonicalDateJSON<T: Encodable>(_ value: T) throws -> String {
+        let encoder = DateCoding.encoder
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         return String(decoding: try encoder.encode(value), as: UTF8.self)
     }
@@ -4174,4 +4442,30 @@ private struct LegalSourcePacket {
     var queryTerms: [String]
     var authorities: [LegalAuthority]
     var researchSessionID: String?
+}
+
+/// Store finalization is synchronous and accepts a `@Sendable` cancellation
+/// check. This tiny signal lets the MainActor controller publish cancellation
+/// without capturing actor-isolated mutable state in that transaction closure.
+private final class GroundedPublicationCancellationSignal: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancellationRequested = false
+
+    var isCancellationRequested: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return cancellationRequested
+    }
+
+    func requestCancellation() {
+        lock.lock()
+        cancellationRequested = true
+        lock.unlock()
+    }
+
+    func reset() {
+        lock.lock()
+        cancellationRequested = false
+        lock.unlock()
+    }
 }
