@@ -157,7 +157,7 @@ final class ArchitectureUXTStoreCap01Tests: XCTestCase {
             method: "POST",
             endpoint: "/wire/731/\(index)",
             approved: true,
-            relatedResearchSessionID: "research-session-713",
+            relatedResearchSessionID: nil,
             blockedReason: nil,
             requestMetadataJSON: #"{"wire":"T_STORE_CAP_01_WIRE_731","version":7}"#
         )
