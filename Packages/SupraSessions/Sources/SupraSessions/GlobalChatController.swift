@@ -64,6 +64,10 @@ public final class GlobalChatController: ObservableObject {
     /// citation lookup) — lets follow-ups the anaphor list misses ("Did Peacock
     /// address laches?") still resolve to the case under discussion.
     private var activeNamedCaseByChatID: [String: String] = [:]
+    /// Content-free disclosure metadata for quick attachments used during this
+    /// controller's lifetime. Nothing here is persisted or reconstructed after
+    /// relaunch; durable matter grounding remains owned by source packets.
+    private var quickAttachmentsByMessageID: [String: [QuickAttachmentPresentation]] = [:]
     private var activeGenerationID: GenerationID?
     /// Set by `cancel()`, checked cooperatively where in-flight work runs under its own
     /// untracked generation ID that `cancelGeneration(activeGenerationID)` can't reach: the
@@ -200,6 +204,15 @@ public final class GlobalChatController: ObservableObject {
         } else {
             select(chatID: chats.first?.id)
         }
+    }
+
+    /// Returns the session-only quick-attachment disclosures associated with a
+    /// visible user or assistant turn. A newly constructed controller returns no
+    /// disclosures for persisted messages because attachment context is not durable.
+    public func quickAttachmentPresentations(
+        messageID: String
+    ) -> [QuickAttachmentPresentation] {
+        quickAttachmentsByMessageID[messageID] ?? []
     }
 
     /// The per-message artifact policy intentionally has no export case. A chat
@@ -507,9 +520,11 @@ public final class GlobalChatController: ObservableObject {
         message: String,
         modelPrompt: String,
         systemPrompt: String?,
-        options: GenerationOptions
+        options: GenerationOptions,
+        quickAttachments: [QuickAttachmentPresentation]
     ) throws {
         let assistant = try store.chats.createAssistantMessageShell(chatID: chatID)
+        recordQuickAttachments(quickAttachments, forMessageID: assistant.id)
         let session = try store.generation.createGenerationSession(
             chatID: chatID,
             messageID: assistant.id,
@@ -592,7 +607,7 @@ public final class GlobalChatController: ObservableObject {
     ) {
         let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         let allowsEmptyPrompt = route?.mode == .legalCritique && latestAssistantDraft() != nil
-        guard (!trimmed.isEmpty || allowsEmptyPrompt), !isGenerating else { return }
+        guard (!trimmed.isEmpty || !attachments.isEmpty || allowsEmptyPrompt), !isGenerating else { return }
         // Claim the generating flag synchronously on the main actor. The actual
         // work runs in a Task (a later hop), so without claiming it now a second
         // synchronous send() could pass the guard before performSend sets it,
@@ -1003,14 +1018,21 @@ public final class GlobalChatController: ObservableObject {
 
         var variantID: String?
         var sessionID: String?
+        let quickAttachments = attachments.map(\.presentation)
 
         // Keep the chat bubble clean (the question + a list of attached files);
         // give the model the attachment contents as grounding.
         let modelPrompt = attachments.isEmpty ? prompt : Self.attachmentsBlock(attachments) + "\n\n" + prompt
         let displayBase = displayPrompt ?? prompt
-        let displayContent = attachments.isEmpty
-            ? displayBase
-            : displayBase + "\n\nAttached: " + attachments.map(\.name).joined(separator: ", ")
+        let attachmentNames = "Attached: " + attachments.map(\.name).joined(separator: ", ")
+        let displayContent: String
+        if attachments.isEmpty {
+            displayContent = displayBase
+        } else if displayBase.isEmpty {
+            displayContent = attachmentNames
+        } else {
+            displayContent = displayBase + "\n\n" + attachmentNames
+        }
 
         do {
             // ECHO FIRST (user report: a submitted prompt sat invisible during a
@@ -1028,7 +1050,11 @@ public final class GlobalChatController: ObservableObject {
             // contract; prior, possibly ungrounded turns must not dilute it).
             let fullHistory = replayHistory(chatID: chatID)
 
-            _ = try store.chats.appendUserMessage(chatID: chatID, content: displayContent)
+            let userMessage = try store.chats.appendUserMessage(
+                chatID: chatID,
+                content: displayContent
+            )
+            recordQuickAttachments(quickAttachments, forMessageID: userMessage.id)
             reloadMessages()
 
             // Resolve the model AFTER the echo. Direct callers (tests) that pass
@@ -1045,7 +1071,8 @@ public final class GlobalChatController: ObservableObject {
                         message: message,
                         modelPrompt: modelPrompt,
                         systemPrompt: systemPrompt,
-                        options: options
+                        options: options,
+                        quickAttachments: quickAttachments
                     )
                     return
                 }
@@ -1085,7 +1112,8 @@ public final class GlobalChatController: ObservableObject {
                     options: options,
                     researchDepth: researchDepth,
                     chatID: chatID,
-                    history: fullHistory
+                    history: fullHistory,
+                    quickAttachments: quickAttachments
                 )
                 return
             }
@@ -1098,6 +1126,7 @@ public final class GlobalChatController: ObservableObject {
             let history = grounded == nil ? fullHistory : []
 
             let assistant = try store.chats.createAssistantMessageShell(chatID: chatID)
+            recordQuickAttachments(quickAttachments, forMessageID: assistant.id)
 
             // A fast-tier grounded answer whose small packet doesn't cover the question
             // is the canonical refusal. Rather than surface it, re-run the SAME question
@@ -1458,13 +1487,15 @@ public final class GlobalChatController: ObservableObject {
         options: GenerationOptions,
         researchDepth: RetrievalDepth = .fast,
         chatID: String,
-        history: [GenerateRequest.Turn]
+        history: [GenerateRequest.Turn],
+        quickAttachments: [QuickAttachmentPresentation]
     ) async throws {
         // The caller (performSend) has already created/selected the chat, captured
         // `history` before the user turn was appended, and ECHOED the user message —
         // the echo must precede this workflow's retrieval, not follow it.
         let priorAssistantDraft = latestAssistantDraft()
         let assistant = try store.chats.createAssistantMessageShell(chatID: chatID)
+        recordQuickAttachments(quickAttachments, forMessageID: assistant.id)
         let generationID = GenerationID()
         activeGenerationID = generationID
 
@@ -3783,13 +3814,27 @@ public final class GlobalChatController: ObservableObject {
     /// that rely on a file to its label, extending the cite-your-source discipline to
     /// the drag-a-file-into-chat workflow.
     nonisolated static func attachmentsBlock(_ attachments: [ChatAttachmentContext]) -> String {
-        var lines = ["The user attached the following file(s) as sources. Use their contents as context, and when a statement relies on an attachment, cite it inline with its label, e.g. [S1]."]
+        var lines = ["The user supplied the following session-only, unverified quick attachment(s). They are not durable matter sources. Use the included content as context, and when a statement relies on an attachment, cite it inline with its label, e.g. [S1]."]
         for (index, attachment) in attachments.enumerated() {
             lines.append("")
-            lines.append("[S\(index + 1)] \(attachment.name)")
+            let presentation = attachment.presentation
+            lines.append(
+                "[S\(index + 1)] \(attachment.name) — \(presentation.contentStatus); "
+                    + "included \(presentation.includedCharacterCount) of "
+                    + "\(presentation.originalCharacterCount) characters; "
+                    + "\(presentation.durabilityStatus); \(presentation.verificationStatus)"
+            )
             lines.append(attachment.text)
         }
         return lines.joined(separator: "\n")
+    }
+
+    private func recordQuickAttachments(
+        _ presentations: [QuickAttachmentPresentation],
+        forMessageID messageID: String
+    ) {
+        guard !presentations.isEmpty else { return }
+        quickAttachmentsByMessageID[messageID] = presentations
     }
 
     /// Returns the selected chat, creating one lazily if none is selected. When a

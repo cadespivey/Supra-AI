@@ -2,20 +2,107 @@ import Foundation
 import SupraDocuments
 import UniformTypeIdentifiers
 
-/// A lightweight, session-only attachment for a chat (global or in-matter): a
-/// filename plus the text the model should see. Built by `ChatAttachmentLoader`
-/// (OCR for images, raw read for text) and injected into the prompt by
-/// `GlobalChatController`. It is never persisted to a matter's document library —
-/// it lives only in the conversation it was attached to.
+public enum ChatAttachmentExtractionMode: String, Sendable, Equatable {
+    case plainText
+    case documentExtraction
+    case opticalCharacterRecognition
+}
+
+public enum QuickAttachmentDurability: String, Sendable, Equatable {
+    case sessionOnly
+}
+
+public enum QuickAttachmentVerificationState: String, Sendable, Equatable {
+    case unverified
+}
+
+/// Content-free presentation data for one quick attachment. It deliberately
+/// excludes the local file URL and extracted text so the composition and answer
+/// surfaces can disclose the attachment's limits without leaking source content.
+public struct QuickAttachmentPresentation: Sendable, Equatable {
+    public let attachmentID: String
+    public let name: String
+    public let title: String
+    public let contentStatus: String
+    public let originalCharacterCount: Int
+    public let includedCharacterCount: Int
+    public let extractionMode: ChatAttachmentExtractionMode
+    public let durabilityStatus: String
+    public let verificationStatus: String
+    public let accessibilityDescription: String
+}
+
+/// A lightweight, session-only attachment for a chat (global or in-matter).
+/// Built by `ChatAttachmentLoader` and injected into the prompt by
+/// `GlobalChatController`. It is never persisted as a matter source, source
+/// packet, or output. An explicit Add-to-Matter handoff must run the normal
+/// durable import and readiness pipeline instead.
 public struct ChatAttachmentContext: Identifiable, Sendable, Equatable {
     public let id: String
     public let name: String
     public let text: String
+    public let sourceURL: URL?
+    public let originalCharacterCount: Int
+    public let includedCharacterCount: Int
+    public let extractionMode: ChatAttachmentExtractionMode
+    public let isTruncated: Bool
+    public let durability: QuickAttachmentDurability
+    public let verificationState: QuickAttachmentVerificationState
 
     public init(id: String = UUID().uuidString, name: String, text: String) {
+        self.init(
+            id: id,
+            name: name,
+            text: text,
+            sourceURL: nil,
+            originalCharacterCount: text.count,
+            extractionMode: .plainText
+        )
+    }
+
+    init(
+        id: String = UUID().uuidString,
+        name: String,
+        text: String,
+        sourceURL: URL?,
+        originalCharacterCount: Int,
+        extractionMode: ChatAttachmentExtractionMode
+    ) {
         self.id = id
         self.name = name
         self.text = text
+        self.sourceURL = sourceURL
+        self.originalCharacterCount = originalCharacterCount
+        self.includedCharacterCount = text.count
+        self.extractionMode = extractionMode
+        self.isTruncated = originalCharacterCount > text.count
+        self.durability = .sessionOnly
+        self.verificationState = .unverified
+    }
+
+    public var presentation: QuickAttachmentPresentation {
+        let contentStatus = isTruncated ? "Partial content" : "Full content"
+        let durabilityStatus = "Session only"
+        let verificationStatus = "Unverified"
+        return QuickAttachmentPresentation(
+            attachmentID: id,
+            name: name,
+            title: "Quick attachment",
+            contentStatus: contentStatus,
+            originalCharacterCount: originalCharacterCount,
+            includedCharacterCount: includedCharacterCount,
+            extractionMode: extractionMode,
+            durabilityStatus: durabilityStatus,
+            verificationStatus: verificationStatus,
+            accessibilityDescription: [
+                "Quick attachment",
+                name,
+                contentStatus,
+                "Included \(includedCharacterCount) of \(originalCharacterCount) characters",
+                durabilityStatus,
+                verificationStatus,
+            ].joined(separator: ", ")
+        )
     }
 }
 
@@ -68,14 +155,24 @@ public struct ChatAttachmentLoader: Sendable {
             let result = try await ocr.recognizeImage(at: url)
             let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !text.isEmpty else { throw LoadFailure.empty(name: name) }
-            return ChatAttachmentContext(name: name, text: Self.capped(text))
+            return Self.context(
+                sourceURL: url,
+                name: name,
+                text: text,
+                extractionMode: .opticalCharacterRecognition
+            )
         }
 
         if isPlainTextLike(family: family, utType: utType) {
             guard let text = readText(url)?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else {
                 throw LoadFailure.unreadable(name: name)
             }
-            return ChatAttachmentContext(name: name, text: Self.capped(text))
+            return Self.context(
+                sourceURL: url,
+                name: name,
+                text: text,
+                extractionMode: .plainText
+            )
         }
 
         // Documents (PDF, Word, spreadsheet, email, RTF) — extract their text so
@@ -96,6 +193,7 @@ public struct ChatAttachmentLoader: Sendable {
             throw LoadFailure.unreadable(name: name)
         }
         var text = result.combinedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        var extractionMode = ChatAttachmentExtractionMode.documentExtraction
 
         // A scanned PDF has no embedded text; OCR its rendered pages instead.
         if text.isEmpty, result.needsOCR, family == .pdf {
@@ -105,10 +203,16 @@ public struct ChatAttachmentLoader: Sendable {
                 .map(\.value.text)
                 .joined(separator: "\n\n")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
+            extractionMode = .opticalCharacterRecognition
         }
 
         guard !text.isEmpty else { throw LoadFailure.empty(name: name) }
-        return ChatAttachmentContext(name: name, text: Self.capped(text))
+        return Self.context(
+            sourceURL: url,
+            name: name,
+            text: text,
+            extractionMode: extractionMode
+        )
     }
 
     private func isPlainTextLike(family: SupportedDocumentTypes.ExtractionFamily?, utType: UTType?) -> Bool {
@@ -133,6 +237,20 @@ public struct ChatAttachmentLoader: Sendable {
     static func capped(_ text: String) -> String {
         guard text.count > maxCharacters else { return text }
         return String(text.prefix(maxCharacters))
-            + "\n\n[Attachment truncated to the first \(maxCharacters) characters for analysis.]"
+    }
+
+    private static func context(
+        sourceURL: URL,
+        name: String,
+        text: String,
+        extractionMode: ChatAttachmentExtractionMode
+    ) -> ChatAttachmentContext {
+        ChatAttachmentContext(
+            name: name,
+            text: capped(text),
+            sourceURL: sourceURL,
+            originalCharacterCount: text.count,
+            extractionMode: extractionMode
+        )
     }
 }
