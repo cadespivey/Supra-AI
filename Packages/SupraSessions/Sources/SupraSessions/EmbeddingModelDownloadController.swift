@@ -20,10 +20,10 @@ public final class EmbeddingModelDownloadController: ObservableObject {
     @Published public private(set) var state: State = .idle
     private var rateTracker = DownloadRateTracker()
 
-    /// Invoked on the main actor right after a download registers (and optionally
-    /// selects) its model in the store. Lets the setup controller refresh its cached
-    /// model list and auto-verify the new model without the user pressing anything.
-    public var onModelRegistered: (() -> Void)?
+    /// Invoked on the main actor right after a download registers its model in
+    /// the store. Activation remains owned by the setup controller and occurs
+    /// only after the exact artifact verifies successfully.
+    public var onModelRegistered: ((_ modelID: String, _ selectAfterDownload: Bool) -> Void)?
 
     private let store: SupraStore
     private let fetcher: ModelRepositoryFetching
@@ -152,20 +152,19 @@ public final class EmbeddingModelDownloadController: ObservableObject {
                 throw ManagedModelIntegrityError.manifestMismatch
             }
 
-            try registerModel(
+            let registeredModelID = try registerModel(
                 repoID: repoID,
                 displayName: displayName,
                 dimension: dimension,
                 runtimeFamily: runtimeFamily,
                 revision: manifest.revision,
-                path: destinationRoot.path,
-                select: selectAfterDownload
+                path: destinationRoot.path
             )
             state = .finished(repoID: repoID, displayName: displayName)
             // The model is now in the store; let the setup controller refresh its
             // list and auto-verify it (so a fresh download appears in "Select for
             // use" and turns green without any manual step).
-            onModelRegistered?()
+            onModelRegistered?(registeredModelID, selectAfterDownload)
         } catch {
             // Keep completed files in place so a re-run resumes rather than restarts.
             if Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled {
@@ -191,9 +190,8 @@ public final class EmbeddingModelDownloadController: ObservableObject {
         dimension: Int,
         runtimeFamily: String,
         revision: String,
-        path: String,
-        select: Bool
-    ) throws {
+        path: String
+    ) throws -> String {
         // Reuse an existing record for this repo if one is already registered.
         let existing = (try? store.documentSettings.fetchEmbeddingModels())?.first { $0.repoID == repoID }
         let record = DocumentEmbeddingModelRecord(
@@ -209,17 +207,6 @@ public final class EmbeddingModelDownloadController: ObservableObject {
             createdAt: existing?.createdAt ?? Date()
         )
         try store.documentSettings.upsertEmbeddingModel(record)
-        if select {
-            try store.documentSettings.selectEmbeddingModel(id: record.id)
-            // Selecting a new embedding model invalidates prior setup completion.
-            try? store.documentSettings.invalidateSetup(reason: "embedding model changed")
-            _ = try? store.auditEvents.recordEvent(
-                eventType: "document_intelligence_setup_changed",
-                actor: "user",
-                summary: "Selected embedding model \(displayName)",
-                relatedTable: "document_embedding_models",
-                relatedID: record.id
-            )
-        }
+        return record.id
     }
 }

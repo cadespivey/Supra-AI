@@ -12,15 +12,18 @@ public final class DocumentIndexingService: @unchecked Sendable {
     private let store: SupraStore
     private let chunker: DocumentChunker?
     private let embedder: (any TextEmbedder)?
+    private let stagedRolloutActiveChunkerVersion: Int?
 
     public init(
         store: SupraStore,
         chunker: DocumentChunker? = nil,
-        embedder: (any TextEmbedder)? = nil
+        embedder: (any TextEmbedder)? = nil,
+        stagedRolloutActiveChunkerVersion: Int? = nil
     ) {
         self.store = store
         self.chunker = chunker
         self.embedder = embedder
+        self.stagedRolloutActiveChunkerVersion = stagedRolloutActiveChunkerVersion
     }
 
     /// Chunks + FTS-indexes a document, then embeds its chunks if an embedder is
@@ -41,19 +44,43 @@ public final class DocumentIndexingService: @unchecked Sendable {
         // and FTS rows so adding model-B vectors neither repeats text work nor
         // cascades away still-valid model-A vectors.
         if let embedder, canReuseTextIndex {
-            if try !store.documentIndex.hasCompleteEmbeddings(
+            let hasCompleteEmbeddings = try store.documentIndex.hasCompleteEmbeddings(
                 documentID: documentID,
                 embeddingModelID: embedder.modelID
-            ) {
-                try await embedChunks(existingChunks, documentID: documentID, embedder: embedder)
+            )
+            let alreadyTerminal = document?.indexStatus == DocumentIndexStatus.ready.rawValue
+                && document?.status != MatterDocumentStatus.indexing.rawValue
+                && document?.status != MatterDocumentStatus.embedding.rawValue
+            if hasCompleteEmbeddings, alreadyTerminal {
+                return existingChunks.count
+            }
+
+            let context = try verifiedEmbeddingContext(for: embedder)
+            let embeddings: [DocumentChunkEmbeddingRecord]
+            if hasCompleteEmbeddings {
+                embeddings = try store.documentIndex.fetchEmbeddings(
+                    documentID: documentID,
+                    embeddingModelID: embedder.modelID
+                )
+            } else {
+                embeddings = try await makeEmbeddings(
+                    existingChunks,
+                    documentID: documentID,
+                    embedder: embedder
+                )
+            }
+            _ = try store.documentIndex.commitSemanticIndex(
+                DocumentSemanticIndexCommitCommand(
+                    documentID: documentID,
+                    expectedChunkIDs: existingChunks.map(\.id),
+                    expectedActiveModel: context.identity,
+                    expectedModelVerifiedAt: context.verifiedAt,
+                    embeddings: embeddings
+                )
+            )
+            if !hasCompleteEmbeddings {
                 try recordSemanticCompletion(documentID: documentID, chunkCount: existingChunks.count)
             }
-            try store.documentLibrary.updateIndexStatus(documentID: documentID, indexStatus: .ready)
-            try store.documentLibrary.promoteStatus(
-                documentID: documentID,
-                to: .ready,
-                whenCurrentIn: [.indexing, .embedding]
-            )
             return existingChunks.count
         }
 
@@ -134,21 +161,51 @@ public final class DocumentIndexingService: @unchecked Sendable {
                 tokenCount: chunk.tokenCount
             )
         }
-        // Replaces chunks + FTS rows and cascades away stale embeddings.
-        try store.documentIndex.replaceChunks(documentID: documentID, chunks: records)
-        try store.documentLibrary.updateIndexStatus(documentID: documentID, indexStatus: .textIndexed)
+        let partBindings = parts.sorted {
+            ($0.partIndex, $0.id) < ($1.partIndex, $1.id)
+        }.map {
+            DocumentReadinessPartBinding(
+                partIndex: $0.partIndex,
+                partID: $0.id,
+                currentRevisionID: $0.currentRevisionID,
+                currentSelectionID: $0.currentSelectionID
+            )
+        }
+        // Replacement chunks, their FTS projection, and the text-index receipt
+        // cross one optimistic Store transaction.
+        _ = try store.documentIndex.commitTextIndex(
+            DocumentTextIndexCommitCommand(
+                documentID: documentID,
+                expectedPartBindings: partBindings,
+                expectedChunkerVersion: selectedChunker.version,
+                expectedActiveChunkerVersion: stagedRolloutActiveChunkerVersion,
+                semanticIndexExpected: embedder != nil && !records.isEmpty,
+                chunks: records
+            )
+        )
 
         if let embedder, !records.isEmpty {
-            try await embedChunks(records, documentID: documentID, embedder: embedder)
-            try store.documentLibrary.updateIndexStatus(documentID: documentID, indexStatus: .ready)
+            let context = try verifiedEmbeddingContext(for: embedder)
+            let embeddings = try await makeEmbeddings(
+                records,
+                documentID: documentID,
+                embedder: embedder
+            )
+            _ = try store.documentIndex.commitSemanticIndex(
+                DocumentSemanticIndexCommitCommand(
+                    documentID: documentID,
+                    expectedChunkIDs: records.map(\.id),
+                    expectedActiveModel: context.identity,
+                    expectedModelVerifiedAt: context.verifiedAt,
+                    embeddings: embeddings
+                )
+            )
             try recordSemanticCompletion(documentID: documentID, chunkCount: records.count)
         }
-        // Without an embedder the document remains text-indexed (searchable);
-        // semantic readiness requires embeddings.
-        // Promote to ready only from an in-progress indexing state so a document
-        // parked in needs_review/failed survives indexing instead of being
-        // clobbered back to ready.
-        try store.documentLibrary.promoteStatus(documentID: documentID, to: .ready, whenCurrentIn: [.indexing, .embedding])
+        // The Store commands own every status transition. Without an embedder,
+        // the text command makes an in-progress document searchable while
+        // leaving semantic readiness explicitly incomplete. A document parked
+        // in needs_review/failed retains that status.
         return records.count
     }
 
@@ -198,26 +255,59 @@ public final class DocumentIndexingService: @unchecked Sendable {
         return indexed
     }
 
-    private func embedChunks(_ records: [DocumentChunkRecord], documentID: String, embedder: any TextEmbedder) async throws {
+    private func makeEmbeddings(
+        _ records: [DocumentChunkRecord],
+        documentID: String,
+        embedder: any TextEmbedder
+    ) async throws -> [DocumentChunkEmbeddingRecord] {
         let vectors = try await embedder.embed(records.map(\.normalizedText))
         guard vectors.count == records.count else {
             throw TextEmbedderError.embedFailed("vector/chunk count mismatch")
         }
-        for (record, vector) in zip(records, vectors) {
+        return zip(records, vectors).map { record, vector in
             let normalized = VectorMath.normalize(vector)
-            try store.documentIndex.upsertEmbedding(
-                DocumentChunkEmbeddingRecord(
-                    chunkID: record.id,
-                    documentID: documentID,
-                    embeddingModelID: embedder.modelID,
-                    modelDisplayName: embedder.modelDisplayName,
-                    modelRevision: embedder.modelRevision,
-                    dimension: normalized.count,
-                    normalized: true,
-                    vector: VectorMath.encode(normalized)
-                )
+            return DocumentChunkEmbeddingRecord(
+                chunkID: record.id,
+                documentID: documentID,
+                embeddingModelID: embedder.modelID,
+                modelDisplayName: embedder.modelDisplayName,
+                modelRevision: embedder.modelRevision,
+                dimension: normalized.count,
+                normalized: true,
+                vector: VectorMath.encode(normalized)
             )
         }
+    }
+
+    private func verifiedEmbeddingContext(
+        for embedder: any TextEmbedder
+    ) throws -> (identity: DocumentReadinessEmbeddingModelIdentity, verifiedAt: Date) {
+        let settings = try store.documentSettings.loadSettings()
+        guard settings.selectedEmbeddingModelID == embedder.modelID else {
+            throw DocumentReadinessTransitionError.modelSelectionInconsistent(embedder.modelID)
+        }
+        guard let model = try store.documentSettings.fetchEmbeddingModel(id: embedder.modelID) else {
+            throw DocumentReadinessTransitionError.modelNotFound(embedder.modelID)
+        }
+        guard model.repoID == embedder.modelRepoID,
+              model.revision == embedder.modelRevision,
+              model.displayName == embedder.modelDisplayName,
+              model.dimension == embedder.dimension else {
+            throw DocumentReadinessTransitionError.modelIdentityChanged(embedder.modelID)
+        }
+        guard model.lastTestLoadResult == "passed",
+              let verifiedAt = model.lastTestLoadAt else {
+            throw DocumentReadinessTransitionError.modelNotVerified(embedder.modelID)
+        }
+        return (
+            DocumentReadinessEmbeddingModelIdentity(
+                id: model.id,
+                repoID: model.repoID,
+                revision: model.revision,
+                dimension: model.dimension
+            ),
+            verifiedAt
+        )
     }
 
     private func recordSemanticCompletion(documentID: String, chunkCount: Int) throws {

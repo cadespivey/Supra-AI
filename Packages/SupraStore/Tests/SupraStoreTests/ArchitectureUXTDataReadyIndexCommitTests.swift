@@ -179,6 +179,73 @@ final class ArchitectureUXTDataReadyIndexCommitTests: XCTestCase {
         )
     }
 
+    func testStagedTextIndexCommitRollsBackAtEveryNPlusOneWriteWithoutActivatingTarget() throws {
+        // Expected RED: the text-index command has no explicit staged-rollout
+        // policy, so it rejects target-v2 rows while the fail-safe active
+        // default remains v1 and never reaches these exact write boundaries.
+        for boundary in TextWriteBoundary.allCases {
+            let fixture = try ReadinessTransitionFixture.makeReady()
+            try fixture.prepareRevision8Stale()
+            try fixture.store.documentSettings.updateSettings {
+                $0.chunkerVersion = 1
+            }
+            let before = try fixture.snapshot()
+            try installStagedTextFailure(boundary, fixture: fixture)
+
+            XCTAssertThrowsError(
+                try fixture.store.documentIndex.commitTextIndex(
+                    try fixture.stagedTextIndexCommand(activeChunkerVersion: 1)
+                )
+            ) { error in
+                XCTAssertTrue(
+                    error.localizedDescription.contains(boundary.rawValue),
+                    "the staged command must reach \(boundary.rawValue) while v1 remains active: \(error)"
+                )
+            }
+            XCTAssertEqual(
+                try fixture.snapshot(),
+                before,
+                "chunks, FTS, status, vectors, and active v1 must roll back together at \(boundary.rawValue)"
+            )
+            XCTAssertEqual(
+                try fixture.store.documentSettings.loadSettings().chunkerVersion,
+                1
+            )
+        }
+    }
+
+    func testStagedTextIndexCommitPublishesTargetProjectionButRemainsFailClosedUntilActivation() throws {
+        // Expected RED: there is no explicit command policy that can bind both
+        // the observed active v1 default and staged target-v2 projection.
+        let fixture = try ReadinessTransitionFixture.makeReady()
+        try fixture.prepareRevision8Stale()
+        try fixture.store.documentSettings.updateSettings {
+            $0.chunkerVersion = 1
+        }
+
+        let commit = try fixture.store.documentIndex.commitTextIndex(
+            try fixture.stagedTextIndexCommand(activeChunkerVersion: 1)
+        )
+        let persistedSettings = try fixture.store.documentSettings.loadSettings()
+        let stagedReceipt = try fixture.store.documentReadiness.fetchReceipt(
+            documentID: ReadinessTransitionFixture.Wire.documentID
+        )
+
+        XCTAssertEqual(persistedSettings.chunkerVersion, 1)
+        XCTAssertEqual(commit.chunkerVersion, 2)
+        XCTAssertEqual(commit.chunkIDs, fixture.newChunks().map(\.id))
+        XCTAssertEqual(commit.readinessReceipt, stagedReceipt)
+        XCTAssertEqual(stagedReceipt.chunkerVersion, 1)
+        XCTAssertTrue(stagedReceipt.exclusions.contains(.staleRevision))
+        XCTAssertFalse(stagedReceipt.isBaseReady)
+        XCTAssertEqual(
+            try fixture.store.documentIndex.fetchChunks(
+                documentID: ReadinessTransitionFixture.Wire.documentID
+            ).map(\.chunkerVersion),
+            [2, 2]
+        )
+    }
+
     func testSemanticIndexCommitRollsBackAtEveryNPlusOneWrite() throws {
         for boundary in SemanticWriteBoundary.allCases {
             let fixture = try ReadinessTransitionFixture.makeReady()
@@ -352,6 +419,42 @@ final class ArchitectureUXTDataReadyIndexCommitTests: XCTestCase {
         }
     }
 
+    private func installStagedTextFailure(
+        _ boundary: TextWriteBoundary,
+        fixture: ReadinessTransitionFixture
+    ) throws {
+        let activeV1 = "AND (SELECT chunker_version FROM document_intelligence_settings WHERE id = 'default') = 1"
+        switch boundary {
+        case .firstChunk:
+            try installFailureTrigger(
+                name: "staged-\(boundary.rawValue)",
+                timing: "INSERT",
+                table: "document_chunks",
+                condition: "NEW.id = '\(ReadinessTransitionFixture.Wire.newFirstChunkID)' \(activeV1)",
+                fixture: fixture,
+                message: boundary.rawValue
+            )
+        case .secondChunk:
+            try installFailureTrigger(
+                name: "staged-\(boundary.rawValue)",
+                timing: "INSERT",
+                table: "document_chunks",
+                condition: "NEW.id = '\(ReadinessTransitionFixture.Wire.newSecondChunkID)' \(activeV1)",
+                fixture: fixture,
+                message: boundary.rawValue
+            )
+        case .textIndexStatus:
+            try installFailureTrigger(
+                name: "staged-\(boundary.rawValue)",
+                timing: "UPDATE",
+                table: "matter_documents",
+                condition: "OLD.id = '\(ReadinessTransitionFixture.Wire.documentID)' AND NEW.index_status = 'text_indexed' \(activeV1)",
+                fixture: fixture,
+                message: boundary.rawValue
+            )
+        }
+    }
+
     private func installSemanticFailure(
         _ boundary: SemanticWriteBoundary,
         fixture: ReadinessTransitionFixture
@@ -389,7 +492,8 @@ final class ArchitectureUXTDataReadyIndexCommitTests: XCTestCase {
         timing: String,
         table: String,
         condition: String,
-        fixture: ReadinessTransitionFixture
+        fixture: ReadinessTransitionFixture,
+        message: String = "synthetic T-DATA-READY index failure"
     ) throws {
         let safeName = "t_data_ready_index_" + name.replacingOccurrences(of: "-", with: "_")
         try fixture.store.database.writer.write { database in
@@ -399,7 +503,7 @@ final class ArchitectureUXTDataReadyIndexCommitTests: XCTestCase {
                     BEFORE \(timing) ON \(table)
                     WHEN \(condition)
                     BEGIN
-                        SELECT RAISE(ABORT, 'synthetic T-DATA-READY index failure');
+                        SELECT RAISE(ABORT, '\(message)');
                     END
                     """
             )
@@ -413,6 +517,18 @@ extension ReadinessTransitionFixture {
             documentID: Wire.documentID,
             expectedPartBindings: try currentPartBindings(),
             expectedChunkerVersion: 2,
+            chunks: newChunks()
+        )
+    }
+
+    func stagedTextIndexCommand(
+        activeChunkerVersion: Int
+    ) throws -> DocumentTextIndexCommitCommand {
+        DocumentTextIndexCommitCommand(
+            documentID: Wire.documentID,
+            expectedPartBindings: try currentPartBindings(),
+            expectedChunkerVersion: 2,
+            expectedActiveChunkerVersion: activeChunkerVersion,
             chunks: newChunks()
         )
     }

@@ -40,10 +40,12 @@ public enum DocumentChunkerRolloutError: Error, Equatable, LocalizedError {
 }
 
 /// Coordinates the D-06 default change across every active matter. Each matter
-/// is rebuilt with an explicit chunker, and the persisted default changes only
-/// after every eligible document reaches a terminal text-indexed/ready state.
-/// A failed or interrupted run therefore remains safely resumable: completed
-/// matters no-op on retry and the prior default remains in force.
+/// first stages a transactional target chunk/FTS projection while the prior
+/// default remains active and canonical readiness stays fail-closed. The one
+/// persisted-default write is the activation boundary after every eligible
+/// document reaches a terminal text-indexed/ready state. A failed or interrupted
+/// staging run is safely resumable: completed matters no-op on retry and the
+/// prior default remains in force.
 public actor DocumentChunkerRolloutService {
     public static let approvedDefaultVersion = 2
     static let approvedMigrationCompletionKey = "documents.chunkerVersion.v2MigrationCompletedAt"
@@ -87,6 +89,23 @@ public actor DocumentChunkerRolloutService {
 
         try store.documentSettings.updateSettings { settings in
             settings.chunkerVersion = targetVersion
+        }
+
+        // Embeddings cannot be canonical while the staged chunks intentionally
+        // differ from the active default. Publish any missing semantic batches
+        // only after the one activation write above. A failure here leaves the
+        // new text projection active and semantic readiness honestly incomplete;
+        // an exact retry will resume only the missing vectors.
+        if let embedder {
+            let activeChunker = DocumentChunker(version: targetVersion)
+            for matter in matters {
+                try Task.checkCancellation()
+                _ = try await DocumentIndexingService(
+                    store: store,
+                    chunker: activeChunker,
+                    embedder: embedder
+                ).indexMatter(matterID: matter.id)
+            }
         }
 
         let result = DocumentChunkerRolloutResult(

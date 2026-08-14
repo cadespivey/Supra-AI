@@ -1001,17 +1001,60 @@ public final class DocumentImportService: @unchecked Sendable {
         author: String = "Local user",
         reason: String = "User correction"
     ) throws {
-        let matterID = try store.documentLibrary.fetchDocument(id: documentID)?.matterID
-        let priorRevisionID = try store.documentIndex.fetchParts(documentID: documentID)
-            .first(where: { $0.id == partID })?.currentRevisionID
-        let revision = try store.documentRevisions.appendUserEdit(
+        let document = try store.documentLibrary.fetchDocument(id: documentID)
+        let parts = try store.documentIndex.fetchParts(documentID: documentID)
+        guard let part = parts.first(where: { $0.id == partID }),
+              let priorRevisionID = part.currentRevisionID,
+              let priorSelectionID = part.currentSelectionID else {
+            throw DocumentReadinessTransitionError.invalidRevisionSelection(
+                "the saved correction has no exact current revision and selection"
+            )
+        }
+        let normalizedText = TextNormalization.normalize(text)
+        let normalizedAuthor = author.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedReason = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+        let revision = DocumentPartRevisionRecord(
             documentID: documentID,
-            partID: partID,
-            text: TextNormalization.normalize(text),
-            author: author.trimmingCharacters(in: .whitespacesAndNewlines),
-            reason: reason.trimmingCharacters(in: .whitespacesAndNewlines)
+            partIndex: part.partIndex,
+            derivationKey: "user-edit:\(UUID().uuidString)",
+            origin: "user_edit",
+            method: "manual",
+            text: normalizedText,
+            charCount: normalizedText.count,
+            author: normalizedAuthor,
+            reason: normalizedReason,
+            supersedesRevisionID: priorRevisionID
         )
-        if let matterID, let priorRevisionID {
+        let decisionData = try JSONSerialization.data(
+            withJSONObject: [
+                "author": normalizedAuthor,
+                "reason": normalizedReason,
+                "rule": "user_edit",
+                "selectedRevisionID": revision.id,
+            ],
+            options: [.sortedKeys]
+        )
+        let selection = DocumentPartSelectionRecord(
+            documentID: documentID,
+            partIndex: part.partIndex,
+            selectedRevisionID: revision.id,
+            selectionKey: "user-edit:\(UUID().uuidString)",
+            selectedBy: "user",
+            policyVersion: nil,
+            decisionJSON: String(decoding: decisionData, as: UTF8.self),
+            supersedesSelectionID: priorSelectionID
+        )
+        _ = try store.documentRevisions.commitSelectionAndInvalidateIndex(
+            DocumentRevisionSelectionTransitionCommand(
+                documentID: documentID,
+                partID: partID,
+                expectedCurrentRevisionID: priorRevisionID,
+                expectedCurrentSelectionID: priorSelectionID,
+                revision: revision,
+                selection: selection
+            )
+        )
+        if let matterID = document?.matterID {
             _ = try OutputStalenessService(store: store).sourceRevisionChanged(
                 matterID: matterID,
                 documentID: documentID,
@@ -1025,8 +1068,7 @@ public final class DocumentImportService: @unchecked Sendable {
             documentID: documentID,
             selectedParts: selectedParts
         )
-        try store.documentLibrary.markTextEdited(documentID: documentID)
-        if let matterID { reindexEnqueuer?(matterID) }
+        if let matterID = document?.matterID { reindexEnqueuer?(matterID) }
     }
 
     // MARK: - Reprocess (re-extract from the managed blob)

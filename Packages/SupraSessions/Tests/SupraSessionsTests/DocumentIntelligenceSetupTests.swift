@@ -38,22 +38,27 @@ final class DocumentIntelligenceSetupTests: XCTestCase {
             text: "B_VECTOR_CANARY belongs only to the second orthogonal branch."
         )
         let modelA = DocumentEmbeddingModelRecord(
-            repoID: "synthetic/model-a",
+            id: "synthetic-model-a",
+            repoID: "synthetic-model-a",
             localPath: "/tmp/tops04-a",
-            displayName: "Synthetic Model A",
+            displayName: "synthetic-model-a",
             dimension: 2,
             runtimeFamily: "synthetic"
         )
         let modelB = DocumentEmbeddingModelRecord(
-            repoID: "synthetic/model-b",
+            id: "synthetic-model-b",
+            repoID: "synthetic-model-b",
             localPath: "/tmp/tops04-b",
-            displayName: "Synthetic Model B",
+            displayName: "synthetic-model-b",
             dimension: 2,
             runtimeFamily: "synthetic"
         )
         try store.documentSettings.upsertEmbeddingModel(modelA)
         try store.documentSettings.upsertEmbeddingModel(modelB)
-        try store.documentSettings.selectEmbeddingModel(id: modelA.id)
+        _ = try store.documentSettings.loadSettings()
+        try verifyEmbeddingModel(modelA, at: Date(timeIntervalSinceReferenceDate: 41), store: store)
+        try verifyEmbeddingModel(modelB, at: Date(timeIntervalSinceReferenceDate: 42), store: store)
+        try activateEmbeddingModel(modelA, store: store)
         _ = try await DocumentIndexingService(
             store: store,
             embedder: OrthogonalTestEmbedder(modelID: modelA.id, counter: EmbedCallCounter())
@@ -387,16 +392,74 @@ final class DocumentIntelligenceSetupTests: XCTestCase {
             status: MatterDocumentStatus.indexing.rawValue,
             extractionStatus: DocumentExtractionStatus.extracted.rawValue
         ))
-        try store.documentIndex.replaceParts(documentID: document.id, parts: [
-            DocumentPagePartRecord(
-                documentID: document.id,
-                partIndex: 0,
-                sourceKind: DocumentSourceKind.text.rawValue,
-                normalizedText: text,
-                charCount: text.count
-            ),
-        ])
+        let part = DocumentPagePartRecord(
+            id: "\(document.id)-part-0",
+            documentID: document.id,
+            partIndex: 0,
+            sourceKind: DocumentSourceKind.text.rawValue,
+            normalizedText: text,
+            charCount: text.count
+        )
+        let revision = DocumentPartRevisionRecord(
+            id: "\(document.id)-revision-0",
+            documentID: document.id,
+            partIndex: 0,
+            derivationKey: "tops04:\(document.id)",
+            origin: "synthetic_test",
+            method: "plain-text",
+            text: text,
+            charCount: text.count
+        )
+        let selection = DocumentPartSelectionRecord(
+            id: "\(document.id)-selection-0",
+            documentID: document.id,
+            partIndex: 0,
+            selectedRevisionID: revision.id,
+            selectionKey: "tops04:\(document.id)",
+            selectedBy: "test",
+            decisionJSON: #"{"rule":"fixture"}"#
+        )
+        _ = try store.documentRevisions.replacePartsAndPersistLineage(
+            documentID: document.id,
+            parts: [part],
+            revisions: [revision],
+            selections: [selection]
+        )
         return document
+    }
+
+    private func verifyEmbeddingModel(
+        _ model: DocumentEmbeddingModelRecord,
+        at date: Date,
+        store: SupraStore
+    ) throws {
+        try store.documentSettings.recordTestLoad(
+            modelID: model.id,
+            at: date,
+            result: "passed"
+        )
+    }
+
+    private func activateEmbeddingModel(
+        _ model: DocumentEmbeddingModelRecord,
+        store: SupraStore
+    ) throws {
+        let persisted = try XCTUnwrap(
+            store.documentSettings.fetchEmbeddingModel(id: model.id)
+        )
+        let verifiedAt = try XCTUnwrap(persisted.lastTestLoadAt)
+        _ = try store.documentSettings.activateVerifiedEmbeddingModel(
+            DocumentVerifiedEmbeddingModelSelectionCommand(
+                expectedModel: DocumentReadinessEmbeddingModelIdentity(
+                    id: persisted.id,
+                    repoID: persisted.repoID,
+                    revision: persisted.revision,
+                    dimension: persisted.dimension
+                ),
+                verifiedAt: verifiedAt,
+                setupInvalidationReason: "synthetic fixture activation"
+            )
+        )
     }
 }
 

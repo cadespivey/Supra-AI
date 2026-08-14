@@ -89,17 +89,31 @@ public struct DocumentTextIndexCommitCommand: Sendable {
     public let documentID: String
     public let expectedPartBindings: [DocumentReadinessPartBinding]
     public let expectedChunkerVersion: Int
+    /// The persisted default observed by the producer. Normally this equals
+    /// `expectedChunkerVersion`. A coordinated rollout may keep the prior
+    /// default active while staging a complete target projection, then flip the
+    /// default once every matter has staged successfully.
+    public let expectedActiveChunkerVersion: Int
+    /// Whether a complete semantic batch is expected to follow this text
+    /// commit. The Store uses this intent to publish an honest in-progress
+    /// document status in the same transaction as the chunks and FTS rows.
+    public let semanticIndexExpected: Bool
     public let chunks: [DocumentChunkRecord]
 
     public init(
         documentID: String,
         expectedPartBindings: [DocumentReadinessPartBinding],
         expectedChunkerVersion: Int,
+        expectedActiveChunkerVersion: Int? = nil,
+        semanticIndexExpected: Bool = false,
         chunks: [DocumentChunkRecord]
     ) {
         self.documentID = documentID
         self.expectedPartBindings = expectedPartBindings
         self.expectedChunkerVersion = expectedChunkerVersion
+        self.expectedActiveChunkerVersion = expectedActiveChunkerVersion
+            ?? expectedChunkerVersion
+        self.semanticIndexExpected = semanticIndexExpected
         self.chunks = chunks
     }
 }

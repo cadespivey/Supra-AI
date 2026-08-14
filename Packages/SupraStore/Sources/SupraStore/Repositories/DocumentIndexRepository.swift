@@ -123,9 +123,9 @@ public final class DocumentIndexRepository: @unchecked Sendable {
             ) else {
                 throw DocumentReadinessTransitionError.settingsNotFound
             }
-            guard settings.chunkerVersion == command.expectedChunkerVersion else {
+            guard settings.chunkerVersion == command.expectedActiveChunkerVersion else {
                 throw DocumentReadinessTransitionError.chunkerVersionChanged(
-                    expected: command.expectedChunkerVersion,
+                    expected: command.expectedActiveChunkerVersion,
                     actual: settings.chunkerVersion
                 )
             }
@@ -136,6 +136,7 @@ public final class DocumentIndexRepository: @unchecked Sendable {
             try Self.validateTextIndexBatch(
                 chunks,
                 documentID: command.documentID,
+                parts: parts,
                 expectedBindings: currentBindings,
                 chunkerVersion: command.expectedChunkerVersion
             )
@@ -161,11 +162,21 @@ public final class DocumentIndexRepository: @unchecked Sendable {
             try database.execute(
                 sql: """
                     UPDATE matter_documents
-                    SET index_status = ?, updated_at = ?
+                    SET index_status = ?,
+                        status = CASE
+                            WHEN status IN (?, ?) THEN ?
+                            ELSE status
+                        END,
+                        updated_at = ?
                     WHERE id = ?
                     """,
                 arguments: [
                     DocumentIndexStatus.textIndexed.rawValue,
+                    MatterDocumentStatus.indexing.rawValue,
+                    MatterDocumentStatus.embedding.rawValue,
+                    command.semanticIndexExpected
+                        ? MatterDocumentStatus.embedding.rawValue
+                        : MatterDocumentStatus.ready.rawValue,
                     Date(),
                     command.documentID,
                 ]
@@ -181,11 +192,17 @@ public final class DocumentIndexRepository: @unchecked Sendable {
                 for: document,
                 in: database
             )
+            let isStagedRollout = command.expectedActiveChunkerVersion
+                != command.expectedChunkerVersion
+            let isExactWhitespaceEmpty = chunks.isEmpty
             guard readiness.partBindings == currentBindings,
-                  readiness.chunkerVersion == command.expectedChunkerVersion,
+                  readiness.chunkerVersion == command.expectedActiveChunkerVersion,
                   readiness.chunkIDs == chunks.map(\.id),
-                  !readiness.exclusions.contains(.staleRevision),
-                  !readiness.exclusions.contains(.textIndexIncomplete),
+                  (isStagedRollout
+                    || !readiness.exclusions.contains(.staleRevision)),
+                  (isStagedRollout
+                    || isExactWhitespaceEmpty
+                    || !readiness.exclusions.contains(.textIndexIncomplete)),
                   readiness.textIndexedChunkCount == chunks.count else {
                 throw DocumentReadinessTransitionError.textIndexPostconditionFailed(
                     command.documentID
@@ -194,7 +211,7 @@ public final class DocumentIndexRepository: @unchecked Sendable {
             return DocumentTextIndexCommitReceipt(
                 documentID: command.documentID,
                 partBindings: readiness.partBindings,
-                chunkerVersion: readiness.chunkerVersion,
+                chunkerVersion: command.expectedChunkerVersion,
                 chunkIDs: readiness.chunkIDs,
                 readinessReceipt: readiness
             )
@@ -515,14 +532,14 @@ public final class DocumentIndexRepository: @unchecked Sendable {
     private static func validateTextIndexBatch(
         _ chunks: [DocumentChunkRecord],
         documentID: String,
+        parts: [DocumentPagePartRecord],
         expectedBindings: [DocumentReadinessPartBinding],
         chunkerVersion: Int
     ) throws {
         guard chunkerVersion > 0,
-              !expectedBindings.isEmpty,
-              !chunks.isEmpty else {
+              !expectedBindings.isEmpty else {
             throw DocumentReadinessTransitionError.invalidChunkBatch(
-                "the part graph, chunker, and chunk set must be nonempty"
+                "the part graph and chunker must be nonempty"
             )
         }
         let partIDs = expectedBindings.map(\.partID)
@@ -535,6 +552,19 @@ public final class DocumentIndexRepository: @unchecked Sendable {
             throw DocumentReadinessTransitionError.invalidChunkBatch(
                 "the selected part lineage is incomplete or duplicated"
             )
+        }
+        if chunks.isEmpty {
+            guard parts.count == expectedBindings.count,
+                  parts.allSatisfy({
+                      $0.normalizedText.trimmingCharacters(
+                          in: .whitespacesAndNewlines
+                      ).isEmpty
+                  }) else {
+                throw DocumentReadinessTransitionError.invalidChunkBatch(
+                    "only an exact whitespace-only selected part graph may publish an empty text index"
+                )
+            }
+            return
         }
         let revisionByPartID = Dictionary(
             uniqueKeysWithValues: zip(partIDs, selectedRevisionIDs)

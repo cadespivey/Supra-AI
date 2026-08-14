@@ -582,8 +582,12 @@ final class AppEnvironment: ObservableObject {
         // A finished embedding download refreshes the setup controller's model list
         // and auto-verifies the new model, so it appears in "Select for use" and
         // turns green without a manual Re-check or Test Load.
-        self.embeddingDownloadController.onModelRegistered = { [weak documentSetup] in
-            documentSetup?.handleEmbeddingModelDownloaded()
+        self.embeddingDownloadController.onModelRegistered = {
+            [weak documentSetup] modelID, selectAfterDownload in
+            documentSetup?.handleEmbeddingModelDownloaded(
+                modelID: modelID,
+                selectAfterDownload: selectAfterDownload
+            )
         }
         let importService = DocumentImportService(store: store)
         self.quickAttachmentMatterHandoff = QuickAttachmentMatterHandoff(
