@@ -50,7 +50,7 @@ public enum QuickAttachmentMatterHandoffOutcome: Sendable, Equatable {
 public struct QuickAttachmentMatterHandoff: Sendable {
     private let store: SupraStore
     private let importService: DocumentImportService
-    private let indexingService: DocumentIndexingService
+    private let makeIndexingService: @Sendable () -> DocumentIndexingService
 
     public init(
         store: SupraStore,
@@ -59,7 +59,17 @@ public struct QuickAttachmentMatterHandoff: Sendable {
     ) {
         self.store = store
         self.importService = importService
-        self.indexingService = indexingService
+        self.makeIndexingService = { indexingService }
+    }
+
+    public init(
+        store: SupraStore,
+        importService: DocumentImportService,
+        makeIndexingService: @escaping @Sendable () -> DocumentIndexingService
+    ) {
+        self.store = store
+        self.importService = importService
+        self.makeIndexingService = makeIndexingService
     }
 
     public func addToMatter(
@@ -104,6 +114,7 @@ public struct QuickAttachmentMatterHandoff: Sendable {
         }
 
         do {
+            let indexingService = makeIndexingService()
             _ = try await indexingService.indexDocument(documentID: documentID)
         } catch {
             return .failed(

@@ -60,7 +60,7 @@ public struct ChatAttachmentContext: Identifiable, Sendable, Equatable {
         )
     }
 
-    init(
+    public init(
         id: String = UUID().uuidString,
         name: String,
         text: String,

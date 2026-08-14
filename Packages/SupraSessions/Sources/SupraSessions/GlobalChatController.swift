@@ -68,6 +68,12 @@ public final class GlobalChatController: ObservableObject {
     /// controller's lifetime. Nothing here is persisted or reconstructed after
     /// relaunch; durable matter grounding remains owned by source packets.
     private var quickAttachmentsByMessageID: [String: [QuickAttachmentPresentation]] = [:]
+    /// The corresponding source-bearing contexts remain process-local and are
+    /// addressable only through a visible message's disclosure. This permits an
+    /// explicit Add-to-Matter action without making quick attachments durable or
+    /// letting an attachment ID become a hidden source capability.
+    private var quickAttachmentSessionContextsByID: [String: ChatAttachmentContext] = [:]
+    private var quickAttachmentContextsByMessageID: [String: [String: ChatAttachmentContext]] = [:]
     private var activeGenerationID: GenerationID?
     /// A lock-backed cancellation signal that the synchronous Store transaction
     /// may inspect without crossing the controller's MainActor isolation.
@@ -216,6 +222,21 @@ public final class GlobalChatController: ObservableObject {
         messageID: String
     ) -> [QuickAttachmentPresentation] {
         quickAttachmentsByMessageID[messageID] ?? []
+    }
+
+    /// Returns source-bearing context only when that exact attachment is disclosed
+    /// on the requested visible message. Reconstructed controllers intentionally
+    /// return nil because quick attachments are session-only.
+    public func quickAttachmentContext(
+        messageID: String,
+        attachmentID: String
+    ) -> ChatAttachmentContext? {
+        guard quickAttachmentsByMessageID[messageID]?.contains(where: {
+            $0.attachmentID == attachmentID
+        }) == true else {
+            return nil
+        }
+        return quickAttachmentContextsByMessageID[messageID]?[attachmentID]
     }
 
     /// The per-message artifact policy intentionally has no export case. A chat
@@ -1029,6 +1050,9 @@ public final class GlobalChatController: ObservableObject {
         var variantID: String?
         var sessionID: String?
         let quickAttachments = attachments.map(\.presentation)
+        for attachment in attachments {
+            quickAttachmentSessionContextsByID[attachment.id] = attachment
+        }
 
         // Keep the chat bubble clean (the question + a list of attached files);
         // give the model the attachment contents as grounding.
@@ -3908,7 +3932,51 @@ public final class GlobalChatController: ObservableObject {
     ) {
         guard !presentations.isEmpty else { return }
         quickAttachmentsByMessageID[messageID] = presentations
+        let contexts = presentations.reduce(into: [String: ChatAttachmentContext]()) {
+            if let context = quickAttachmentSessionContextsByID[$1.attachmentID] {
+                $0[$1.attachmentID] = context
+            }
+        }
+        if !contexts.isEmpty {
+            quickAttachmentContextsByMessageID[messageID] = contexts
+        }
     }
+
+#if DEBUG
+    /// Installs a hermetic, session-only disclosure fixture without invoking a
+    /// model. Shipping callers cannot use this seam, and the Store receives only
+    /// ordinary chat/message rows—not attachment bodies or durable source packets.
+    public func installQuickAttachmentUITestFixture(
+        chatTitle: String,
+        attachment: ChatAttachmentContext,
+        answer: String
+    ) throws {
+        quickAttachmentSessionContextsByID[attachment.id] = attachment
+
+        if let existing = chats.first(where: { $0.title == chatTitle }) {
+            select(chatID: existing.id)
+            if let assistant = messages.last(where: { $0.role == .assistant }) {
+                recordQuickAttachments([attachment.presentation], forMessageID: assistant.id)
+            }
+            return
+        }
+
+        let chat = try createChat(title: chatTitle)
+        _ = try store.chats.appendUserMessage(
+            chatID: chat.id,
+            content: "Summarize the attached quick file."
+        )
+        let assistant = try store.chats.createAssistantMessageShell(chatID: chat.id)
+        let variant = try store.chats.createVariant(
+            messageID: assistant.id,
+            generationSessionID: nil
+        )
+        try store.chats.appendToken(to: variant.id, token: answer)
+        try store.chats.completeVariant(variant.id)
+        recordQuickAttachments([attachment.presentation], forMessageID: assistant.id)
+        reloadMessages()
+    }
+#endif
 
     /// Returns the selected chat, creating one lazily if none is selected. When a
     /// chat is created here, `titleHint` (the first user message) becomes its title

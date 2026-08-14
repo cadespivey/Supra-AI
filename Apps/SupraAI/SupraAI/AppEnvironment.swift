@@ -301,6 +301,8 @@ final class AppEnvironment: ObservableObject {
     let documentSetupController: DocumentIntelligenceSetupController
     let embeddingDownloadController: EmbeddingModelDownloadController
     let documentQueue: DocumentProcessingQueue
+    private(set) var quickAttachmentMatterHandoff: QuickAttachmentMatterHandoff?
+    private(set) var quickAttachmentUITestComposerAttachments: [ChatAttachmentContext] = []
     private let draftArtifactStorage: DocumentStorage
     private let draftArtifactReconciler: DraftArtifactReconciliationService
     private let interruptedDraftRecoveryUITestRoot: URL?
@@ -506,6 +508,17 @@ final class AppEnvironment: ObservableObject {
             documentSetup?.handleEmbeddingModelDownloaded()
         }
         let importService = DocumentImportService(store: store)
+        self.quickAttachmentMatterHandoff = QuickAttachmentMatterHandoff(
+            store: store,
+            importService: importService,
+            makeIndexingService: {
+                let model = try? store.documentSettings.fetchSelectedEmbeddingModel()
+                let embedder = model.flatMap {
+                    RuntimeTextEmbedder(model: $0, runtimeClient: runtimeClient)
+                }
+                return DocumentIndexingService(store: store, embedder: embedder)
+            }
+        )
         let queue = DocumentProcessingQueue(
             store: store,
             importService: importService,
@@ -1195,6 +1208,7 @@ final class AppEnvironment: ObservableObject {
         seedUITestWindowLedgerMatterIfNeeded()
         seedUITestCanonicalMatterIdentityIfNeeded()
         seedUITestDefaultCanonicalMatterIfNeeded()
+        seedUITestQuickAttachmentTruthIfNeeded()
 #endif
         mattersController.loadMatters()
         if mattersController.matters.isEmpty {
@@ -1414,6 +1428,95 @@ final class AppEnvironment: ObservableObject {
             )
         } catch {
             assertionFailure("Could not seed default canonical UI-test matter: \(error)")
+        }
+    }
+
+    /// Hermetic native proof for the session-only quick-attachment disclosure and
+    /// explicit durable handoff. The two files and the matter live only in the
+    /// isolated UI-test store/root selected by `makeStore()`.
+    private func seedUITestQuickAttachmentTruthIfNeeded() {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard arguments.contains("-uiTestQuickAttachmentTruth") else { return }
+
+        let truncatedID = "quick-attachment-native-941"
+        let fullID = "quick-attachment-native-947"
+        let matterID = "matter-quick-attachment-native-953"
+        let matterName = "Aster Harbor Attachment Matter 953"
+
+        do {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+                "SupraAI-UITest-QuickAttachment",
+                isDirectory: true
+            )
+            try FileManager.default.createDirectory(
+                at: root,
+                withIntermediateDirectories: true
+            )
+            let partialURL = root.appendingPathComponent("partial-941.txt")
+            let fullURL = root.appendingPathComponent("full-947.txt")
+            let partialSource = String(repeating: "P", count: 40_001)
+            let fullSource = String(repeating: "F", count: 731)
+            try partialSource.write(to: partialURL, atomically: true, encoding: .utf8)
+            try fullSource.write(to: fullURL, atomically: true, encoding: .utf8)
+
+            let truncated = ChatAttachmentContext(
+                id: truncatedID,
+                name: "Partial Contract 941.txt",
+                text: String(partialSource.prefix(40_000)),
+                sourceURL: partialURL,
+                originalCharacterCount: partialSource.count,
+                extractionMode: .plainText
+            )
+            let full = ChatAttachmentContext(
+                id: fullID,
+                name: "Full Contract 947.txt",
+                text: fullSource,
+                sourceURL: fullURL,
+                originalCharacterCount: fullSource.count,
+                extractionMode: .plainText
+            )
+            quickAttachmentUITestComposerAttachments = [truncated]
+
+            if try store.matters.fetchMatter(id: matterID) == nil {
+                let catalog = JurisdictionCatalog()
+                _ = try store.matterIdentity.createMatter(
+                    command: MatterIdentityCreateCommand(
+                        matterID: matterID,
+                        name: matterName,
+                        legacyJurisdictionText: "Not applicable",
+                        legacyCourtText: nil,
+                        legacyPartyPerspective: .neutral,
+                        legacyClientNames: nil,
+                        courtResolutionState: .notApplicable,
+                        canonicalCatalogVersion: catalog.catalogVersion,
+                        canonicalCatalogDigestSHA256: catalog.identityDigestSHA256,
+                        canonicalJurisdictionID: nil,
+                        canonicalCourtID: nil,
+                        parties: [],
+                        representations: [],
+                        workspaceDetails: MatterIdentityWorkspaceDetails(
+                            name: matterName,
+                            judge: nil,
+                            docketNumber: nil,
+                            practiceArea: nil,
+                            matterDescription: "Synthetic quick-attachment handoff fixture.",
+                            internalMatterID: nil,
+                            clientID: nil,
+                            clientMatterID: nil,
+                            notes: nil,
+                            starterFolderNames: []
+                        )
+                    )
+                )
+            }
+
+            try chatController.installQuickAttachmentUITestFixture(
+                chatTitle: "Quick Attachment Truth 947",
+                attachment: full,
+                answer: "This answer used the quick attachment for a session-only summary."
+            )
+        } catch {
+            assertionFailure("Could not seed quick-attachment truth fixture: \(error)")
         }
     }
 

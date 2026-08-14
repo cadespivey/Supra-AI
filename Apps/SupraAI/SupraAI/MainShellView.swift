@@ -311,7 +311,10 @@ struct MainShellView: View {
                 controller: environment.chatController,
                 library: environment.modelLibrary,
                 settings: environment.settingsController,
-                matters: environment.mattersController
+                matters: environment.mattersController,
+                quickAttachmentHandoff: environment.quickAttachmentMatterHandoff,
+                quickAttachmentTargets: environment.mattersController.matters,
+                initialQuickAttachments: environment.quickAttachmentUITestComposerAttachments
             )
         case .scratchpad:
             ScratchPadView(

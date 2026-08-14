@@ -25,6 +25,13 @@ struct GlobalChatsView: View {
     /// Matters available as "move chat to…" targets, shown only in the global
     /// (`.picker`) chat. Nil inside a matter (chats there already belong to it).
     var matters: MattersController?
+    /// Explicit promotion boundary for session-only quick attachments. A nil
+    /// value leaves disclosure available but removes the Add-to-Matter action.
+    var quickAttachmentHandoff: QuickAttachmentMatterHandoff? = nil
+    var quickAttachmentTargets: [MatterSummary] = []
+    /// Hermetic native-test composition fixture. Ordinary launches pass an empty
+    /// array and still use the file picker/drop loader.
+    var initialQuickAttachments: [ChatAttachmentContext] = []
     @State private var draft = ""
     @State private var showGenerationSettings = false
     @State private var showJurisdiction = false
@@ -34,6 +41,8 @@ struct GlobalChatsView: View {
     @State private var isReceivingFileDrop = false
     @State private var attachmentLoadTask: Task<Void, Never>?
     @State private var attachmentLoadID: UUID?
+    @State private var quickAttachmentHandoffMessages: [String: String] = [:]
+    @State private var quickAttachmentHandoffsInFlight: Set<String> = []
     /// True while a drag hovers the conversation column (drives the drop hint).
     @State private var fileDropTargeted = false
     /// Plain state (not @FocusState): the composer is AppKit-backed, so focus is
@@ -80,6 +89,9 @@ struct GlobalChatsView: View {
             // the user to click into it.
             if listStyle == .picker { inputFocused = true }
             matters?.loadMatters()
+            if attachments.isEmpty, !initialQuickAttachments.isEmpty {
+                attachments = initialQuickAttachments
+            }
             if suggestions.isEmpty { suggestions = ChatSuggestions.sample() }
             // Warm the chat model when the chat opens (safety net over the launch
             // preload) so the first message doesn't wait on the load — e.g. after the
@@ -484,7 +496,18 @@ struct GlobalChatsView: View {
                     ForEach(controller.messages) { message in
                         MessageRow(
                             message: message,
+                            quickAttachments: controller.quickAttachmentPresentations(messageID: message.id),
+                            quickAttachmentTargets: quickAttachmentTargets,
+                            quickAttachmentHandoffMessages: quickAttachmentHandoffMessages,
+                            quickAttachmentHandoffsInFlight: quickAttachmentHandoffsInFlight,
                             artifactActions: controller.availableArtifactActions(messageID: message.id),
+                            onAddQuickAttachment: { attachmentID, matterID in
+                                addQuickAttachment(
+                                    messageID: message.id,
+                                    attachmentID: attachmentID,
+                                    matterID: matterID
+                                )
+                            },
                             onSaveToOutputs: {
                                 _ = controller.saveToOutputs(messageID: message.id)
                             },
@@ -787,9 +810,11 @@ struct GlobalChatsView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
                     ForEach(attachments) { attachment in
-                        HStack(spacing: 4) {
-                            Image(systemName: "doc.text")
-                            Text(attachment.name).lineLimit(1)
+                        HStack(alignment: .top, spacing: 6) {
+                            QuickAttachmentDisclosure(
+                                presentation: attachment.presentation,
+                                accessibilityIdentifier: "chat.quickAttachment.composer.\(attachment.id)"
+                            )
                             Button {
                                 attachments.removeAll { $0.id == attachment.id }
                             } label: {
@@ -798,10 +823,6 @@ struct GlobalChatsView: View {
                             .buttonStyle(.plain)
                             .foregroundStyle(.secondary)
                         }
-                        .font(.supraCaption)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(Color.secondary.opacity(0.12), in: Capsule())
                     }
                 }
             }
@@ -909,7 +930,9 @@ struct GlobalChatsView: View {
     }
 
     private var canSend: Bool {
-        !attachmentBusy && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !attachmentBusy
+            && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || !attachments.isEmpty)
     }
 
     private func send() {
@@ -972,6 +995,45 @@ struct GlobalChatsView: View {
             displayPrompt: rawPrompt,
             modelResolver: modelResolver
         )
+    }
+
+    private func addQuickAttachment(
+        messageID: String,
+        attachmentID: String,
+        matterID: String
+    ) {
+        guard !quickAttachmentHandoffsInFlight.contains(attachmentID) else { return }
+        guard let handoff = quickAttachmentHandoff else {
+            quickAttachmentHandoffMessages[attachmentID] =
+                "Add to Matter is unavailable in this session. Choose the file again from Documents."
+            return
+        }
+        guard let attachment = controller.quickAttachmentContext(messageID: messageID, attachmentID: attachmentID) else {
+            quickAttachmentHandoffMessages[attachmentID] =
+                "This session-only attachment is no longer available. Choose the file again."
+            return
+        }
+        let matterName = quickAttachmentTargets.first(where: { $0.id == matterID })?.name
+            ?? "the selected matter"
+        quickAttachmentHandoffsInFlight.insert(attachmentID)
+        quickAttachmentHandoffMessages[attachmentID] = nil
+
+        Task { @MainActor in
+            let outcome = await handoff.addToMatter(
+                attachment: attachment,
+                matterID: matterID
+            )
+            quickAttachmentHandoffsInFlight.remove(attachmentID)
+            switch outcome {
+            case .completed:
+                quickAttachmentHandoffMessages[attachmentID] = "Ready in matter \(matterName)."
+            case .awaitingReadiness:
+                quickAttachmentHandoffMessages[attachmentID] = "Still preparing in matter \(matterName)."
+            case let .failed(failure):
+                quickAttachmentHandoffMessages[attachmentID] =
+                    "Could not add to matter \(matterName). \(failure.message)"
+            }
+        }
     }
 
     /// Re-runs the offered question at the deeper tier: the full document pass for
@@ -1221,9 +1283,57 @@ struct GlobalChatsView: View {
     }
 }
 
+private struct QuickAttachmentDisclosure: View {
+    let presentation: QuickAttachmentPresentation
+    let accessibilityIdentifier: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "paperclip")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Color.accentColor)
+                .frame(width: 20, height: 20)
+                .background(Color.accentColor.opacity(0.1), in: RoundedRectangle(cornerRadius: 5))
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Quick attachment")
+                    .font(.supraCaption.weight(.semibold))
+                Text(presentation.name)
+                    .font(.supraCaption)
+                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(presentation.contentStatus)
+                    Text("Included \(presentation.includedCharacterCount) of \(presentation.originalCharacterCount) characters")
+                    Text(presentation.durabilityStatus)
+                    Text(presentation.verificationStatus)
+                }
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 7)
+        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(Color.secondary.opacity(0.16))
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Quick attachment")
+        .accessibilityValue(presentation.accessibilityDescription)
+        .accessibilityIdentifier(accessibilityIdentifier)
+    }
+}
+
 private struct MessageRow: View {
     let message: ChatMessage
+    var quickAttachments: [QuickAttachmentPresentation] = []
+    var quickAttachmentTargets: [MatterSummary] = []
+    var quickAttachmentHandoffMessages: [String: String] = [:]
+    var quickAttachmentHandoffsInFlight: Set<String> = []
     var artifactActions: [ChatMessageArtifactAction] = []
+    var onAddQuickAttachment: (String, String) -> Void = { _, _ in }
     var onSaveToOutputs: () -> Void = {}
     /// Opens a tapped `[A#]` authority's CourtListener page.
     var onOpenAuthority: (MessageCitation) -> Void = { _ in }
@@ -1237,6 +1347,7 @@ private struct MessageRow: View {
     /// completed answers and must not dwarf the answer it qualifies.
     @State private var supportNoticeExpanded = false
     @State private var isHovered = false
+    @State private var targetPickerAttachmentID: String?
 
     private var reasoningExpanded: Binding<Bool> {
         Binding(
@@ -1246,10 +1357,84 @@ private struct MessageRow: View {
     }
 
     var body: some View {
-        if message.role == .user {
-            userBubble
-        } else {
-            assistantRow
+        VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 6) {
+            if message.role == .user {
+                userBubble
+            } else {
+                assistantRow
+            }
+            if !quickAttachments.isEmpty {
+                quickAttachmentBlock
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: message.role == .user ? .trailing : .leading)
+    }
+
+    private var quickAttachmentBlock: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(quickAttachments, id: \.attachmentID) { presentation in
+                VStack(alignment: .leading, spacing: 6) {
+                    QuickAttachmentDisclosure(
+                        presentation: presentation,
+                        accessibilityIdentifier: "chat.quickAttachment.answer.\(presentation.attachmentID)"
+                    )
+
+                    if !quickAttachmentTargets.isEmpty {
+                        Button {
+                            targetPickerAttachmentID =
+                                targetPickerAttachmentID == presentation.attachmentID
+                                ? nil
+                                : presentation.attachmentID
+                        } label: {
+                            Label("Add to Matter", systemImage: "folder.badge.plus")
+                        }
+                        .buttonStyle(.borderless)
+                        .disabled(quickAttachmentHandoffsInFlight.contains(presentation.attachmentID))
+                        .accessibilityIdentifier(
+                            "chat.quickAttachment.addToMatter.\(presentation.attachmentID)"
+                        )
+                    }
+
+                    if targetPickerAttachmentID == presentation.attachmentID {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Choose a matter")
+                                .font(.supraCaption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                            ForEach(quickAttachmentTargets) { matter in
+                                Button(matter.name) {
+                                    targetPickerAttachmentID = nil
+                                    onAddQuickAttachment(presentation.attachmentID, matter.id)
+                                }
+                                .buttonStyle(.borderless)
+                                .accessibilityIdentifier(
+                                    "chat.quickAttachment.target.\(matter.id)"
+                                )
+                            }
+                        }
+                        .padding(8)
+                        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+                    }
+
+                    if quickAttachmentHandoffsInFlight.contains(presentation.attachmentID) {
+                        HStack(spacing: 6) {
+                            ProgressView().controlSize(.small)
+                            Text("Adding through the matter document pipeline…")
+                                .font(.supraCaption)
+                                .foregroundStyle(.secondary)
+                        }
+                    } else if let outcome = quickAttachmentHandoffMessages[presentation.attachmentID] {
+                        Text(outcome)
+                            .font(.supraCaption)
+                            .foregroundStyle(.secondary)
+                            .accessibilityElement(children: .ignore)
+                            .accessibilityLabel("Quick attachment handoff")
+                            .accessibilityValue(outcome)
+                            .accessibilityIdentifier(
+                                "chat.quickAttachment.handoff.\(presentation.attachmentID)"
+                            )
+                    }
+                }
+            }
         }
     }
 
@@ -1356,7 +1541,8 @@ private struct MessageRow: View {
                 HStack(spacing: 10) {
                     copyButton
                         .opacity(isHovered ? 1 : 0.35)
-                    if artifactActions.contains(.saveToOutputs) {
+                    if quickAttachments.isEmpty,
+                       artifactActions.contains(.saveToOutputs) {
                         Button(action: onSaveToOutputs) {
                             Label("Save to Outputs", systemImage: "tray.and.arrow.down")
                                 .font(.caption.weight(.medium))
