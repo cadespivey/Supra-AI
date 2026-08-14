@@ -69,6 +69,8 @@ public final class StructuredOutputController: ObservableObject {
     @Published public private(set) var isGenerating = false
     @Published public private(set) var message: String?
     @Published public private(set) var lastMutationFailure: UserMutationFailure?
+    @Published public private(set) var retainedWorkProductRequest:
+        StructuredWorkProductCreationRequest?
 
     private let store: SupraStore
     private let runtimeClient: any RuntimeClientProtocol
@@ -465,6 +467,312 @@ public final class StructuredOutputController: ObservableObject {
             message = "Reverification failed without changing the legacy version: \(error.localizedDescription)"
             return false
         }
+    }
+
+    /// Governed creation router for ordinary, accepted-authority, and explicitly
+    /// provisional work. Packet availability is resolved before the first model
+    /// call; publication then uses the Store's one terminal aggregate boundary.
+    public func createWorkProduct(
+        _ request: StructuredWorkProductCreationRequest,
+        modelID: ModelID?,
+        route: ModelRoute? = nil
+    ) async -> StructuredWorkProductCreationResult {
+        let blocked: (String) -> StructuredWorkProductCreationResult = { [weak self] detail in
+            let blocker = StructuredWorkProductBlocker(
+                reason: .reviewedAuthorityPacketUnavailable,
+                userMessage: "Open Formal Research to execute and review the exact authority packet, then confirm its reviewed propositions in Authorities before retrying. \(detail)",
+                recoverySurfaces: [.research, .authorities]
+            )
+            self?.retainedWorkProductRequest = request
+            self?.message = blocker.userMessage
+            self?.lastMutationFailure = nil
+            return StructuredWorkProductCreationResult(
+                receipt: nil,
+                blocker: blocker,
+                failure: nil,
+                retainedRequest: request,
+                eligibility: nil
+            )
+        }
+
+        guard let contract = StructuredOutputContracts.contract(for: request.type) else {
+            return Self.failedWorkProductResult(
+                request: request,
+                message: "This work-product type is created from the Documents surface."
+            )
+        }
+        if request.type.assertsLegalAuthority,
+           request.publicationMode != .governedAuthority {
+            return blocked("Authority-asserting work cannot use an ordinary publication path.")
+        }
+
+        let acceptedPacket: AcceptedResearchPacketVersion?
+        if request.publicationMode == .governedAuthority {
+            guard let reference = request.acceptedResearchPacket,
+                  let packet = try? store.researchPackets.availableAcceptedVersion(
+                      id: reference.versionID,
+                      versionIndex: reference.versionIndex,
+                      aggregateDigestSHA256:
+                        reference.expectedAggregateDigestSHA256
+                  ),
+                  packet.matterID == matterID,
+                  !packet.sources.isEmpty else {
+                return blocked("The selected reviewed packet version is missing, altered, or revoked.")
+            }
+            acceptedPacket = packet
+        } else {
+            guard request.acceptedResearchPacket == nil else {
+                return blocked("Only governed authority work may attach an accepted packet.")
+            }
+            acceptedPacket = nil
+        }
+
+        guard let modelID else {
+            let result = Self.failedWorkProductResult(
+                request: request,
+                message: "Assign a task model in the Models tab before creating this work product."
+            )
+            retainedWorkProductRequest = request
+            message = result.failure?.userMessage
+            lastMutationFailure = result.failure
+            return result
+        }
+        guard !isGenerating else {
+            let result = Self.failedWorkProductResult(
+                request: request,
+                message: "A work product is already generating. Wait for it to finish."
+            )
+            retainedWorkProductRequest = request
+            message = result.failure?.userMessage
+            lastMutationFailure = result.failure
+            return result
+        }
+
+        var effectiveRoute = route ?? ModelRouter().route(forStructuredOutput: request.type)
+        if let current = effectiveRoute?.options.maxOutputTokens {
+            effectiveRoute?.options.maxOutputTokens = max(
+                current,
+                Self.structuredOutputMinOutputTokens
+            )
+        }
+        let identity: MatterLegalIdentityReadProjection
+        do {
+            identity = try legalIdentityReadProjection()
+        } catch {
+            let result = Self.failedWorkProductResult(
+                request: request,
+                message: "This matter's legal identity is unavailable. Resolve its court and parties before generating an output."
+            )
+            retainedWorkProductRequest = request
+            message = result.failure?.userMessage
+            lastMutationFailure = result.failure
+            return result
+        }
+        let promptContext = Self.governedWorkProductContext(
+            request: request,
+            identity: identity,
+            acceptedPacket: acceptedPacket
+        )
+
+        isGenerating = true
+        message = nil
+        defer { isGenerating = false }
+        do {
+            let prompt = try StructuredOutputPromptBuilder.buildPrompt(
+                for: contract,
+                context: promptContext
+            )
+            let systemPrompt = structuredSystemPrompt(effectiveRoute)
+            let generated = ReasoningContent.answer(
+                from: try await collect(
+                    prompt: prompt,
+                    modelID: modelID,
+                    route: effectiveRoute
+                )
+            )
+            let analysis = StructuredOutputSections.analyze(
+                markdown: generated,
+                requiredHeadings: contract.requiredHeadings
+            )
+            let content: String
+            if request.publicationMode == .provisionalIssueOutline {
+                content = """
+                > ⚠️ **PROVISIONAL ISSUE OUTLINE — NOT AUTHORITY-GROUNDED.**
+
+                Instructions and facts retained for attorney review:
+                \(request.instructionsAndFacts)
+
+                \(generated)
+                """
+            } else {
+                content = generated
+            }
+
+            let now = Date()
+            let outputID = UUID().uuidString
+            let promptBuilderVersion = "structured-work-product-v1"
+            let options = effectiveRoute?.options ?? GenerationOptions()
+            let optionsData = try JSONEncoder().encode(options)
+            let generation = GenerationSessionRecord(
+                modelID: modelID.rawValue.uuidString,
+                modelRepository: effectiveRoute?.modelIdentifier ?? "local-runtime",
+                modelRevision: "selected-runtime-model",
+                promptBuilderVersion: promptBuilderVersion,
+                prompt: prompt,
+                systemPrompt: systemPrompt,
+                optionsJSON: String(decoding: optionsData, as: UTF8.self),
+                status: MessageStatus.completed.rawValue,
+                startedAt: now,
+                firstTokenAt: now,
+                completedAt: now,
+                generatedTokenCount: max(1, generated.split(whereSeparator: \.isWhitespace).count),
+                createdAt: now,
+                updatedAt: now
+            )
+            let output = StructuredOutputRecord(
+                id: outputID,
+                matterID: matterID,
+                title: contract.title,
+                outputType: request.type.rawValue,
+                status: StructuredOutputStatus.draft.rawValue,
+                createdAt: now,
+                updatedAt: now
+            )
+            let sourceSet = DocumentSourceSetRecord(
+                matterID: matterID,
+                mode: DocumentSourceSetMode.guided.rawValue,
+                scopeJSON: "{\"publication_mode\":\"\(request.publicationMode.rawValue)\"}",
+                retrievalQuery: nil,
+                retrievalDepth: nil,
+                createdAt: now
+            )
+            let assurance: OutputAssuranceState = request.publicationMode ==
+                .provisionalIssueOutline ? .preliminary : .supportNeedsReview
+            let audit = AuditEventRecord(
+                matterID: matterID,
+                timestamp: now,
+                eventType: "structured_work_product_published",
+                actor: "runtime",
+                summary: "Published \(contract.title)",
+                relatedTable: StructuredOutputRecord.databaseTableName,
+                relatedID: outputID,
+                metadataJSON: "{\"publication_mode\":\"\(request.publicationMode.rawValue)\"}"
+            )
+            let receipt = try store.structuredOutputs
+                .createVersionWithSourceSetAtomically(
+                    StructuredWorkProductPublicationCommand(
+                        publicationMode: request.publicationMode,
+                        idempotencyKey: request.idempotencyKey,
+                        versionIndex: 1,
+                        structuredOutputID: outputID,
+                        newOutput: output,
+                        sourceSet: sourceSet,
+                        orderedSources: [],
+                        contentMarkdown: content,
+                        requiredSections: contract.requiredHeadings,
+                        presentSections: analysis.present,
+                        missingSections: analysis.missing,
+                        parentVersionID: nil,
+                        repairReason: nil,
+                        verificationStatus: .legacyUnverified,
+                        verificationVersion: nil,
+                        verificationResults: [],
+                        verificationDimensions: nil,
+                        outputStatus: .needsReview,
+                        generationSession: generation,
+                        promptBuilderVersion: promptBuilderVersion,
+                        assuranceState: assurance,
+                        acceptedResearchPacket: request.acceptedResearchPacket,
+                        auditEvent: audit
+                    )
+                )
+            retainedWorkProductRequest = nil
+            lastMutationFailure = nil
+            message = nil
+            loadOutputs()
+            let eligibility = StructuredWorkProductEligibility(
+                canExport: false,
+                canPromote: false,
+                reason: request.publicationMode == .provisionalIssueOutline
+                    ? .provisionalIssueOutline
+                    : .reviewRequired
+            )
+            return StructuredWorkProductCreationResult(
+                receipt: receipt,
+                blocker: nil,
+                failure: nil,
+                retainedRequest: nil,
+                eligibility: eligibility
+            )
+        } catch {
+            let failure = UserMutationFailure(
+                operation: .structuredWorkProductPublication,
+                userMessage: "Work product publication failed: \(error.localizedDescription)",
+                recoveryActions: [.retry]
+            )
+            retainedWorkProductRequest = request
+            lastMutationFailure = failure
+            message = failure.userMessage
+            return StructuredWorkProductCreationResult(
+                receipt: nil,
+                blocker: nil,
+                failure: failure,
+                retainedRequest: request,
+                eligibility: nil
+            )
+        }
+    }
+
+    private nonisolated static func failedWorkProductResult(
+        request: StructuredWorkProductCreationRequest,
+        message: String
+    ) -> StructuredWorkProductCreationResult {
+        let failure = UserMutationFailure(
+            operation: .structuredWorkProductPublication,
+            userMessage: message,
+            recoveryActions: [.correctInput]
+        )
+        return StructuredWorkProductCreationResult(
+            receipt: nil,
+            blocker: nil,
+            failure: failure,
+            retainedRequest: request,
+            eligibility: nil
+        )
+    }
+
+    private nonisolated static func governedWorkProductContext(
+        request: StructuredWorkProductCreationRequest,
+        identity: MatterLegalIdentityReadProjection,
+        acceptedPacket: AcceptedResearchPacketVersion?
+    ) -> String {
+        var context = canonicalIdentityContext(identity)
+        if let packet = acceptedPacket {
+            var lines = [
+                "REVIEWED AUTHORITY PACKET — EXACT ACCEPTED VERSION",
+                "packet_version_id: \(packet.id)",
+                "version_index: \(packet.versionIndex)",
+                "aggregate_digest_sha256: \(packet.aggregateDigestSHA256)",
+                "provider_id: \(packet.providerID)",
+                "egress_grant_id: \(packet.egressGrantID)",
+                "query_sha256: \(packet.exactQuerySHA256)",
+            ]
+            for source in packet.sources.sorted(by: { $0.sourceIndex < $1.sourceIndex }) {
+                lines += [
+                    "source_index: \(source.sourceIndex)",
+                    "research_result_id: \(source.researchResultID)",
+                    "provider_result_id: \(source.providerResultID)",
+                    "authority_id: \(source.authorityID)",
+                    "ground: \(source.groundKey.rawValue)",
+                    "reviewed_binding_sha256: \(source.reviewedPropositionBindingSHA256)",
+                    "reviewed_excerpt: \(source.excerpt)",
+                ]
+            }
+            context += "\n\n" + lines.joined(separator: "\n")
+        }
+        context += "\n\nUSER-PROVIDED INSTRUCTIONS AND FACTS:\n"
+            + request.instructionsAndFacts
+        return context
     }
 
     /// Generates an output: prompt → local model → section detection → persist.

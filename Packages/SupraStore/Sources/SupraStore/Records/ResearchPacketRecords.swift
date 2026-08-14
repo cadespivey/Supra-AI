@@ -12,8 +12,114 @@ public enum ResearchPacketReviewerAction: String, Codable, Equatable, Sendable {
     case approvedForAuthorityUse = "approved_for_authority_use"
 }
 
-public enum ResearchPacketEgressAuthority: Equatable, Sendable {
-    case approvedGrant(id: String, version: Int)
+/// Opaque proof that Store may record one egress-backed research execution.
+/// Ordinary package clients can only obtain this value from the Sessions
+/// receipt registrar; primitive grant fields are not a public construction
+/// surface.
+public struct ResearchPacketEgressAuthority: Equatable, Sendable {
+    enum Storage: Equatable, Sendable {
+        case approvedGrant(id: String, version: Int)
+        case registeredConsumption(ResearchPacketEgressConsumptionCapability)
+    }
+
+    let storage: Storage
+
+    /// Compatibility fixture for Store's pre-receipt tests. This remains
+    /// internal so `@testable import SupraStore` can exercise the legacy
+    /// aggregate without exposing a production bypass.
+    static func approvedGrant(id: String, version: Int) -> Self {
+        Self(storage: .approvedGrant(id: id, version: version))
+    }
+
+    static func registeredConsumption(
+        _ capability: ResearchPacketEgressConsumptionCapability
+    ) -> Self {
+        Self(storage: .registeredConsumption(capability))
+    }
+}
+
+/// Opaque Store-minted capability. Ordinary callers can pass a registered
+/// capability onward but cannot construct one from primitive receipt fields.
+public struct ResearchPacketEgressConsumptionCapability: Equatable, Sendable {
+    let receiptID: String
+
+    init(receiptID: String) {
+        self.receiptID = receiptID
+    }
+}
+
+@_spi(ResearchPacketEgressRegistration)
+public struct ResearchPacketEgressConsumptionRegistrationCommand: Equatable, Sendable {
+    public let receiptID: String
+    public let providerID: String
+    public let grantVersion: Int
+    public let origin: String
+    public let matterID: String?
+    public let researchSessionID: String?
+    public let classification: String
+    public let querySHA256: String
+    public let bindingDigestSHA256: String
+    public let registeredAt: Date
+
+    public init(
+        receiptID: String,
+        providerID: String,
+        grantVersion: Int,
+        origin: String,
+        matterID: String?,
+        researchSessionID: String?,
+        classification: String,
+        querySHA256: String,
+        bindingDigestSHA256: String,
+        registeredAt: Date
+    ) {
+        self.receiptID = receiptID
+        self.providerID = providerID
+        self.grantVersion = grantVersion
+        self.origin = origin
+        self.matterID = matterID
+        self.researchSessionID = researchSessionID
+        self.classification = classification
+        self.querySHA256 = querySHA256
+        self.bindingDigestSHA256 = bindingDigestSHA256
+        self.registeredAt = registeredAt
+    }
+}
+
+public struct ResearchPacketEgressConsumptionRegistration: Codable, FetchableRecord,
+    PersistableRecord, Equatable, Sendable
+{
+    public static let databaseTableName = "research_packet_egress_consumptions"
+
+    public let receiptID: String
+    public let requestDigestSHA256: String
+    public let providerID: String
+    public let grantVersion: Int
+    public let origin: String
+    public let matterID: String?
+    public let researchSessionID: String?
+    public let classification: String
+    public let querySHA256: String
+    public let bindingDigestSHA256: String
+    public let registeredAt: Date
+    public let usedByExecutionID: String?
+    public let usedAt: Date?
+
+    enum CodingKeys: String, CodingKey {
+        case receiptID = "receipt_id"
+        case requestDigestSHA256 = "request_digest_sha256"
+        case providerID = "provider_id"
+        case grantVersion = "grant_version"
+        case origin
+        case matterID = "matter_id"
+        case researchSessionID = "research_session_id"
+        case classification
+        case querySHA256 = "query_sha256"
+        case bindingDigestSHA256 = "binding_digest_sha256"
+        case registeredAt = "registered_at"
+        case usedByExecutionID = "used_by_execution_id"
+        case usedAt = "used_at"
+    }
 }
 
 public struct ResearchPacketExecutedResult: Equatable, Sendable {
@@ -498,4 +604,6 @@ public enum ResearchPacketRepositoryError: Error, Equatable, Sendable {
     case versionUnavailable
     case crossMatter
     case invalidDisposition
+    case egressConsumptionUnavailable
+    case egressConsumptionAlreadyUsed
 }

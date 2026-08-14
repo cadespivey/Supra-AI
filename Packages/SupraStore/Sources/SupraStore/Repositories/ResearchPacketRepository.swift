@@ -13,12 +13,102 @@ public final class ResearchPacketRepository: @unchecked Sendable {
         self.writer = writer
     }
 
+    /// Registers a content-free receipt only after the Sessions seam has
+    /// validated the Research-owned binding digest. Exact retries return the
+    /// same authority; an altered retry cannot replace the durable provenance.
+    @_spi(ResearchPacketEgressRegistration)
+    @discardableResult
+    public func registerEgressConsumption(
+        _ command: ResearchPacketEgressConsumptionRegistrationCommand
+    ) throws -> ResearchPacketEgressAuthority {
+        let receiptID = try Self.requireCanonical(command.receiptID)
+        let providerID = try Self.requireCanonical(command.providerID)
+        let origin = try Self.requireCanonical(command.origin)
+        let classification = try Self.requireCanonical(command.classification)
+        guard command.grantVersion > 0,
+              Self.isSHA256(command.querySHA256),
+              Self.isSHA256(command.bindingDigestSHA256) else {
+            throw ResearchPacketRepositoryError.invalidCommand
+        }
+        let requestDigest = Self.canonicalDigest([
+            "research-packet-egress-registration-v1",
+            receiptID,
+            providerID,
+            String(command.grantVersion),
+            origin,
+            command.matterID ?? "",
+            command.researchSessionID ?? "",
+            classification,
+            command.querySHA256,
+            command.bindingDigestSHA256,
+            Self.dateKey(command.registeredAt),
+        ])
+        return try writer.write { db in
+            if let existing = try ResearchPacketEgressConsumptionRegistration.fetchOne(
+                db,
+                key: receiptID
+            ) {
+                guard existing.requestDigestSHA256 == requestDigest else {
+                    throw ResearchPacketRepositoryError.conflictingRetry
+                }
+                return .registeredConsumption(
+                    ResearchPacketEgressConsumptionCapability(
+                        receiptID: existing.receiptID
+                    )
+                )
+            }
+            if let matterID = command.matterID {
+                guard try Int.fetchOne(
+                    db,
+                    sql: "SELECT COUNT(*) FROM matters WHERE id = ? AND deleted_at IS NULL",
+                    arguments: [matterID]
+                ) == 1 else {
+                    throw ResearchPacketRepositoryError.provenanceMismatch
+                }
+            }
+            if let researchSessionID = command.researchSessionID {
+                guard let session = try ResearchSessionRecord.fetchOne(
+                    db,
+                    key: researchSessionID
+                ), command.matterID == nil || session.matterID == command.matterID else {
+                    throw ResearchPacketRepositoryError.provenanceMismatch
+                }
+            }
+            try ResearchPacketEgressConsumptionRegistration(
+                receiptID: receiptID,
+                requestDigestSHA256: requestDigest,
+                providerID: providerID,
+                grantVersion: command.grantVersion,
+                origin: origin,
+                matterID: command.matterID,
+                researchSessionID: command.researchSessionID,
+                classification: classification,
+                querySHA256: command.querySHA256,
+                bindingDigestSHA256: command.bindingDigestSHA256,
+                registeredAt: command.registeredAt,
+                usedByExecutionID: nil,
+                usedAt: nil
+            ).insert(db)
+            return .registeredConsumption(
+                ResearchPacketEgressConsumptionCapability(receiptID: receiptID)
+            )
+        }
+    }
+
+    public func egressConsumptionRegistration(
+        id: String
+    ) throws -> ResearchPacketEgressConsumptionRegistration? {
+        try writer.read { db in
+            try ResearchPacketEgressConsumptionRegistration.fetchOne(db, key: id)
+        }
+    }
+
     @discardableResult
     public func recordExecuted(
         _ command: ResearchPacketExecutionCommand
     ) throws -> ResearchPacketExecutedReceipt {
-        let prepared = try Self.prepareExecution(command)
         return try writer.write { db in
+            let prepared = try Self.prepareExecution(command, db: db)
             if let existing = try ResearchPacketCandidateRecord.fetchOne(
                 db,
                 key: prepared.command.executionID
@@ -126,6 +216,23 @@ public final class ResearchPacketRepository: @unchecked Sendable {
                     "result_count": candidateSources.count,
                 ])
             ).insert(db)
+            if let registrationID = prepared.egressConsumptionRegistrationID {
+                try db.execute(
+                    sql: """
+                    UPDATE research_packet_egress_consumptions
+                    SET used_by_execution_id = ?, used_at = ?
+                    WHERE receipt_id = ? AND used_by_execution_id IS NULL
+                    """,
+                    arguments: [
+                        candidate.executionID,
+                        prepared.command.executedAt,
+                        registrationID,
+                    ]
+                )
+                guard db.changesCount == 1 else {
+                    throw ResearchPacketRepositoryError.egressConsumptionAlreadyUsed
+                }
+            }
             return Self.executedReceipt(candidate, sources: candidateSources)
         }
     }
@@ -547,6 +654,35 @@ public final class ResearchPacketRepository: @unchecked Sendable {
         }
     }
 
+    /// Resolves one exact, currently usable accepted version for governed work.
+    /// Revocation is checked in the same Store read as the immutable version and
+    /// source projection, before a caller may invoke a model.
+    public func availableAcceptedVersion(
+        id: String,
+        versionIndex: Int,
+        aggregateDigestSHA256: String
+    ) throws -> AcceptedResearchPacketVersion? {
+        try writer.read { db in
+            guard let record = try AcceptedResearchPacketVersionRecord.fetchOne(db, key: id),
+                  record.versionIndex == versionIndex,
+                  record.aggregateDigestSHA256 == aggregateDigestSHA256,
+                  try Int.fetchOne(
+                      db,
+                      sql: """
+                      SELECT COUNT(*) FROM research_packet_version_dispositions
+                      WHERE packet_version_id = ? AND kind = 'revoked'
+                      """,
+                      arguments: [id]
+                  ) == 0 else {
+                return nil
+            }
+            return try Self.project(
+                record,
+                sources: Self.acceptedSources(versionID: id, db: db)
+            )
+        }
+    }
+
     public func acceptedVersions(
         packetID: String
     ) throws -> [AcceptedResearchPacketVersion] {
@@ -572,90 +708,100 @@ public final class ResearchPacketRepository: @unchecked Sendable {
     public func bindAcceptedVersion(
         _ command: ResearchPacketWorkProductBindingCommand
     ) throws -> ResearchPacketWorkProductBinding {
+        try writer.write { db in
+            try Self.bindAcceptedVersion(command, db: db)
+        }
+    }
+
+    /// Internal transaction-sharing form used by the structured work aggregate.
+    /// It deliberately accepts an existing GRDB transaction so the accepted
+    /// packet binding cannot commit separately from publication.
+    static func bindAcceptedVersion(
+        _ command: ResearchPacketWorkProductBindingCommand,
+        db: Database
+    ) throws -> ResearchPacketWorkProductBinding {
         let requestDigest = Self.workProductBindingRequestDigest(command)
-        return try writer.write { db in
-            if let existing = try ResearchPacketWorkProductBinding.fetchOne(
+        if let existing = try ResearchPacketWorkProductBinding.fetchOne(
+            db,
+            key: command.structuredOutputVersionID
+        ) {
+            guard existing.requestDigestSHA256 == requestDigest else {
+                throw ResearchPacketRepositoryError.workProductAlreadyBound
+            }
+            return existing
+        }
+        guard let version = try AcceptedResearchPacketVersionRecord.fetchOne(
+            db,
+            key: command.acceptedPacketVersionID
+        ) else {
+            throw ResearchPacketRepositoryError.versionUnavailable
+        }
+        guard version.aggregateDigestSHA256 ==
+                command.expectedPacketAggregateDigestSHA256 else {
+            throw ResearchPacketRepositoryError.packetDigestMismatch
+        }
+        guard try Int.fetchOne(
+            db,
+            sql: """
+            SELECT COUNT(*) FROM research_packet_version_dispositions
+            WHERE packet_version_id = ? AND kind = 'revoked'
+            """,
+            arguments: [version.id]
+        ) == 0 else {
+            throw ResearchPacketRepositoryError.versionUnavailable
+        }
+        guard let outputMatterID = try String.fetchOne(
+            db,
+            sql: """
+            SELECT output.matter_id
+            FROM structured_output_versions AS version
+            JOIN structured_outputs AS output
+              ON output.id = version.structured_output_id
+            WHERE version.id = ? AND output.deleted_at IS NULL
+            """,
+            arguments: [command.structuredOutputVersionID]
+        ) else {
+            throw ResearchPacketRepositoryError.versionUnavailable
+        }
+        guard outputMatterID == version.matterID else {
+            throw ResearchPacketRepositoryError.crossMatter
+        }
+        let audit = AuditEventRecord(
+            matterID: version.matterID,
+            timestamp: command.boundAt,
+            eventType: "research_packet_work_product_bound",
+            actor: "store",
+            summary: "Bound work product to accepted research packet version",
+            relatedTable: StructuredOutputVersionRecord.databaseTableName,
+            relatedID: command.structuredOutputVersionID,
+            metadataJSON: try Self.auditMetadata([
+                "packet_aggregate_digest_sha256": version.aggregateDigestSHA256,
+                "packet_version_id": version.id,
+                "structured_output_version_id": command.structuredOutputVersionID,
+            ])
+        )
+        try audit.insert(db)
+        let binding = ResearchPacketWorkProductBinding(
+            idempotencyKey: try Self.requireCanonical(command.idempotencyKey),
+            requestDigestSHA256: requestDigest,
+            structuredOutputVersionID: command.structuredOutputVersionID,
+            acceptedPacketVersionID: version.id,
+            packetAggregateDigestSHA256: version.aggregateDigestSHA256,
+            createdAt: command.boundAt,
+            auditEventID: audit.id
+        )
+        do {
+            try binding.insert(db)
+        } catch {
+            if try ResearchPacketWorkProductBinding.fetchOne(
                 db,
                 key: command.structuredOutputVersionID
-            ) {
-                guard existing.requestDigestSHA256 == requestDigest else {
-                    throw ResearchPacketRepositoryError.workProductAlreadyBound
-                }
-                return existing
+            ) != nil {
+                throw ResearchPacketRepositoryError.workProductAlreadyBound
             }
-            guard let version = try AcceptedResearchPacketVersionRecord.fetchOne(
-                db,
-                key: command.acceptedPacketVersionID
-            ) else {
-                throw ResearchPacketRepositoryError.versionUnavailable
-            }
-            guard version.aggregateDigestSHA256 ==
-                    command.expectedPacketAggregateDigestSHA256 else {
-                throw ResearchPacketRepositoryError.packetDigestMismatch
-            }
-            guard try Int.fetchOne(
-                db,
-                sql: """
-                SELECT COUNT(*) FROM research_packet_version_dispositions
-                WHERE packet_version_id = ? AND kind = 'revoked'
-                """,
-                arguments: [version.id]
-            ) == 0 else {
-                throw ResearchPacketRepositoryError.versionUnavailable
-            }
-            guard let outputMatterID = try String.fetchOne(
-                db,
-                sql: """
-                SELECT output.matter_id
-                FROM structured_output_versions AS version
-                JOIN structured_outputs AS output
-                  ON output.id = version.structured_output_id
-                WHERE version.id = ? AND output.deleted_at IS NULL
-                """,
-                arguments: [command.structuredOutputVersionID]
-            ) else {
-                throw ResearchPacketRepositoryError.versionUnavailable
-            }
-            guard outputMatterID == version.matterID else {
-                throw ResearchPacketRepositoryError.crossMatter
-            }
-            let audit = AuditEventRecord(
-                matterID: version.matterID,
-                timestamp: command.boundAt,
-                eventType: "research_packet_work_product_bound",
-                actor: "store",
-                summary: "Bound work product to accepted research packet version",
-                relatedTable: StructuredOutputVersionRecord.databaseTableName,
-                relatedID: command.structuredOutputVersionID,
-                metadataJSON: try Self.auditMetadata([
-                    "packet_aggregate_digest_sha256": version.aggregateDigestSHA256,
-                    "packet_version_id": version.id,
-                    "structured_output_version_id": command.structuredOutputVersionID,
-                ])
-            )
-            try audit.insert(db)
-            let binding = ResearchPacketWorkProductBinding(
-                idempotencyKey: try Self.requireCanonical(command.idempotencyKey),
-                requestDigestSHA256: requestDigest,
-                structuredOutputVersionID: command.structuredOutputVersionID,
-                acceptedPacketVersionID: version.id,
-                packetAggregateDigestSHA256: version.aggregateDigestSHA256,
-                createdAt: command.boundAt,
-                auditEventID: audit.id
-            )
-            do {
-                try binding.insert(db)
-            } catch {
-                if try ResearchPacketWorkProductBinding.fetchOne(
-                    db,
-                    key: command.structuredOutputVersionID
-                ) != nil {
-                    throw ResearchPacketRepositoryError.workProductAlreadyBound
-                }
-                throw error
-            }
-            return binding
+            throw error
         }
+        return binding
     }
 
     public func workProductBinding(
@@ -751,10 +897,12 @@ public final class ResearchPacketRepository: @unchecked Sendable {
         let grantVersion: Int
         let exactQuerySHA256: String
         let executionDigestSHA256: String
+        let egressConsumptionRegistrationID: String?
     }
 
     private static func prepareExecution(
-        _ command: ResearchPacketExecutionCommand
+        _ command: ResearchPacketExecutionCommand,
+        db: Database
     ) throws -> PreparedExecution {
         _ = try requireCanonical(command.packetID)
         _ = try requireCanonical(command.executionID)
@@ -772,12 +920,36 @@ public final class ResearchPacketRepository: @unchecked Sendable {
                 command.orderedResults.count else {
             throw ResearchPacketRepositoryError.invalidCommand
         }
+        let queryDigest = sha256(command.exactQueryBytes)
         let grantID: String
         let grantVersion: Int
-        switch command.egressAuthority {
+        let egressConsumptionRegistrationID: String?
+        switch command.egressAuthority.storage {
         case let .approvedGrant(id, version):
             grantID = try requireCanonical(id)
             grantVersion = version
+            egressConsumptionRegistrationID = nil
+        case let .registeredConsumption(capability):
+            let registrationID = try requireCanonical(capability.receiptID)
+            guard let registration = try ResearchPacketEgressConsumptionRegistration.fetchOne(
+                db,
+                key: registrationID
+            ) else {
+                throw ResearchPacketRepositoryError.egressConsumptionUnavailable
+            }
+            guard registration.usedByExecutionID == nil
+                    || registration.usedByExecutionID == command.executionID else {
+                throw ResearchPacketRepositoryError.egressConsumptionAlreadyUsed
+            }
+            guard registration.providerID == command.providerID,
+                  registration.matterID == command.matterID,
+                  registration.researchSessionID == command.researchSessionID,
+                  registration.querySHA256 == queryDigest else {
+                throw ResearchPacketRepositoryError.provenanceMismatch
+            }
+            grantID = registration.receiptID
+            grantVersion = registration.grantVersion
+            egressConsumptionRegistrationID = registration.receiptID
         }
         guard grantVersion > 0 else {
             throw ResearchPacketRepositoryError.invalidCommand
@@ -786,7 +958,6 @@ public final class ResearchPacketRepository: @unchecked Sendable {
             _ = try requireCanonical(result.researchResultID)
             _ = try requireCanonical(result.providerResultID)
         }
-        let queryDigest = sha256(command.exactQueryBytes)
         var fields = [
             "research-packet-execution-v1",
             command.packetID,
@@ -813,7 +984,8 @@ public final class ResearchPacketRepository: @unchecked Sendable {
             grantID: grantID,
             grantVersion: grantVersion,
             exactQuerySHA256: queryDigest,
-            executionDigestSHA256: canonicalDigest(fields)
+            executionDigestSHA256: canonicalDigest(fields),
+            egressConsumptionRegistrationID: egressConsumptionRegistrationID
         )
     }
 
@@ -1098,6 +1270,10 @@ public final class ResearchPacketRepository: @unchecked Sendable {
 
     private static func sha256(_ data: Data) -> String {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func isSHA256(_ value: String) -> Bool {
+        value.count == 64 && value.allSatisfy { $0.isHexDigit && !$0.isUppercase }
     }
 
     private static func dateKey(_ date: Date) -> String {

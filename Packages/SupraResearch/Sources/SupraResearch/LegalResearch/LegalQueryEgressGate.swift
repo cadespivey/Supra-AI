@@ -1,9 +1,10 @@
+import CryptoKit
 import Foundation
 
 /// Stable identity for one legal-data provider configuration. A network host
 /// allow-list is necessary transport policy, but it is not query authority; the
 /// provider identity is therefore one of the values bound into every grant.
-public struct LegalDataProviderID: RawRepresentable, Hashable, Sendable {
+public struct LegalDataProviderID: RawRepresentable, Codable, Hashable, Sendable {
     public let rawValue: String
 
     public init(rawValue: String) {
@@ -14,13 +15,13 @@ public struct LegalDataProviderID: RawRepresentable, Hashable, Sendable {
 }
 
 /// The product workflow that obtained or exercised query authority.
-public enum LegalQueryEgressOrigin: String, Hashable, Sendable {
+public enum LegalQueryEgressOrigin: String, Codable, Hashable, Sendable {
     case formalResearch
     case quickResearch
 }
 
 /// Deterministic privacy classification for the exact outbound query.
-public enum LegalQueryEgressClassification: String, Hashable, Sendable {
+public enum LegalQueryEgressClassification: String, Codable, Hashable, Sendable {
     /// A conclusively parsed public reporter citation. This is the sole class
     /// eligible for the narrow automatic authority.
     case publicCitation
@@ -195,6 +196,190 @@ public enum LegalQueryEgressAuthorization: Sendable {
     case grant(LegalQueryEgressGrant)
 }
 
+/// Content-free evidence that one exact approved provider query crossed the
+/// transport boundary successfully. The receipt intentionally retains only
+/// digests and stable provenance identities; neither the query text nor any
+/// matter body can be reconstructed from its encoded form.
+public struct LegalQueryEgressConsumptionReceipt: Codable, Equatable, Sendable {
+    /// Ephemeral process capability: JSON round-trips within the running app are
+    /// supported, while decoded fields cannot be used to mint a fresh receipt.
+    /// A restart intentionally requires a new provider execution and receipt.
+    private static let attestationKey = SymmetricKey(size: .bits256)
+
+    public let id: String
+    public let providerID: LegalDataProviderID
+    public let grantVersion: Int
+    public let origin: LegalQueryEgressOrigin
+    public let matterID: String?
+    public let researchSessionID: String?
+    public let classification: LegalQueryEgressClassification
+    public let querySHA256: String
+    public let purposeSHA256: String
+    public let sourceSetDigest: String?
+    public let approvedAt: Date
+    public let expiresAt: Date
+    public let consumedAt: Date
+    public let bindingDigestSHA256: String
+
+    fileprivate init(grant: LegalQueryEgressGrant, consumedAt: Date) {
+        id = grant.id.uuidString.lowercased()
+        providerID = grant.intent.providerID
+        grantVersion = grant.version
+        origin = grant.intent.origin
+        matterID = grant.intent.matterID
+        researchSessionID = grant.intent.researchSessionID
+        classification = grant.intent.classification
+        querySHA256 = Self.sha256(grant.intent.queryBytes)
+        purposeSHA256 = Self.sha256(Data(grant.intent.purpose.utf8))
+        sourceSetDigest = grant.intent.sourceSetDigest
+        approvedAt = grant.approvedAt
+        expiresAt = grant.expiresAt
+        self.consumedAt = consumedAt
+        bindingDigestSHA256 = Self.attestationDigest(
+            id: id,
+            providerID: providerID,
+            grantVersion: grantVersion,
+            origin: origin,
+            matterID: matterID,
+            researchSessionID: researchSessionID,
+            classification: classification,
+            querySHA256: querySHA256,
+            purposeSHA256: purposeSHA256,
+            sourceSetDigest: sourceSetDigest,
+            approvedAt: approvedAt,
+            expiresAt: expiresAt,
+            consumedAt: consumedAt
+        )
+    }
+
+    /// Revalidates the receipt after decoding at a package boundary. A caller
+    /// cannot alter even one provenance or digest member while retaining the
+    /// gate-minted binding.
+    public var hasValidBindingDigest: Bool {
+        guard let received = Self.hexData(bindingDigestSHA256) else { return false }
+        return HMAC<SHA256>.isValidAuthenticationCode(
+            received,
+            authenticating: Self.canonicalAttestationData(
+            id: id,
+            providerID: providerID,
+            grantVersion: grantVersion,
+            origin: origin,
+            matterID: matterID,
+            researchSessionID: researchSessionID,
+            classification: classification,
+            querySHA256: querySHA256,
+            purposeSHA256: purposeSHA256,
+            sourceSetDigest: sourceSetDigest,
+            approvedAt: approvedAt,
+            expiresAt: expiresAt,
+            consumedAt: consumedAt
+            ),
+            using: Self.attestationKey
+        )
+    }
+
+    private static func attestationDigest(
+        id: String,
+        providerID: LegalDataProviderID,
+        grantVersion: Int,
+        origin: LegalQueryEgressOrigin,
+        matterID: String?,
+        researchSessionID: String?,
+        classification: LegalQueryEgressClassification,
+        querySHA256: String,
+        purposeSHA256: String,
+        sourceSetDigest: String?,
+        approvedAt: Date,
+        expiresAt: Date,
+        consumedAt: Date
+    ) -> String {
+        HMAC<SHA256>.authenticationCode(
+            for: canonicalAttestationData(
+                id: id,
+                providerID: providerID,
+                grantVersion: grantVersion,
+                origin: origin,
+                matterID: matterID,
+                researchSessionID: researchSessionID,
+                classification: classification,
+                querySHA256: querySHA256,
+                purposeSHA256: purposeSHA256,
+                sourceSetDigest: sourceSetDigest,
+                approvedAt: approvedAt,
+                expiresAt: expiresAt,
+                consumedAt: consumedAt
+            ),
+            using: attestationKey
+        ).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func canonicalAttestationData(
+        id: String,
+        providerID: LegalDataProviderID,
+        grantVersion: Int,
+        origin: LegalQueryEgressOrigin,
+        matterID: String?,
+        researchSessionID: String?,
+        classification: LegalQueryEgressClassification,
+        querySHA256: String,
+        purposeSHA256: String,
+        sourceSetDigest: String?,
+        approvedAt: Date,
+        expiresAt: Date,
+        consumedAt: Date
+    ) -> Data {
+        let values = [
+            "legal-query-egress-consumption-v1",
+            id,
+            providerID.rawValue,
+            String(grantVersion),
+            origin.rawValue,
+            matterID ?? "",
+            researchSessionID ?? "",
+            classification.rawValue,
+            querySHA256,
+            purposeSHA256,
+            sourceSetDigest ?? "",
+            String(approvedAt.timeIntervalSinceReferenceDate.bitPattern),
+            String(expiresAt.timeIntervalSinceReferenceDate.bitPattern),
+            String(consumedAt.timeIntervalSinceReferenceDate.bitPattern),
+        ]
+        let canonical = values.map { "\($0.utf8.count):\($0)" }.joined(separator: "|")
+        return Data(canonical.utf8)
+    }
+
+    private static func sha256(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func hexData(_ value: String) -> Data? {
+        guard value.count == 64 else { return nil }
+        var data = Data()
+        data.reserveCapacity(32)
+        var index = value.startIndex
+        for _ in 0..<32 {
+            let next = value.index(index, offsetBy: 2)
+            guard let byte = UInt8(value[index..<next], radix: 16) else { return nil }
+            data.append(byte)
+            index = next
+        }
+        return data
+    }
+}
+
+public struct LegalQueryEgressSearchConsumption: Sendable {
+    public let response: CourtListenerSearchResponse
+    public let consumptionReceipt: LegalQueryEgressConsumptionReceipt
+
+    public init(
+        response: CourtListenerSearchResponse,
+        consumptionReceipt: LegalQueryEgressConsumptionReceipt
+    ) {
+        self.response = response
+        self.consumptionReceipt = consumptionReceipt
+    }
+}
+
 /// The sole CourtListener search execution boundary. It validates policy and
 /// consumes grants synchronously inside the actor before awaiting transport, so
 /// concurrent attempts cannot both spend the same approval.
@@ -278,6 +463,38 @@ public actor LegalQueryEgressGate {
         return try await courtListenerClient.searchOpinions(
             request,
             relatedResearchSessionID: relatedResearchSessionID
+        )
+    }
+
+    /// Executes an explicitly granted opinion search and returns content-free
+    /// proof only after the provider transport itself succeeds. Automatic
+    /// policy authority deliberately cannot mint a reusable research-packet
+    /// receipt.
+    public func searchOpinionsWithConsumptionReceipt(
+        _ request: CourtListenerSearchRequest,
+        intent: LegalQueryEgressIntent,
+        authorization: LegalQueryEgressAuthorization,
+        relatedResearchSessionID: String?
+    ) async throws -> LegalQueryEgressSearchConsumption {
+        guard case let .grant(grant) = authorization else {
+            throw LegalQueryEgressError.approvalRequired
+        }
+        try authorize(
+            request: request,
+            intent: intent,
+            authorization: authorization,
+            relatedResearchSessionID: relatedResearchSessionID
+        )
+        let response = try await courtListenerClient.searchOpinions(
+            request,
+            relatedResearchSessionID: relatedResearchSessionID
+        )
+        return LegalQueryEgressSearchConsumption(
+            response: response,
+            consumptionReceipt: LegalQueryEgressConsumptionReceipt(
+                grant: grant,
+                consumedAt: now()
+            )
         )
     }
 

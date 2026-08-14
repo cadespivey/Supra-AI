@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import GRDB
 import SupraCore
@@ -101,6 +102,12 @@ public final class StructuredOutputRepository: @unchecked Sendable {
         }
 
         return try writer.write { db in
+            guard try !Self.isProvisionalPublication(
+                structuredOutputID: structuredOutputID,
+                db: db
+            ) else {
+                throw StructuredOutputRepositoryError.provisionalPublicationCannotPromote
+            }
             let now = Date()
             let resolvedVerifiedAt = verificationStatus == .legacyUnverified ? verifiedAt : (verifiedAt ?? now)
             let resolvedIndex = try versionIndex ?? (Int.fetchOne(
@@ -419,6 +426,270 @@ public final class StructuredOutputRepository: @unchecked Sendable {
         }
     }
 
+    /// Publishes the complete terminal work-product aggregate through the
+    /// existing strong structured-output boundary. The idempotency receipt is
+    /// inserted last in the same writer transaction, so every earlier member is
+    /// either visible with it or rolled back with it.
+    @discardableResult
+    public func createVersionWithSourceSetAtomically(
+        _ command: StructuredWorkProductPublicationCommand
+    ) throws -> StructuredWorkProductPublicationReceipt {
+        do {
+            try Self.validatePublicationCommand(command)
+            let requestDigest = try Self.publicationRequestDigest(command)
+            return try writer.write { db in
+                if let existing = try StructuredWorkProductPublicationReceipt.fetchOne(
+                    db,
+                    key: command.idempotencyKey
+                ) {
+                    guard existing.requestDigestSHA256 == requestDigest else {
+                        throw StructuredWorkProductPublicationError.idempotencyConflict(
+                            command.idempotencyKey
+                        )
+                    }
+                    return existing
+                }
+
+                guard try Int.fetchOne(
+                    db,
+                    sql: "SELECT COUNT(*) FROM matters WHERE id = ? AND deleted_at IS NULL",
+                    arguments: [command.sourceSet.matterID]
+                ) == 1 else {
+                    throw StructuredWorkProductPublicationError.invalidCommand(
+                        "matter is unavailable"
+                    )
+                }
+
+                let output: StructuredOutputRecord
+                if let newOutput = command.newOutput {
+                    try newOutput.insert(db)
+                    output = newOutput
+                } else {
+                    guard let existing = try StructuredOutputRecord.fetchOne(
+                        db,
+                        key: command.structuredOutputID
+                    ), existing.deletedAt == nil else {
+                        throw StructuredWorkProductPublicationError.invalidCommand(
+                            "structured output is unavailable"
+                        )
+                    }
+                    output = existing
+                }
+                guard output.matterID == command.sourceSet.matterID else {
+                    throw StructuredWorkProductPublicationError.invalidCommand(
+                        "source set belongs to another matter"
+                    )
+                }
+
+                let currentMaxIndex = try Int.fetchOne(
+                    db,
+                    sql: """
+                    SELECT MAX(version_index) FROM structured_output_versions
+                    WHERE structured_output_id = ?
+                    """,
+                    arguments: [command.structuredOutputID]
+                )
+                if command.newOutput == nil {
+                    guard let activeVersionID = output.activeVersionID,
+                          activeVersionID == command.parentVersionID,
+                          command.versionIndex == (currentMaxIndex ?? 0) + 1 else {
+                        throw StructuredWorkProductPublicationError.invalidCommand(
+                            "repair must extend the exact active version"
+                        )
+                    }
+                } else if currentMaxIndex != nil {
+                    throw StructuredWorkProductPublicationError.invalidCommand(
+                        "new output already has a version"
+                    )
+                }
+
+                try command.sourceSet.insert(db)
+                var preparedSources: [DocumentOutputSourceRecord] = []
+                for source in command.orderedSources {
+                    let prepared = try DocumentSourceIntegrityValidator.prepare(
+                        source,
+                        preserveUnknownRevision: false,
+                        db: db
+                    )
+                    try prepared.insert(db)
+                    preparedSources.append(prepared)
+                }
+                if command.assuranceState == .propositionSupported {
+                    try DocumentSourceIntegrityValidator.validateEvidence(
+                        command.verificationResults,
+                        against: preparedSources,
+                        matterID: command.sourceSet.matterID,
+                        db: db
+                    )
+                }
+
+                try command.generationSession.insert(db)
+
+                let requiredSectionsJSON = try JSONCoding.encode(command.requiredSections)
+                let presentSectionsJSON = try JSONCoding.encode(command.presentSections)
+                let missingSectionsJSON = try JSONCoding.encode(command.missingSections)
+                let verificationJSON = command.verificationResults.isEmpty
+                    ? nil
+                    : try JSONCoding.encode(command.verificationResults)
+                let verificationDimensionsJSON = try command.verificationDimensions.map(
+                    JSONCoding.encode
+                )
+                let versionTimestamp = command.auditEvent.timestamp
+                let version = StructuredOutputVersionRecord(
+                    structuredOutputID: command.structuredOutputID,
+                    versionIndex: command.versionIndex,
+                    parentVersionID: command.parentVersionID,
+                    contentMarkdown: command.contentMarkdown,
+                    requiredSectionsJSON: requiredSectionsJSON,
+                    presentSectionsJSON: presentSectionsJSON,
+                    missingSectionsJSON: missingSectionsJSON,
+                    repairReason: command.repairReason,
+                    generationSessionID: command.generationSession.id,
+                    verificationStatus: command.verificationStatus.rawValue,
+                    verificationVersion: command.verificationVersion,
+                    verificationJSON: verificationJSON,
+                    verificationDimensionsJSON: verificationDimensionsJSON,
+                    verifiedAt: command.verificationStatus == .legacyUnverified
+                        ? nil
+                        : versionTimestamp,
+                    promptBuilderVersion: command.promptBuilderVersion,
+                    assuranceState: command.assuranceState.rawValue,
+                    createdAt: versionTimestamp,
+                    updatedAt: versionTimestamp
+                )
+                try version.insert(db)
+
+                try db.execute(
+                    sql: """
+                    UPDATE document_source_sets
+                    SET structured_output_version_id = ?, status = ?
+                    WHERE id = ?
+                      AND structured_output_version_id IS NULL
+                      AND status = ?
+                      AND matter_id = ?
+                    """,
+                    arguments: [
+                        version.id,
+                        DocumentSourceSetStatus.attached.rawValue,
+                        command.sourceSet.id,
+                        DocumentSourceSetStatus.pending.rawValue,
+                        output.matterID,
+                    ]
+                )
+                guard db.changesCount == 1 else {
+                    throw StructuredWorkProductPublicationError.invalidCommand(
+                        "source set is unavailable"
+                    )
+                }
+                try db.execute(
+                    sql: """
+                    UPDATE document_output_sources
+                    SET structured_output_version_id = ?
+                    WHERE source_set_id = ? AND structured_output_version_id IS NULL
+                    """,
+                    arguments: [version.id, command.sourceSet.id]
+                )
+
+                if let accepted = command.acceptedResearchPacket {
+                    guard let packet = try AcceptedResearchPacketVersionRecord.fetchOne(
+                        db,
+                        key: accepted.versionID
+                    ), packet.versionIndex == accepted.versionIndex,
+                       packet.aggregateDigestSHA256 ==
+                        accepted.expectedAggregateDigestSHA256 else {
+                        throw StructuredWorkProductPublicationError
+                            .acceptedResearchPacketUnavailable
+                    }
+                    _ = try ResearchPacketRepository.bindAcceptedVersion(
+                        ResearchPacketWorkProductBindingCommand(
+                            idempotencyKey: "\(command.idempotencyKey):accepted-packet",
+                            structuredOutputVersionID: version.id,
+                            acceptedPacketVersionID: accepted.versionID,
+                            expectedPacketAggregateDigestSHA256:
+                                accepted.expectedAggregateDigestSHA256,
+                            boundAt: command.auditEvent.timestamp
+                        ),
+                        db: db
+                    )
+                }
+
+                try command.auditEvent.insert(db)
+                try db.execute(
+                    sql: """
+                    UPDATE structured_outputs
+                    SET active_version_id = ?, status = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    arguments: [
+                        version.id,
+                        command.outputStatus.rawValue,
+                        versionTimestamp,
+                        command.structuredOutputID,
+                    ]
+                )
+                guard db.changesCount == 1 else {
+                    throw StructuredWorkProductPublicationError.invalidCommand(
+                        "active output selection failed"
+                    )
+                }
+
+                let aggregateDigest = Self.canonicalDigest([
+                    "structured-work-product-publication-v1",
+                    requestDigest,
+                    output.matterID,
+                    command.structuredOutputID,
+                    version.id,
+                    String(command.versionIndex),
+                    command.sourceSet.id,
+                    command.generationSession.id,
+                    command.auditEvent.id,
+                    command.acceptedResearchPacket?.versionID ?? "",
+                    command.acceptedResearchPacket?.expectedAggregateDigestSHA256 ?? "",
+                ])
+                let receipt = StructuredWorkProductPublicationReceipt(
+                    publicationMode: command.publicationMode,
+                    idempotencyKey: command.idempotencyKey,
+                    requestDigestSHA256: requestDigest,
+                    matterID: output.matterID,
+                    structuredOutputID: command.structuredOutputID,
+                    versionID: version.id,
+                    versionIndex: command.versionIndex,
+                    sourceSetID: command.sourceSet.id,
+                    generationSessionID: command.generationSession.id,
+                    auditEventID: command.auditEvent.id,
+                    aggregateDigestSHA256: aggregateDigest,
+                    acceptedResearchPacketVersionID:
+                        command.acceptedResearchPacket?.versionID,
+                    acceptedResearchPacketVersionIndex:
+                        command.acceptedResearchPacket?.versionIndex,
+                    acceptedResearchPacketAggregateDigestSHA256:
+                        command.acceptedResearchPacket?
+                            .expectedAggregateDigestSHA256,
+                    createdAt: versionTimestamp
+                )
+                try receipt.insert(db)
+                return receipt
+            }
+        } catch let error as StructuredWorkProductPublicationError {
+            throw error
+        } catch {
+            throw StructuredWorkProductPublicationError.persistence(
+                error.localizedDescription
+            )
+        }
+    }
+
+    public func fetchWorkProductPublication(
+        idempotencyKey: String
+    ) throws -> StructuredWorkProductPublicationReceipt? {
+        try writer.read { db in
+            try StructuredWorkProductPublicationReceipt.fetchOne(
+                db,
+                key: idempotencyKey
+            )
+        }
+    }
+
     /// Promotes one persisted grounded-chat packet into a new structured output.
     /// The message-owned source set already exists, so this transaction inserts
     /// only the output/version and attaches that exact packet. Any failure after
@@ -576,6 +847,10 @@ public final class StructuredOutputRepository: @unchecked Sendable {
 
     public func updateStatus(outputID: String, status: StructuredOutputStatus) throws {
         try writer.write { db in
+            if status == .complete,
+               try Self.isProvisionalPublication(structuredOutputID: outputID, db: db) {
+                throw StructuredOutputRepositoryError.provisionalPublicationCannotPromote
+            }
             try db.execute(
                 sql: "UPDATE structured_outputs SET status = ?, updated_at = ? WHERE id = ?",
                 arguments: [status.rawValue, Date(), outputID]
@@ -820,6 +1095,161 @@ public final class StructuredOutputRepository: @unchecked Sendable {
         }
     }
 
+    private static func validatePublicationCommand(
+        _ command: StructuredWorkProductPublicationCommand
+    ) throws {
+        let idempotencyKey = command.idempotencyKey
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !idempotencyKey.isEmpty,
+              idempotencyKey == command.idempotencyKey,
+              command.versionIndex > 0,
+              !command.structuredOutputID.isEmpty,
+              !command.contentMarkdown.isEmpty,
+              command.sourceSet.structuredOutputVersionID == nil,
+              command.sourceSet.status == DocumentSourceSetStatus.pending.rawValue,
+              command.orderedSources.allSatisfy({
+                  $0.sourceSetID == command.sourceSet.id
+                    && $0.structuredOutputVersionID == nil
+              }),
+              Set(command.orderedSources.map(\.id)).count == command.orderedSources.count,
+              command.generationSession.status == MessageStatus.completed.rawValue,
+              command.generationSession.completedAt != nil,
+              command.auditEvent.matterID == command.sourceSet.matterID,
+              command.auditEvent.eventType == "structured_work_product_published",
+              command.auditEvent.relatedTable == StructuredOutputRecord.databaseTableName,
+              command.auditEvent.relatedID == command.structuredOutputID else {
+            throw StructuredWorkProductPublicationError.invalidCommand(
+                "terminal aggregate members do not share one exact identity"
+            )
+        }
+        if let output = command.newOutput {
+            guard output.id == command.structuredOutputID,
+                  output.matterID == command.sourceSet.matterID,
+                  output.activeVersionID == nil,
+                  output.deletedAt == nil,
+                  output.status == StructuredOutputStatus.draft.rawValue,
+                  command.parentVersionID == nil else {
+                throw StructuredWorkProductPublicationError.invalidCommand(
+                    "new output identity is inconsistent"
+                )
+            }
+        }
+        switch command.publicationMode {
+        case .governedAuthority:
+            guard command.acceptedResearchPacket != nil else {
+                throw StructuredWorkProductPublicationError
+                    .acceptedResearchPacketUnavailable
+            }
+        case .ordinary:
+            guard command.acceptedResearchPacket == nil else {
+                throw StructuredWorkProductPublicationError.invalidCommand(
+                    "ordinary publication cannot attach authority packet"
+                )
+            }
+        case .provisionalIssueOutline:
+            guard command.acceptedResearchPacket == nil,
+                  command.outputStatus == .needsReview,
+                  command.assuranceState == .preliminary,
+                  command.verificationStatus != .allSupported else {
+                throw StructuredWorkProductPublicationError.invalidCommand(
+                    "provisional publication cannot be promoted"
+                )
+            }
+        }
+        if command.verificationStatus != .legacyUnverified,
+           command.verificationDimensions?.isComplete != true {
+            throw StructuredWorkProductPublicationError.invalidCommand(
+                "verification dimensions are incomplete"
+            )
+        }
+        if command.outputStatus == .complete {
+            guard command.verificationStatus == .allSupported,
+                  Self.supportsCompleteStatus(command.assuranceState) else {
+                throw StructuredWorkProductPublicationError.invalidCommand(
+                    "complete output lacks terminal support"
+                )
+            }
+        }
+    }
+
+    private static func publicationRequestDigest(
+        _ command: StructuredWorkProductPublicationCommand
+    ) throws -> String {
+        var values = [
+            "structured-work-product-publication-request-v1",
+            command.publicationMode.rawValue,
+            command.idempotencyKey,
+            String(command.versionIndex),
+            command.structuredOutputID,
+            command.contentMarkdown,
+            command.parentVersionID ?? "",
+            command.repairReason ?? "",
+            command.verificationStatus.rawValue,
+            command.verificationVersion ?? "",
+            command.outputStatus.rawValue,
+            command.promptBuilderVersion ?? "",
+            command.assuranceState.rawValue,
+            command.acceptedResearchPacket?.versionID ?? "",
+            command.acceptedResearchPacket.map { String($0.versionIndex) } ?? "",
+            command.acceptedResearchPacket?.expectedAggregateDigestSHA256 ?? "",
+            try digestJSON(command.newOutput),
+            try digestJSON(command.sourceSet),
+            try digestJSON(command.orderedSources),
+            try digestJSON(command.requiredSections),
+            try digestJSON(command.presentSections),
+            try digestJSON(command.missingSections),
+            try digestJSON(command.verificationResults),
+            try digestJSON(command.verificationDimensions),
+            try digestJSON(command.generationSession),
+            try digestJSON(command.auditEvent),
+        ]
+        values.append(String(values.count))
+        return canonicalDigest(values)
+    }
+
+    private static func digestJSON<T: Encodable>(_ value: T) throws -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        encoder.dateEncodingStrategy = .custom { date, encoder in
+            var container = encoder.singleValueContainer()
+            try container.encode(String(date.timeIntervalSinceReferenceDate.bitPattern))
+        }
+        return String(decoding: try encoder.encode(value), as: UTF8.self)
+    }
+
+    private static func canonicalDigest(_ values: [String]) -> String {
+        let canonical = values.map { "\($0.utf8.count):\($0)" }.joined(separator: "|")
+        return SHA256.hash(data: Data(canonical.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+    }
+
+    private static func isProvisionalPublication(
+        structuredOutputID: String,
+        db: Database
+    ) throws -> Bool {
+        // Migration fixtures intentionally exercise repositories against an
+        // older schema endpoint. Before v078 there is no provisional ledger,
+        // so the legacy operation cannot target a governed provisional work
+        // product.
+        guard try db.tableExists(
+            StructuredWorkProductPublicationReceipt.databaseTableName
+        ) else {
+            return false
+        }
+        return try Int.fetchOne(
+            db,
+            sql: """
+            SELECT COUNT(*) FROM structured_work_product_publications
+            WHERE structured_output_id = ? AND publication_mode = ?
+            """,
+            arguments: [
+                structuredOutputID,
+                StructuredWorkProductPublicationMode.provisionalIssueOutline.rawValue,
+            ]
+        ) ?? 0 > 0
+    }
+
     private static func defaultAssurance(
         for verificationStatus: OutputVerificationStatus
     ) -> OutputAssuranceState {
@@ -868,4 +1298,5 @@ public enum StructuredOutputRepositoryError: Error, Equatable, Sendable {
     case versionUnavailable(String)
     case staleVersionRequiresNewVersion(String)
     case verificationEvidenceMismatch(String)
+    case provisionalPublicationCannotPromote
 }

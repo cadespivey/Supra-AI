@@ -15,6 +15,7 @@ public enum UserMutationOperation: String, Codable, CaseIterable, Hashable, Send
     case importStart
     case export
     case routeDependentSave
+    case structuredWorkProductPublication
 }
 
 /// An action the presentation layer can expose after a failed mutation.
