@@ -175,7 +175,7 @@ private struct NewOutputSheet: View {
                 }
                 Section {
                     if library.models.isEmpty {
-                        Text("No models registered — add one in the Models tab to generate.")
+                        Text("No local assistant is configured — finish AI Setup to generate.")
                             .font(.supraCaption).foregroundStyle(.orange)
                     } else {
                         Picker("Model", selection: $selectedModelID) {

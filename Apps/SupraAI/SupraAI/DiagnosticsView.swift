@@ -167,7 +167,7 @@ struct DiagnosticsView: View {
                             let report = await environment.runReasoningCapabilityProbe()
                             capabilityReport = report
                             if report == nil {
-                                capabilityProbeMessage = "Load a model in the Models tab first."
+                                capabilityProbeMessage = "Load a model in AI Setup first."
                             }
                             runningCapabilityProbe = false
                         }
@@ -305,7 +305,7 @@ struct DiagnosticsView: View {
         }
         return switch environment.runtimeServiceState {
         case .modelUnloaded, .connected:
-            "Load or assign a model from the Models tab before running model-backed tasks."
+            "Load or assign a model in AI Setup before running model-backed tasks."
         case .disconnected:
             "The runtime service is unavailable; relaunch the app if it does not reconnect."
         case .failed:

@@ -6,8 +6,13 @@ import SwiftUI
 struct MainShellView: View {
     @EnvironmentObject private var environment: AppEnvironment
     @State private var selection: SidebarSelection? = .route(.globalChats)
+    @State private var setupNavigationRequest: SetupNavigationRequest?
     @State private var showNewMatter = false
     @State private var windowContentHeight: CGFloat = 720
+#if DEBUG
+    @State private var setupNavigationFixture: SetupNavigationUITestFixture?
+    @State private var isShowingSetupNavigationFixture = false
+#endif
 
     var body: some View {
         // Top alignment matters: while the measured height lags the live
@@ -146,6 +151,27 @@ struct MainShellView: View {
 
     @ViewBuilder
     private var detailView: some View {
+#if DEBUG
+        if let fixture = setupNavigationFixture,
+           isShowingSetupNavigationFixture {
+            SetupBlockerFixtureView(
+                fixture: fixture,
+                library: environment.modelLibrary,
+                documentSetup: environment.documentSetupController,
+                settings: environment.settingsController,
+                backup: environment.backupController,
+                onOpenSetup: beginSetupNavigation
+            )
+        } else {
+            standardDetailView
+        }
+#else
+        standardDetailView
+#endif
+    }
+
+    @ViewBuilder
+    private var standardDetailView: some View {
         switch selection ?? .route(.globalChats) {
         case let .route(route):
             routeView(route)
@@ -199,7 +225,11 @@ struct MainShellView: View {
     private func applyUITestInitialSelection() {
         guard AppEnvironment.isUITestMode else { return }
         let arguments = ProcessInfo.processInfo.arguments
-        if let routeFlag = arguments.firstIndex(of: "-uiTestInitialRoute"),
+        if let fixture = SetupNavigationUITestFixture(arguments: arguments) {
+            setupNavigationFixture = fixture
+            isShowingSetupNavigationFixture = true
+            setupNavigationRequest = nil
+        } else if let routeFlag = arguments.firstIndex(of: "-uiTestInitialRoute"),
            arguments.indices.contains(routeFlag + 1),
            let route = AppRoute(rawValue: arguments[routeFlag + 1]) {
             selection = .route(route)
@@ -232,7 +262,9 @@ struct MainShellView: View {
                 library: environment.modelLibrary,
                 downloader: environment.modelDownloadController,
                 documentSetup: environment.documentSetupController,
-                embeddingDownloader: environment.embeddingDownloadController
+                embeddingDownloader: environment.embeddingDownloadController,
+                setupNavigationRequest: setupNavigationRequest,
+                onReturnFromSetup: returnFromSetup
             )
         case .publicRecords:
             PublicRecordsView(controller: environment.publicRecordsController)
@@ -246,12 +278,310 @@ struct MainShellView: View {
                 billing: environment.billingSettingsController,
                 backup: environment.backupController,
                 firmStyle: environment.firmStyleProfileController,
-                parseExemplar: environment.parseFirmStyleExemplar
+                parseExemplar: environment.parseFirmStyleExemplar,
+                setupNavigationRequest: setupNavigationRequest,
+                onReturnFromSetup: returnFromSetup
             )
         }
     }
 
+    /// Opens the precise setup destination carried by the typed request. The
+    /// originating matter and work inputs remain on the request until the user
+    /// explicitly returns; no current-matter or default-route substitution is
+    /// permitted here.
+    private func beginSetupNavigation(_ request: SetupNavigationRequest) {
+        setupNavigationRequest = request
+#if DEBUG
+        isShowingSetupNavigationFixture = false
+#endif
+        switch request.navigationTarget {
+        case .aiSetup:
+            selection = .route(.models)
+        case .settings:
+            selection = .route(.settings)
+        }
+    }
+
+    /// Restores only the work context that opened the active setup request.
+    /// A stale return control cannot redirect a newer request.
+    private func returnFromSetup(_ request: SetupNavigationRequest) {
+        guard setupNavigationRequest == request else { return }
+        setupNavigationRequest = nil
+#if DEBUG
+        if setupNavigationFixture?.request == request {
+            isShowingSetupNavigationFixture = true
+            return
+        }
+#endif
+        switch request.returnContext.returnDestination {
+        case let .matterTask(matterID, _):
+            selectMatter(matterID)
+        }
+    }
+
 }
+
+/// Keeps return navigation consistent across AI Setup and Settings. The action
+/// carries the complete typed request back to the shell rather than rebuilding
+/// a matter or task from global state.
+struct SetupNavigationReturnBar: View {
+    let request: SetupNavigationRequest
+    let onReturn: (SetupNavigationRequest) -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "arrow.uturn.backward.circle.fill")
+                .foregroundStyle(.tint)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Setup for blocked work")
+                    .font(.supraHeadline)
+                Text("Your matter, selected sources, and task checkpoint are preserved.")
+                    .font(.supraCaption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button("Return to Draft Motion") {
+                onReturn(request)
+            }
+            .accessibilityIdentifier("setup.navigation.return")
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(.bar)
+        .overlay(alignment: .bottom) { Divider() }
+    }
+}
+
+/// Stable focus surface for a setup requirement row. Applying the identifier
+/// and keyboard focus to the same element lets assistive technology confirm
+/// that navigation reached the requested correction, not merely its screen.
+struct SetupRequirementFocusModifier: ViewModifier {
+    let identifier: String
+    let focusedIdentifier: FocusState<String?>.Binding
+
+    func body(content: Content) -> some View {
+        content
+            .id(identifier)
+            .accessibilityIdentifier(identifier)
+            .focusable()
+            .focused(focusedIdentifier, equals: identifier)
+    }
+}
+
+extension View {
+    func setupRequirementFocus(
+        _ identifier: String,
+        focusedIdentifier: FocusState<String?>.Binding
+    ) -> some View {
+        modifier(
+            SetupRequirementFocusModifier(
+                identifier: identifier,
+                focusedIdentifier: focusedIdentifier
+            )
+        )
+    }
+}
+
+#if DEBUG
+private struct SetupNavigationUITestFixture: Equatable {
+    let request: SetupNavigationRequest
+    let input: String
+
+    init?(arguments: [String]) {
+        func exactValue(after flag: String) -> String? {
+            let matches = arguments.indices.filter { arguments[$0] == flag }
+            guard matches.count == 1,
+                  let index = matches.first,
+                  arguments.indices.contains(index + 1) else { return nil }
+            let value = arguments[index + 1]
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return value.isEmpty ? nil : value
+        }
+
+        guard let requirementID = exactValue(after: "-uiTestSetupRequirement"),
+              let requirement = SetupRequirement(id: requirementID),
+              let requestID = exactValue(after: "-uiTestSetupRequestID"),
+              let matterID = exactValue(after: "-uiTestSetupMatterID"),
+              let intentRaw = exactValue(after: "-uiTestSetupIntent"),
+              let intent = WorkIntent(rawValue: intentRaw),
+              let sourceSetID = exactValue(after: "-uiTestSetupSourceSetID"),
+              let sourceSetVersionRaw = exactValue(after: "-uiTestSetupSourceSetVersion"),
+              let sourceSetVersion = Int(sourceSetVersionRaw),
+              sourceSetVersion > 0,
+              let authorityPacketID = exactValue(after: "-uiTestSetupAuthorityPacketID"),
+              let authorityPacketVersionRaw = exactValue(after: "-uiTestSetupAuthorityPacketVersion"),
+              let authorityPacketVersion = Int(authorityPacketVersionRaw),
+              authorityPacketVersion > 0,
+              let checkpointID = exactValue(after: "-uiTestSetupCheckpointID"),
+              let input = exactValue(after: "-uiTestSetupInput") else { return nil }
+
+        let context = WorkContext(
+            matterID: matterID,
+            intent: intent,
+            sourceSet: VersionedWorkReference(id: sourceSetID, version: sourceSetVersion),
+            authorityPacket: VersionedWorkReference(
+                id: authorityPacketID,
+                version: authorityPacketVersion
+            ),
+            workProduct: nil,
+            returnDestination: .matterTask(matterID: matterID, intent: intent),
+            checkpointID: checkpointID
+        )
+        self.request = SetupNavigationRequest(
+            id: requestID,
+            requirement: requirement,
+            returnContext: context
+        )
+        self.input = input
+    }
+}
+
+private struct SetupBlockerFixtureView: View {
+    let fixture: SetupNavigationUITestFixture
+    @ObservedObject var library: ModelLibrary
+    @ObservedObject var documentSetup: DocumentIntelligenceSetupController
+    @ObservedObject var settings: SettingsController
+    @ObservedObject var backup: BackupController
+    let onOpenSetup: (SetupNavigationRequest) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Text("Draft Motion")
+                .font(.title2.weight(.semibold))
+            Text("This synthetic task verifies that a setup detour preserves the exact work in progress.")
+                .foregroundStyle(.secondary)
+
+            Text(contextSummary)
+                .font(.supraCaption.monospaced())
+                .textSelection(.enabled)
+                .accessibilityLabel(contextSummary)
+                .accessibilityIdentifier("setup.fixture.context")
+
+            Text(fixture.input)
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+                .accessibilityLabel("Preserved input")
+                .accessibilityValue(fixture.input)
+                .accessibilityIdentifier("setup.fixture.input")
+
+            VStack(alignment: .leading, spacing: 10) {
+                Label(blockerTitle, systemImage: "exclamationmark.triangle.fill")
+                    .font(.supraHeadline)
+                    .foregroundStyle(.orange)
+                Text(blockerDetail)
+                    .foregroundStyle(.secondary)
+                HStack {
+                    Button(actionTitle) {
+                        onOpenSetup(fixture.request)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .accessibilityValue(blockerAccessibilityValue)
+                    .accessibilityIdentifier(
+                        "setup.blocker.action.\(fixture.request.requirement.id)"
+                    )
+                    Spacer()
+                    Button("Draft Motion") {}
+                        .disabled(!isRequirementSatisfied)
+                        .accessibilityIdentifier("setup.fixture.blockedAction")
+                }
+            }
+            .padding(16)
+            .background(.background, in: RoundedRectangle(cornerRadius: 12))
+            .overlay {
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(.orange.opacity(0.35), lineWidth: 1)
+            }
+            Spacer()
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var contextSummary: String {
+        let context = fixture.request.returnContext
+        var parts = [
+            "request=\(fixture.request.id)",
+            "matter=\(context.matterID)",
+            "intent=\(context.intent.rawValue)",
+        ]
+        if let sourceSet = context.sourceSet {
+            parts.append("sourceSet=\(sourceSet.id)@\(sourceSet.version)")
+        }
+        if let authorityPacket = context.authorityPacket {
+            parts.append("authorityPacket=\(authorityPacket.id)@\(authorityPacket.version)")
+        }
+        if let workProduct = context.workProduct {
+            parts.append("workProduct=\(workProduct.id)@\(workProduct.version)")
+        }
+        if let checkpointID = context.checkpointID {
+            parts.append("checkpoint=\(checkpointID)")
+        }
+        return parts.joined(separator: " | ")
+    }
+
+    private var actionTitle: String {
+        switch fixture.request.requirement {
+        case .localAssistant:
+            "Set Up Local Assistant"
+        case .documentSearch:
+            "Set Up Document Search"
+        case .providerConnection:
+            "Connect CourtListener"
+        case .backupDestination:
+            "Set Up Backup"
+        }
+    }
+
+    private var blockerTitle: String {
+        switch fixture.request.requirement {
+        case .localAssistant:
+            "Local assistant required"
+        case .documentSearch:
+            "Document search setup required"
+        case .providerConnection:
+            "CourtListener connection required"
+        case .backupDestination:
+            "Backup destination required"
+        }
+    }
+
+    private var blockerDetail: String {
+        "Draft Motion is unavailable until this requirement is satisfied. Open the exact setup row, complete it, then return to this preserved task."
+    }
+
+    private var blockerAccessibilityValue: String {
+        "\(blockerTitle). Draft Motion is unavailable. Opens the required setup row."
+    }
+
+    private var isRequirementSatisfied: Bool {
+        switch fixture.request.requirement {
+        case let .localAssistant(role):
+            switch role {
+            case .drafting:
+                library.resolvedModel(for: .drafting) != nil
+            }
+        case let .documentSearch(step):
+            switch step {
+            case .embeddingModel:
+                documentSetup.selectedEmbeddingModel != nil
+                    && documentSetup.embeddingTestPassed
+            case .extractionToolchain:
+                documentSetup.toolchain?.meetsMinimumForSetup == true
+            case .storage:
+                documentSetup.storageInitialized
+            }
+        case let .providerConnection(provider):
+            switch provider {
+            case .courtListener:
+                settings.hasCourtListenerToken
+            }
+        case .backupDestination:
+            backup.hasDestination
+        }
+    }
+}
+#endif
 
 /// Hosts a matter's workspace, resolving the matter from the (observed) controller
 /// so it re-renders once the matter's scoped sub-controllers are wired.

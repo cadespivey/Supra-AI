@@ -30,7 +30,7 @@ enum AppRoute: String, CaseIterable, Identifiable {
         case .publicRecords:
             "Public Records"
         case .models:
-            "Models"
+            "AI Setup"
         case .diagnostics:
             "Diagnostics"
         case .settings:

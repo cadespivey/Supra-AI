@@ -285,7 +285,20 @@ final class AppEnvironment: ObservableObject {
             appVersion: appVersion,
             tokenStore: tokenStore
         )
-        let documentStorage = DocumentStorage.makeDefault()
+        // The setup-navigation wire proof must start with genuinely unmet
+        // document prerequisites and complete the real storage action without
+        // reading or changing the user's managed-document folder. Ordinary UI
+        // tests keep the existing layout; only the exact typed-setup fixture
+        // receives this process-local root and deterministic capability probe.
+        let setupNavigationUITestRequested = Self.setupNavigationUITestRequirementID != nil
+        let documentStorage = setupNavigationUITestRequested
+            ? DocumentStorage(
+                root: FileManager.default.temporaryDirectory.appendingPathComponent(
+                    "SupraAI-UITest-Setup-\(UUID().uuidString)",
+                    isDirectory: true
+                )
+            )
+            : DocumentStorage.makeDefault()
 #if DEBUG
         let restoreUITestFixture = AppEnvironment.makeRestoreUITestFixtureIfRequested()
 #else
@@ -373,7 +386,28 @@ final class AppEnvironment: ObservableObject {
 
         // Document intelligence controllers must exist before MattersController so
         // it can vend a per-matter Documents controller wired to the queue + gate.
-        let documentSetup = DocumentIntelligenceSetupController(store: store, runtimeClient: runtimeClient)
+        let setupCapabilitiesProvider: @Sendable () -> DocumentToolchainCapabilities
+        if setupNavigationUITestRequested {
+            setupCapabilitiesProvider = {
+                DocumentToolchainCapabilities(
+                    version: "setup-navigation-wire-proof",
+                    pdfText: false,
+                    ocr: false,
+                    nativeImageDecoding: true,
+                    heicDecoding: false,
+                    supportedFamilies: [],
+                    ocrLanguages: []
+                )
+            }
+        } else {
+            setupCapabilitiesProvider = { DocumentToolchain.detectCapabilities() }
+        }
+        let documentSetup = DocumentIntelligenceSetupController(
+            store: store,
+            runtimeClient: runtimeClient,
+            storage: documentStorage,
+            capabilitiesProvider: setupCapabilitiesProvider
+        )
         self.documentSetupController = documentSetup
         self.embeddingDownloadController = EmbeddingModelDownloadController(
             store: store,
@@ -1009,6 +1043,26 @@ final class AppEnvironment: ObservableObject {
     /// hermetic throwaway store + a seeded matter so UI tests never touch real data.
     static var isUITestMode: Bool {
         ProcessInfo.processInfo.arguments.contains("-uiTestMode")
+    }
+
+    /// Resolves the dedicated typed-setup fixture without a fallback value.
+    /// Release builds cannot activate this path, and malformed or duplicated
+    /// launch arguments are rejected rather than silently choosing a target.
+    private static var setupNavigationUITestRequirementID: String? {
+#if DEBUG
+        guard isUITestMode else { return nil }
+        let arguments = ProcessInfo.processInfo.arguments
+        let matches = arguments.indices.filter {
+            arguments[$0] == "-uiTestSetupRequirement"
+        }
+        guard matches.count == 1,
+              let index = matches.first,
+              arguments.indices.contains(index + 1),
+              SetupRequirement(id: arguments[index + 1]) != nil else { return nil }
+        return arguments[index + 1]
+#else
+        return nil
+#endif
     }
 
     /// True when launched with `-demoMode`: the same hermetic throwaway store as UI

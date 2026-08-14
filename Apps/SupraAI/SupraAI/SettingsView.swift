@@ -15,16 +15,53 @@ struct SettingsView: View {
     @ObservedObject var backup: BackupController
     @ObservedObject var firmStyle: FirmStyleProfileController
     let parseExemplar: @MainActor (ExemplarKind, URL) async -> ExemplarParseOutcome
+    var setupNavigationRequest: SetupNavigationRequest?
+    var onReturnFromSetup: (SetupNavigationRequest) -> Void
+    @FocusState private var focusedSetupRequirementID: String?
+
+    init(
+        settings: SettingsController,
+        profile: AssistantProfileController,
+        update: SparkleUpdaterController,
+        billing: BillingSettingsController,
+        backup: BackupController,
+        firmStyle: FirmStyleProfileController,
+        parseExemplar: @escaping @MainActor (ExemplarKind, URL) async -> ExemplarParseOutcome,
+        setupNavigationRequest: SetupNavigationRequest? = nil,
+        onReturnFromSetup: @escaping (SetupNavigationRequest) -> Void = { _ in }
+    ) {
+        self.settings = settings
+        self.profile = profile
+        self.update = update
+        self.billing = billing
+        self.backup = backup
+        self.firmStyle = firmStyle
+        self.parseExemplar = parseExemplar
+        self.setupNavigationRequest = setupNavigationRequest
+        self.onReturnFromSetup = onReturnFromSetup
+    }
 
     var body: some View {
-        Form {
-            AssistantProfileSection(profile: profile, billing: billing)
+        VStack(alignment: .leading, spacing: 0) {
+            if let request = settingsRequest {
+                SetupNavigationReturnBar(
+                    request: request,
+                    onReturn: onReturnFromSetup
+                )
+            }
 
-            FirmStyleSection(firmStyle: firmStyle, parseExemplar: parseExemplar)
+            ScrollViewReader { proxy in
+                Form {
+                    AssistantProfileSection(profile: profile, billing: billing)
 
-            ScratchPadBillingSection(billing: billing)
+                FirmStyleSection(firmStyle: firmStyle, parseExemplar: parseExemplar)
 
-            BackupSection(backup: backup)
+                ScratchPadBillingSection(billing: billing)
+
+                BackupSection(
+                    backup: backup,
+                    focusedSetupRequirementID: $focusedSetupRequirementID
+                )
 
             Section("Generation Defaults") {
                 Picker("Preset", selection: $settings.preset) {
@@ -66,6 +103,10 @@ struct SettingsView: View {
                     settings: settings, title: "CourtListener",
                     description: "Federal & state case law from courts and PACER, via the nonprofit Free Law Project. Updated continuously as new opinions are published.",
                     kind: .courtListener(signupURL: URL(string: "https://www.courtlistener.com/help/api/rest/")!)
+                )
+                .setupRequirementFocus(
+                    "settings.requirement.provider.courtListener",
+                    focusedIdentifier: $focusedSetupRequirementID
                 )
                 // Codified law
                 APIKeyDisclosure(
@@ -157,17 +198,44 @@ struct SettingsView: View {
             } header: {
                 Text("About")
             }
+                }
+                .formStyle(.grouped)
+                // Larger, bolder section headers — consistent with AI Setup.
+                .headerProminence(.increased)
+                // A clearly-bordered box for every single-line field, so they're easy to
+                // identify (cascades to all TextField/SecureField descendants; MultilineField
+                // has its own border). Left-align the contents so text and spaces flow with
+                // typing instead of the grouped form's default right alignment.
+                .textFieldStyle(.roundedBorder)
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .onChange(of: focusedSetupRequirementID) { _, identifier in
+                    guard let identifier else { return }
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        proxy.scrollTo(identifier, anchor: .center)
+                    }
+                }
+            }
         }
-        .formStyle(.grouped)
-        // Larger, bolder section headers — consistent with the Models tab.
-        .headerProminence(.increased)
-        // A clearly-bordered box for every single-line field, so they're easy to
-        // identify (cascades to all TextField/SecureField descendants; MultilineField
-        // has its own border). Left-align the contents so text and spaces flow with
-        // typing instead of the grouped form's default right alignment.
-        .textFieldStyle(.roundedBorder)
-        .multilineTextAlignment(.leading)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .onAppear { focusRequestedSetupRow() }
+        .onChange(of: setupNavigationRequest?.id) { _, _ in
+            focusRequestedSetupRow()
+        }
+    }
+
+    private var settingsRequest: SetupNavigationRequest? {
+        guard let setupNavigationRequest,
+              setupNavigationRequest.navigationTarget.isSettings else { return nil }
+        return setupNavigationRequest
+    }
+
+    private func focusRequestedSetupRow() {
+        guard let request = settingsRequest else { return }
+        let identifier = request.navigationTarget.rowAccessibilityIdentifier
+        Task { @MainActor in
+            await Task.yield()
+            focusedSetupRequirementID = identifier
+        }
     }
 
     private func revealInFinder(_ path: String) {
@@ -181,6 +249,7 @@ struct SettingsView: View {
 /// while folder choice and execution remain ordinary macOS controls.
 private struct BackupSection: View {
     @ObservedObject var backup: BackupController
+    let focusedSetupRequirementID: FocusState<String?>.Binding
     @State private var showingRestoreConfirmation = false
 
     var body: some View {
@@ -244,6 +313,10 @@ private struct BackupSection: View {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .stroke(statusColor.opacity(0.25), lineWidth: 1)
             }
+            .setupRequirementFocus(
+                "settings.requirement.backup",
+                focusedIdentifier: focusedSetupRequirementID
+            )
 
             if backup.shouldWarnAboutLargeFirstBackup {
                 Label {
@@ -1189,7 +1262,7 @@ private struct AssistantProfileSection: View {
 
 /// Guided embedding-model setup flow: 1) download a curated or custom model, then
 /// 2) select it for use. Selecting (or finishing a download) auto-verifies the
-/// model by loading it into the runtime — no manual test-load. Shown in the Models tab.
+/// model by loading it into the runtime — no manual test-load. Shown in AI Setup.
 struct EmbeddingModelSetupView: View {
     @ObservedObject var setup: DocumentIntelligenceSetupController
     @ObservedObject var downloader: EmbeddingModelDownloadController
