@@ -76,6 +76,10 @@ Dependency rules that are enforced by package boundaries:
 
 - `SupraCore` depends on nothing internal; everything depends on it for IDs and domain enums.
 - `SupraStore` owns the database connection. No other package opens the SQLite database.
+- Store persistence records stop at the Store/Sessions boundary. High-change app surfaces receive
+  stable `SupraSessions` projections for document and folder summaries, billing lines, ScratchPad
+  search hits, and diagnostic events; their controllers map once while preserving persisted
+  identity, ordering, and update/delete semantics.
 - Cross-package transport auditing uses `SupraCore.NetworkRequestAuditWriting`; `SupraStore`
   vends the narrow `networkRequestAudits` implementation, which can only create and finish
   network-request rows. `SupraNetworking` receives only that capability and has no Store package
