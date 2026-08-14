@@ -151,6 +151,38 @@ final class RuntimeSafetyClientTests: XCTestCase {
         XCTAssertEqual(base.restartCallCount, 2)
     }
 
+    func testTRuntimeSafe04RecoveryRequiresDeterministicResetReceiptAfterRestart() async throws {
+        // T-RUNTIME-RESET-01 refinement RED: connection replacement and an idle
+        // status alone do not prove model containers or replay buffers cleared.
+        let generationID = GenerationID()
+        let base = RuntimeSafetyBaseClient(cancellationFailures: 1)
+        let client = RuntimeSafetyClient(base: base)
+        let stream = try client.generate(request(
+            generationID: generationID,
+            prompt: "T_RUNTIME_RESET_01_WIRE_731"
+        ))
+        let consumer = Task { try await drainRuntimeSafetyStream(stream) }
+        try await waitForRuntimeSafety("generation reaches reset recovery base") {
+            base.generatedPrompts == ["T_RUNTIME_RESET_01_WIRE_731"]
+        }
+        consumer.cancel()
+        _ = await consumer.result
+        try await waitForRuntimeSafety("reset recovery quarantine") {
+            client.currentRecoverySnapshot().phase == .recoveryRequired
+        }
+
+        try await client.recoverRuntime()
+
+        XCTAssertEqual(base.restartCallCount, 1)
+        XCTAssertEqual(base.residencySnapshotCallCount, 1)
+        XCTAssertEqual(base.resetRequests.count, 1)
+        let resetRequest = try XCTUnwrap(base.resetRequests.first)
+        XCTAssertEqual(resetRequest.expectedEpoch, 7)
+        XCTAssertEqual(resetRequest.requestID.isEmpty, false)
+        XCTAssertEqual(client.currentRecoverySnapshot(), .available)
+        XCTAssertFalse(resetRequest.requestID.contains("DEFAULT-000"))
+    }
+
     func testTXPCCancel01MismatchedCancellationIdentityFailsClosed() async throws {
         // T-XPC-CANCEL-01 expected RED: cancellation confirmation has no
         // injectable bounded policy, so the exact mismatch/timeout matrix is
@@ -341,7 +373,8 @@ private func cancelRuntimeSafetyGeneration(
     }
 }
 
-private final class RuntimeSafetyBaseClient: RuntimeClientProtocol, @unchecked Sendable {
+private final class RuntimeSafetyBaseClient: RuntimeClientProtocol, RuntimeResidencyClientProtocol,
+    @unchecked Sendable {
     enum CancellationReply: Sendable {
         case cancelled
         case mismatched(GenerationID)
@@ -367,6 +400,8 @@ private final class RuntimeSafetyBaseClient: RuntimeClientProtocol, @unchecked S
     private var storedRestartCallCount = 0
     private var storedCancelCallCount = 0
     private var storedRuntimeStatusCallCount = 0
+    private var storedResidencySnapshotCallCount = 0
+    private var storedResetRequests: [RuntimeServiceResetRequest] = []
     private var storedReturnedCancellationIDs: [GenerationID] = []
     private var storedRecentEventRequests: [Int] = []
 
@@ -386,6 +421,8 @@ private final class RuntimeSafetyBaseClient: RuntimeClientProtocol, @unchecked S
     var restartCallCount: Int { lock.withLock { storedRestartCallCount } }
     var cancelCallCount: Int { lock.withLock { storedCancelCallCount } }
     var runtimeStatusCallCount: Int { lock.withLock { storedRuntimeStatusCallCount } }
+    var residencySnapshotCallCount: Int { lock.withLock { storedResidencySnapshotCallCount } }
+    var resetRequests: [RuntimeServiceResetRequest] { lock.withLock { storedResetRequests } }
     var returnedCancellationIDs: [GenerationID] {
         lock.withLock { storedReturnedCancellationIDs }
     }
@@ -491,6 +528,42 @@ private final class RuntimeSafetyBaseClient: RuntimeClientProtocol, @unchecked S
         }
     }
 
+    func runtimeResidencySnapshot() async throws -> RuntimeServiceResidencySnapshot {
+        lock.withLock {
+            storedResidencySnapshotCallCount += 1
+            return RuntimeServiceResidencySnapshot(
+                epoch: 7,
+                unifiedMemoryCeilingBytes: 8_000_000_007,
+                fixedResidentBytes: 719,
+                replayGenerationCount: 0,
+                bufferedEventCount: 0,
+                residents: [],
+                activeTaskCount: 0
+            )
+        }
+    }
+
+    func evictRuntimeArtifact(
+        _ request: RuntimeServiceArtifactEvictionRequest
+    ) async throws -> RuntimeServiceArtifactEvictionResponse {
+        throw RuntimeSafetyBaseError.unexpectedEviction
+    }
+
+    func resetRuntime(
+        _ request: RuntimeServiceResetRequest
+    ) async throws -> RuntimeServiceResetReceipt {
+        lock.withLock { storedResetRequests.append(request) }
+        return RuntimeServiceResetReceipt(
+            requestID: request.requestID,
+            previousEpoch: request.expectedEpoch,
+            newEpoch: request.expectedEpoch + 1,
+            unloadedChatModelIDs: [],
+            unloadedEmbeddingModelIDs: [],
+            clearedReplayGenerationCount: 0,
+            clearedBufferedEventCount: 0
+        )
+    }
+
     func restartRuntimeService() async throws {
         lock.withLock { storedRestartCallCount += 1 }
     }
@@ -502,6 +575,7 @@ private final class RuntimeSafetyBaseClient: RuntimeClientProtocol, @unchecked S
 
 private enum RuntimeSafetyBaseError: Error {
     case cancellationRejected
+    case unexpectedEviction
 }
 
 private func drainRuntimeSafetyStream(
