@@ -43,6 +43,17 @@ final class ArchitectureUXTMarkdown01Tests: XCTestCase {
         XCTAssertNil(
             SupraMarkdownCitationLinker.label(from: try XCTUnwrap(URL(string: "https://example.invalid/S7")))
         )
+        var tappedLabels: [String] = []
+        XCTAssertTrue(SupraMarkdownCitationLinker.route(
+            try XCTUnwrap(URL(string: "supracite://s7")),
+            onCitationTap: { tappedLabels.append($0) }
+        ))
+        XCTAssertEqual(tappedLabels, ["S7"])
+        XCTAssertFalse(SupraMarkdownCitationLinker.route(
+            try XCTUnwrap(URL(string: "https://example.invalid/S7")),
+            onCitationTap: { tappedLabels.append($0) }
+        ))
+        XCTAssertEqual(tappedLabels, ["S7"])
 
         let exactPlan = blocks.map(String.init(describing:)).joined(separator: "|")
         XCTAssertTrue(exactPlan.contains(MarkdownWire.marker))
