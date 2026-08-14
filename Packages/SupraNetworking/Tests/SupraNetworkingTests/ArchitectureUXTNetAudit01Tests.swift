@@ -117,7 +117,7 @@ final class ArchitectureUXTNetAudit01Tests: XCTestCase {
     ) -> AuthorizedHTTPClient {
         let logger = NetworkRequestLogger(
             writer: auditWriter,
-            requestID: { self.recordID },
+            requestID: { "record-713" },
             now: { Date(timeIntervalSince1970: 731) }
         )
         return AuthorizedHTTPClient(
