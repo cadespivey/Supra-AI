@@ -1,4 +1,5 @@
 import Foundation
+import SupraCore
 import SupraStore
 
 struct BoundedSemanticScanConfiguration: Sendable, Equatable {
@@ -337,3 +338,212 @@ private struct FixedSemanticCandidateHeap {
         return lhs.chunkID > rhs.chunkID
     }
 }
+
+#if DEBUG
+/// Content-free result from the signed hosted T-RAG-SCAN-02 fixture. This
+/// DEBUG-only probe exercises the same Store cursor and bounded heap as
+/// shipping retrieval without loading a downloaded model or retaining source
+/// text in the result exposed to the UI-test process.
+public struct HostedRAGScanResourceReport: Equatable, Sendable {
+    public let scannedRows: Int
+    public let maximumLivePageRows: Int
+    public let maximumHeapEntries: Int
+    public let maximumLiveVectorBytes: Int
+    public let publishedCandidateCount: Int
+    public let cacheCeilingBytes: Int
+
+    public init(
+        scannedRows: Int,
+        maximumLivePageRows: Int,
+        maximumHeapEntries: Int,
+        maximumLiveVectorBytes: Int,
+        publishedCandidateCount: Int,
+        cacheCeilingBytes: Int
+    ) {
+        self.scannedRows = scannedRows
+        self.maximumLivePageRows = maximumLivePageRows
+        self.maximumHeapEntries = maximumHeapEntries
+        self.maximumLiveVectorBytes = maximumLiveVectorBytes
+        self.publishedCandidateCount = publishedCandidateCount
+        self.cacheCeilingBytes = cacheCeilingBytes
+    }
+}
+
+/// Hermetic hosted proof for the large-corpus resource envelope. The fixture
+/// uses only synthetic three-dimensional vectors and an in-memory Store; it
+/// never resolves, loads, or reads a user-downloaded model artifact.
+public struct HostedRAGScanResourceProbe: Sendable {
+    private static let wire = "T_RAG_SCAN_02_WIRE_731"
+    private static let query = "QUERY_713"
+    private static let modelID = "t-rag-scan-hosted-model-713"
+    private static let modelRepositoryID = "synthetic/t-rag-scan-hosted-model-713"
+    private static let modelRevision = "t-rag-scan-hosted-revision-7"
+    private static let modelDisplayName = "Synthetic Hosted RAG Model 713"
+    private static let verifiedAt = Date(timeIntervalSinceReferenceDate: 731_713)
+
+    public init() {}
+
+    public func run() throws -> HostedRAGScanResourceReport {
+        let store = try SupraStore.inMemory()
+        let matter = try store.matters.createMatter(name: Self.wire)
+        try Self.configureModel(in: store)
+        let documentID = try Self.insertDocument(in: store, matterID: matter.id)
+        let instrumentation = BoundedSemanticScanInstrumentation()
+        let result = try BoundedSemanticScanner(
+            store: store,
+            instrumentation: instrumentation
+        ).scan(
+            matterID: matter.id,
+            documentIDs: [documentID],
+            queryVector: [1, 0, 0],
+            activeModel: DocumentReadinessEmbeddingModelIdentity(
+                id: Self.modelID,
+                repoID: Self.modelRepositoryID,
+                revision: Self.modelRevision,
+                dimension: 3
+            ),
+            configuration: BoundedSemanticScanConfiguration(
+                pageSize: 3,
+                candidateLimit: 2,
+                minimumSimilarity: 0.5
+            )
+        )
+        return HostedRAGScanResourceReport(
+            scannedRows: result.metrics.scannedRows,
+            maximumLivePageRows: result.metrics.maximumLivePageRows,
+            maximumHeapEntries: result.metrics.maximumHeapEntries,
+            maximumLiveVectorBytes: result.metrics.maximumLiveVectorBytes,
+            publishedCandidateCount: result.candidates.count,
+            cacheCeilingBytes: 17
+        )
+    }
+
+    private static func configureModel(in store: SupraStore) throws {
+        _ = try store.documentSettings.loadSettings()
+        try store.documentSettings.upsertEmbeddingModel(
+            DocumentEmbeddingModelRecord(
+                id: modelID,
+                repoID: modelRepositoryID,
+                localPath: "/synthetic/hosted-rag-scan/model-713",
+                displayName: modelDisplayName,
+                dimension: 3,
+                runtimeFamily: "synthetic-hosted-rag-7",
+                revision: modelRevision,
+                isDefault: false,
+                isSelected: false,
+                lastTestLoadAt: verifiedAt,
+                lastTestLoadResult: "passed",
+                createdAt: verifiedAt,
+                updatedAt: verifiedAt
+            )
+        )
+        try store.documentSettings.selectEmbeddingModel(id: modelID)
+        try store.documentSettings.updateSettings {
+            $0.embeddingModelLastTestedAt = verifiedAt
+            $0.chunkerVersion = 2
+        }
+    }
+
+    private static func insertDocument(
+        in store: SupraStore,
+        matterID: String
+    ) throws -> String {
+        let documentID = "t-rag-scan-hosted-document-731"
+        let text = "\(wire) \(query) bounded hosted semantic evidence"
+        let blob = try store.documentLibrary.upsertBlob(
+            DocumentBlobRecord(
+                id: "t-rag-scan-hosted-blob-731",
+                sha256: String(repeating: "7", count: 64),
+                byteSize: text.utf8.count,
+                originalExtension: "txt",
+                managedRelativePath: "synthetic/t-rag-scan-hosted-731.txt"
+            )
+        ).blob
+        _ = try store.documentLibrary.insertDocument(
+            MatterDocumentRecord(
+                id: documentID,
+                matterID: matterID,
+                blobID: blob.id,
+                displayName: "Hosted RAG Scan 731.txt",
+                status: MatterDocumentStatus.ready.rawValue,
+                extractionStatus: DocumentExtractionStatus.extracted.rawValue,
+                indexStatus: DocumentIndexStatus.ready.rawValue,
+                sourceKind: DocumentSourceKind.text.rawValue,
+                extractionMethod: "plain_text@toolchain:hosted-rag-7",
+                extractedTextChecksum: String(repeating: "3", count: 64),
+                pagePartCount: 1
+            )
+        )
+        let part = DocumentPagePartRecord(
+            id: "t-rag-scan-hosted-part-731-7",
+            documentID: documentID,
+            partIndex: 0,
+            sourceKind: DocumentSourceKind.text.rawValue,
+            normalizedText: text,
+            charCount: text.count
+        )
+        let revision = DocumentPartRevisionRecord(
+            id: "t-rag-scan-hosted-revision-731-7",
+            documentID: documentID,
+            partIndex: 0,
+            derivationKey: "hosted-rag-scan:revision-7",
+            origin: "synthetic_hosted_probe",
+            method: "plain_text",
+            text: text,
+            charCount: text.count,
+            toolchainVersion: "hosted-rag-7"
+        )
+        let selection = DocumentPartSelectionRecord(
+            id: "t-rag-scan-hosted-selection-731-7",
+            documentID: documentID,
+            partIndex: 0,
+            selectedRevisionID: revision.id,
+            selectionKey: "hosted-rag-scan:selection-7",
+            selectedBy: "synthetic_hosted_probe",
+            policyVersion: 7,
+            decisionJSON: #"{"wire":"T_RAG_SCAN_02_WIRE_731"}"#
+        )
+        _ = try store.documentRevisions.replacePartsAndPersistLineage(
+            documentID: documentID,
+            parts: [part],
+            revisions: [revision],
+            selections: [selection]
+        )
+
+        let chunks = (0..<31).map { index in
+            DocumentChunkRecord(
+                id: String(format: "hosted-candidate-%03d-731", index),
+                documentID: documentID,
+                pagePartID: part.id,
+                revisionID: revision.id,
+                chunkerVersion: 2,
+                chunkIndex: index,
+                sourceKind: DocumentSourceKind.text.rawValue,
+                charStart: 0,
+                charEnd: text.count,
+                normalizedText: "\(text) candidate \(index)",
+                displayExcerpt: "\(text) candidate \(index)",
+                tokenCount: 7
+            )
+        }
+        try store.documentIndex.replaceChunks(documentID: documentID, chunks: chunks)
+        for (index, chunk) in chunks.enumerated() {
+            try store.documentIndex.upsertEmbedding(
+                DocumentChunkEmbeddingRecord(
+                    id: "hosted-embedding-\(index)-731-7",
+                    chunkID: chunk.id,
+                    documentID: documentID,
+                    embeddingModelID: modelID,
+                    modelDisplayName: modelDisplayName,
+                    modelRevision: modelRevision,
+                    dimension: 3,
+                    normalized: true,
+                    vector: VectorMath.encode([1, 0, 0]),
+                    createdAt: verifiedAt.addingTimeInterval(Double(index))
+                )
+            )
+        }
+        return documentID
+    }
+}
+#endif

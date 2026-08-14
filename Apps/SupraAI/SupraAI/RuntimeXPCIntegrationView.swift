@@ -1,9 +1,11 @@
 #if DEBUG
 import CryptoKit
+import Darwin
 import Foundation
 import SupraCore
 import SupraRuntimeClient
 import SupraRuntimeInterface
+import SupraSessions
 import SwiftUI
 
 @MainActor
@@ -18,6 +20,7 @@ struct RuntimeXPCIntegrationView: View {
     @State private var focusedControl: String?
     @State private var nextControlValue = ""
     @State private var focusChain = SupraFocusChain()
+    @State private var ragScanMetrics: [String: Int] = [:]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -26,6 +29,8 @@ struct RuntimeXPCIntegrationView: View {
 
             if scenario == "switch" {
                 switchScenario
+            } else if scenario == "rag-scan" {
+                ragScanScenario
             } else {
                 lifecycleScenario
             }
@@ -108,12 +113,196 @@ struct RuntimeXPCIntegrationView: View {
             focusChain.installInitialFocusIfPossible()
         }
     }
+
+    private var ragScanScenario: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if result == "RUNNING" {
+                ProgressView()
+                    .accessibilityIdentifier("runtimeXPCIntegration.ragScan.progress")
+            } else {
+                Text(result)
+                    .accessibilityIdentifier("runtimeXPCIntegration.ragScan.result")
+                    .accessibilityLabel("Hosted RAG resource result")
+                    .accessibilityValue(result)
+            }
+            Text(detail)
+                .accessibilityIdentifier("runtimeXPCIntegration.ragScan.detail")
+                .accessibilityLabel("Hosted RAG resource detail")
+                .accessibilityValue(detail)
+
+            ForEach(Self.ragScanMetricElements, id: \.name) { metric in
+                let value = ragScanMetrics[metric.name]
+                Text(value.map(String.init) ?? "PENDING")
+                    .accessibilityIdentifier(metric.accessibilityID)
+                    .accessibilityLabel("Hosted RAG metric \(metric.name)")
+                    .accessibilityValue(value.map(String.init) ?? "PENDING")
+            }
+        }
+        .task {
+            do {
+                let report = try await HostedRAGScanIntegrationRunner().run()
+                ragScanMetrics = report.metrics
+                detail = report.detail
+                result = report.passed ? "PASS" : "FAIL"
+            } catch {
+                detail = error.localizedDescription
+                result = "FAIL"
+            }
+        }
+    }
+
+    private static let ragScanMetricElements: [(name: String, accessibilityID: String)] = [
+        ("scannedRows", "runtimeXPCIntegration.ragScan.scannedRows"),
+        ("maximumLivePageRows", "runtimeXPCIntegration.ragScan.maximumLivePageRows"),
+        ("maximumHeapEntries", "runtimeXPCIntegration.ragScan.maximumHeapEntries"),
+        ("maximumLiveVectorBytes", "runtimeXPCIntegration.ragScan.maximumLiveVectorBytes"),
+        ("publishedCandidateCount", "runtimeXPCIntegration.ragScan.publishedCandidateCount"),
+        ("cacheCeilingBytes", "runtimeXPCIntegration.ragScan.cacheCeilingBytes"),
+        ("appCurrentDeltaMiB", "runtimeXPCIntegration.ragScan.appCurrentDeltaMiB"),
+        ("appPeakDeltaMiB", "runtimeXPCIntegration.ragScan.appPeakDeltaMiB"),
+        ("xpcCurrentDeltaMiB", "runtimeXPCIntegration.ragScan.xpcCurrentDeltaMiB"),
+        ("xpcPeakDeltaMiB", "runtimeXPCIntegration.ragScan.xpcPeakDeltaMiB"),
+        ("combinedCurrentDeltaMiB", "runtimeXPCIntegration.ragScan.combinedCurrentDeltaMiB"),
+        ("combinedPeakDeltaMiB", "runtimeXPCIntegration.ragScan.combinedPeakDeltaMiB"),
+    ]
 }
 
 private struct RuntimeXPCIntegrationReport: Sendable {
     let iterations: Int
     let checks: [String: Bool]
     let detail: String
+}
+
+private struct HostedRAGScanIntegrationReport: Sendable {
+    let metrics: [String: Int]
+    let detail: String
+    let passed: Bool
+}
+
+private struct HostedRAGScanIntegrationRunner {
+    func run() async throws -> HostedRAGScanIntegrationReport {
+        let runtime = RuntimeClient()
+        try await runtime.connect()
+        defer { runtime.disconnect() }
+
+        let xpcBefore = try await runtime.runtimeStatus()
+        let appBefore = try ProcessMemoryObservation.capture()
+        let scan = try HostedRAGScanResourceProbe().run()
+        let appAfter = try ProcessMemoryObservation.capture()
+        let xpcAfter = try await runtime.runtimeStatus()
+
+        guard let xpcCurrentBefore = xpcBefore.metrics?.currentMemoryMb,
+              let xpcPeakBefore = xpcBefore.metrics?.peakMemoryMb,
+              let xpcCurrentAfter = xpcAfter.metrics?.currentMemoryMb,
+              let xpcPeakAfter = xpcAfter.metrics?.peakMemoryMb,
+              xpcCurrentBefore > 0,
+              xpcPeakBefore > 0,
+              xpcCurrentAfter > 0,
+              xpcPeakAfter > 0 else {
+            throw RuntimeXPCIntegrationError.assertion(
+                "hosted XPC did not publish current and peak resident memory"
+            )
+        }
+
+        let metrics = [
+            "scannedRows": scan.scannedRows,
+            "maximumLivePageRows": scan.maximumLivePageRows,
+            "maximumHeapEntries": scan.maximumHeapEntries,
+            "maximumLiveVectorBytes": scan.maximumLiveVectorBytes,
+            "publishedCandidateCount": scan.publishedCandidateCount,
+            "cacheCeilingBytes": scan.cacheCeilingBytes,
+            "appCurrentDeltaMiB": Self.nonnegativeDelta(
+                appAfter.currentMiB,
+                appBefore.currentMiB
+            ),
+            "appPeakDeltaMiB": Self.nonnegativeDelta(
+                appAfter.peakMiB,
+                appBefore.peakMiB
+            ),
+            "xpcCurrentDeltaMiB": Self.nonnegativeDelta(
+                xpcCurrentAfter,
+                xpcCurrentBefore
+            ),
+            "xpcPeakDeltaMiB": Self.nonnegativeDelta(
+                xpcPeakAfter,
+                xpcPeakBefore
+            ),
+            "combinedCurrentDeltaMiB": Self.nonnegativeDelta(
+                appAfter.currentMiB + xpcCurrentAfter,
+                appBefore.currentMiB + xpcCurrentBefore
+            ),
+            "combinedPeakDeltaMiB": Self.nonnegativeDelta(
+                appAfter.peakMiB + xpcPeakAfter,
+                appBefore.peakMiB + xpcPeakBefore
+            ),
+        ]
+        let passed = scan.scannedRows == 31
+            && scan.maximumLivePageRows <= 3
+            && scan.maximumHeapEntries <= 2
+            && scan.maximumLiveVectorBytes <= 36
+            && scan.publishedCandidateCount == 2
+            && scan.cacheCeilingBytes == 17
+            && metrics["appCurrentDeltaMiB", default: .max] <= 64
+            && metrics["appPeakDeltaMiB", default: .max] <= 64
+            && metrics["xpcCurrentDeltaMiB", default: .max] <= 32
+            && metrics["xpcPeakDeltaMiB", default: .max] <= 32
+            && metrics["combinedCurrentDeltaMiB", default: .max] <= 96
+            && metrics["combinedPeakDeltaMiB", default: .max] <= 96
+
+        return HostedRAGScanIntegrationReport(
+            metrics: metrics,
+            detail: "T_RAG_SCAN_02_WIRE_731 QUERY_713; 31 rows; page 3; K 2; dimension 3; cache ceiling 17 bytes.",
+            passed: passed
+        )
+    }
+
+    private static func nonnegativeDelta(_ after: Int, _ before: Int) -> Int {
+        max(0, after - before)
+    }
+}
+
+private struct ProcessMemoryObservation: Sendable {
+    let currentMiB: Int
+    let peakMiB: Int
+
+    static func capture() throws -> ProcessMemoryObservation {
+        let current = currentResidentMiB()
+        let peak = maximumResidentMiB()
+        guard current > 0, peak > 0 else {
+            throw RuntimeXPCIntegrationError.assertion(
+                "hosted app did not publish current and peak resident memory"
+            )
+        }
+        return ProcessMemoryObservation(currentMiB: current, peakMiB: peak)
+    }
+
+    private static func maximumResidentMiB() -> Int {
+        var usage = rusage()
+        guard getrusage(RUSAGE_SELF, &usage) == 0 else { return 0 }
+        return Int(usage.ru_maxrss / (1_024 * 1_024))
+    }
+
+    private static func currentResidentMiB() -> Int {
+        var information = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(
+            MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size
+        )
+        let result = withUnsafeMutablePointer(to: &information) { pointer in
+            pointer.withMemoryRebound(
+                to: integer_t.self,
+                capacity: Int(count)
+            ) { rebound in
+                task_info(
+                    mach_task_self_,
+                    task_flavor_t(TASK_VM_INFO),
+                    rebound,
+                    &count
+                )
+            }
+        }
+        guard result == KERN_SUCCESS else { return 0 }
+        return Int(information.phys_footprint / (1_024 * 1_024))
+    }
 }
 
 private enum RuntimeXPCIntegrationError: LocalizedError {
