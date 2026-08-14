@@ -906,7 +906,7 @@ final class CorpusIntegrityMigrationTests: XCTestCase {
             XCTAssertEqual(
                 try String.fetchOne(
                     db, sql: "SELECT identifier FROM grdb_migrations ORDER BY rowid DESC LIMIT 1"),
-                "v075_create_grounded_chat_publications"
+                "v077_create_accepted_research_packets"
             )
             let runColumns = Set(try db.columns(in: "corpus_analysis_runs").map(\.name))
             XCTAssertTrue(runColumns.contains("request_schema_version"))

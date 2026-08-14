@@ -60,12 +60,14 @@ final class ArchitectureUXTDataMigrate01Tests: XCTestCase {
         )
 
         let migrations = SupraMigrator.makeMigrator().migrations
-        XCTAssertEqual(migrations.count, 75)
-        XCTAssertEqual(Array(migrations.suffix(4)), [
+        XCTAssertEqual(migrations.count, 77)
+        XCTAssertEqual(Array(migrations.suffix(6)), [
             "v072_harden_corpus_review_integrity",
             "v073_create_case_file_review_projects",
             "v074_create_canonical_matter_identity",
             "v075_create_grounded_chat_publications",
+            "v076_link_export_publication_intents",
+            "v077_create_accepted_research_packets",
         ])
     }
 
@@ -714,7 +716,7 @@ private struct LegacyCanarySnapshot: Equatable {
 private enum Wire {
     static let v073 = "v073_create_case_file_review_projects"
     static let v074 = "v074_create_canonical_matter_identity"
-    static let currentMigration = "v075_create_grounded_chat_publications"
+    static let currentMigration = "v077_create_accepted_research_packets"
     static let catalogVersion = "jurisdiction-courts-v1"
     static let catalogDigestSHA256 =
         "0393b9dc507ea91ebbf939e3b7620c3e6555dd01cfdbcdc00d5298d89e14adf3"

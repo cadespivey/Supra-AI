@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "syntheticDataDeclaration": "Every fixture contains deterministic synthetic records only; no user or production data is permitted.",
-  "currentMigration": "v075_create_grounded_chat_publications",
+  "currentMigration": "v077_create_accepted_research_packets",
   "supportedVersions": [
     "v1.4.1",
     "v1.5.2",

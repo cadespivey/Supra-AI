@@ -17,6 +17,112 @@ final class ArchitectureUXTResearchPacket02Tests: XCTestCase {
     private let workProductBindingKey = "research-packet-work-binding-769"
     private let boundAt = Date(timeIntervalSince1970: 1_946_333_769)
 
+    func testPermanentMatterDeletionCascadesPacketLedgerAndRetainsAudits() throws {
+        // Expected RED: v077's work-product binding delete guard sees the
+        // accepted packet parent while the same whole-matter cascade is deleting
+        // the structured-output parent, so the real repository deletion aborts
+        // instead of removing the complete seven-table packet ledger.
+        let fixture = try ArchitectureUXResearchPacketFixture.make()
+        let accepted = try fixture.executeReviewAndAccept()
+        _ = try fixture.store.researchPackets.bindAcceptedVersion(
+            ResearchPacketWorkProductBindingCommand(
+                idempotencyKey: workProductBindingKey,
+                structuredOutputVersionID: fixture.outputVersion.id,
+                acceptedPacketVersionID: accepted.id,
+                expectedPacketAggregateDigestSHA256: accepted.aggregateDigestSHA256,
+                boundAt: boundAt
+            )
+        )
+        let unrelatedAudit = try fixture.store.auditEvents.recordEvent(
+            matterID: fixture.unrelatedMatter.id,
+            eventType: "unrelated_packet_delete_canary_797",
+            actor: "synthetic-canary-797",
+            summary: "Unrelated packet deletion canary 797",
+            relatedTable: MatterRecord.databaseTableName,
+            relatedID: fixture.unrelatedMatter.id
+        )
+        let packetAuditsBefore: [AuditEventRecord] = try fixture.store.database.writer
+            .read { db in
+                try AuditEventRecord.fetchAll(
+                    db,
+                    sql: """
+                    SELECT * FROM audit_events
+                    WHERE matter_id = ? AND event_type LIKE 'research_packet_%'
+                    ORDER BY event_type, id
+                    """,
+                    arguments: [fixture.matter.id]
+                )
+            }
+        XCTAssertEqual(
+            Set(packetAuditsBefore.map(\.eventType)),
+            Set([
+                "research_packet_executed",
+                "research_packet_reviewed",
+                "research_packet_accepted",
+                "research_packet_work_product_bound",
+            ])
+        )
+
+        _ = try fixture.store.matters.permanentlyDeleteMatter(
+            id: fixture.matter.id,
+            actor: "synthetic-packet-deleter-793",
+            at: boundAt.addingTimeInterval(7)
+        )
+
+        XCTAssertNil(try fixture.store.matters.fetchMatter(id: fixture.matter.id))
+        XCTAssertNotNil(
+            try fixture.store.matters.fetchMatter(id: fixture.unrelatedMatter.id),
+            "the unrelated canary matter cannot be reached by the packet cascade"
+        )
+        try fixture.store.database.writer.read { db in
+            for table in [
+                "research_packet_candidates",
+                "research_packet_candidate_sources",
+                "accepted_research_packet_versions",
+                "accepted_research_packet_sources",
+                "research_packet_acceptance_receipts",
+                "research_packet_version_dispositions",
+                "research_packet_work_product_bindings",
+            ] {
+                XCTAssertEqual(
+                    try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM \(table)"),
+                    0,
+                    "whole-matter deletion must cascade every row from \(table)"
+                )
+            }
+
+            let packetAuditsAfter = try AuditEventRecord.fetchAll(
+                db,
+                sql: """
+                SELECT * FROM audit_events
+                WHERE event_type LIKE 'research_packet_%'
+                ORDER BY event_type, id
+                """
+            )
+            XCTAssertEqual(packetAuditsAfter.map(\.id), packetAuditsBefore.map(\.id))
+            XCTAssertTrue(packetAuditsAfter.allSatisfy { $0.matterID == nil })
+            for audit in packetAuditsAfter {
+                let metadata = audit.metadataJSON ?? ""
+                XCTAssertFalse(metadata.contains(ArchitectureUXResearchPacketWire.exactQuery))
+                XCTAssertFalse(metadata.contains(ArchitectureUXResearchPacketWire.excerpt))
+                XCTAssertFalse(metadata.contains(ArchitectureUXResearchPacketWire.forbiddenDefault))
+            }
+
+            let retainedCanary = try XCTUnwrap(
+                AuditEventRecord.fetchOne(db, key: unrelatedAudit.id)
+            )
+            XCTAssertEqual(retainedCanary.matterID, fixture.unrelatedMatter.id)
+        }
+        let deletionAudits = try fixture.store.auditEvents.fetchEvents(
+            relatedTable: MatterRecord.databaseTableName,
+            relatedID: fixture.matter.id,
+            eventType: "matter_permanently_deleted"
+        )
+        XCTAssertEqual(deletionAudits.count, 1)
+        XCTAssertNil(deletionAudits.first?.matterID)
+        XCTAssertEqual(deletionAudits.first?.actor, "synthetic-packet-deleter-793")
+    }
+
     func testAcceptedVersionSourcesAndReceiptRejectUpdateOrDelete() throws {
         let fixture = try ArchitectureUXResearchPacketFixture.make()
         let accepted = try fixture.executeReviewAndAccept()

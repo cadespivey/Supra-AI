@@ -29,6 +29,10 @@ final class ArchitectureUXReviewRetirementSchemaTests: XCTestCase {
             #"        migrator.registerMigration("v074_create_canonical_matter_identity") { db in"#
         let v075Anchor =
             #"        migrator.registerMigration("v075_create_grounded_chat_publications") { db in"#
+        let v076Anchor =
+            #"        migrator.registerMigration("v076_link_export_publication_intents") { db in"#
+        let v077Anchor =
+            #"        migrator.registerMigration("v077_create_accepted_research_packets") { db in"#
         let returnAnchor = "        return migrator"
         let resetAnchor =
             "            // Case File Review: children before project/matter ownership."
@@ -39,6 +43,8 @@ final class ArchitectureUXReviewRetirementSchemaTests: XCTestCase {
         let v073Start = try XCTUnwrap(source.range(of: v073Anchor)?.lowerBound)
         let v074Start = try XCTUnwrap(source.range(of: v074Anchor)?.lowerBound)
         let v075Start = try XCTUnwrap(source.range(of: v075Anchor)?.lowerBound)
+        let v076Start = try XCTUnwrap(source.range(of: v076Anchor)?.lowerBound)
+        let v077Start = try XCTUnwrap(source.range(of: v077Anchor)?.lowerBound)
         let migratorReturn = try XCTUnwrap(source.range(of: returnAnchor)?.lowerBound)
         let resetStart = try XCTUnwrap(source.range(of: resetAnchor)?.lowerBound)
         let resetEnd = try XCTUnwrap(source.range(of: resetEndAnchor)?.lowerBound)
@@ -46,7 +52,9 @@ final class ArchitectureUXReviewRetirementSchemaTests: XCTestCase {
         XCTAssertLessThan(v072Start, v073Start)
         XCTAssertLessThan(v073Start, v074Start)
         XCTAssertLessThan(v074Start, v075Start)
-        XCTAssertLessThan(v075Start, migratorReturn)
+        XCTAssertLessThan(v075Start, v076Start)
+        XCTAssertLessThan(v076Start, v077Start)
+        XCTAssertLessThan(v077Start, migratorReturn)
         XCTAssertLessThan(migratorReturn, resetStart)
         XCTAssertLessThan(resetStart, resetEnd)
 
@@ -87,8 +95,8 @@ final class ArchitectureUXReviewRetirementSchemaTests: XCTestCase {
         )
 
         let migrations = SupraMigrator.makeMigrator().migrations
-        XCTAssertEqual(migrations.count, 75)
-        XCTAssertEqual(Array(migrations.suffix(7)), [
+        XCTAssertEqual(migrations.count, 77)
+        XCTAssertEqual(Array(migrations.suffix(9)), [
             "v069_add_verification_dimensions",
             "v070_add_authority_reviewed_proposition",
             "v071_create_draft_artifact_intents",
@@ -96,14 +104,16 @@ final class ArchitectureUXReviewRetirementSchemaTests: XCTestCase {
             "v073_create_case_file_review_projects",
             "v074_create_canonical_matter_identity",
             "v075_create_grounded_chat_publications",
+            "v076_link_export_publication_intents",
+            "v077_create_accepted_research_packets",
         ])
         XCTAssertEqual(
             sha256(linesData(migrations)),
-            "1a69d1bf89e66a6c4cee1fb904666f91e62276d51c0c739d6b28d742ac2cfdd4"
+            "ba28974c075939fc8833032be6c9da70c42c0af6b1d79087c15f92dfef5ba427"
         )
         XCTAssertEqual(
-            sha256(linesData(Array(migrations.suffix(7)))),
-            "67e0750d02af2de776151bf4fe37e5ba3fda6750aa77b955cdfe655c7a2637cc"
+            sha256(linesData(Array(migrations.suffix(9)))),
+            "155dacb17807e7685820b3f23163d9a394e72ff6a9dcb3502dc312a37a354699"
         )
 
         // v072 embeds these persisted raw values into its data upgrade. Freeze
@@ -216,7 +226,7 @@ final class ArchitectureUXReviewRetirementSchemaTests: XCTestCase {
                     db,
                     sql: "SELECT identifier FROM grdb_migrations ORDER BY rowid"
                 ).last,
-                "v075_create_grounded_chat_publications"
+                "v077_create_accepted_research_packets"
             )
             XCTAssertEqual(Set(try db.columns(in: "case_file_review_projects").map(\.name)), Set([
                 "id", "matter_id", "title", "status", "stale_reason", "source_run_id",

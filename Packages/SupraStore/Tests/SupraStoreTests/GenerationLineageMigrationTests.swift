@@ -109,7 +109,7 @@ final class GenerationLineageMigrationTests: XCTestCase {
 
         try migrator.migrate(queue)
         try queue.read { db in
-            XCTAssertEqual(try appliedMigrations(db).last, "v075_create_grounded_chat_publications")
+            XCTAssertEqual(try appliedMigrations(db).last, "v077_create_accepted_research_packets")
             XCTAssertEqual(Set(try db.columns(in: "structured_output_versions").map(\.name)), Set([
                 "id", "structured_output_id", "version_index", "parent_version_id",
                 "content_markdown", "required_sections_json", "present_sections_json",

@@ -15,6 +15,7 @@ public final class SupraStore: @unchecked Sendable {
     public let exportedReports: ExportedReportsRepository
     public let networkRequests: NetworkRequestRepository
     public let research: ResearchRepository
+    public let researchPackets: ResearchPacketRepository
     public let authorities: AuthorityRepository
     public let structuredOutputs: StructuredOutputRepository
     public let auditEvents: AuditEventRepository
@@ -53,6 +54,7 @@ public final class SupraStore: @unchecked Sendable {
         self.exportedReports = ExportedReportsRepository(writer: database.writer)
         self.networkRequests = NetworkRequestRepository(writer: database.writer)
         self.research = ResearchRepository(writer: database.writer)
+        self.researchPackets = ResearchPacketRepository(writer: database.writer)
         self.authorities = AuthorityRepository(writer: database.writer)
         self.structuredOutputs = StructuredOutputRepository(writer: database.writer)
         self.auditEvents = AuditEventRepository(writer: database.writer)
