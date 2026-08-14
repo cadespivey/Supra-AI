@@ -130,22 +130,53 @@ public final class DocumentRetrievalService: @unchecked Sendable {
     static let defaultMaxPerDocument = 4
     static let defaultMinSemanticSimilarity = 0.15
     static let fastMinSemanticSimilarity = 0.25
+    private static let semanticCacheAlgorithmVersion = 1
+    private static let defaultSemanticScanPageSize = 256
+    private static let defaultSemanticCandidateLimit = 60
     private let store: SupraStore
     private let readinessLedger: CanonicalDocumentReadinessLedger
     private let semanticScanner: BoundedSemanticScanner
+    private let semanticCacheResolver: RAGSemanticCandidateCacheResolver
+    private let semanticScanPageSize: Int
+    private let semanticCandidateLimit: Int
     private let embedder: (any TextEmbedder)?
     private let maxPerDocument: Int
     private let minSemanticSimilarity: Double
 
-    public init(
+    public convenience init(
         store: SupraStore,
         embedder: (any TextEmbedder)? = nil,
         maxPerDocument: Int = 4,
         minSemanticSimilarity: Double = 0.15
     ) {
+        self.init(
+            store: store,
+            embedder: embedder,
+            maxPerDocument: maxPerDocument,
+            minSemanticSimilarity: minSemanticSimilarity,
+            semanticCandidateCache: RAGSemanticCandidateCache(),
+            semanticScanPageSize: Self.defaultSemanticScanPageSize,
+            semanticCandidateLimit: Self.defaultSemanticCandidateLimit
+        )
+    }
+
+    init(
+        store: SupraStore,
+        embedder: (any TextEmbedder)?,
+        maxPerDocument: Int,
+        minSemanticSimilarity: Double,
+        semanticCandidateCache: any RAGSemanticCandidateCacheBackend,
+        semanticScanPageSize: Int,
+        semanticCandidateLimit: Int
+    ) {
         self.store = store
         self.readinessLedger = CanonicalDocumentReadinessLedger(store: store)
         self.semanticScanner = BoundedSemanticScanner(store: store)
+        self.semanticCacheResolver = RAGSemanticCandidateCacheResolver(
+            cache: semanticCandidateCache
+        )
+        self.semanticScanPageSize = semanticScanPageSize
+        self.semanticCandidateLimit = semanticCandidateLimit
         self.embedder = embedder
         self.maxPerDocument = maxPerDocument
         self.minSemanticSimilarity = minSemanticSimilarity
@@ -252,32 +283,88 @@ public final class DocumentRetrievalService: @unchecked Sendable {
         // Semantic candidates (cosine over normalized vectors == dot product).
         var semanticBucket: [String: String] = [:]
         var usedSemantic = false
+        let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
         if let embedder,
            !scopeIDs.isEmpty,
-           let queryVector = try await embedQuery(query, embedder: embedder) {
+           !trimmedQuery.isEmpty {
             let activeModel = DocumentReadinessEmbeddingModelIdentity(
                 id: embedder.modelID,
                 repoID: embedder.modelRepoID,
                 revision: embedder.modelRevision,
                 dimension: embedder.dimension
             )
-            let scan = try semanticScanner.scan(
+            let receiptIDs = readiness.documentReadiness.map(\.baseReceiptID).sorted()
+            let scopedReceiptDocumentIDs = Set(
+                readiness.documentReadiness.map(\.documentID)
+            )
+            let allDocumentsBaseReady = !readiness.documentReadiness.isEmpty
+                && scopedReceiptDocumentIDs == Set(scopeIDs)
+                && readiness.documentReadiness.allSatisfy(\.isBaseReady)
+            let runtimeMatchesPersistedModel = readiness.documentReadiness.allSatisfy {
+                $0.baseReceipt.activeEmbeddingModel == activeModel
+            }
+            let preparedQuery = EmbeddingModelCatalog.queryText(
+                trimmedQuery,
+                forModelID: embedder.modelRepoID
+            )
+            let key = RAGDerivedCacheKey(
+                querySHA256: DocumentStorage.sha256Hex(of: Data(preparedQuery.utf8)),
                 matterID: matterID,
                 documentIDs: scopeIDs,
-                queryVector: queryVector,
-                activeModel: activeModel,
-                configuration: BoundedSemanticScanConfiguration(
-                    pageSize: 256,
-                    candidateLimit: 60,
-                    minimumSimilarity: semanticFloor
-                )
+                readinessReceiptIDs: receiptIDs,
+                embeddingModel: activeModel,
+                artifactIdentitySHA256: embedder.artifactIdentitySHA256 ?? "",
+                pageSize: semanticScanPageSize,
+                candidateLimit: semanticCandidateLimit,
+                minimumSimilarity: semanticFloor,
+                retrievalDepth: depth.rawValue,
+                algorithmVersion: Self.semanticCacheAlgorithmVersion
             )
-            usedSemantic = true
-            for (position, entry) in scan.candidates.enumerated() {
-                scores[entry.chunkID, default: 0] += Self.rrfContribution(rank: position + 1)
-                semanticBucket[entry.chunkID] = entry.similarity > 0.7
-                    ? "high"
-                    : (entry.similarity > 0.45 ? "medium" : "low")
+            let access = RAGDerivedCacheAccess(
+                readinessReceiptIDs: receiptIDs,
+                allDocumentsBaseReady: allDocumentsBaseReady,
+                policyAllowsUse: runtimeMatchesPersistedModel
+                    && Self.isLowercaseSHA256(embedder.artifactIdentitySHA256)
+            )
+            if let resolution = try await semanticCacheResolver.resolveIfAvailable(
+                key: key,
+                access: access,
+                compute: {
+                    guard let queryVector = try await self.embedQuery(
+                        query,
+                        embedder: embedder
+                    ) else { return nil }
+                    let scan = try self.semanticScanner.scan(
+                        matterID: matterID,
+                        documentIDs: scopeIDs,
+                        queryVector: queryVector,
+                        activeModel: activeModel,
+                        configuration: BoundedSemanticScanConfiguration(
+                            pageSize: self.semanticScanPageSize,
+                            candidateLimit: self.semanticCandidateLimit,
+                            minimumSimilarity: semanticFloor
+                        )
+                    )
+                    return RAGSemanticCandidateCacheValue(
+                        candidates: scan.candidates.map {
+                            RAGCachedSemanticCandidate(
+                                chunkID: $0.chunkID,
+                                documentID: $0.documentID,
+                                similarity: $0.similarity
+                            )
+                        }
+                    )
+                }
+            ) {
+                usedSemantic = true
+                for (position, entry) in resolution.value.candidates.enumerated() {
+                    scores[entry.chunkID, default: 0] += Self.rrfContribution(
+                        rank: position + 1
+                    )
+                    semanticBucket[entry.chunkID] = entry.similarity > 0.7
+                        ? "high"
+                        : (entry.similarity > 0.45 ? "medium" : "low")
+                }
             }
         }
 
@@ -589,6 +676,15 @@ public final class DocumentRetrievalService: @unchecked Sendable {
         let prepared = EmbeddingModelCatalog.queryText(trimmed, forModelID: embedder.modelRepoID)
         guard let vector = try await embedder.embed([prepared]).first else { return nil }
         return VectorMath.normalize(vector)
+    }
+
+    private static func isLowercaseSHA256(_ value: String?) -> Bool {
+        guard let value, value.utf8.count == 64 else { return false }
+        return value.utf8.allSatisfy { byte in
+            (byte >= Character("0").asciiValue! && byte <= Character("9").asciiValue!)
+                || (byte >= Character("a").asciiValue!
+                    && byte <= Character("f").asciiValue!)
+        }
     }
 
     private func resolveScope(matterID: String, scope: RetrievalScope) throws -> [String] {

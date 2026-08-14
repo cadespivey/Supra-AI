@@ -51,6 +51,13 @@ public protocol TextEmbedder: Sendable {
     var modelRepoID: String { get }
     var modelDisplayName: String { get }
     var modelRevision: String? { get }
+    /// Digest of the exact verified artifact manifest. A nil value identifies an
+    /// unbound/custom runtime and makes derived semantic results cache-ineligible.
+    var artifactIdentitySHA256: String? { get }
     var dimension: Int { get }
     func embed(_ texts: [String]) async throws -> [[Float]]
+}
+
+public extension TextEmbedder {
+    var artifactIdentitySHA256: String? { nil }
 }

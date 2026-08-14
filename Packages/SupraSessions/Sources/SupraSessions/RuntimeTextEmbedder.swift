@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import SupraCore
 import SupraRuntimeClient
@@ -25,6 +26,7 @@ public actor RuntimeTextEmbedder: TextEmbedder {
     public nonisolated let modelRepoID: String
     public nonisolated let modelDisplayName: String
     public nonisolated let modelRevision: String?
+    public nonisolated let artifactIdentitySHA256: String?
     public nonisolated let dimension: Int
 
     private let embeddingModelID: DocumentEmbeddingModelID
@@ -36,24 +38,39 @@ public actor RuntimeTextEmbedder: TextEmbedder {
 
     public init?(model: DocumentEmbeddingModelRecord, runtimeClient: any ModelExecutionGateway, batchSize: Int = 32) {
         guard let path = model.localPath, !path.isEmpty else { return nil }
+        let artifactIdentitySHA256: String?
         if ManagedModelStorage.isManagedEmbedding(path: path) {
             guard
                 let manifest = try? ManagedModelStorage.loadVerifiedManifest(
                     at: URL(fileURLWithPath: path, isDirectory: true)
                 ),
                 manifest.repositoryID == model.repoID,
-                manifest.revision == model.revision
+                manifest.revision == model.revision,
+                let identity = Self.artifactIdentitySHA256(manifest)
             else { return nil }
+            artifactIdentitySHA256 = identity
+        } else {
+            artifactIdentitySHA256 = nil
         }
         self.modelID = model.id
         self.modelRepoID = model.repoID
         self.modelDisplayName = model.displayName
         self.modelRevision = model.revision
+        self.artifactIdentitySHA256 = artifactIdentitySHA256
         self.dimension = model.dimension
         self.embeddingModelID = DocumentEmbeddingModelID(UUID(uuidString: model.id) ?? UUID())
         self.modelPath = path
         self.runtimeClient = runtimeClient
         self.batchSize = max(1, batchSize)
+    }
+
+    private nonisolated static func artifactIdentitySHA256(
+        _ manifest: ModelArtifactManifest
+    ) -> String? {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        guard let data = try? encoder.encode(manifest.canonicalized()) else { return nil }
+        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
     public func embed(_ texts: [String]) async throws -> [[Float]] {
