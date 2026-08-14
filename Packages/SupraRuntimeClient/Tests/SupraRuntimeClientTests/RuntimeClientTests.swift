@@ -126,6 +126,38 @@ final class RuntimeClientTests: XCTestCase {
             }
         }
     }
+
+    func testResidencySnapshotEvictionAndResetRoundTripThroughInjectedXPCService() async throws {
+        let service = FakeRuntimeXPCService()
+        let client = RuntimeClient(remoteService: service)
+
+        let before = try await client.runtimeResidencySnapshot()
+        XCTAssertEqual(before.epoch, 7)
+        XCTAssertEqual(before.residents.map(\.modelID), ["embedding-wire-719", "model-wire-713"])
+
+        let eviction = try await client.evictRuntimeArtifact(
+            RuntimeServiceArtifactEvictionRequest(
+                modelID: "embedding-wire-719",
+                revision: "embed-rev-7",
+                kind: .embedding
+            )
+        )
+        XCTAssertEqual(eviction.evictedModelID, "embedding-wire-719")
+
+        let reset = try await client.resetRuntime(
+            RuntimeServiceResetRequest(
+                requestID: "T_RUNTIME_RESET_01_WIRE_731",
+                expectedEpoch: 7
+            )
+        )
+        XCTAssertEqual(reset.requestID, "T_RUNTIME_RESET_01_WIRE_731")
+        XCTAssertEqual(reset.previousEpoch, 7)
+        XCTAssertEqual(reset.newEpoch, 8)
+        XCTAssertEqual(reset.unloadedChatModelIDs, ["model-wire-713"])
+        XCTAssertEqual(reset.clearedReplayGenerationCount, 3)
+        XCTAssertEqual(reset.clearedBufferedEventCount, 7)
+        XCTAssertFalse(String(describing: reset).contains("DEFAULT-000"))
+    }
 }
 
 private final class FakeRuntimeXPCService: NSObject, SupraRuntimeXPCServiceProtocol {
@@ -133,6 +165,25 @@ private final class FakeRuntimeXPCService: NSObject, SupraRuntimeXPCServiceProto
     private let malformedTokenCounts: Bool
     private var loadedModelID: ModelID?
     private var eventsByGenerationID: [GenerationID: [GenerationEvent]] = [:]
+    private var residencyEpoch: UInt64 = 7
+    private var residencyArtifacts: [RuntimeServiceResidentArtifact] = [
+        RuntimeServiceResidentArtifact(
+            modelID: "embedding-wire-719",
+            revision: "embed-rev-7",
+            kind: .embedding,
+            estimatedBytes: 200,
+            isActive: false,
+            lastUseSequence: 6
+        ),
+        RuntimeServiceResidentArtifact(
+            modelID: "model-wire-713",
+            revision: "rev-7",
+            kind: .chat,
+            estimatedBytes: 250,
+            isActive: false,
+            lastUseSequence: 7
+        ),
+    ]
 
     init(
         generateStartStatus: GenerateStartStatus = .started,
@@ -269,6 +320,76 @@ private final class FakeRuntimeXPCService: NSObject, SupraRuntimeXPCServiceProto
                 )
             )
         )
+    }
+
+    func runtimeResidencySnapshot(withReply reply: @escaping (Data) -> Void) {
+        reply(encoded(RuntimeServiceResidencySnapshot(
+            epoch: residencyEpoch,
+            unifiedMemoryCeilingBytes: 1_200,
+            fixedResidentBytes: 400,
+            replayGenerationCount: 3,
+            bufferedEventCount: 7,
+            residents: residencyArtifacts,
+            activeTaskCount: residencyArtifacts.filter(\.isActive).count
+        )))
+    }
+
+    func evictRuntimeArtifact(
+        _ requestData: Data,
+        withReply reply: @escaping (Data) -> Void
+    ) {
+        guard let request = try? RuntimeXPCCodec.decode(
+            RuntimeServiceArtifactEvictionRequest.self,
+            from: requestData
+        ), let index = residencyArtifacts.firstIndex(where: {
+            $0.modelID == request.modelID
+                && $0.revision == request.revision
+                && $0.kind == request.kind
+                && !$0.isActive
+        }) else {
+            reply(encoded(RuntimeServiceArtifactEvictionResponse(
+                evictedModelID: nil,
+                error: RuntimeError(category: "residency", message: "Artifact is not evictable.")
+            )))
+            return
+        }
+        let artifact = residencyArtifacts.remove(at: index)
+        reply(encoded(RuntimeServiceArtifactEvictionResponse(
+            evictedModelID: artifact.modelID,
+            error: nil
+        )))
+    }
+
+    func resetRuntime(
+        _ requestData: Data,
+        withReply reply: @escaping (Data) -> Void
+    ) {
+        guard let request = try? RuntimeXPCCodec.decode(
+            RuntimeServiceResetRequest.self,
+            from: requestData
+        ), request.expectedEpoch == residencyEpoch else {
+            reply(encoded(RuntimeServiceResetResponse(
+                receipt: nil,
+                error: RuntimeError(category: "residency", message: "Epoch mismatch.")
+            )))
+            return
+        }
+        let chatIDs = residencyArtifacts.filter { $0.kind == .chat }.map(\.modelID).sorted()
+        let embeddingIDs = residencyArtifacts.filter { $0.kind == .embedding }.map(\.modelID).sorted()
+        residencyArtifacts = []
+        residencyEpoch += 1
+        reply(encoded(RuntimeServiceResetResponse(
+            receipt: RuntimeServiceResetReceipt(
+                requestID: request.requestID,
+                previousEpoch: request.expectedEpoch,
+                newEpoch: residencyEpoch,
+                unloadedChatModelIDs: chatIDs,
+                unloadedEmbeddingModelIDs: embeddingIDs,
+                clearedReplayGenerationCount: 3,
+                clearedBufferedEventCount: 7
+            ),
+            error: nil
+        )))
     }
 
 #if DEBUG
