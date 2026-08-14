@@ -259,7 +259,7 @@ public final class MattersController: ObservableObject {
     @Published public private(set) var lastMutationFailure: UserMutationFailure?
 
     private let store: SupraStore
-    private let runtimeClient: any RuntimeClientProtocol
+    private let runtimeClient: any ModelExecutionGateway
     private let defaultSystemPrompt: String?
     private let documentQueue: DocumentProcessingQueue?
     private let isImportReady: (@MainActor () -> Bool)?
@@ -271,7 +271,7 @@ public final class MattersController: ObservableObject {
 
     public init(
         store: SupraStore,
-        runtimeClient: any RuntimeClientProtocol,
+        runtimeClient: any ModelExecutionGateway,
         defaultSystemPrompt: String? = nil,
         documentQueue: DocumentProcessingQueue? = nil,
         isImportReady: (@MainActor () -> Bool)? = nil,

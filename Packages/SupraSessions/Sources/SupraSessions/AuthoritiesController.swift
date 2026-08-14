@@ -46,7 +46,7 @@ public final class AuthoritiesController: ObservableObject {
     public let matterID: String
     private let courtListenerClient: any CourtListenerClientProtocol
     private let tokenStore: any APIKeyStoreProtocol
-    private var runtimeClient: (any RuntimeClientProtocol)?
+    private var runtimeClient: (any ModelExecutionGateway)?
     private let legalConfiguration: LegalModelConfiguration
     /// Authorities with a summary generation in flight (UI busy state).
     @Published public private(set) var summarizingAuthorityIDs: Set<String> = []
@@ -57,7 +57,7 @@ public final class AuthoritiesController: ObservableObject {
         legalConfiguration: LegalModelConfiguration = .fromEnvironment(),
         tokenStore: (any APIKeyStoreProtocol)? = nil,
         courtListenerClient: (any CourtListenerClientProtocol)? = nil,
-        runtimeClient: (any RuntimeClientProtocol)? = nil
+        runtimeClient: (any ModelExecutionGateway)? = nil
     ) {
         self.store = store
         self.matterID = matterID
@@ -273,7 +273,9 @@ public final class AuthoritiesController: ObservableObject {
     /// Grounded summarization only: with no opinion text there is no summary.
     /// Returns nil on success, else a user-facing reason.
     public func generateSummary(authorityID: String, modelID: ModelID) async -> String? {
-        guard let runtimeClient else { return "Summaries need the local model runtime." }
+        guard let modelExecutionGateway = runtimeClient else {
+            return "Summaries need the local model runtime."
+        }
         guard let item = authorities.first(where: { $0.id == authorityID }) else { return "Authority not found." }
         guard !summarizingAuthorityIDs.contains(authorityID) else { return nil }
         summarizingAuthorityIDs.insert(authorityID)
@@ -314,7 +316,7 @@ public final class AuthoritiesController: ObservableObject {
             contextWorkload: .groundedExactEvidence,
             options: options
         )
-        guard let raw = try? await runtimeClient.collectGeneratedText(request),
+        guard let raw = try? await modelExecutionGateway.collectGeneratedText(request),
               case let .answer(answer) = ReasoningContent.resolve(rawOutput: raw, thinkingEnabled: false) else {
             return "The model didn't return a summary. Check that a model is loaded in the Models tab."
         }

@@ -30,7 +30,7 @@ enum GenerationStreamError: Error, LocalizedError, Equatable {
     }
 }
 
-extension RuntimeClientProtocol {
+extension ModelExecutionGateway {
     /// Runs a generation to completion and returns the accumulated token text,
     /// throwing `GenerationStreamError` if the runtime reports a failure/cancel or
     /// the stream ends without a `.generationCompleted` event. Use this for the

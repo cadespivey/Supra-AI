@@ -43,10 +43,11 @@ public final class BillingDraftService {
     public static func live(
         store: SupraStore,
         modelLibrary: ModelLibrary,
-        runtimeClient: any RuntimeClientProtocol,
+        runtimeClient: any ModelExecutionGateway,
         role: ModelRole = .drafting
     ) -> BillingDraftService {
         BillingDraftService(store: store) { systemPrompt, userPrompt in
+            let modelExecutionGateway = runtimeClient
             guard case let .success(modelID) = await modelLibrary.ensureLoadedRoutedModelID(for: role) else {
                 throw BillingDraftError.noModelAvailable
             }
@@ -64,7 +65,7 @@ public final class BillingDraftService {
                     thinkingBudget: .off
                 )
             )
-            let raw = try await runtimeClient.collectGeneratedText(request)
+            let raw = try await modelExecutionGateway.collectGeneratedText(request)
             return ReasoningContent.answer(from: raw)
         }
     }

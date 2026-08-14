@@ -236,9 +236,10 @@ extension CorpusAnalysisQueueRunner {
     public static func live(
         store: SupraStore,
         modelLibrary: ModelLibrary,
-        runtimeClient: any RuntimeClientProtocol,
+        runtimeClient: any ModelExecutionGateway,
         progressHandler: @escaping ProgressHandler = { _, _ in }
     ) -> CorpusAnalysisQueueRunner {
+        let modelExecutionGateway = runtimeClient
         let selection = CorpusAnalysisLiveModelSelection()
         let generationConfiguration = ExhaustiveListGenerationConfiguration(
             systemPrompt: "Return only the requested strict JSON object. Do not add prose or markdown fences.",
@@ -284,7 +285,7 @@ extension CorpusAnalysisQueueRunner {
                 )
                 do {
                     let raw = try await withTaskCancellationHandler {
-                        try await runtimeClient.collectGeneratedText(request)
+                        try await modelExecutionGateway.collectGeneratedText(request)
                     } onCancel: {
                         cancellation.request()
                     }
@@ -334,11 +335,11 @@ private final class CorpusAnalysisPauseRequests: @unchecked Sendable {
 
 private final class CorpusAnalysisGenerationCancellation: @unchecked Sendable {
     private let lock = NSLock()
-    private let runtimeClient: any RuntimeClientProtocol
+    private let runtimeClient: any ModelExecutionGateway
     private let generationID: GenerationID
     private var cancellationTask: Task<Void, Error>?
 
-    init(runtimeClient: any RuntimeClientProtocol, generationID: GenerationID) {
+    init(runtimeClient: any ModelExecutionGateway, generationID: GenerationID) {
         self.runtimeClient = runtimeClient
         self.generationID = generationID
     }
@@ -366,10 +367,11 @@ private final class CorpusAnalysisGenerationCancellation: @unchecked Sendable {
     }
 
     private static func cancelAndAwaitQuiescence(
-        runtimeClient: any RuntimeClientProtocol,
+        runtimeClient: any ModelExecutionGateway,
         generationID: GenerationID
     ) async throws {
-        let response = try await runtimeClient.cancelGeneration(generationID)
+        let modelExecutionGateway = runtimeClient
+        let response = try await modelExecutionGateway.cancelGeneration(generationID)
         guard response.generationID == generationID,
               response.error == nil,
               response.status == .cancelled || response.status == .notFound else {
@@ -381,7 +383,7 @@ private final class CorpusAnalysisGenerationCancellation: @unchecked Sendable {
         // abandons its stream. If that request wins, bounded status polling proves
         // the original generation reservation disappeared before FIFO advances.
         for attempt in 0..<3_000 {
-            let status = try await runtimeClient.runtimeStatus()
+            let status = try await modelExecutionGateway.runtimeStatus()
             guard let activeGenerationID = status.activeGenerationID else { return }
             guard activeGenerationID == generationID else {
                 throw CorpusAnalysisQueueRunnerError.runtimeCancellationUnconfirmed

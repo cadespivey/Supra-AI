@@ -141,7 +141,7 @@ public enum TypedProseABProbe {
         modelID: ModelID,
         options: GenerationOptions,
         systemPrompt: String?,
-        runtimeClient: any RuntimeClientProtocol,
+        runtimeClient: any ModelExecutionGateway,
         repeats: Int = 1
     ) async -> [TypedProseABOutcome] {
         var outcomes: [TypedProseABOutcome] = []
@@ -163,7 +163,7 @@ public enum TypedProseABProbe {
         modelID: ModelID,
         options: GenerationOptions,
         systemPrompt: String?,
-        runtimeClient: any RuntimeClientProtocol
+        runtimeClient: any ModelExecutionGateway
     ) async -> TypedProseABOutcome {
         let outcome = await TypedGroundedGenerator.generate(
             question: fixture.question,
@@ -196,7 +196,7 @@ public enum TypedProseABProbe {
         modelID: ModelID,
         options: GenerationOptions,
         systemPrompt: String?,
-        runtimeClient: any RuntimeClientProtocol
+        runtimeClient: any ModelExecutionGateway
     ) async -> TypedProseABOutcome {
         let prompt = DocumentQAPromptBuilder.buildQAPrompt(
             question: fixture.question,
@@ -208,7 +208,8 @@ public enum TypedProseABProbe {
             prompt: prompt, systemPrompt: systemPrompt,
             contextWorkload: .ordinaryConversation, options: options
         )
-        guard let raw = try? await runtimeClient.collectGeneratedText(request) else {
+        let modelExecutionGateway = runtimeClient
+        guard let raw = try? await modelExecutionGateway.collectGeneratedText(request) else {
             return TypedProseABOutcome(
                 fixtureName: fixture.name, arm: .prose, answer: "", requiresReview: true,
                 warnings: ["generation failed"], expectsRefusal: fixture.expectsRefusal,

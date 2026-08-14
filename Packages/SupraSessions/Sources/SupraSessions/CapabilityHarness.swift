@@ -84,7 +84,7 @@ public enum CapabilityHarness {
         modelID: ModelID,
         options: GenerationOptions,
         systemPrompt: String?,
-        runtimeClient: any RuntimeClientProtocol,
+        runtimeClient: any ModelExecutionGateway,
         maxRepairs: Int = 2
     ) async -> CapabilityReport {
         var results: [(CapabilityFixture, TypedGroundedGenerator.Outcome)] = []

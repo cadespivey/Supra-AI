@@ -1,5 +1,12 @@
 import Foundation
+import SupraCore
 import SupraRuntimeClient
+import SupraRuntimeInterface
+
+/// Feature-facing runtime surface. Shipping composition provides the one shared
+/// coordinator; the alias preserves lightweight transport doubles in package
+/// tests without granting raw transport ownership to production features.
+public typealias ModelExecutionGateway = RuntimeClientProtocol
 
 public enum ModelExecutionPriority: Int, CaseIterable, Equatable, Sendable {
     case speculative = 0
@@ -55,6 +62,9 @@ public actor ModelExecutionCoordinator {
     private var duplicateOwners: [String: ModelExecutionTaskID] = [:]
     private var cancellationRequested: Set<ModelExecutionTaskID> = []
     private var activeCancellation: [ModelExecutionTaskID: @Sendable () -> Void] = [:]
+    private var loadedChatBindings: [ModelID: ModelExecutionModelBinding] = [:]
+    private var loadedEmbeddingBindings: [DocumentEmbeddingModelID: ModelExecutionModelBinding] = [:]
+    private var generationTasks: [GenerationID: ModelExecutionTaskID] = [:]
 
     public init(
         runtimeClient: RuntimeSafetyClient,
@@ -408,5 +418,205 @@ public actor ModelExecutionCoordinator {
     private func takeSequence() -> UInt64 {
         defer { nextSequence &+= 1 }
         return nextSequence
+    }
+}
+
+extension ModelExecutionCoordinator: RuntimeClientProtocol {
+    public func connect() async throws {
+        try await runtimeClient.connect()
+    }
+
+    public func loadModel(_ request: LoadModelRequest) async throws -> LoadModelResponse {
+        let binding = request.contentBinding.map {
+            ModelExecutionModelBinding(
+                modelID: request.modelID,
+                repositoryID: $0.repositoryID,
+                revision: $0.revision,
+                artifactFingerprintSHA256: $0.fingerprintSHA256
+            )
+        }
+        let response = try await execute(
+            gatewayRequest(operation: .modelLoad, priority: .userInitiatedBatch, binding: binding)
+        ) { permit in
+            await permit.markRunning()
+            return try await permit.loadModel(request)
+        }
+        if response.status == .loaded {
+            if let binding {
+                loadedChatBindings[request.modelID] = binding
+            } else {
+                loadedChatBindings[request.modelID] = nil
+            }
+        }
+        return response
+    }
+
+    public nonisolated func generate(
+        _ request: GenerateRequest
+    ) throws -> AsyncThrowingStream<GenerationEvent, Error> {
+        let taskID = ModelExecutionTaskID(rawValue: UUID().uuidString.lowercased())
+        return AsyncThrowingStream { continuation in
+            let worker = Task {
+                do {
+                    try await self.executeGeneration(
+                        request,
+                        taskID: taskID,
+                        continuation: continuation
+                    )
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { @Sendable _ in
+                worker.cancel()
+                Task { await self.cancel(taskID: taskID) }
+            }
+        }
+    }
+
+    public func countTokens(
+        _ request: CountTokensRequest
+    ) async throws -> CountTokensResponse {
+        try await execute(
+            gatewayRequest(
+                operation: .generation,
+                priority: .foregroundInteractive,
+                binding: loadedChatBindings[request.modelID]
+            )
+        ) { permit in
+            await permit.markRunning()
+            return try await permit.countTokens(request)
+        }
+    }
+
+    public func cancelGeneration(
+        _ generationID: GenerationID
+    ) async throws -> CancelGenerationResponse {
+        if let taskID = generationTasks[generationID] {
+            cancel(taskID: taskID)
+        }
+        return try await runtimeClient.cancelGeneration(generationID)
+    }
+
+    public func recentEvents(
+        for generationID: GenerationID,
+        after sequenceNumber: Int
+    ) async throws -> [GenerationEvent] {
+        try await runtimeClient.recentEvents(
+            for: generationID,
+            after: sequenceNumber
+        )
+    }
+
+    public func unloadModel() async throws -> UnloadModelResponse {
+        let response = try await execute(
+            gatewayRequest(operation: .modelLoad, priority: .userInitiatedBatch, binding: nil)
+        ) { permit in
+            await permit.markRunning()
+            return try await permit.unloadModel()
+        }
+        if response.status == .unloaded {
+            loadedChatBindings.removeAll()
+        }
+        return response
+    }
+
+    public func reloadCurrentModel() async throws -> LoadModelResponse {
+        try await execute(
+            gatewayRequest(operation: .modelLoad, priority: .userInitiatedBatch, binding: nil)
+        ) { permit in
+            await permit.markRunning()
+            return try await permit.reloadCurrentModel()
+        }
+    }
+
+    public func runtimeStatus() async throws -> RuntimeStatus {
+        try await runtimeClient.runtimeStatus()
+    }
+
+    public func restartRuntimeService() async throws {
+        try await runtimeClient.restartRuntimeService()
+    }
+
+    public func loadEmbeddingModel(
+        _ request: LoadEmbeddingModelRequest
+    ) async throws -> LoadEmbeddingModelResponse {
+        let modelID = ModelID(request.embeddingModelID.rawValue)
+        let binding = request.contentBinding.map {
+            ModelExecutionModelBinding(
+                modelID: modelID,
+                repositoryID: $0.repositoryID,
+                revision: $0.revision,
+                artifactFingerprintSHA256: $0.fingerprintSHA256
+            )
+        }
+        let response = try await execute(
+            gatewayRequest(operation: .modelLoad, priority: .userInitiatedBatch, binding: binding)
+        ) { permit in
+            await permit.markRunning()
+            return try await permit.loadEmbeddingModel(request)
+        }
+        if response.state == .loaded {
+            if let binding {
+                loadedEmbeddingBindings[request.embeddingModelID] = binding
+            } else {
+                loadedEmbeddingBindings[request.embeddingModelID] = nil
+            }
+        }
+        return response
+    }
+
+    public func embedTexts(_ request: EmbedTextRequest) async throws -> EmbedTextResponse {
+        try await execute(
+            gatewayRequest(
+                operation: .embeddingBatch,
+                priority: .userInitiatedBatch,
+                binding: loadedEmbeddingBindings[request.embeddingModelID]
+            )
+        ) { permit in
+            await permit.markRunning()
+            return try await permit.embedTexts(request)
+        }
+    }
+
+    public func embeddingStatus() async throws -> EmbeddingModelStatus {
+        try await runtimeClient.embeddingStatus()
+    }
+
+    private func executeGeneration(
+        _ request: GenerateRequest,
+        taskID: ModelExecutionTaskID,
+        continuation: AsyncThrowingStream<GenerationEvent, Error>.Continuation
+    ) async throws {
+        generationTasks[request.generationID] = taskID
+        defer { generationTasks[request.generationID] = nil }
+        let executionRequest = ModelExecutionRequest(
+            taskID: taskID,
+            operation: .generation,
+            priority: .foregroundInteractive,
+            modelBinding: loadedChatBindings[request.modelID],
+            duplicateKey: "generation-\(request.generationID.rawValue.uuidString.lowercased())"
+        )
+        try await execute(executionRequest) { permit in
+            await permit.markRunning()
+            for try await event in try permit.generate(request) {
+                continuation.yield(event)
+            }
+        }
+    }
+
+    private func gatewayRequest(
+        operation: ModelExecutionOperation,
+        priority: ModelExecutionPriority,
+        binding: ModelExecutionModelBinding?
+    ) -> ModelExecutionRequest {
+        ModelExecutionRequest(
+            taskID: ModelExecutionTaskID(rawValue: UUID().uuidString.lowercased()),
+            operation: operation,
+            priority: priority,
+            modelBinding: binding,
+            duplicateKey: nil
+        )
     }
 }

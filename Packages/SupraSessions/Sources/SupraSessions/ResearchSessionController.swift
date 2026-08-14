@@ -157,7 +157,8 @@ public final class ResearchSessionController: ObservableObject {
     @Published public private(set) var runMessage: String?
 
     private let store: SupraStore
-    private let runtimeClient: any RuntimeClientProtocol
+    private let runtimeClient: any ModelExecutionGateway
+    private var modelExecutionGateway: any ModelExecutionGateway { runtimeClient }
     private let defaultSystemPrompt: String?
     private let planner = ResearchQueryPlanner()
     private let tokenStore: any APIKeyStoreProtocol
@@ -168,7 +169,7 @@ public final class ResearchSessionController: ObservableObject {
 
     public init(
         store: SupraStore,
-        runtimeClient: any RuntimeClientProtocol,
+        runtimeClient: any ModelExecutionGateway,
         matterID: String,
         defaultSystemPrompt: String? = nil,
         legalConfiguration: LegalModelConfiguration = .fromEnvironment(),
@@ -1106,7 +1107,7 @@ public final class ResearchSessionController: ObservableObject {
             contextWorkload: .groundedExactEvidence,
             options: options
         )
-        return try await runtimeClient.collectGeneratedText(request)
+        return try await modelExecutionGateway.collectGeneratedText(request)
     }
 
     private func formatDateRange(start: Date?, end: Date?) -> String {

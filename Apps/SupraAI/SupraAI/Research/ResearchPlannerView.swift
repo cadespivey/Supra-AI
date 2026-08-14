@@ -466,8 +466,6 @@ struct ResearchPlannerView: View {
         guard !Task.isCancelled, !actionInFlight, controller.plannedQueries.isEmpty else { return }
         guard refreshIdentityForAction() else { return }
         if case .generating = controller.planState { return }
-        // Don't evict a model out from under a generation running elsewhere.
-        if library.isRuntimeGenerating() { return }
         // Only proceed with a real (loaded) model — a failed load stays silent and
         // leaves no half-built manual query behind for the commit to trip over.
         guard case let .success(modelID) = await library.ensureLoadedRoutedModelID(

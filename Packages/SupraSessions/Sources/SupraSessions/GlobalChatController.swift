@@ -28,7 +28,8 @@ public final class GlobalChatController: ObservableObject {
     @Published public private(set) var errorMessage: String?
 
     private let store: SupraStore
-    private let runtimeClient: any RuntimeClientProtocol
+    private let runtimeClient: any ModelExecutionGateway
+    private var modelExecutionGateway: any ModelExecutionGateway { runtimeClient }
     private let defaultSystemPrompt: String?
     private let scope: ChatScope
     /// Grounds matter chats in the matter's own documents (folder inventories +
@@ -135,7 +136,7 @@ public final class GlobalChatController: ObservableObject {
 
     public init(
         store: SupraStore,
-        runtimeClient: any RuntimeClientProtocol,
+        runtimeClient: any ModelExecutionGateway,
         defaultSystemPrompt: String? = nil,
         scope: ChatScope = .global,
         embedder: (any TextEmbedder)? = nil,
@@ -907,8 +908,8 @@ public final class GlobalChatController: ObservableObject {
         cancelRequested = true
         groundedPublicationCancellation.requestCancellation()
         guard let activeGenerationID else { return }
-        let runtimeClient = runtimeClient
-        Task { _ = try? await runtimeClient.cancelGeneration(activeGenerationID) }
+        let modelExecutionGateway = modelExecutionGateway
+        Task { _ = try? await modelExecutionGateway.cancelGeneration(activeGenerationID) }
     }
 
     /// Phase 1 gate switch (P1-T4): generate a typed AnswerDraft for a matter-document CONTENT
@@ -1270,7 +1271,7 @@ public final class GlobalChatController: ObservableObject {
                 var finalMetrics: RuntimeMetrics?
                 var groundingVerification: DocumentSupportReport?
 
-                generationEvents: for try await event in try runtimeClient.generate(request) {
+                generationEvents: for try await event in try modelExecutionGateway.generate(request) {
                     switch event.type {
                     case .token:
                         guard let token = event.tokenText else { break }
@@ -1825,7 +1826,7 @@ public final class GlobalChatController: ObservableObject {
                 contextWorkload: .groundedExactEvidence,
                 options: options
             )
-            let output = ReasoningContent.answer(from: try await runtimeClient.collectGeneratedText(request))
+            let output = ReasoningContent.answer(from: try await modelExecutionGateway.collectGeneratedText(request))
             return LegalWorkflowResult(
                 output: output,
                 queryTerms: packet.queryTerms,
@@ -1852,7 +1853,7 @@ public final class GlobalChatController: ObservableObject {
                 contextWorkload: .ordinaryConversation,
                 options: options
             )
-            let output = ReasoningContent.answer(from: try await runtimeClient.collectGeneratedText(request))
+            let output = ReasoningContent.answer(from: try await modelExecutionGateway.collectGeneratedText(request))
             return LegalWorkflowResult(output: output, queryTerms: [], authorities: [], verification: nil, researchSessionID: nil)
         }
     }
@@ -2120,7 +2121,7 @@ public final class GlobalChatController: ObservableObject {
             contextWorkload: .groundedExactEvidence,
             options: options
         )
-        var output = ReasoningContent.answer(from: try await runtimeClient.collectGeneratedText(request))
+        var output = ReasoningContent.answer(from: try await modelExecutionGateway.collectGeneratedText(request))
         var verificationPacket = packet
         var hydration = await rehydratedForVerification(verificationPacket, answer: output)
         verificationPacket = hydration.packet
@@ -2158,7 +2159,7 @@ public final class GlobalChatController: ObservableObject {
                 systemPrompt: systemPrompt, history: history,
                 contextWorkload: .groundedExactEvidence, options: options
             )
-            if let revisedRaw = try? await runtimeClient.collectGeneratedText(revisionRequest) {
+            if let revisedRaw = try? await modelExecutionGateway.collectGeneratedText(revisionRequest) {
                 let revised = ReasoningContent.answer(from: revisedRaw)
                 hydration = await rehydratedForVerification(verificationPacket, answer: revised)
                 verificationPacket = hydration.packet
@@ -2944,7 +2945,7 @@ public final class GlobalChatController: ObservableObject {
             contextWorkload: .ordinaryConversation,
             options: options
         )
-        guard let raw = try? await runtimeClient.collectGeneratedText(request),
+        guard let raw = try? await modelExecutionGateway.collectGeneratedText(request),
               case let .answer(answer) = ReasoningContent.resolve(rawOutput: raw, thinkingEnabled: false) else {
             return []
         }
@@ -3570,7 +3571,7 @@ public final class GlobalChatController: ObservableObject {
             contextWorkload: .ordinaryConversation,
             options: options
         )
-        guard let raw = try? await runtimeClient.collectGeneratedText(request),
+        guard let raw = try? await modelExecutionGateway.collectGeneratedText(request),
               case let .answer(answer) = ReasoningContent.resolve(rawOutput: raw, thinkingEnabled: false) else {
             return nil
         }

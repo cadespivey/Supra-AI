@@ -29,11 +29,12 @@ public actor RuntimeTextEmbedder: TextEmbedder {
 
     private let embeddingModelID: DocumentEmbeddingModelID
     private let modelPath: String
-    private let runtimeClient: any RuntimeClientProtocol
+    private let runtimeClient: any ModelExecutionGateway
+    private var modelExecutionGateway: any ModelExecutionGateway { runtimeClient }
     private let batchSize: Int
     private var loaded = false
 
-    public init?(model: DocumentEmbeddingModelRecord, runtimeClient: any RuntimeClientProtocol, batchSize: Int = 32) {
+    public init?(model: DocumentEmbeddingModelRecord, runtimeClient: any ModelExecutionGateway, batchSize: Int = 32) {
         guard let path = model.localPath, !path.isEmpty else { return nil }
         if ManagedModelStorage.isManagedEmbedding(path: path) {
             guard
@@ -62,7 +63,7 @@ public actor RuntimeTextEmbedder: TextEmbedder {
         var index = 0
         while index < texts.count {
             let batch = Array(texts[index..<min(index + batchSize, texts.count)])
-            let response = try await runtimeClient.embedTexts(
+            let response = try await modelExecutionGateway.embedTexts(
                 EmbedTextRequest(embeddingModelID: embeddingModelID, texts: batch, normalize: true)
             )
             guard response.state == .loaded, response.vectors.count == batch.count else {
@@ -87,7 +88,7 @@ public actor RuntimeTextEmbedder: TextEmbedder {
                 revision: modelRevision,
                 expectedDimension: expectedDimension
             )
-            let response = try await runtimeClient.loadEmbeddingModel(prepared.request)
+            let response = try await modelExecutionGateway.loadEmbeddingModel(prepared.request)
             _ = prepared.authorization
             guard response.state == .loaded else {
                 throw TextEmbedderError.loadFailed(response.error?.message ?? "unknown error")
@@ -104,7 +105,7 @@ public actor RuntimeTextEmbedder: TextEmbedder {
               let authorization = access.makeTransferableAuthorization() else {
             throw TextEmbedderError.loadFailed("the model-folder security scope could not be activated")
         }
-        let response = try await runtimeClient.loadEmbeddingModel(
+        let response = try await modelExecutionGateway.loadEmbeddingModel(
             LoadEmbeddingModelRequest(
                 embeddingModelID: embeddingModelID,
                 modelPath: modelPath,

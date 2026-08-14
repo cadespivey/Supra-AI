@@ -73,7 +73,8 @@ public final class StructuredOutputController: ObservableObject {
         StructuredWorkProductCreationRequest?
 
     private let store: SupraStore
-    private let runtimeClient: any RuntimeClientProtocol
+    private let runtimeClient: any ModelExecutionGateway
+    private var modelExecutionGateway: any ModelExecutionGateway { runtimeClient }
     private let retrieval: DocumentRetrievalService
     private let defaultSystemPrompt: String?
     private let exportAction: ExportAction
@@ -81,7 +82,7 @@ public final class StructuredOutputController: ObservableObject {
 
     public init(
         store: SupraStore,
-        runtimeClient: any RuntimeClientProtocol,
+        runtimeClient: any ModelExecutionGateway,
         matterID: String,
         embedder: (any TextEmbedder)? = nil,
         defaultSystemPrompt: String? = nil,
@@ -1305,7 +1306,7 @@ public final class StructuredOutputController: ObservableObject {
             contextWorkload: .groundedExactEvidence,
             options: route?.options ?? GenerationOptions()
         )
-        return try await runtimeClient.collectGeneratedText(request)
+        return try await modelExecutionGateway.collectGeneratedText(request)
     }
 
     private func structuredSystemPrompt(_ route: ModelRoute?) -> String? {

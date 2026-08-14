@@ -91,9 +91,10 @@ enum DocumentRerank {
         question: String,
         candidates: [Candidate],
         limit: Int,
-        runtimeClient: any RuntimeClientProtocol,
+        runtimeClient: any ModelExecutionGateway,
         modelID: ModelID
     ) async -> [String] {
+        let modelExecutionGateway = runtimeClient
         let retrievalLabels = candidates.map(\.label)
         var options = GenerationPreset.extractive.defaultOptions
         options.maxOutputTokens = 256
@@ -105,7 +106,7 @@ enum DocumentRerank {
             contextWorkload: .groundedExactEvidence,
             options: options
         )
-        guard let raw = try? await runtimeClient.collectGeneratedText(request) else {
+        guard let raw = try? await modelExecutionGateway.collectGeneratedText(request) else {
             return Array(retrievalLabels.prefix(limit))
         }
         return rerankOrder(

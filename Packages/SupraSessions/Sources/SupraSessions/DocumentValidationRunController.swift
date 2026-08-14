@@ -25,10 +25,10 @@ public final class DocumentValidationRunController: ObservableObject {
     @Published public private(set) var state: State = .idle
 
     private let store: SupraStore
-    private let runtimeClient: any RuntimeClientProtocol
+    private let runtimeClient: any ModelExecutionGateway
     private var task: Task<Void, Never>?
 
-    public init(store: SupraStore, runtimeClient: any RuntimeClientProtocol) {
+    public init(store: SupraStore, runtimeClient: any ModelExecutionGateway) {
         self.store = store
         self.runtimeClient = runtimeClient
     }

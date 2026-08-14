@@ -47,7 +47,8 @@ public final class DocumentChronologyController: ObservableObject {
 
     public let matterID: String
     private let store: SupraStore
-    private let runtimeClient: any RuntimeClientProtocol
+    private let runtimeClient: any ModelExecutionGateway
+    private var modelExecutionGateway: any ModelExecutionGateway { runtimeClient }
     private let retrieval: DocumentRetrievalService
     private let defaultSystemPrompt: String?
     /// Total safety cap on harvested sources (metadata-date and text-chunk
@@ -59,7 +60,7 @@ public final class DocumentChronologyController: ObservableObject {
     public init(
         matterID: String,
         store: SupraStore,
-        runtimeClient: any RuntimeClientProtocol,
+        runtimeClient: any ModelExecutionGateway,
         defaultSystemPrompt: String? = nil,
         maxSources: Int = 1_000
     ) {
@@ -214,8 +215,8 @@ public final class DocumentChronologyController: ObservableObject {
 
     private func cancelActiveRuntimeGeneration() {
         guard let activeGenerationID else { return }
-        let runtimeClient = runtimeClient
-        Task { _ = try? await runtimeClient.cancelGeneration(activeGenerationID) }
+        let modelExecutionGateway = modelExecutionGateway
+        Task { _ = try? await modelExecutionGateway.cancelGeneration(activeGenerationID) }
     }
 
     @discardableResult
@@ -1472,7 +1473,7 @@ public final class DocumentChronologyController: ObservableObject {
         // just this task.
         activeGenerationID = request.generationID
         defer { activeGenerationID = nil }
-        let output = try await runtimeClient.collectGeneratedText(request)
+        let output = try await modelExecutionGateway.collectGeneratedText(request)
         return ReasoningContent.answer(from: output)
     }
 

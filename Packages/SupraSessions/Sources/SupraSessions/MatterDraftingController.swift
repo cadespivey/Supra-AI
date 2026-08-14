@@ -134,7 +134,7 @@ public final class MatterDraftingController: ObservableObject {
     /// Present when the app can call the on-device model — required for the LLM-backed
     /// kinds (`letterDemand`). The deterministic notice and supported-motion
     /// paths work without it.
-    private let runtimeClient: (any RuntimeClientProtocol)?
+    private let runtimeClient: (any ModelExecutionGateway)?
     /// The firm's structural style overrides (letterhead/caption/signature/…), or nil to use the
     /// house default. Injected as the raw value type; in the app, `FirmStyleProfileController`
     /// (M2) supplies its `.profile` here. `nil` ⇒ output is byte-for-byte `.defaultFL`.
@@ -142,7 +142,7 @@ public final class MatterDraftingController: ObservableObject {
 
     public init(
         store: SupraStore,
-        runtimeClient: (any RuntimeClientProtocol)? = nil,
+        runtimeClient: (any ModelExecutionGateway)? = nil,
         storage: DocumentStorage = .makeDefault(),
         fileWriter: DurableFileWriter = DurableFileWriter(),
         fileStampProvider: (@Sendable () -> String)? = nil,

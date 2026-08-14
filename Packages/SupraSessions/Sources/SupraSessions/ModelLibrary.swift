@@ -95,7 +95,7 @@ struct ContentBoundAuthorizationExecutor: Sendable {
 ///
 /// All state is published on the main actor for SwiftUI. The orchestration is
 /// kept here (rather than in the app target) so it can be unit-tested against a
-/// stub `RuntimeClientProtocol` and an in-memory `SupraStore`.
+/// stub `ModelExecutionGateway` and an in-memory `SupraStore`.
 @MainActor
 public final class ModelLibrary: ObservableObject {
     public enum LoadState: Equatable, Sendable {
@@ -117,18 +117,15 @@ public final class ModelLibrary: ObservableObject {
     public let hardwareProfile: MacHardwareProfile
     static let forcedChatModelSettingsKey = "chat.forced_model_id"
     private let store: SupraStore
-    private let runtimeClient: any RuntimeClientProtocol
+    private let modelExecutionGateway: any ModelExecutionGateway
+    private let modelExecutionCoordinator: ModelExecutionCoordinator?
     private let managedModelRoots: [URL]
     private let authorizationExecutor: ContentBoundAuthorizationExecutor
     private var hasPersistedRoleAssignments: Bool
-    /// Whether the runtime is mid-generation. Speculative pre-warms consult this so
-    /// they never evict the model out from under an in-flight generation; wired by the
-    /// app to the runtime status (defaults to "not generating" for tests/headless).
-    public var isRuntimeGenerating: () -> Bool = { false }
 
     public convenience init(
         store: SupraStore,
-        runtimeClient: any RuntimeClientProtocol,
+        runtimeClient: any ModelExecutionGateway,
         managedModelRoots: [URL] = [ManagedModelStorage.modelsDirectory()],
         hardwareProfile: MacHardwareProfile? = nil
     ) {
@@ -143,13 +140,14 @@ public final class ModelLibrary: ObservableObject {
 
     init(
         store: SupraStore,
-        runtimeClient: any RuntimeClientProtocol,
+        runtimeClient: any ModelExecutionGateway,
         managedModelRoots: [URL],
         authorizationExecutor: ContentBoundAuthorizationExecutor,
         hardwareProfile: MacHardwareProfile? = nil
     ) {
         self.store = store
-        self.runtimeClient = runtimeClient
+        self.modelExecutionGateway = runtimeClient
+        self.modelExecutionCoordinator = runtimeClient as? ModelExecutionCoordinator
         self.managedModelRoots = managedModelRoots
         self.authorizationExecutor = authorizationExecutor
         self.hardwareProfile = hardwareProfile ?? MacHardwareProfileProbe.current(
@@ -239,6 +237,18 @@ public final class ModelLibrary: ObservableObject {
         for role: ModelRole,
         configuration: LegalModelConfiguration = .fromEnvironment()
     ) async -> Result<ModelID, ModelRouteResolutionIssue> {
+        await ensureLoadedRoutedModelID(
+            for: role,
+            configuration: configuration,
+            runtimeGateway: modelExecutionGateway
+        )
+    }
+
+    private func ensureLoadedRoutedModelID(
+        for role: ModelRole,
+        configuration: LegalModelConfiguration,
+        runtimeGateway: any ModelExecutionGateway
+    ) async -> Result<ModelID, ModelRouteResolutionIssue> {
         guard !Task.isCancelled else { return .failure(.cancelled(role: role)) }
         refresh()
         let resolution = resolvedModelWithIssue(for: role, configuration: configuration)
@@ -252,13 +262,14 @@ public final class ModelLibrary: ObservableObject {
             return .failure(.assignedModelMissing(role: role, modelID: preferred.id))
         }
         guard await settleInFlightLoad() else { return .failure(.cancelled(role: role)) }
-        if loadedModelID?.rawValue == uuid, await runtimeConfirmsLoaded(uuid) {
+        if loadedModelID?.rawValue == uuid,
+           await runtimeConfirmsLoaded(uuid, runtimeGateway: runtimeGateway) {
             guard !Task.isCancelled else { return .failure(.cancelled(role: role)) }
             return .success(ModelID(uuid))
         }
 
         guard !Task.isCancelled else { return .failure(.cancelled(role: role)) }
-        await activateAndLoad(modelID: preferred.id)
+        await activateAndLoad(modelID: preferred.id, runtimeGateway: runtimeGateway)
         guard !Task.isCancelled else { return .failure(.cancelled(role: role)) }
         if loadedModelID?.rawValue == uuid {
             return .success(ModelID(uuid))
@@ -300,9 +311,11 @@ public final class ModelLibrary: ObservableObject {
     /// message right after a model switch) doesn't wait on the multi-second load. A
     /// no-op when that model is already loaded, or a load is already in flight.
     public func prewarmChatModel(configuration: LegalModelConfiguration = .fromEnvironment()) {
-        if case .loading = loadState { return }
-        if isRuntimeGenerating() { return }
-        Task { _ = await ensureLoadedChatModelID(for: .legalReasoning, configuration: configuration) }
+        schedulePrewarm(
+            role: .legalReasoning,
+            configuration: configuration,
+            honorsForcedChatSelection: true
+        )
     }
 
     /// Fire-and-forget warm of a role's assigned model (drafting, high-quality
@@ -310,9 +323,11 @@ public final class ModelLibrary: ObservableObject {
     /// feature's screen opens so the load hides behind the user's setup time. Ignores
     /// the chat forced-pin (that's chat-only). No-op while a load is in flight.
     public func prewarm(role: ModelRole, configuration: LegalModelConfiguration = .fromEnvironment()) {
-        if case .loading = loadState { return }
-        if isRuntimeGenerating() { return }
-        Task { _ = await ensureLoadedRoutedModelID(for: role, configuration: configuration) }
+        schedulePrewarm(
+            role: role,
+            configuration: configuration,
+            honorsForcedChatSelection: false
+        )
     }
 
     /// Chat model resolution honoring the user's forced-model pin: if a model is
@@ -322,22 +337,43 @@ public final class ModelLibrary: ObservableObject {
         for role: ModelRole,
         configuration: LegalModelConfiguration = .fromEnvironment()
     ) async -> Result<ModelID, ModelRouteResolutionIssue> {
+        await ensureLoadedChatModelID(
+            for: role,
+            configuration: configuration,
+            runtimeGateway: modelExecutionGateway
+        )
+    }
+
+    private func ensureLoadedChatModelID(
+        for role: ModelRole,
+        configuration: LegalModelConfiguration,
+        runtimeGateway: any ModelExecutionGateway
+    ) async -> Result<ModelID, ModelRouteResolutionIssue> {
         guard !Task.isCancelled else { return .failure(.cancelled(role: role)) }
         guard let forced = forcedModelID else {
-            return await ensureLoadedRoutedModelID(for: role, configuration: configuration)
+            return await ensureLoadedRoutedModelID(
+                for: role,
+                configuration: configuration,
+                runtimeGateway: runtimeGateway
+            )
         }
         refresh()
         guard let model = models.first(where: { $0.id == forced.rawValue.uuidString }) else {
             setForcedModel(nil)
-            return await ensureLoadedRoutedModelID(for: role, configuration: configuration)
+            return await ensureLoadedRoutedModelID(
+                for: role,
+                configuration: configuration,
+                runtimeGateway: runtimeGateway
+            )
         }
         guard await settleInFlightLoad() else { return .failure(.cancelled(role: role)) }
-        if loadedModelID?.rawValue == forced.rawValue, await runtimeConfirmsLoaded(forced.rawValue) {
+        if loadedModelID?.rawValue == forced.rawValue,
+           await runtimeConfirmsLoaded(forced.rawValue, runtimeGateway: runtimeGateway) {
             guard !Task.isCancelled else { return .failure(.cancelled(role: role)) }
             return .success(forced)
         }
         guard !Task.isCancelled else { return .failure(.cancelled(role: role)) }
-        await activateAndLoad(modelID: model.id)
+        await activateAndLoad(modelID: model.id, runtimeGateway: runtimeGateway)
         guard !Task.isCancelled else { return .failure(.cancelled(role: role)) }
         if loadedModelID?.rawValue == forced.rawValue {
             return .success(forced)
@@ -349,6 +385,54 @@ public final class ModelLibrary: ObservableObject {
             message = "The runtime did not confirm that the selected model is loaded."
         }
         return .failure(.assignedModelLoadFailed(role: role, displayName: model.displayName, message: message))
+    }
+
+    private func schedulePrewarm(
+        role: ModelRole,
+        configuration: LegalModelConfiguration,
+        honorsForcedChatSelection: Bool
+    ) {
+        guard let coordinator = modelExecutionCoordinator else {
+            Task { [weak self] in
+                guard let self else { return }
+                if honorsForcedChatSelection {
+                    _ = await ensureLoadedChatModelID(for: role, configuration: configuration)
+                } else {
+                    _ = await ensureLoadedRoutedModelID(for: role, configuration: configuration)
+                }
+            }
+            return
+        }
+
+        let supersessionKey = honorsForcedChatSelection
+            ? "chat-model-prewarm"
+            : "role-model-prewarm-\(role.rawValue)"
+        let request = ModelExecutionRequest(
+            taskID: ModelExecutionTaskID(rawValue: UUID().uuidString.lowercased()),
+            operation: ModelExecutionOperation.prewarm(supersessionKey: supersessionKey),
+            priority: .speculative,
+            modelBinding: nil,
+            duplicateKey: nil
+        )
+        Task { [weak self] in
+            guard let self else { return }
+            _ = try? await coordinator.execute(request) { permit in
+                await permit.markRunning()
+                if honorsForcedChatSelection {
+                    _ = await self.ensureLoadedChatModelID(
+                        for: role,
+                        configuration: configuration,
+                        runtimeGateway: permit
+                    )
+                } else {
+                    _ = await self.ensureLoadedRoutedModelID(
+                        for: role,
+                        configuration: configuration,
+                        runtimeGateway: permit
+                    )
+                }
+            }
+        }
     }
 
     /// A suggested model for a role given what is currently registered: the plan's
@@ -488,7 +572,7 @@ public final class ModelLibrary: ObservableObject {
         // Evict it from the runtime first if it's the one currently loaded.
         if loadedModelID?.rawValue.uuidString == modelID {
             do {
-                _ = try await runtimeClient.unloadModel()
+                _ = try await modelExecutionGateway.unloadModel()
             } catch {
                 return .blocked(message: error.localizedDescription)
             }
@@ -563,8 +647,11 @@ public final class ModelLibrary: ObservableObject {
     /// with the runtime's "No matching runtime model is loaded." A status probe is
     /// a millisecond RPC next to a multi-second generate; an unreachable service
     /// reports unconfirmed, and the caller falls through to a real load.
-    private func runtimeConfirmsLoaded(_ uuid: UUID) async -> Bool {
-        guard let status = try? await runtimeClient.runtimeStatus() else { return false }
+    private func runtimeConfirmsLoaded(
+        _ uuid: UUID,
+        runtimeGateway: any ModelExecutionGateway
+    ) async -> Bool {
+        guard let status = try? await runtimeGateway.runtimeStatus() else { return false }
         if status.loadedModelID?.rawValue == uuid { return true }
         // The cache lied — resynchronize it so status surfaces (Models tab, chat
         // footer) stop reporting a model the runtime does not hold.
@@ -678,7 +765,7 @@ public final class ModelLibrary: ObservableObject {
             loadState = .loading(modelID: selected.candidate.record.id)
             ownedLoadingModelID = selected.candidate.record.id
 
-            let response = try await runtimeClient.loadModel(selected.preparedLoad.request)
+            let response = try await modelExecutionGateway.loadModel(selected.preparedLoad.request)
             guard response.status == .loaded else {
                 throw ContentBoundModelLoadError.runtimeRejected(
                     Self.failureMessage(response.error)
@@ -731,6 +818,16 @@ public final class ModelLibrary: ObservableObject {
 
     /// Marks the given model active in the store and loads it into the runtime service.
     public func activateAndLoad(modelID modelIDString: String) async {
+        await activateAndLoad(
+            modelID: modelIDString,
+            runtimeGateway: modelExecutionGateway
+        )
+    }
+
+    private func activateAndLoad(
+        modelID modelIDString: String,
+        runtimeGateway: any ModelExecutionGateway
+    ) async {
         guard !Task.isCancelled else { return }
         // Ignore overlapping loads so concurrent taps cannot leave the published
         // load state and the runtime out of sync.
@@ -863,7 +960,7 @@ public final class ModelLibrary: ObservableObject {
             defer { retainedScopedAccess?.release() }
             guard let self else { return }
             do {
-                let response = try await runtimeClient.loadModel(request)
+                let response = try await runtimeGateway.loadModel(request)
                 switch response.status {
                 case .loaded:
                     loadState = .loaded(modelID: record.id)

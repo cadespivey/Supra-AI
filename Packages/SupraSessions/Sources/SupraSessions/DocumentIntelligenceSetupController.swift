@@ -31,7 +31,8 @@ public final class DocumentIntelligenceSetupController: ObservableObject {
     @Published public private(set) var autoPurgeDays: Int = DocumentMaintenance.defaultAutoPurgeDays
 
     private let store: SupraStore
-    private let runtimeClient: any RuntimeClientProtocol
+    private let runtimeClient: any ModelExecutionGateway
+    private var modelExecutionGateway: any ModelExecutionGateway { runtimeClient }
     private let notifier: any DocumentNotifying
     private let storage: DocumentStorage
     private let capabilitiesProvider: @Sendable () -> DocumentToolchainCapabilities
@@ -39,7 +40,7 @@ public final class DocumentIntelligenceSetupController: ObservableObject {
 
     public init(
         store: SupraStore,
-        runtimeClient: any RuntimeClientProtocol,
+        runtimeClient: any ModelExecutionGateway,
         notifier: any DocumentNotifying = SystemDocumentNotifier(),
         storage: DocumentStorage = .makeDefault(),
         capabilitiesProvider: @escaping @Sendable () -> DocumentToolchainCapabilities = { DocumentToolchain.detectCapabilities() }
@@ -135,7 +136,7 @@ public final class DocumentIntelligenceSetupController: ObservableObject {
     }
 
     public func refreshChatModelStatus() async {
-        guard let status = try? await runtimeClient.runtimeStatus() else {
+        guard let status = try? await modelExecutionGateway.runtimeStatus() else {
             chatModelLoaded = false
             syncCompletionStateIfNeeded()
             return
@@ -488,7 +489,7 @@ public final class DocumentIntelligenceSetupController: ObservableObject {
                 revision: model.revision,
                 expectedDimension: expectedDimension
             )
-            let response = try await runtimeClient.loadEmbeddingModel(prepared.request)
+            let response = try await modelExecutionGateway.loadEmbeddingModel(prepared.request)
             _ = prepared.authorization
             return response
         }
@@ -501,7 +502,7 @@ public final class DocumentIntelligenceSetupController: ObservableObject {
                 "the model-folder security scope could not be activated"
             )
         }
-        return try await runtimeClient.loadEmbeddingModel(
+        return try await modelExecutionGateway.loadEmbeddingModel(
             LoadEmbeddingModelRequest(
                 embeddingModelID: embeddingModelID,
                 modelPath: path,

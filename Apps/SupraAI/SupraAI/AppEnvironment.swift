@@ -386,7 +386,7 @@ final class AppEnvironment: ObservableObject {
     private let interruptedDraftRecoveryUITestRoot: URL?
 
     private let runtimeStatusController: RuntimeStatusController
-    private let runtimeClient: RuntimeSafetyClient
+    private let modelExecutionCoordinator: ModelExecutionCoordinator
     /// Non-nil only for the explicitly authorized guided-Q&A XCUITest launch.
     /// The synthetic model fixture is confined to this throwaway root.
     private let guidedQAUITestModelRoot: URL?
@@ -405,6 +405,14 @@ final class AppEnvironment: ObservableObject {
             ? GuidedQAUITestRuntimeClient()
             : RuntimeClient()
         let runtimeClient = RuntimeSafetyClient(base: baseRuntimeClient)
+        let modelExecutionCoordinator = ModelExecutionCoordinator(
+            runtimeClient: runtimeClient,
+            configuration: ModelExecutionConfiguration(
+                maximumQueuedTasks: 64,
+                agingIntervalTicks: 1_000_000_000
+            ),
+            monotonicNow: { DispatchTime.now().uptimeNanoseconds }
+        )
         let guidedQAUITestModelRoot = guidedQAUITestAuthorized
             ? Optional(FileManager.default.temporaryDirectory.appendingPathComponent(
                 "SupraAI-UITest-GuidedQA-\(UUID().uuidString)",
@@ -423,7 +431,7 @@ final class AppEnvironment: ObservableObject {
         let appVersion = AppEnvironment.currentAppVersion()
         let modelLibrary = ModelLibrary(
             store: store,
-            runtimeClient: runtimeClient,
+            runtimeClient: modelExecutionCoordinator,
             managedModelRoots: guidedQAUITestManagedRoots
         )
         let tokenStore = APIKeyStoreComposition.live()
@@ -431,13 +439,13 @@ final class AppEnvironment: ObservableObject {
         self.usingFallbackStore = storeResult.isFallback
         self.databaseRecoveryState = storeResult.recoveryState
         self.runtimeStatusController = RuntimeStatusController(runtimeClient: runtimeClient)
-        self.runtimeClient = runtimeClient
+        self.modelExecutionCoordinator = modelExecutionCoordinator
         self.guidedQAUITestModelRoot = guidedQAUITestModelRoot
         self.interruptedDraftRecoveryUITestRoot = interruptedDraftRecoveryUITestRoot
         self.modelLibrary = modelLibrary
         self.chatController = GlobalChatController(
             store: store,
-            runtimeClient: runtimeClient,
+            runtimeClient: modelExecutionCoordinator,
             defaultSystemPrompt: systemPrompt,
             tokenStore: tokenStore
         )
@@ -518,7 +526,10 @@ final class AppEnvironment: ObservableObject {
                 for: router.route(for: .drafting).role, configuration: router.configuration
             ) {
             case let .success(loadedModelID):
-                return await FirmStyleExemplarParser(runtimeClient: runtimeClient, modelID: loadedModelID)
+                return await FirmStyleExemplarParser(
+                    runtimeClient: modelExecutionCoordinator,
+                    modelID: loadedModelID
+                )
                     .parse(kind: kind, fileURL: url)
             case let .failure(issue):
                 return ExemplarParseOutcome(candidate: FirmStyleProfile(), message: issue.message)
@@ -537,7 +548,11 @@ final class AppEnvironment: ObservableObject {
         self.billingSettingsController = billingSettings
         let billingDraft = BillingDraftController(
             store: store,
-            service: BillingDraftService.live(store: store, modelLibrary: modelLibrary, runtimeClient: runtimeClient),
+            service: BillingDraftService.live(
+                store: store,
+                modelLibrary: modelLibrary,
+                runtimeClient: modelExecutionCoordinator
+            ),
             timekeeper: billingSettings.timekeeper
         )
         billingDraft.applySettings(billingSettings.settings)
@@ -570,7 +585,7 @@ final class AppEnvironment: ObservableObject {
         }
         let documentSetup = DocumentIntelligenceSetupController(
             store: store,
-            runtimeClient: runtimeClient,
+            runtimeClient: modelExecutionCoordinator,
             storage: documentStorage,
             capabilitiesProvider: setupCapabilitiesProvider
         )
@@ -596,7 +611,7 @@ final class AppEnvironment: ObservableObject {
             makeIndexingService: {
                 let model = try? store.documentSettings.fetchSelectedEmbeddingModel()
                 let embedder = model.flatMap {
-                    RuntimeTextEmbedder(model: $0, runtimeClient: runtimeClient)
+                    RuntimeTextEmbedder(model: $0, runtimeClient: modelExecutionCoordinator)
                 }
                 return DocumentIndexingService(store: store, embedder: embedder)
             }
@@ -608,7 +623,9 @@ final class AppEnvironment: ObservableObject {
                 // Build a fresh indexing service per job using the currently
                 // selected embedding model (if any).
                 let model = try? store.documentSettings.fetchSelectedEmbeddingModel()
-                let embedder = model.flatMap { RuntimeTextEmbedder(model: $0, runtimeClient: runtimeClient) }
+                let embedder = model.flatMap {
+                    RuntimeTextEmbedder(model: $0, runtimeClient: modelExecutionCoordinator)
+                }
                 return DocumentIndexingService(store: store, embedder: embedder)
             },
             // Suggests a taxonomy category for each imported document using the
@@ -618,7 +635,7 @@ final class AppEnvironment: ObservableObject {
             classificationService: Self.isUITestMode ? nil : DocumentClassificationService(
                 store: store,
                 modelLibrary: modelLibrary,
-                runtimeClient: runtimeClient
+                runtimeClient: modelExecutionCoordinator
             )
         )
         documentSetup.setReindexEnqueuer { [weak queue] matterID in
@@ -656,7 +673,7 @@ final class AppEnvironment: ObservableObject {
         }
         self.mattersController = MattersController(
             store: store,
-            runtimeClient: runtimeClient,
+            runtimeClient: modelExecutionCoordinator,
             defaultSystemPrompt: systemPrompt,
             documentQueue: queue,
             isImportReady: { documentSetup.isReadyForImport },
@@ -673,9 +690,6 @@ final class AppEnvironment: ObservableObject {
         if Self.isDemoMode {
             seedDemoFixturesIfNeeded()
         }
-        // Let speculative pre-warms back off while a generation is running, so they
-        // never evict the model out from under an in-flight answer.
-        modelLibrary.isRuntimeGenerating = { [weak self] in self?.runtimeServiceState == .generating }
         // When a model becomes loaded, classify any pending documents in the selected
         // matter (a no-op when none are pending). Collapse the load state to a Bool and
         // fire only on the transition into loaded.
@@ -888,7 +902,7 @@ final class AppEnvironment: ObservableObject {
             modelID: modelID,
             options: options,
             systemPrompt: nil,
-            runtimeClient: runtimeClient
+            runtimeClient: modelExecutionCoordinator
         )
     }
 
@@ -897,7 +911,9 @@ final class AppEnvironment: ObservableObject {
     /// one idiom for vending the real embedder (the runtime client is otherwise private).
     func makeSelectedEmbedder() -> (any TextEmbedder)? {
         let selectedModel = try? store.documentSettings.fetchSelectedEmbeddingModel()
-        return selectedModel.flatMap { RuntimeTextEmbedder(model: $0, runtimeClient: runtimeClient) }
+        return selectedModel.flatMap {
+            RuntimeTextEmbedder(model: $0, runtimeClient: modelExecutionCoordinator)
+        }
     }
 
     /// Headless typed-vs-prose A/B (`-runTypedProseABProbe`, optional `-abRepeats N`): runs both
@@ -940,7 +956,7 @@ final class AppEnvironment: ObservableObject {
         payload["repeats"] = repeats
         let outcomes = await TypedProseABProbe.run(
             modelID: modelID, options: options, systemPrompt: nil,
-            runtimeClient: runtimeClient, repeats: repeats
+            runtimeClient: modelExecutionCoordinator, repeats: repeats
         )
         payload["status"] = "ok"
         for arm in [TypedProseArm.typed, .prose] {
@@ -1157,7 +1173,9 @@ final class AppEnvironment: ObservableObject {
 
     private func makeDocumentChunkerRolloutService() -> DocumentChunkerRolloutService {
         let selectedModel = try? store.documentSettings.fetchSelectedEmbeddingModel()
-        let embedder = selectedModel.flatMap { RuntimeTextEmbedder(model: $0, runtimeClient: runtimeClient) }
+        let embedder = selectedModel.flatMap {
+            RuntimeTextEmbedder(model: $0, runtimeClient: modelExecutionCoordinator)
+        }
         return DocumentChunkerRolloutService(store: store, embedder: embedder)
     }
 

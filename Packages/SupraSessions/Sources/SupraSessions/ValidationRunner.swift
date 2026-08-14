@@ -21,7 +21,8 @@ public struct ValidationRunResult: Sendable {
 /// Generation failures for an individual test are recorded as a failed test and
 /// do not abort the suite; only store errors propagate.
 public struct ValidationRunner: Sendable {
-    private let runtimeClient: any RuntimeClientProtocol
+    private let runtimeClient: any ModelExecutionGateway
+    private var modelExecutionGateway: any ModelExecutionGateway { runtimeClient }
     private let store: SupraStore
     private let appVersion: AppVersion
     private let evaluator = ValidationEvaluator()
@@ -29,7 +30,7 @@ public struct ValidationRunner: Sendable {
     private let jsonRenderer = JSONValidationReportRenderer()
 
     public init(
-        runtimeClient: any RuntimeClientProtocol,
+        runtimeClient: any ModelExecutionGateway,
         store: SupraStore,
         appVersion: AppVersion = .unknown
     ) {
@@ -151,7 +152,7 @@ public struct ValidationRunner: Sendable {
             errors: allErrors
         )
 
-        let runtimeState = (try? await runtimeClient.runtimeStatus())?.state.rawValue ?? "unknown"
+        let runtimeState = (try? await modelExecutionGateway.runtimeStatus())?.state.rawValue ?? "unknown"
 
         let report = ValidationReport(
             appVersion: "\(appVersion.marketingVersion) (\(appVersion.buildNumber))",
@@ -214,7 +215,7 @@ public struct ValidationRunner: Sendable {
                 options: options
             )
 
-            for try await event in try runtimeClient.generate(request) {
+            for try await event in try modelExecutionGateway.generate(request) {
                 switch event.type {
                 case .generationStarted:
                     input.generationStarted = true
@@ -227,7 +228,7 @@ public struct ValidationRunner: Sendable {
                     if isCancellationTest, !cancelIssued {
                         cancelIssued = true
                         input.cancelRequestSent = true
-                        _ = try? await runtimeClient.cancelGeneration(generationID)
+                        _ = try? await modelExecutionGateway.cancelGeneration(generationID)
                     }
 
                 case .metrics:

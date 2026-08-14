@@ -23,7 +23,7 @@ public final class ValidationRunController: ObservableObject {
 
     public init(
         store: SupraStore,
-        runtimeClient: any RuntimeClientProtocol,
+        runtimeClient: any ModelExecutionGateway,
         appVersion: AppVersion = .unknown,
         systemPrompt: String? = nil
     ) {

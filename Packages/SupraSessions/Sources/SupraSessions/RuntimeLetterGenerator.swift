@@ -11,7 +11,8 @@ import SupraRuntimeInterface
 /// and accepts only a strict JSON response carrying paragraph-level source labels. The labels
 /// are independently checked by `DraftVerifier`; model output alone can never establish support.
 struct RuntimeLetterGenerator: LetterGenerator {
-    let runtimeClient: any RuntimeClientProtocol
+    let runtimeClient: any ModelExecutionGateway
+    private var modelExecutionGateway: any ModelExecutionGateway { runtimeClient }
     let modelID: ModelID
     let route: ModelRoute
 
@@ -24,7 +25,7 @@ struct RuntimeLetterGenerator: LetterGenerator {
             contextWorkload: .groundedExactEvidence,
             options: route.options
         )
-        let raw = try await runtimeClient.collectGeneratedText(request)
+        let raw = try await modelExecutionGateway.collectGeneratedText(request)
         let answer = ReasoningContent.answer(from: raw)
         return try Self.parseResponse(answer)
     }

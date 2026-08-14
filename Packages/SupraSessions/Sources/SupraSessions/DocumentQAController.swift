@@ -100,7 +100,8 @@ public final class DocumentQAController: ObservableObject {
 
     public let matterID: String
     private let store: SupraStore
-    private let runtimeClient: any RuntimeClientProtocol
+    private let runtimeClient: any ModelExecutionGateway
+    private var modelExecutionGateway: any ModelExecutionGateway { runtimeClient }
     private let retrieval: DocumentRetrievalService
     private let previewLoader: DocumentPreviewLoader
     private let requiresSemanticIndex: Bool
@@ -111,7 +112,7 @@ public final class DocumentQAController: ObservableObject {
     public init(
         matterID: String,
         store: SupraStore,
-        runtimeClient: any RuntimeClientProtocol,
+        runtimeClient: any ModelExecutionGateway,
         embedder: (any TextEmbedder)? = nil,
         defaultSystemPrompt: String? = nil
     ) {
@@ -294,8 +295,8 @@ public final class DocumentQAController: ObservableObject {
     /// and the generation path checks cancellation before any persistence boundary.
     public func cancel() {
         guard let activeGenerationID else { return }
-        let runtimeClient = runtimeClient
-        Task { _ = try? await runtimeClient.cancelGeneration(activeGenerationID) }
+        let modelExecutionGateway = modelExecutionGateway
+        Task { _ = try? await modelExecutionGateway.cancelGeneration(activeGenerationID) }
     }
 
     /// Runs a Q&A: retrieves sources (auto or guided), generates a cited answer,
@@ -1028,7 +1029,7 @@ public final class DocumentQAController: ObservableObject {
         )
         activeGenerationID = request.generationID
         defer { activeGenerationID = nil }
-        let output = try await runtimeClient.collectGeneratedText(request)
+        let output = try await modelExecutionGateway.collectGeneratedText(request)
         try Task.checkCancellation()
         return ReasoningContent.answer(from: output)
     }
