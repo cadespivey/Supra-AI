@@ -127,6 +127,30 @@ final class ArchitectureUXTRagCache01Tests: XCTestCase {
         XCTAssertEqual(first.sources.first?.chunkID, "cache-candidate-731")
         XCTAssertFalse(first.sources.map(\.chunkID).contains("DEFAULT-000"))
 
+        let alteredArtifactEmbedder = CountingRAGCacheEmbedder(
+            artifactIdentitySHA256: String(repeating: "b", count: 64)
+        )
+        let alteredArtifactService = DocumentRetrievalService(
+            store: fixture.store,
+            embedder: alteredArtifactEmbedder,
+            maxPerDocument: 2,
+            minSemanticSimilarity: 0.5,
+            semanticCandidateCache: cache,
+            semanticScanPageSize: 3,
+            semanticCandidateLimit: 2
+        )
+        _ = try await alteredArtifactService.retrieve(
+            matterID: fixture.matterID,
+            query: "QUERY_713",
+            scope: .wholeMatter,
+            limit: 2
+        )
+        XCTAssertEqual(
+            alteredArtifactEmbedder.callCount,
+            1,
+            "the same model metadata with altered artifact identity must miss"
+        )
+
         let nextText = "T_RAG_CACHE_01_WIRE_731 QUERY_713 revision 8"
         let nextRevision = try fixture.store.documentRevisions.appendRevision(
             DocumentPartRevisionRecord(
@@ -194,11 +218,15 @@ private final class CountingRAGCacheEmbedder: TextEmbedder, @unchecked Sendable 
     let modelRepoID = ArchitectureUXRagScanFixture.modelRepoID
     let modelDisplayName = ArchitectureUXRagScanFixture.modelDisplayName
     let modelRevision: String? = ArchitectureUXRagScanFixture.modelRevision
-    let artifactIdentitySHA256: String? = String(repeating: "a", count: 64)
+    let artifactIdentitySHA256: String?
     let dimension = ArchitectureUXRagScanFixture.dimension
 
     private let lock = NSLock()
     private var calls = 0
+
+    init(artifactIdentitySHA256: String = String(repeating: "a", count: 64)) {
+        self.artifactIdentitySHA256 = artifactIdentitySHA256
+    }
 
     var callCount: Int { lock.withLock { calls } }
 
