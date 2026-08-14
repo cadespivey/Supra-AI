@@ -96,6 +96,85 @@ final class ArchitectureUXTRagScan02Tests: XCTestCase {
         XCTAssertEqual(ArchitectureUXRagScanFixture.query, "QUERY_713")
         XCTAssertNotEqual(ArchitectureUXRagScanFixture.candidateK, 60)
     }
+
+    func testHostedAppAndXPCResourceEnvelopeIsWiredToTheExactScan() throws {
+        let metricsSource = try source(
+            "Packages/SupraRuntimeInterface/Sources/SupraRuntimeInterface/DTOs/RuntimeMetrics.swift"
+        )
+        let serviceSource = try source(
+            "Apps/SupraAI/SupraRuntimeService/SupraRuntimeService.swift"
+        )
+        let probeSource = try source(
+            "Packages/SupraSessions/Sources/SupraSessions/BoundedSemanticScanner.swift"
+        )
+        let viewSource = try source(
+            "Apps/SupraAI/SupraAI/RuntimeXPCIntegrationView.swift"
+        )
+        let hostedTestSource = try source(
+            "Apps/SupraAI/SupraAIUITests/RuntimeXPCIntegrationTests.swift"
+        )
+
+        XCTAssertTrue(
+            metricsSource.contains("public let currentMemoryMb: Int?"),
+            "Expected RED: XPC status exposes only peak memory, so combined current usage cannot be measured"
+        )
+        XCTAssertTrue(
+            serviceSource.contains("currentMemoryMb: Self.currentResidentMiB()"),
+            "Expected RED: the hosted XPC does not publish current resident memory"
+        )
+        for exactWire in [
+            "public struct HostedRAGScanResourceProbe",
+            "T_RAG_SCAN_02_WIRE_731",
+            "QUERY_713",
+            "pageSize: 3",
+            "candidateLimit: 2",
+            "cacheCeilingBytes: 17",
+        ] {
+            XCTAssertTrue(
+                probeSource.contains(exactWire),
+                "Expected RED: missing hosted RAG resource probe wire \(exactWire)"
+            )
+        }
+        for exactWire in [
+            "scenario == \"rag-scan\"",
+            "HostedRAGScanResourceProbe",
+            "runtimeXPCIntegration.ragScan.result",
+            "runtimeXPCIntegration.ragScan.combinedPeakDeltaMiB",
+        ] {
+            XCTAssertTrue(
+                viewSource.contains(exactWire),
+                "Expected RED: hosted app/XPC surface is missing \(exactWire)"
+            )
+        }
+        XCTAssertTrue(
+            hostedTestSource.contains("func testBoundedLargeCorpusRAGResourceEnvelope()"),
+            "the signed hosted test must execute the app/XPC resource scenario"
+        )
+        XCTAssertTrue(
+            hostedTestSource.contains(
+                #"let app = launchIntegrationApp(scenario: "rag-scan")"#
+            )
+        )
+        XCTAssertTrue(hostedTestSource.contains("T_RAG_SCAN_02_WIRE_731"))
+        XCTAssertTrue(
+            hostedTestSource.contains(
+                #"XCTAssertFalse(detail.contains("T_RAG_SCAN_02_DEFAULT-000"))"#
+            )
+        )
+    }
+
+    private func source(_ relativePath: String) throws -> String {
+        try String(
+            contentsOf: repositoryRoot.appendingPathComponent(relativePath),
+            encoding: .utf8
+        )
+    }
+
+    private var repositoryRoot: URL {
+        var root = URL(fileURLWithPath: #filePath)
+        for _ in 0..<5 { root.deleteLastPathComponent() }
+        return root
+    }
 }
 
 private final class RagScanCancellation: @unchecked Sendable {

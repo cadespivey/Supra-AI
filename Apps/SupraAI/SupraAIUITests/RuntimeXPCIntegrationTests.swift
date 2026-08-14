@@ -80,6 +80,52 @@ final class RuntimeXPCIntegrationTests: XCTestCase {
         )
     }
 
+    func testBoundedLargeCorpusRAGResourceEnvelope() {
+        let app = launchIntegrationApp(scenario: "rag-scan")
+
+        let result = app.staticTexts["runtimeXPCIntegration.ragScan.result"]
+        XCTAssertTrue(
+            result.waitForExistence(timeout: 90),
+            "The hosted T-RAG-SCAN-02 probe did not publish a result."
+        )
+        XCTAssertEqual(
+            result.value as? String,
+            "PASS",
+            app.staticTexts["runtimeXPCIntegration.ragScan.detail"].value as? String
+                ?? "No hosted RAG resource detail."
+        )
+
+        XCTAssertEqual(intValue(app, "scannedRows"), 31)
+        XCTAssertLessThanOrEqual(intValue(app, "maximumLivePageRows"), 3)
+        XCTAssertLessThanOrEqual(intValue(app, "maximumHeapEntries"), 2)
+        XCTAssertLessThanOrEqual(intValue(app, "maximumLiveVectorBytes"), 36)
+        XCTAssertEqual(intValue(app, "publishedCandidateCount"), 2)
+        XCTAssertEqual(intValue(app, "cacheCeilingBytes"), 17)
+
+        XCTAssertLessThanOrEqual(intValue(app, "appCurrentDeltaMiB"), 64)
+        XCTAssertLessThanOrEqual(intValue(app, "appPeakDeltaMiB"), 64)
+        XCTAssertLessThanOrEqual(intValue(app, "xpcCurrentDeltaMiB"), 32)
+        XCTAssertLessThanOrEqual(intValue(app, "xpcPeakDeltaMiB"), 32)
+        XCTAssertLessThanOrEqual(intValue(app, "combinedCurrentDeltaMiB"), 96)
+        XCTAssertLessThanOrEqual(intValue(app, "combinedPeakDeltaMiB"), 96)
+
+        let detail = app.staticTexts["runtimeXPCIntegration.ragScan.detail"].value as? String
+            ?? ""
+        XCTAssertTrue(detail.contains("T_RAG_SCAN_02_WIRE_731"))
+        XCTAssertTrue(detail.contains("QUERY_713"))
+        XCTAssertFalse(detail.contains("T_RAG_SCAN_02_DEFAULT-000"))
+    }
+
+    private func intValue(_ app: XCUIApplication, _ name: String) -> Int {
+        let element = app.staticTexts["runtimeXPCIntegration.ragScan.\(name)"]
+        XCTAssertTrue(element.exists, "Missing hosted RAG metric \(name).")
+        let value = element.value as? String
+        XCTAssertNotNil(value, "Hosted RAG metric \(name) has no accessibility value.")
+        let parsed = value.flatMap(Int.init)
+        XCTAssertNotNil(parsed, "Hosted RAG metric \(name) is not an integer: \(value ?? "nil")")
+        return parsed ?? Int.max
+    }
+
     private func launchIntegrationApp(scenario: String) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments += [
