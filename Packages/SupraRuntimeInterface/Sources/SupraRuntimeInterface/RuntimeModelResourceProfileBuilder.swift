@@ -18,6 +18,11 @@ public struct RuntimeModelResourceCalibration: Equatable, Sendable {
         nonWeightOverheadBytes: 256 * 1_024 * 1_024,
         activationWorkingSetMultiplier: 4
     )
+
+    public static let productionEmbedding = RuntimeModelResourceCalibration(
+        nonWeightOverheadBytes: 64 * 1_024 * 1_024,
+        activationWorkingSetMultiplier: 3
+    )
 }
 
 public enum RuntimeModelResourceProfileError: Error, Equatable, Sendable {
@@ -28,6 +33,7 @@ public enum RuntimeModelResourceProfileError: Error, Equatable, Sendable {
     case invalidConfigurationField(String)
     case unsupportedScalarType(String)
     case missingWeightArtifact
+    case embeddingDimensionMismatch(expected: Int, configured: Int)
     case arithmeticOverflow(String)
 }
 
@@ -48,6 +54,8 @@ extension RuntimeModelResourceProfileError: LocalizedError {
             "The model scalar type \(type) is not supported for resource admission."
         case .missingWeightArtifact:
             "The exact artifact binding contains no recognized model weights."
+        case let .embeddingDimensionMismatch(expected, configured):
+            "The expected embedding dimension \(expected) does not match the exact model configuration dimension \(configured)."
         case .arithmeticOverflow(let operation):
             "Runtime resource profile arithmetic overflowed during \(operation)."
         }
@@ -154,6 +162,35 @@ public struct RuntimeModelResourceProfileBuilder: Sendable {
             nonWeightOverheadBytes: calibration.nonWeightOverheadBytes,
             activationBytesPerToken: activationBytesPerToken
         )
+    }
+
+    public func buildEmbeddingProfile(
+        profileID: String,
+        modelID: ModelID,
+        binding: RuntimeModelContentBinding,
+        configData: Data,
+        expectedDimension: Int?
+    ) throws -> ModelResourceProfile {
+        let profile = try buildChatProfile(
+            profileID: profileID,
+            modelID: modelID,
+            binding: binding,
+            configData: configData
+        )
+        if let expectedDimension {
+            let configuredDimension = try positiveInteger(
+                in: configurationObject(configData),
+                keys: ["hidden_size", "d_model", "dim"],
+                canonicalKey: "hidden_size"
+            )
+            guard expectedDimension == configuredDimension else {
+                throw RuntimeModelResourceProfileError.embeddingDimensionMismatch(
+                    expected: expectedDimension,
+                    configured: configuredDimension
+                )
+            }
+        }
+        return profile
     }
 
     private func verifyConfigBinding(

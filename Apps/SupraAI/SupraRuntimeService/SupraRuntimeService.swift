@@ -583,7 +583,9 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
         }
 
         let replacementProfile: ModelResourceProfile
+        let contentBinding: RuntimeModelContentBinding
         do {
+            contentBinding = try Self.requiredEmbeddingContentBinding(request)
             replacementProfile = try Self.embeddingResourceProfile(for: request)
             let admission = try resourceAdmissionPlanner.evaluate(
                 profile: replacementProfile,
@@ -611,7 +613,13 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
         }
 
         let reply = RuntimeReply(reply)
-        embeddingModelOperations.enqueue { [self, embeddingController, reply, replacementProfile] in
+        embeddingModelOperations.enqueue { [
+            self,
+            embeddingController,
+            reply,
+            replacementProfile,
+            contentBinding,
+        ] in
             let startedAt = Date()
             do {
                 if let currentProfile = currentEmbeddingResourceProfile() {
@@ -638,6 +646,7 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
                     path: request.modelPath,
                     managedRootPath: request.managedRootPath,
                     expectedIdentity: request.modelDirectoryIdentity,
+                    contentBinding: contentBinding,
                     expectedDimension: request.expectedDimension
                 )
                 setLoadedEmbeddingModel(
@@ -877,17 +886,45 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
     private static func verifiedModelConfigData(
         for request: LoadModelRequest
     ) throws -> Data {
-        guard let binding = request.contentBinding,
+        try verifiedModelConfigData(
+            binding: request.contentBinding,
+            bookmark: request.modelBookmark,
+            modelPath: request.modelPath,
+            managedRootPath: request.managedRootPath,
+            modelDirectoryIdentity: request.modelDirectoryIdentity
+        )
+    }
+
+    private static func verifiedEmbeddingModelConfigData(
+        for request: LoadEmbeddingModelRequest
+    ) throws -> Data {
+        try verifiedModelConfigData(
+            binding: request.contentBinding,
+            bookmark: request.modelBookmark,
+            modelPath: request.modelPath,
+            managedRootPath: request.managedRootPath,
+            modelDirectoryIdentity: request.modelDirectoryIdentity
+        )
+    }
+
+    private static func verifiedModelConfigData(
+        binding: RuntimeModelContentBinding?,
+        bookmark: Data?,
+        modelPath: String,
+        managedRootPath: String?,
+        modelDirectoryIdentity: ModelDirectoryIdentity?
+    ) throws -> Data {
+        guard let binding,
               let config = binding.files.first(where: { $0.path == "config.json" }),
               config.size >= 0,
               config.size <= 10 * 1_024 * 1_024 else {
             throw RuntimeServiceResourceAdmissionError.invalidWeightCardinality
         }
         let access = try RuntimeModelDirectoryAccess(
-            bookmark: request.modelBookmark,
-            requestedPath: request.modelPath,
-            managedRootPath: request.managedRootPath,
-            expectedIdentity: request.modelDirectoryIdentity
+            bookmark: bookmark,
+            requestedPath: modelPath,
+            managedRootPath: managedRootPath,
+            expectedIdentity: modelDirectoryIdentity
         )
         defer { access.close() }
         let configURL = access.url.appendingPathComponent(
@@ -946,49 +983,28 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
         for request: LoadEmbeddingModelRequest
     ) throws -> ModelResourceProfile {
         let identifier = request.embeddingModelID.rawValue.uuidString.lowercased()
-        let dimension = request.expectedDimension ?? 384
-        let estimatedWeights: Int
-        if let binding = request.contentBinding {
-            estimatedWeights = try binding.files.reduce(into: 0) { total, file in
-                guard file.size <= Int64(Int.max) else {
-                    throw RuntimeServiceResourceAdmissionError.invalidWeightCardinality
-                }
-                let (next, overflow) = total.addingReportingOverflow(Int(file.size))
-                guard !overflow else {
-                    throw RuntimeServiceResourceAdmissionError.invalidWeightCardinality
-                }
-                total = next
-            }
-        } else {
-            let (scaled, overflow) = dimension.multipliedReportingOverflow(by: 256)
-            guard !overflow else {
-                throw RuntimeServiceResourceAdmissionError.invalidWeightCardinality
-            }
-            let (bytes, byteOverflow) = scaled.multipliedReportingOverflow(
-                by: MemoryLayout<Float>.size
-            )
-            guard !byteOverflow else {
-                throw RuntimeServiceResourceAdmissionError.invalidWeightCardinality
-            }
-            estimatedWeights = max(64 * 1_024 * 1_024, bytes)
+        guard let binding = request.contentBinding else {
+            throw RuntimeServiceResourceAdmissionError.invalidWeightCardinality
         }
-        let binding = request.contentBinding
-        return ModelResourceProfile(
+        let configData = try verifiedEmbeddingModelConfigData(for: request)
+        return try RuntimeModelResourceProfileBuilder(
+            calibration: .productionEmbedding
+        ).buildEmbeddingProfile(
             profileID: "runtime-embedding-\(identifier)",
             modelID: ModelID(request.embeddingModelID.rawValue),
-            modelArtifactID: binding?.repositoryID ?? "embedding-\(identifier)",
-            modelRevision: binding?.revision ?? request.revision ?? "unbound",
-            contentFingerprintSHA256: binding?.fingerprintSHA256
-                ?? unboundFingerprint(for: request.embeddingModelID.rawValue),
-            weightBytes: estimatedWeights,
-            layerCount: 1,
-            keyValueHeadCount: 1,
-            headDimension: dimension,
-            scalarBytes: MemoryLayout<Float>.size,
-            supportedContextTokens: 32_768,
-            nonWeightOverheadBytes: 32 * 1_024 * 1_024,
-            activationBytesPerToken: 1_024
+            binding: binding,
+            configData: configData,
+            expectedDimension: request.expectedDimension
         )
+    }
+
+    private static func requiredEmbeddingContentBinding(
+        _ request: LoadEmbeddingModelRequest
+    ) throws -> RuntimeModelContentBinding {
+        guard let binding = request.contentBinding else {
+            throw RuntimeServiceResourceAdmissionError.invalidWeightCardinality
+        }
+        return binding
     }
 
     private static func productionMemoryEnvelope() -> RuntimeMemoryEnvelope {
