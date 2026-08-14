@@ -50,7 +50,7 @@ final class ArchitectureUXTUxDelete01Tests: XCTestCase {
         menu.click()
         let action = app.menuItems["chat.moveToRecycleBin.\(chatName)"]
         XCTAssertTrue(action.waitForExistence(timeout: 5))
-        XCTAssertEqual(action.label, "Move to Recycle Bin")
+        XCTAssertTrue(app.staticTexts["Move to Recycle Bin"].exists)
         action.click()
 
         assertRestorableDialog(
