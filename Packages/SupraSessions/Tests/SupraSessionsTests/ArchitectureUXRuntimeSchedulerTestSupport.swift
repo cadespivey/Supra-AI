@@ -214,7 +214,7 @@ final class ArchitectureUXImmediateRuntimeClient: RuntimeClientProtocol, @unchec
 
     func loadModel(_ request: LoadModelRequest) async throws -> LoadModelResponse {
         lock.withLock { storedModelLoadRequests.append(request) }
-        LoadModelResponse(status: .loaded, modelID: request.modelID)
+        return LoadModelResponse(status: .loaded, modelID: request.modelID)
     }
 
     func generate(
@@ -287,7 +287,7 @@ final class ArchitectureUXImmediateRuntimeClient: RuntimeClientProtocol, @unchec
         _ request: LoadEmbeddingModelRequest
     ) async throws -> LoadEmbeddingModelResponse {
         lock.withLock { storedEmbeddingLoadRequests.append(request) }
-        LoadEmbeddingModelResponse(
+        return LoadEmbeddingModelResponse(
             state: .loaded,
             embeddingModelID: request.embeddingModelID,
             dimension: request.expectedDimension ?? 7
