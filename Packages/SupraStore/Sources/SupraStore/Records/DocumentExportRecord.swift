@@ -10,6 +10,7 @@ public struct DocumentExportRecord: Codable, FetchableRecord, PersistableRecord,
     public var id: String
     public var structuredOutputID: String?
     public var structuredOutputVersionID: String?
+    public var publicationIntentID: String?
     public var matterID: String
     public var format: String
     public var managedRelativePath: String
@@ -19,6 +20,7 @@ public struct DocumentExportRecord: Codable, FetchableRecord, PersistableRecord,
         id: String = UUID().uuidString,
         structuredOutputID: String? = nil,
         structuredOutputVersionID: String? = nil,
+        publicationIntentID: String? = nil,
         matterID: String,
         format: String,
         managedRelativePath: String,
@@ -27,6 +29,7 @@ public struct DocumentExportRecord: Codable, FetchableRecord, PersistableRecord,
         self.id = id
         self.structuredOutputID = structuredOutputID
         self.structuredOutputVersionID = structuredOutputVersionID
+        self.publicationIntentID = publicationIntentID
         self.matterID = matterID
         self.format = format
         self.managedRelativePath = managedRelativePath
@@ -37,6 +40,7 @@ public struct DocumentExportRecord: Codable, FetchableRecord, PersistableRecord,
         case id
         case structuredOutputID = "structured_output_id"
         case structuredOutputVersionID = "structured_output_version_id"
+        case publicationIntentID = "publication_intent_id"
         case matterID = "matter_id"
         case format
         case managedRelativePath = "managed_relative_path"

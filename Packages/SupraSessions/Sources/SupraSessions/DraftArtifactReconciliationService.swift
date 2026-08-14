@@ -320,10 +320,16 @@ public final class DraftArtifactReconciliationService: @unchecked Sendable {
 
     private static func exportFormat(_ rawValue: String) throws -> DocumentExportFormat {
         switch DraftArtifactIntentFormat(rawValue: rawValue) {
+        case .pdf:
+            return .pdf
         case .docx:
             return .docx
         case .markdown:
             return .markdown
+        case .csv:
+            return .csv
+        case .xlsx:
+            return .xlsx
         case nil:
             throw ReconciliationError.invalidFormat
         }

@@ -70,6 +70,24 @@ public enum DocumentExportBuilder {
 
     public typealias FaultInjector = (FaultStage) throws -> Void
 
+    /// Renders and validates the complete immutable payload without creating a
+    /// filesystem entry. Publication coordinators use this to bind a Store-owned
+    /// intent to the exact bytes before a create-only public install.
+    public static func renderValidatedData(
+        _ payload: DocumentExportPayload,
+        format: DocumentExportFormat,
+        faultInjector: FaultInjector = { _ in }
+    ) throws -> Data {
+        try Task.checkCancellation()
+        try faultInjector(.beforeRender)
+        try Task.checkCancellation()
+        let data = try render(payload, format: format)
+        try Task.checkCancellation()
+        try faultInjector(.beforeValidation)
+        try DocumentExportValidator.validate(data, as: format)
+        return data
+    }
+
     public static func write(
         _ payload: DocumentExportPayload,
         format: DocumentExportFormat,

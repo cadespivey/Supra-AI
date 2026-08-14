@@ -244,7 +244,7 @@ public final class DraftArtifactIntentRepository: @unchecked Sendable {
             expectedFormat = .docx
         case .customDescription:
             expectedFormat = .markdown
-        case .motionToDismiss:
+        case .motionToDismiss, .structuredOutputExport:
             throw DraftArtifactIntentError.invalidArtifactKind
         }
         guard format == expectedFormat else { throw DraftArtifactIntentError.invalidFormat }
@@ -278,6 +278,63 @@ public final class DraftArtifactIntentRepository: @unchecked Sendable {
         )
         return try writer.write { db in
             try Self.requireMatter(matterID, db: db)
+            try Self.reserve(fileName: fileName, matterID: matterID, db: db)
+            try record.insert(db)
+            return record
+        }
+    }
+
+    /// Prepares the shared publication ledger for one immutable Saved Work
+    /// artifact. The exact output/version binding is revalidated transactionally
+    /// before the filename reservation becomes visible.
+    @discardableResult
+    public func prepareStructuredOutputExportIntent(
+        matterID: String,
+        structuredOutputID: String,
+        structuredOutputVersionID: String,
+        workProductVersion: Int,
+        format: DraftArtifactIntentFormat,
+        fileName: String,
+        output: Data,
+        id: String = UUID().uuidString,
+        createdAt: Date = Date()
+    ) throws -> DraftArtifactIntentRecord {
+        try Self.validateCommon(
+            artifactKind: DraftArtifactIntentKind.structuredOutputExport.rawValue,
+            format: format,
+            fileName: fileName,
+            output: output
+        )
+        let outputSHA256 = Self.sha256(output)
+        let lineage = StructuredOutputExportAuditLineage(
+            schemaVersion: 1,
+            artifactIdentity: id,
+            digestMarker: outputSHA256,
+            matterID: matterID,
+            structuredOutputID: structuredOutputID,
+            structuredOutputVersionID: structuredOutputVersionID,
+            workProductVersion: workProductVersion,
+            format: format.rawValue,
+            outputFileName: fileName,
+            outputSHA256: outputSHA256,
+            outputByteSize: output.count
+        )
+        let metadataJSON = try Self.jsonString(lineage)
+        let record = DraftArtifactIntentRecord(
+            id: id,
+            matterID: matterID,
+            artifactKind: DraftArtifactIntentKind.structuredOutputExport.rawValue,
+            format: format,
+            fileName: fileName,
+            outputSHA256: outputSHA256,
+            outputByteSize: output.count,
+            auditMetadataJSON: metadataJSON,
+            auditMetadataSHA256: Self.sha256(Data(metadataJSON.utf8)),
+            createdAt: createdAt
+        )
+        return try writer.write { db in
+            try Self.requireMatter(matterID, db: db)
+            try Self.validateCurrentStructuredOutputExport(lineage, record: record, db: db)
             try Self.reserve(fileName: fileName, matterID: matterID, db: db)
             try record.insert(db)
             return record
@@ -437,8 +494,34 @@ public final class DraftArtifactIntentRepository: @unchecked Sendable {
             guard record.status == DraftArtifactIntentStatus.prepared.rawValue else {
                 throw DraftArtifactIntentError.invalidIntentState
             }
-            _ = try Self.validateStoredRecord(record)
-            return Self.auditEvent(for: record)
+            let lineage = try Self.validateStoredRecord(record)
+            if case let .structuredOutputExport(exportLineage) = lineage {
+                try Self.validateCurrentStructuredOutputExport(
+                    exportLineage,
+                    record: record,
+                    db: db
+                )
+            }
+            return Self.auditEvent(for: record, lineage: lineage)
+        }
+    }
+
+    /// Returns the exact Store-built Saved Work row for a prepared export
+    /// intent. Test fault seams may observe this value, but only
+    /// `finalizeIntent` can make it normative.
+    public func structuredOutputExportPreview(intentID: String) throws -> DocumentExportRecord {
+        try writer.read { db in
+            guard let record = try DraftArtifactIntentRecord.fetchOne(db, key: intentID) else {
+                throw DraftArtifactIntentError.intentNotFound
+            }
+            guard record.status == DraftArtifactIntentStatus.prepared.rawValue else {
+                throw DraftArtifactIntentError.invalidIntentState
+            }
+            guard case let .structuredOutputExport(lineage) = try Self.validateStoredRecord(record) else {
+                throw DraftArtifactIntentError.invalidArtifactKind
+            }
+            try Self.validateCurrentStructuredOutputExport(lineage, record: record, db: db)
+            return Self.exportRecord(for: record, lineage: lineage)
         }
     }
 
@@ -458,11 +541,19 @@ public final class DraftArtifactIntentRepository: @unchecked Sendable {
                   Self.sha256(installedOutput) == record.outputSHA256 else {
                 throw DraftArtifactIntentError.installedArtifactMismatch
             }
-            let event = Self.auditEvent(for: record)
+            let event = Self.auditEvent(for: record, lineage: storedLineage)
             if isCompleted {
                 guard let existing = try AuditEventRecord.fetchOne(db, key: event.id),
                       Self.auditEvent(existing, exactlyMatches: event) else {
                     throw DraftArtifactIntentError.intentIntegrityInvalid
+                }
+                if case let .structuredOutputExport(lineage) = storedLineage {
+                    _ = try Self.requireCompletedExport(
+                        record: record,
+                        lineage: lineage,
+                        event: event,
+                        db: db
+                    )
                 }
                 // Completion already atomically bound this event and output.
                 // Do not revalidate mutable motion sources on an idempotent retry;
@@ -494,6 +585,12 @@ public final class DraftArtifactIntentRepository: @unchecked Sendable {
                     record: record,
                     current: current
                 )
+            } else if case let .structuredOutputExport(lineage) = storedLineage {
+                try Self.validateCurrentStructuredOutputExport(
+                    lineage,
+                    record: record,
+                    db: db
+                )
             }
             // A prepared intent cannot legitimately have crossed this atomic
             // insert/transition boundary already. Any occupant of the
@@ -502,11 +599,54 @@ public final class DraftArtifactIntentRepository: @unchecked Sendable {
             guard try AuditEventRecord.fetchOne(db, key: event.id) == nil else {
                 throw DraftArtifactIntentError.intentIntegrityInvalid
             }
+            if case let .structuredOutputExport(lineage) = storedLineage {
+                let export = Self.exportRecord(for: record, lineage: lineage)
+                guard try DocumentExportRecord.fetchOne(
+                    db,
+                    sql: "SELECT * FROM document_exports WHERE publication_intent_id = ?",
+                    arguments: [record.id]
+                ) == nil else {
+                    throw DraftArtifactIntentError.intentIntegrityInvalid
+                }
+                try export.insert(db)
+            }
             try event.insert(db)
             let now = Date()
             try db.execute(
                 sql: "UPDATE draft_artifact_intents SET status = ?, updated_at = ?, terminal_at = ? WHERE id = ?",
                 arguments: [DraftArtifactIntentStatus.completed.rawValue, now, now, id]
+            )
+        }
+    }
+
+    /// Authoritative postcondition read used before a publisher may return a
+    /// success URL. It rebinds the completed intent, exact export row, audit,
+    /// and installed digest without revalidating mutable active-version state.
+    @discardableResult
+    public func verifyCompletedStructuredOutputExportIntent(
+        id: String,
+        installedOutput: Data
+    ) throws -> DocumentExportRecord {
+        try writer.read { db in
+            guard let record = try DraftArtifactIntentRecord.fetchOne(db, key: id) else {
+                throw DraftArtifactIntentError.intentNotFound
+            }
+            guard record.status == DraftArtifactIntentStatus.completed.rawValue,
+                  installedOutput.count == record.outputByteSize,
+                  Self.sha256(installedOutput) == record.outputSHA256,
+                  case let .structuredOutputExport(lineage) = try Self.validateStoredRecord(record) else {
+                throw DraftArtifactIntentError.intentIntegrityInvalid
+            }
+            let event = Self.auditEvent(for: record, lineage: .structuredOutputExport(lineage))
+            guard let existingEvent = try AuditEventRecord.fetchOne(db, key: event.id),
+                  Self.auditEvent(existingEvent, exactlyMatches: event) else {
+                throw DraftArtifactIntentError.intentIntegrityInvalid
+            }
+            return try Self.requireCompletedExport(
+                record: record,
+                lineage: lineage,
+                event: event,
+                db: db
             )
         }
     }
@@ -579,7 +719,19 @@ public final class DraftArtifactIntentRepository: @unchecked Sendable {
               fileName.utf8.count <= 255 else {
             throw DraftArtifactIntentError.invalidFileName
         }
-        let expectedExtension = format == .docx ? "docx" : "md"
+        let expectedExtension: String
+        switch format {
+        case .pdf:
+            expectedExtension = "pdf"
+        case .docx:
+            expectedExtension = "docx"
+        case .markdown:
+            expectedExtension = "md"
+        case .csv:
+            expectedExtension = "csv"
+        case .xlsx:
+            expectedExtension = "xlsx"
+        }
         guard URL(fileURLWithPath: fileName).pathExtension.lowercased() == expectedExtension else {
             throw DraftArtifactIntentError.invalidFormat
         }
@@ -604,6 +756,7 @@ public final class DraftArtifactIntentRepository: @unchecked Sendable {
     private enum StoredLineage {
         case generic(GenericDraftAuditLineage)
         case motion(MotionDraftAuditLineage)
+        case structuredOutputExport(StructuredOutputExportAuditLineage)
     }
 
     private static func validateStoredRecord(
@@ -626,6 +779,30 @@ public final class DraftArtifactIntentRepository: @unchecked Sendable {
             output: Data(repeating: 0, count: 1)
         )
         let data = Data(record.auditMetadataJSON.utf8)
+        if record.artifactKind == DraftArtifactIntentKind.structuredOutputExport.rawValue {
+            guard record.motionSnapshotRequestJSON == nil,
+                  record.motionSnapshotSHA256 == nil,
+                  let lineage = try? JSONDecoder().decode(
+                      StructuredOutputExportAuditLineage.self,
+                      from: data
+                  ),
+                  (try? jsonString(lineage)) == record.auditMetadataJSON,
+                  lineage.schemaVersion == 1,
+                  lineage.artifactIdentity == record.id,
+                  !lineage.digestMarker.isEmpty,
+                  lineage.digestMarker.utf8.count <= 128,
+                  lineage.matterID == record.matterID,
+                  !lineage.structuredOutputID.isEmpty,
+                  !lineage.structuredOutputVersionID.isEmpty,
+                  lineage.workProductVersion > 0,
+                  lineage.format == record.format,
+                  lineage.outputFileName == record.fileName,
+                  lineage.outputSHA256 == record.outputSHA256,
+                  lineage.outputByteSize == record.outputByteSize else {
+                throw DraftArtifactIntentError.intentIntegrityInvalid
+            }
+            return .structuredOutputExport(lineage)
+        }
         if let requestJSON = record.motionSnapshotRequestJSON {
             guard record.artifactKind == DraftArtifactIntentKind.motionToDismiss.rawValue,
                   format == .docx,
@@ -717,18 +894,108 @@ public final class DraftArtifactIntentRepository: @unchecked Sendable {
         }
     }
 
-    private static func auditEvent(for record: DraftArtifactIntentRecord) -> AuditEventRecord {
-        AuditEventRecord(
-            id: "draft-artifact-\(record.id)",
+    private static func validateCurrentStructuredOutputExport(
+        _ lineage: StructuredOutputExportAuditLineage,
+        record: DraftArtifactIntentRecord,
+        db: Database
+    ) throws {
+        guard let output = try StructuredOutputRecord.fetchOne(db, key: lineage.structuredOutputID),
+              output.deletedAt == nil,
+              output.matterID == record.matterID,
+              output.activeVersionID == lineage.structuredOutputVersionID,
+              let version = try StructuredOutputVersionRecord.fetchOne(
+                  db,
+                  key: lineage.structuredOutputVersionID
+              ),
+              version.structuredOutputID == output.id,
+              version.versionIndex == lineage.workProductVersion,
+              version.verificationStatus == "all_supported",
+              let assuranceState = version.assuranceState,
+              ["corpus_complete", "proposition_supported"].contains(assuranceState) else {
+            throw DraftArtifactIntentError.sourceSnapshotStale
+        }
+    }
+
+    private static func exportRecord(
+        for record: DraftArtifactIntentRecord,
+        lineage: StructuredOutputExportAuditLineage
+    ) -> DocumentExportRecord {
+        DocumentExportRecord(
+            id: "structured-output-export-\(record.id)",
+            structuredOutputID: lineage.structuredOutputID,
+            structuredOutputVersionID: lineage.structuredOutputVersionID,
+            publicationIntentID: record.id,
             matterID: record.matterID,
-            timestamp: record.createdAt,
-            eventType: "draft_generated",
-            actor: "user",
-            summary: "Generated \(record.artifactKind) draft (\(record.fileName))",
-            relatedTable: MatterRecord.databaseTableName,
-            relatedID: record.matterID,
-            metadataJSON: record.auditMetadataJSON
+            format: record.format,
+            managedRelativePath: "exports/\(record.matterID)/\(record.fileName)",
+            createdAt: record.createdAt
         )
+    }
+
+    private static func requireCompletedExport(
+        record: DraftArtifactIntentRecord,
+        lineage: StructuredOutputExportAuditLineage,
+        event: AuditEventRecord,
+        db: Database
+    ) throws -> DocumentExportRecord {
+        let expected = exportRecord(for: record, lineage: lineage)
+        guard let existing = try DocumentExportRecord.fetchOne(
+            db,
+            sql: "SELECT * FROM document_exports WHERE publication_intent_id = ?",
+            arguments: [record.id]
+        ),
+        documentExport(existing, exactlyMatches: expected),
+        let existingEvent = try AuditEventRecord.fetchOne(db, key: event.id),
+        auditEvent(existingEvent, exactlyMatches: event) else {
+            throw DraftArtifactIntentError.intentIntegrityInvalid
+        }
+        return existing
+    }
+
+    private static func documentExport(
+        _ lhs: DocumentExportRecord,
+        exactlyMatches rhs: DocumentExportRecord
+    ) -> Bool {
+        lhs.id == rhs.id
+            && lhs.structuredOutputID == rhs.structuredOutputID
+            && lhs.structuredOutputVersionID == rhs.structuredOutputVersionID
+            && lhs.publicationIntentID == rhs.publicationIntentID
+            && lhs.matterID == rhs.matterID
+            && lhs.format == rhs.format
+            && lhs.managedRelativePath == rhs.managedRelativePath
+            && lhs.createdAt == rhs.createdAt
+    }
+
+    private static func auditEvent(
+        for record: DraftArtifactIntentRecord,
+        lineage: StoredLineage
+    ) -> AuditEventRecord {
+        switch lineage {
+        case let .structuredOutputExport(export):
+            return AuditEventRecord(
+                id: "structured-output-export-\(record.id)",
+                matterID: record.matterID,
+                timestamp: record.createdAt,
+                eventType: "export_completed",
+                actor: "user",
+                summary: "Exported structured output version \(export.workProductVersion) as \(record.format) (\(record.fileName))",
+                relatedTable: StructuredOutputRecord.databaseTableName,
+                relatedID: export.structuredOutputID,
+                metadataJSON: record.auditMetadataJSON
+            )
+        case .generic, .motion:
+            return AuditEventRecord(
+                id: "draft-artifact-\(record.id)",
+                matterID: record.matterID,
+                timestamp: record.createdAt,
+                eventType: "draft_generated",
+                actor: "user",
+                summary: "Generated \(record.artifactKind) draft (\(record.fileName))",
+                relatedTable: MatterRecord.databaseTableName,
+                relatedID: record.matterID,
+                metadataJSON: record.auditMetadataJSON
+            )
+        }
     }
 
     private static func auditEvent(
@@ -774,5 +1041,33 @@ public final class DraftArtifactIntentRepository: @unchecked Sendable {
         let outputFileName: String
         let outputSHA256: String
         let outputByteSize: Int
+    }
+
+    private struct StructuredOutputExportAuditLineage: Codable {
+        let schemaVersion: Int
+        let artifactIdentity: String
+        let digestMarker: String
+        let matterID: String
+        let structuredOutputID: String
+        let structuredOutputVersionID: String
+        let workProductVersion: Int
+        let format: String
+        let outputFileName: String
+        let outputSHA256: String
+        let outputByteSize: Int
+
+        private enum CodingKeys: String, CodingKey {
+            case format
+            case schemaVersion = "schema_version"
+            case artifactIdentity = "artifact_identity"
+            case digestMarker = "digest_marker"
+            case matterID = "matter_id"
+            case structuredOutputID = "structured_output_id"
+            case structuredOutputVersionID = "structured_output_version_id"
+            case workProductVersion = "work_product_version"
+            case outputFileName = "output_file_name"
+            case outputSHA256 = "output_sha256"
+            case outputByteSize = "output_byte_size"
+        }
     }
 }
