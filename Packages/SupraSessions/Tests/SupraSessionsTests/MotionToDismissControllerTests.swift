@@ -15,6 +15,12 @@ import XCTest
 /// success-audit boundary.
 @MainActor
 final class MotionToDismissControllerTests: XCTestCase {
+    private enum CanonicalFactReadinessFixture {
+        static let modelID = "motion-drafting-readiness-model-827"
+        static let modelRevision = "motion-drafting-readiness-revision-17"
+        static let modelDimension = 7
+        static let timestamp = Date(timeIntervalSince1970: 1_785_513_617)
+    }
     private enum InjectedFailure: Error { case stop }
     private struct DirectorySyncFailure: LocalizedError {
         var errorDescription: String? { "injected directory synchronization failure" }
@@ -992,6 +998,7 @@ final class MotionToDismissControllerTests: XCTestCase {
                     documentID: documentID,
                     pagePartID: part.id,
                     revisionID: revision.id,
+                    chunkerVersion: 1,
                     chunkIndex: 0,
                     sourceKind: DocumentSourceKind.text.rawValue,
                     charStart: 0,
@@ -1000,6 +1007,11 @@ final class MotionToDismissControllerTests: XCTestCase {
                     displayExcerpt: replacement,
                     tokenCount: 21
                 )]
+            )
+            try self.insertCanonicalFactEmbedding(
+                store: fixture.store,
+                documentID: documentID,
+                chunkID: fixture.selectedFact.chunkID
             )
         }
 
@@ -1720,8 +1732,11 @@ final class MotionToDismissControllerTests: XCTestCase {
             displayName: name,
             status: MatterDocumentStatus.ready.rawValue,
             extractionStatus: DocumentExtractionStatus.extracted.rawValue,
-            indexStatus: DocumentIndexStatus.textIndexed.rawValue,
-            extractionMethod: "synthetic@toolchain:motion-tests"
+            indexStatus: DocumentIndexStatus.ready.rawValue,
+            sourceKind: DocumentSourceKind.text.rawValue,
+            extractionMethod: "synthetic@toolchain:motion-tests",
+            extractedTextChecksum: DocumentStorage.sha256Hex(of: Data(text.utf8)),
+            pagePartCount: 1
         ))
         let part = DocumentPagePartRecord(
             documentID: document.id,
@@ -1737,7 +1752,8 @@ final class MotionToDismissControllerTests: XCTestCase {
             origin: "parser",
             method: "synthetic",
             text: text,
-            charCount: text.count
+            charCount: text.count,
+            toolchainVersion: "motion-tests-canonical-toolchain-17"
         )
         let selection = DocumentPartSelectionRecord(
             documentID: document.id,
@@ -1758,6 +1774,7 @@ final class MotionToDismissControllerTests: XCTestCase {
             documentID: document.id,
             pagePartID: part.id,
             revisionID: revision.id,
+            chunkerVersion: 1,
             chunkIndex: 0,
             sourceKind: DocumentSourceKind.text.rawValue,
             charStart: 0,
@@ -1767,7 +1784,48 @@ final class MotionToDismissControllerTests: XCTestCase {
             tokenCount: 30
         )
         try store.documentIndex.replaceChunks(documentID: document.id, chunks: [chunk])
+        try insertCanonicalFactEmbedding(
+            store: store,
+            documentID: document.id,
+            chunkID: chunk.id
+        )
+        XCTAssertTrue(
+            try store.documentReadiness.fetchReceipt(documentID: document.id).isBaseReady,
+            "shared motion facts must model the complete canonical readiness graph"
+        )
         return IndexedFact(documentID: document.id, chunkID: chunk.id, revisionID: revision.id, text: text)
+    }
+
+    private func insertCanonicalFactEmbedding(
+        store: SupraStore,
+        documentID: String,
+        chunkID: String
+    ) throws {
+        try store.documentIndex.upsertEmbedding(
+            DocumentChunkEmbeddingRecord(
+                id: "motion-drafting-embedding-\(chunkID)",
+                chunkID: chunkID,
+                documentID: documentID,
+                embeddingModelID: CanonicalFactReadinessFixture.modelID,
+                modelDisplayName: "Motion Drafting Canonical Model 827",
+                modelRevision: CanonicalFactReadinessFixture.modelRevision,
+                dimension: CanonicalFactReadinessFixture.modelDimension,
+                normalized: true,
+                vector: Self.floatBlob([1, 0, 0, 0, 0, 0, 0]),
+                createdAt: CanonicalFactReadinessFixture.timestamp
+            )
+        )
+    }
+
+    private static func floatBlob(_ values: [Float]) -> Data {
+        var data = Data(capacity: values.count * MemoryLayout<Float>.size)
+        for value in values {
+            var littleEndianBits = value.bitPattern.littleEndian
+            withUnsafeBytes(of: &littleEndianBits) { bytes in
+                data.append(contentsOf: bytes)
+            }
+        }
+        return data
     }
 
     private func factSelection(_ fact: IndexedFact) -> MotionDraftFactSourceSelection {
@@ -1840,7 +1898,33 @@ final class MotionToDismissControllerTests: XCTestCase {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("MotionStore-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        return try SupraStore(url: directory.appendingPathComponent("test.sqlite"))
+        let store = try SupraStore(url: directory.appendingPathComponent("test.sqlite"))
+        _ = try store.documentSettings.loadSettings()
+        try store.documentSettings.upsertEmbeddingModel(
+            DocumentEmbeddingModelRecord(
+                id: CanonicalFactReadinessFixture.modelID,
+                repoID: "synthetic/motion-drafting-readiness-model-827",
+                localPath: "/synthetic/motion-drafting-readiness-model-827",
+                displayName: "Motion Drafting Canonical Model 827",
+                dimension: CanonicalFactReadinessFixture.modelDimension,
+                runtimeFamily: "motion-drafting-readiness-fixture-17",
+                revision: CanonicalFactReadinessFixture.modelRevision,
+                isDefault: false,
+                isSelected: false,
+                lastTestLoadAt: CanonicalFactReadinessFixture.timestamp,
+                lastTestLoadResult: "passed",
+                createdAt: CanonicalFactReadinessFixture.timestamp,
+                updatedAt: CanonicalFactReadinessFixture.timestamp
+            )
+        )
+        try store.documentSettings.selectEmbeddingModel(
+            id: CanonicalFactReadinessFixture.modelID
+        )
+        try store.documentSettings.updateSettings {
+            $0.embeddingModelLastTestedAt = CanonicalFactReadinessFixture.timestamp
+            $0.chunkerVersion = 1
+        }
+        return store
     }
 
     private func completeProfile() -> AssistantProfile {
