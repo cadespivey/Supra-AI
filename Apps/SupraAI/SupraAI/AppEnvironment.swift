@@ -3086,6 +3086,15 @@ final class AppEnvironment: ObservableObject {
                     matchText: "tie-down procedures", rank: 2
                 )
             ])
+            try seedDemoGroundedSourcePacket(
+                matterID: matter.id,
+                messageID: docAssistant.id,
+                labeledDocumentIDs: [
+                    ("S1", msaID),
+                    ("S2", coverageID),
+                    ("S3", depoID),
+                ]
+            )
 
             // A saved authority with REAL case law (public domain) so the in-app
             // opinion reader has offline text: Winter v. NRDC, 555 U.S. 7 (2008).
@@ -3264,6 +3273,104 @@ final class AppEnvironment: ObservableObject {
             )
         }
         return seededDocumentID
+    }
+
+    /// Retains the exact chunks behind the demo chat's visible citations. The
+    /// pending packet is the production promotion precondition: without it the
+    /// answer may be previewed, but cannot cross the atomic Saved Work boundary.
+    private func seedDemoGroundedSourcePacket(
+        matterID: String,
+        messageID: String,
+        labeledDocumentIDs: [(label: String, documentID: String)]
+    ) throws {
+        guard let model = try store.documentSettings.fetchSelectedEmbeddingModel() else {
+            throw CanonicalReadinessSeedError.selectedEmbeddingModelUnavailable
+        }
+        let retained = try labeledDocumentIDs.enumerated().map { rank, source in
+            guard let chunk = try store.documentIndex.fetchChunks(documentID: source.documentID).first,
+                  let revisionID = chunk.revisionID else {
+                throw CanonicalReadinessSeedError.receiptNotReady(
+                    documentID: source.documentID,
+                    exclusions: []
+                )
+            }
+            let locator = DocumentSourceLocator(
+                sourceKind: DocumentSourceKind(rawValue: chunk.sourceKind) ?? .text,
+                pageIndex: chunk.pageIndex,
+                pageLabel: chunk.pageLabel,
+                sheetName: chunk.sheetName,
+                cellRange: chunk.cellRange,
+                emailPartPath: chunk.emailPartPath,
+                charStart: chunk.charStart,
+                charEnd: chunk.charEnd,
+                boundingBoxesJSON: chunk.boundingBoxesJSON
+            ).encodedJSON()
+            return (
+                label: source.label,
+                rank: rank,
+                documentID: source.documentID,
+                chunk: chunk,
+                revisionID: revisionID,
+                locator: locator
+            )
+        }
+        let verification = try PropositionSupportResult(
+            propositionID: "demo-grounded-answer",
+            status: .supported,
+            reasons: [],
+            evidence: retained.map { source in
+                SupportEvidence(
+                    sourceID: "\(matterID)/\(source.chunk.id)",
+                    sourceLabel: source.label,
+                    locator: source.locator,
+                    retainedExcerpt: source.chunk.normalizedText,
+                    verifierName: "Canonical demo fixture",
+                    verifierVersion: DocumentSupportVerifier.version
+                )
+            },
+            timestamp: CanonicalReadinessSeed.timestamp
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        let verificationJSON = String(
+            decoding: try encoder.encode([verification]),
+            as: UTF8.self
+        )
+        let scopeJSON = String(
+            decoding: try JSONSerialization.data(
+                withJSONObject: ["documentIDs": labeledDocumentIDs.map(\.documentID)],
+                options: [.sortedKeys]
+            ),
+            as: UTF8.self
+        )
+        let sourceSet = try store.documentSources.createSourceSet(
+            matterID: matterID,
+            mode: .autoSource,
+            scopeJSON: scopeJSON,
+            retrievalQuery: "What do my documents say about indemnification and insurance coverage?",
+            retrievalDepth: RetrievalDepth.deep.rawValue,
+            packingReportJSON: #"{"candidates":[],"packedSourceIDs":[]}"#,
+            embeddingModelID: model.id,
+            embeddingModelRevision: model.revision,
+            chunkerVersion: CanonicalReadinessSeed.chunkerVersion,
+            retrievalConfigJSON: #"{"depth":"deep","fixture":"canonical-demo"}"#,
+            corpusSnapshotHash: "canonical-demo-grounded-packet-23",
+            messageID: messageID
+        )
+        try store.documentSources.addOutputSources(retained.map { source in
+            DocumentOutputSourceRecord(
+                sourceSetID: sourceSet.id,
+                documentID: source.documentID,
+                chunkID: source.chunk.id,
+                revisionID: source.revisionID,
+                citationLabel: source.label,
+                locatorJSON: source.locator,
+                excerpt: source.chunk.displayExcerpt ?? source.chunk.normalizedText,
+                rank: source.rank,
+                warningsJSON: verificationJSON,
+                createdAt: CanonicalReadinessSeed.timestamp
+            )
+        })
     }
 
     private func configureCanonicalReadinessEmbeddingModel() throws {
