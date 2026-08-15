@@ -368,7 +368,12 @@ struct MatterWorkspaceView: View {
             }
         case .outputs:
             if let outputs = controller.outputsController {
-                MatterOutputsView(controller: outputs, library: library, matter: matter)
+                MatterOutputsView(
+                    controller: outputs,
+                    library: library,
+                    matter: matter,
+                    onOpenDocuments: { tab = .documents }
+                )
             } else {
                 placeholder(
                     "Saved Work unavailable",

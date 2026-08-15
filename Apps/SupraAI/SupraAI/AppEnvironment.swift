@@ -2678,6 +2678,35 @@ final class AppEnvironment: ObservableObject {
                     relatedID: output.id
                 )
             }
+            if !existing.contains(where: { $0.title == "Stale Dependency Fixture" }) {
+                let output = try store.structuredOutputs.createOutput(
+                    matterID: matterID,
+                    title: "Stale Dependency Fixture",
+                    outputType: .documentQA,
+                    status: .needsReview
+                )
+                let version = try store.structuredOutputs.createVersion(
+                    structuredOutputID: output.id,
+                    contentMarkdown: "# Stale Dependency Fixture\n\nSynthetic immutable prior content.",
+                    requiredSections: [],
+                    presentSections: [],
+                    missingSections: [],
+                    verificationStatus: .needsReview,
+                    verificationVersion: "synthetic-stale-v1",
+                    verificationDimensions: .allNotRun,
+                    assuranceState: .stale,
+                    outputStatus: .needsReview
+                )
+                try store.database.writer.write { db in
+                    try db.execute(
+                        sql: "UPDATE structured_output_versions SET stale_reason = ? WHERE id = ?",
+                        arguments: [
+                            "source_revision_changed:document=stale-source-document-751:from=revision-23:to=revision-24",
+                            version.id,
+                        ]
+                    )
+                }
+            }
 
             let formatter = DateFormatter()
             formatter.calendar = Calendar(identifier: .gregorian)

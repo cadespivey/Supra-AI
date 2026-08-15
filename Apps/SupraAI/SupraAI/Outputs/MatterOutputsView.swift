@@ -8,6 +8,7 @@ struct MatterOutputsView: View {
     @ObservedObject var controller: StructuredOutputController
     @ObservedObject var library: ModelLibrary
     let matter: MatterSummary
+    let onOpenDocuments: () -> Void
 
     @State private var showNew = false
     @State private var navigationPath: [String] = []
@@ -20,7 +21,15 @@ struct MatterOutputsView: View {
                 content
             }
             .navigationDestination(for: String.self) { id in
-                OutputDetailView(controller: controller, library: library, outputID: id)
+                OutputDetailView(
+                    controller: controller,
+                    library: library,
+                    outputID: id,
+                    onOpenDocuments: {
+                        navigationPath.removeAll()
+                        onOpenDocuments()
+                    }
+                )
             }
         }
         .sheet(isPresented: $showNew) {

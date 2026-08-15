@@ -1564,6 +1564,7 @@ final class ChatCitationsAndExportUITests: XCTestCase {
     }
 }
 
+@MainActor
 final class OwnerWalkthroughGroundedPromotionUITests: XCTestCase {
     override func setUp() {
         continueAfterFailure = false

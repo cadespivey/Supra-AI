@@ -11,6 +11,7 @@ struct OutputDetailView: View {
     @ObservedObject var controller: StructuredOutputController
     @ObservedObject var library: ModelLibrary
     let outputID: String
+    let onOpenDocuments: () -> Void
 
     @State private var selectedVersionID: String?
     @State private var showRaw = false
@@ -181,7 +182,35 @@ struct OutputDetailView: View {
         VStack(alignment: .leading, spacing: 8) {
             AssuranceBadge(state: version.assuranceState)
                 .accessibilityIdentifier("output.assurance.\(version.assuranceState.rawValue)")
-            if version.verificationStatus != OutputVerificationStatus.allSupported.rawValue {
+            if version.assuranceState == .stale {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .foregroundStyle(.orange)
+                        .accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("A dependency changed")
+                            .font(.supraHeadline)
+                        Text(version.staleReason ?? "A retained source or processing dependency changed. Regenerate or recheck against the current matter sources.")
+                            .font(.supraCaption)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    Button("Open Documents") {
+                        onOpenDocuments()
+                    }
+                    .fixedSize()
+                    .accessibilityIdentifier("output.stale.openDocuments")
+                    .accessibilityHint("Review the changed matter source and rebuild readiness before creating a new verified version")
+                }
+                .padding(10)
+                .background(Color.orange.opacity(0.12))
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("output.staleWarning")
+                .accessibilityLabel(
+                    "Stale dependency. \(version.staleReason ?? "A retained source or processing dependency changed.")"
+                )
+            } else if version.verificationStatus != OutputVerificationStatus.allSupported.rawValue {
                 HStack(alignment: .top, spacing: 10) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .foregroundStyle(.orange)

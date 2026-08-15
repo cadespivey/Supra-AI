@@ -63,6 +63,7 @@ public final class StructuredOutputController: ObservableObject {
         public let verifiedAt: Date?
         public let assuranceState: OutputAssuranceState
         public let assuranceText: String
+        public let staleReason: String?
     }
 
     @Published public private(set) var outputs: [OutputItem] = []
@@ -368,7 +369,8 @@ public final class StructuredOutputController: ObservableObject {
                     ),
                     verifiedAt: version.verifiedAt,
                     assuranceState: assurance,
-                    assuranceText: OutputAssurancePresentation.text(for: assurance)
+                    assuranceText: OutputAssurancePresentation.text(for: assurance),
+                    staleReason: version.staleReason
                 )
             }
     }
