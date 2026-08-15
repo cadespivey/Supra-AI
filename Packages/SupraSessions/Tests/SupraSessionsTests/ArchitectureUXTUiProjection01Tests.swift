@@ -237,6 +237,40 @@ final class ArchitectureUXTUiProjection01Tests: XCTestCase {
         }
     }
 
+    func testSavedWorkHandsExactMatterAndVersionToNotesOrBillingWithoutCopyingContent() throws {
+        let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent() // SupraSessionsTests
+            .deletingLastPathComponent() // Tests
+            .deletingLastPathComponent() // SupraSessions
+            .deletingLastPathComponent() // Packages
+            .deletingLastPathComponent() // repository
+        func source(_ relativePath: String) throws -> String {
+            try String(
+                contentsOf: repositoryRoot.appendingPathComponent(relativePath),
+                encoding: .utf8
+            )
+        }
+
+        let detail = try source("Apps/SupraAI/SupraAI/Outputs/OutputDetailView.swift")
+        let outputs = try source("Apps/SupraAI/SupraAI/Outputs/MatterOutputsView.swift")
+        let workspace = try source("Apps/SupraAI/SupraAI/Matters/MatterWorkspaceView.swift")
+        let scratchPad = try source("Apps/SupraAI/SupraAI/ScratchPad/ScratchPadView.swift")
+        let shell = try source("Apps/SupraAI/SupraAI/MainShellView.swift")
+
+        XCTAssertTrue(detail.contains("SavedWorkNotesHandoff"))
+        XCTAssertTrue(detail.contains("Button(\"Open Notes & Time\")"))
+        XCTAssertTrue(detail.contains("Button(\"Open Billing Rules\")"))
+        XCTAssertTrue(outputs.contains("matterID: matter.id"))
+        XCTAssertTrue(outputs.contains("navigationPath.removeAll()"))
+        XCTAssertTrue(workspace.contains("onOpenNotesAndTime"))
+        XCTAssertTrue(workspace.contains("onOpenBilling: { tab = .billing }"))
+        XCTAssertTrue(shell.contains("pendingSavedWorkNotesHandoff"))
+        XCTAssertTrue(shell.contains("selectRoute(.scratchpad)"))
+        XCTAssertTrue(scratchPad.contains("Button(\"Insert reference\")"))
+        XCTAssertTrue(scratchPad.contains("pendingMentions[\"matter\"] = handoff.matterID"))
+        XCTAssertTrue(detail.contains("contentMarkdown: nil"))
+    }
+
     private func makeDocumentFixture() throws -> (
         store: SupraStore,
         queue: DocumentProcessingQueue,

@@ -1624,5 +1624,28 @@ final class OwnerWalkthroughGroundedPromotionUITests: XCTestCase {
                 "Promoted answer did not retain source \(label)"
             )
         }
+
+        let openNotes = app.buttons["output.openNotesAndTime"]
+        XCTAssertTrue(
+            openNotes.waitForExistence(timeout: 5),
+            "Saved Work detail must expose the separate Notes & Time handoff"
+        )
+        openNotes.click()
+        XCTAssertTrue(
+            app.descendants(matching: .any)["scratchpad.savedWorkHandoff"].waitForExistence(timeout: 10),
+            "Notes & Time must receive the exact pending matter/work reference without saving it"
+        )
+        let insertReference = app.buttons["scratchpad.savedWorkHandoff.insert"]
+        XCTAssertTrue(insertReference.exists)
+        insertReference.click()
+        let composer = app.textViews["scratchpad.composer"]
+        XCTAssertTrue(composer.waitForExistence(timeout: 5))
+        let draft = composer.value as? String ?? ""
+        XCTAssertTrue(draft.contains("Saved Work:"))
+        XCTAssertTrue(draft.contains("@matter"))
+        XCTAssertFalse(
+            draft.localizedCaseInsensitiveContains("indemnity applies"),
+            "A handoff may insert an exact reference but must not copy the saved legal analysis"
+        )
     }
 }
