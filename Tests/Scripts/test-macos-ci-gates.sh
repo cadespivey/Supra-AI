@@ -658,7 +658,7 @@ else
   record_failure 'app smoke does not execute every Review-retirement and parity guard'
 fi
 
-if rg -q -- 'CaseFileReview|CorpusReviewQueueComposition|TRP(UI|CREATEUI|HWUI)|SUPRA_CASE_FILE_REVIEW' "$app_smoke_script"; then
+if grep -Eq -- 'CaseFileReview|CorpusReviewQueueComposition|TRP(UI|CREATEUI|HWUI)|SUPRA_CASE_FILE_REVIEW' "$app_smoke_script"; then
   record_failure 'app smoke still contains a retired Review selector or hook'
 else
   printf '%s\n' 'PASS: app smoke contains no retired Review selector or hook'
@@ -806,7 +806,8 @@ motion_ui_tests="${repo_root}/Apps/SupraAI/SupraAIUITests/ResearchAuthoritiesUIT
 letter_generation_function="$(sed -n '/private func generateLetter(token:/,/^    }/p' "$motion_view")"
 if grep -Fq 'drafting.motion.fact.\(source.chunkID)' "$motion_view" \
     && grep -Fq 'drafting.motion.authority.\(source.authorityID)' "$motion_view" \
-    && grep -Fq 'drafting.motion.fact.ui-motion-fact-chunk' "$motion_ui_tests" \
+    && grep -Fq 'format: "identifier BEGINSWITH %@"' "$motion_ui_tests" \
+    && grep -Fq '"drafting.motion.fact.chunk-v2-"' "$motion_ui_tests" \
     && grep -Fq 'ui-motion-authority-success' "$motion_ui_tests" \
     && grep -Fq 'expectedBindingSHA256: bindingSHA256' "$motion_view" \
     && grep -Fq 'displayedAuthorityBindings[authorityID]' "$motion_view" \
