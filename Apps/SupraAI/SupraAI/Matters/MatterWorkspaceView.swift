@@ -12,6 +12,7 @@ struct MatterWorkspaceView: View {
     @ObservedObject var settings: SettingsController
     let matter: MatterSummary
     let onOpenImportSetup: () -> Void
+    let onOpenNotesAndTime: (SavedWorkNotesHandoff) -> Void
 
     @State private var tab: MatterTab = .chat
     @State private var showEditor = false
@@ -372,7 +373,9 @@ struct MatterWorkspaceView: View {
                     controller: outputs,
                     library: library,
                     matter: matter,
-                    onOpenDocuments: { tab = .documents }
+                    onOpenDocuments: { tab = .documents },
+                    onOpenNotesAndTime: onOpenNotesAndTime,
+                    onOpenBilling: { tab = .billing }
                 )
             } else {
                 placeholder(

@@ -9,6 +9,8 @@ struct MatterOutputsView: View {
     @ObservedObject var library: ModelLibrary
     let matter: MatterSummary
     let onOpenDocuments: () -> Void
+    let onOpenNotesAndTime: (SavedWorkNotesHandoff) -> Void
+    let onOpenBilling: () -> Void
 
     @State private var showNew = false
     @State private var navigationPath: [String] = []
@@ -25,9 +27,19 @@ struct MatterOutputsView: View {
                     controller: controller,
                     library: library,
                     outputID: id,
+                    matterID: matter.id,
+                    matterName: matter.name,
                     onOpenDocuments: {
                         navigationPath.removeAll()
                         onOpenDocuments()
+                    },
+                    onOpenNotesAndTime: { handoff in
+                        navigationPath.removeAll()
+                        onOpenNotesAndTime(handoff)
+                    },
+                    onOpenBilling: {
+                        navigationPath.removeAll()
+                        onOpenBilling()
                     }
                 )
             }

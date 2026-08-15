@@ -1625,11 +1625,14 @@ final class OwnerWalkthroughGroundedPromotionUITests: XCTestCase {
             )
         }
 
-        let openNotes = app.buttons["output.openNotesAndTime"]
+        let relatedWork = app.descendants(matching: .any)["output.relatedWork"]
         XCTAssertTrue(
-            openNotes.waitForExistence(timeout: 5),
+            relatedWork.waitForExistence(timeout: 5),
             "Saved Work detail must expose the separate Notes & Time handoff"
         )
+        relatedWork.click()
+        let openNotes = app.descendants(matching: .any)["output.openNotesAndTime"]
+        XCTAssertTrue(openNotes.waitForExistence(timeout: 5))
         openNotes.click()
         XCTAssertTrue(
             app.descendants(matching: .any)["scratchpad.savedWorkHandoff"].waitForExistence(timeout: 10),

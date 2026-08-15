@@ -4,6 +4,21 @@ import SupraDesignSystem
 import SupraSessions
 import SwiftUI
 
+/// A presentation-only request to carry one exact Saved Work identity to Notes
+/// & Time. The legal content is deliberately absent: the receiving surface may
+/// insert the reference after another explicit action, but it cannot silently
+/// turn the work product into a billing narrative.
+struct SavedWorkNotesHandoff: Identifiable, Equatable {
+    let id: String
+    let matterID: String
+    let matterName: String
+    let outputID: String
+    let outputTitle: String
+    let versionID: String
+    let versionIndex: Int
+    let contentMarkdown: String?
+}
+
 /// Structured output detail (spec §13.3): version picker, Markdown preview with a
 /// raw toggle, missing-section list, linked research session, and the Repair
 /// Structure action when sections are missing.
@@ -11,7 +26,11 @@ struct OutputDetailView: View {
     @ObservedObject var controller: StructuredOutputController
     @ObservedObject var library: ModelLibrary
     let outputID: String
+    let matterID: String
+    let matterName: String
     let onOpenDocuments: () -> Void
+    let onOpenNotesAndTime: (SavedWorkNotesHandoff) -> Void
+    let onOpenBilling: () -> Void
 
     @State private var selectedVersionID: String?
     @State private var showRaw = false
@@ -132,6 +151,35 @@ struct OutputDetailView: View {
                     .font(.supraCaption).foregroundStyle(.secondary)
             }
             Spacer()
+            if let selected {
+                Menu {
+                    Button("Open Notes & Time") {
+                        onOpenNotesAndTime(
+                            SavedWorkNotesHandoff(
+                                id: "\(outputID)@\(selected.id)",
+                                matterID: matterID,
+                                matterName: matterName,
+                                outputID: outputID,
+                                outputTitle: outputTitle,
+                                versionID: selected.id,
+                                versionIndex: selected.index,
+                                contentMarkdown: nil
+                            )
+                        )
+                    }
+                    .accessibilityIdentifier("output.openNotesAndTime")
+                    Button("Open Billing Rules") {
+                        onOpenBilling()
+                    }
+                    .accessibilityIdentifier("output.openBillingRules")
+                } label: {
+                    Label("Related Work", systemImage: "arrow.triangle.branch")
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .accessibilityIdentifier("output.relatedWork")
+                .help("Open this matter's separate Notes & Time or Billing Rules workflow")
+            }
             if let selected,
                selected.verificationStatus == OutputVerificationStatus.allSupported.rawValue,
                OutputAssurancePresentation.isExportEligible(selected.assuranceState) {

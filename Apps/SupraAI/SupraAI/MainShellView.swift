@@ -7,6 +7,7 @@ struct MainShellView: View {
     @EnvironmentObject private var environment: AppEnvironment
     @State private var selection: SidebarSelection? = .route(.globalChats)
     @State private var setupNavigationRequest: SetupNavigationRequest?
+    @State private var pendingSavedWorkNotesHandoff: SavedWorkNotesHandoff?
     @State private var showNewMatter = false
     @State private var windowContentHeight: CGFloat = 720
 #if DEBUG
@@ -280,7 +281,11 @@ struct MainShellView: View {
                 queue: environment.documentQueue,
                 settings: environment.settingsController,
                 matterID: id,
-                onOpenImportSetup: { beginDocumentImportSetup(matterID: id) }
+                onOpenImportSetup: { beginDocumentImportSetup(matterID: id) },
+                onOpenNotesAndTime: { handoff in
+                    pendingSavedWorkNotesHandoff = handoff
+                    selectRoute(.scratchpad)
+                }
             )
         case .recycleBin:
             RecycleBinView(
@@ -428,7 +433,11 @@ struct MainShellView: View {
                 controller: environment.scratchPadController,
                 billing: environment.billingDraftController,
                 billingSettings: environment.billingSettingsController,
-                library: environment.modelLibrary
+                library: environment.modelLibrary,
+                savedWorkHandoff: pendingSavedWorkNotesHandoff,
+                onSavedWorkHandoffConsumed: {
+                    pendingSavedWorkNotesHandoff = nil
+                }
             )
         case .models:
             ModelsView(
@@ -852,6 +861,7 @@ private struct MatterDetailView: View {
     @ObservedObject var settings: SettingsController
     let matterID: String
     let onOpenImportSetup: () -> Void
+    let onOpenNotesAndTime: (SavedWorkNotesHandoff) -> Void
 
     var body: some View {
         if let matter = controller.matters.first(where: { $0.id == matterID }) {
@@ -861,7 +871,8 @@ private struct MatterDetailView: View {
                 queue: queue,
                 settings: settings,
                 matter: matter,
-                onOpenImportSetup: onOpenImportSetup
+                onOpenImportSetup: onOpenImportSetup,
+                onOpenNotesAndTime: onOpenNotesAndTime
             )
         } else {
             ContentUnavailableView(
