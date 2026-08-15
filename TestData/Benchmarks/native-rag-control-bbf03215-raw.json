@@ -1,0 +1,2464 @@
+{
+  "chatModel" : {
+    "artifactIdentitySHA256" : "a069c0d78e8af721b4391d02a87a292361af7a28eef4823e1023b8a3180bc148",
+    "repositoryID" : "mlx-community/Qwen3-32B-4bit",
+    "revision" : "bcaaf7f538adf166c1080a2befdb4f6019f66639"
+  },
+  "completedAt" : "2026-08-15T22:27:28Z",
+  "controlID" : "native-rag-control-v1",
+  "corpusID" : "supra-rag-synthetic-legal",
+  "corpusManifestSHA256" : "6fa99ce95733c4d0af62035393ea7b5d3635f7cc47e5580547bfdfaee5aca598",
+  "corpusVersion" : "1.0.0",
+  "embeddingModel" : {
+    "artifactIdentitySHA256" : "cafe0e5bd79ce519339769d5f8016fe54b967060ebc7612e03d60b33c872c255",
+    "repositoryID" : "mlx-community/Qwen3-Embedding-4B-4bit-DWQ",
+    "revision" : "b5d88f1fe49b50d2ac01b4692ca2d387f14f9c72"
+  },
+  "importSummary" : {
+    "discovered" : 10,
+    "failed" : 1,
+    "imported" : 9,
+    "indexedDocuments" : 9
+  },
+  "memory" : {
+    "appCurrentPhysFootprintBytes" : 50824320,
+    "appPeakPhysFootprintBytes" : 179143736,
+    "combinedCurrentPhysFootprintBytes" : 37622350976,
+    "combinedPeakPhysFootprintBytes" : 37750670392,
+    "maximumLiveSemanticCacheBytes" : 18610,
+    "xpcCurrentPhysFootprintBytes" : 37571526656,
+    "xpcPeakPhysFootprintBytes" : 37571526656
+  },
+  "queries" : [
+    {
+      "answerMarkdown" : "> ⚠️ **DOCUMENT SUPPORT NEEDS REVIEW — DO NOT RELY.** No cited source text supports “Answer: The tracking code on scanned Exhibit F is OCR-F-8842”.\n\nAnswer: The tracking code on scanned Exhibit F is OCR-F-8842 [S2].\n\n## Sources\n- **[S1]** scanned-exhibit-f.pdf — p. 1\n  > SYNTHETIC SCANNED EXHIBIT F\n- **[S2]** scanned-exhibit-f.pdf — p. 1\n  > Tracking code OCR-F-8842\n- **[S3]** scanned-exhibit-f.pdf — p. 1\n  > Six attachments were inventoried.\n- **[S4]** scanned-exhibit-f.pdf — p. 1\n  > Received January 29, 2026",
+      "citationLabels" : [
+        "S2"
+      ],
+      "coldCandidates" : [
+        {
+          "artifactID" : "scanned-exhibit-f",
+          "documentName" : "scanned-exhibit-f.pdf",
+          "excerpt" : "SYNTHETIC SCANNED EXHIBIT F",
+          "ftsMatched" : true,
+          "locator" : "p. 1",
+          "rank" : 1,
+          "score" : 0.03252247488101534,
+          "semanticBucket" : "medium"
+        },
+        {
+          "artifactID" : "scanned-exhibit-f",
+          "documentName" : "scanned-exhibit-f.pdf",
+          "excerpt" : "Tracking code OCR-F-8842",
+          "ftsMatched" : true,
+          "locator" : "p. 1",
+          "rank" : 2,
+          "score" : 0.03252247488101534,
+          "semanticBucket" : "medium"
+        },
+        {
+          "artifactID" : "scanned-exhibit-f",
+          "documentName" : "scanned-exhibit-f.pdf",
+          "excerpt" : "Six attachments were inventoried.",
+          "ftsMatched" : false,
+          "locator" : "p. 1",
+          "rank" : 3,
+          "score" : 0.015873015873015872,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "scanned-exhibit-f",
+          "documentName" : "scanned-exhibit-f.pdf",
+          "excerpt" : "Received January 29, 2026",
+          "ftsMatched" : false,
+          "locator" : "p. 1",
+          "rank" : 4,
+          "score" : 0.015625,
+          "semanticBucket" : "low"
+        }
+      ],
+      "coldExecutionReceipt" : {
+        "chunker_version" : 2,
+        "elapsed_milliseconds" : 282,
+        "embedding_artifact_identity_sha256" : "cafe0e5bd79ce519339769d5f8016fe54b967060ebc7612e03d60b33c872c255",
+        "execution_id" : "rag-d28e5ee4-919b-4391-8f27-158ceb40360f",
+        "lexical_candidate_count" : 2,
+        "query_sha256" : "576d52e015a85bdda30604b878a367b5e78d102f39b5cd05fee8d91829c290dd",
+        "ranks" : [
+          {
+            "candidate_identity_sha256" : "ba2b18df217e6169075e2f69114ef7aa6aa979f31c90edbdcdf41df360f1f346",
+            "rank" : 1,
+            "score_bucket" : "medium",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "678e4be272bac2b8fbc41b092d03481fb808f2aa0a4829aa41c5980f3e88a384",
+            "rank" : 2,
+            "score_bucket" : "medium",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "70a7f7fed0cecc82a9fc3e349bafec7afc30a57e6f5d2ffbf0899c8be78e5cf2",
+            "rank" : 3,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "ec0d718cb7ef35dc00fd65d48eb5d7c861191fe87425af252824608e4d20a67c",
+            "rank" : 4,
+            "score_bucket" : "low",
+            "selected" : true
+          }
+        ],
+        "readiness_receipt_set_sha256" : "b1b35e30204d5bcd9734fa1b6ec3be24899e5f2576f06fd40aac8060f58334dc",
+        "receipt_id" : "88d974f657c0b2f47f1954e8036a4facbfc99fc1cf9fbe735cdb94f37c058cc0",
+        "retrieval_algorithm_version" : 1,
+        "retrieval_depth" : "deep",
+        "schema_version" : 1,
+        "scope_sha256" : "7905e5d499f0f4a50ec2431ad5061a316253e1e39c58ec2163c7a1a57e7e4807",
+        "semantic" : {
+          "cache_disposition" : "computed",
+          "candidate_limit" : 60,
+          "maximum_heap_entries" : 4,
+          "maximum_live_page_rows" : 4,
+          "maximum_live_vector_bytes" : 40960,
+          "page_count" : 1,
+          "page_size" : 256,
+          "rejected_rows" : 0,
+          "scanned_rows" : 4
+        },
+        "started_at_unix_milliseconds" : 1786832567896
+      },
+      "coldRetrievalMilliseconds" : 282,
+      "packedSources" : [
+        {
+          "artifactID" : "scanned-exhibit-f",
+          "citationLabel" : "S1",
+          "excerpt" : "SYNTHETIC SCANNED EXHIBIT F",
+          "locator" : "p. 1"
+        },
+        {
+          "artifactID" : "scanned-exhibit-f",
+          "citationLabel" : "S2",
+          "excerpt" : "Tracking code OCR-F-8842",
+          "locator" : "p. 1"
+        },
+        {
+          "artifactID" : "scanned-exhibit-f",
+          "citationLabel" : "S3",
+          "excerpt" : "Six attachments were inventoried.",
+          "locator" : "p. 1"
+        },
+        {
+          "artifactID" : "scanned-exhibit-f",
+          "citationLabel" : "S4",
+          "excerpt" : "Received January 29, 2026",
+          "locator" : "p. 1"
+        }
+      ],
+      "queryID" : "rag-ocr-exhibit-f-tracking",
+      "scopeArtifactIDs" : [
+        "scanned-exhibit-f"
+      ],
+      "status" : "needs_review",
+      "timeToFirstTokenMilliseconds" : 12248,
+      "totalLatencyMilliseconds" : 33887,
+      "unsupported" : false,
+      "warmCandidates" : [
+        {
+          "artifactID" : "scanned-exhibit-f",
+          "documentName" : "scanned-exhibit-f.pdf",
+          "excerpt" : "SYNTHETIC SCANNED EXHIBIT F",
+          "ftsMatched" : true,
+          "locator" : "p. 1",
+          "rank" : 1,
+          "score" : 0.03252247488101534,
+          "semanticBucket" : "medium"
+        },
+        {
+          "artifactID" : "scanned-exhibit-f",
+          "documentName" : "scanned-exhibit-f.pdf",
+          "excerpt" : "Tracking code OCR-F-8842",
+          "ftsMatched" : true,
+          "locator" : "p. 1",
+          "rank" : 2,
+          "score" : 0.03252247488101534,
+          "semanticBucket" : "medium"
+        },
+        {
+          "artifactID" : "scanned-exhibit-f",
+          "documentName" : "scanned-exhibit-f.pdf",
+          "excerpt" : "Six attachments were inventoried.",
+          "ftsMatched" : false,
+          "locator" : "p. 1",
+          "rank" : 3,
+          "score" : 0.015873015873015872,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "scanned-exhibit-f",
+          "documentName" : "scanned-exhibit-f.pdf",
+          "excerpt" : "Received January 29, 2026",
+          "ftsMatched" : false,
+          "locator" : "p. 1",
+          "rank" : 4,
+          "score" : 0.015625,
+          "semanticBucket" : "low"
+        }
+      ],
+      "warmExecutionReceipt" : {
+        "chunker_version" : 2,
+        "elapsed_milliseconds" : 6,
+        "embedding_artifact_identity_sha256" : "cafe0e5bd79ce519339769d5f8016fe54b967060ebc7612e03d60b33c872c255",
+        "execution_id" : "rag-0cc1a214-7573-49ae-a9b5-56959ecdf189",
+        "lexical_candidate_count" : 2,
+        "query_sha256" : "576d52e015a85bdda30604b878a367b5e78d102f39b5cd05fee8d91829c290dd",
+        "ranks" : [
+          {
+            "candidate_identity_sha256" : "ba2b18df217e6169075e2f69114ef7aa6aa979f31c90edbdcdf41df360f1f346",
+            "rank" : 1,
+            "score_bucket" : "medium",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "678e4be272bac2b8fbc41b092d03481fb808f2aa0a4829aa41c5980f3e88a384",
+            "rank" : 2,
+            "score_bucket" : "medium",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "70a7f7fed0cecc82a9fc3e349bafec7afc30a57e6f5d2ffbf0899c8be78e5cf2",
+            "rank" : 3,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "ec0d718cb7ef35dc00fd65d48eb5d7c861191fe87425af252824608e4d20a67c",
+            "rank" : 4,
+            "score_bucket" : "low",
+            "selected" : true
+          }
+        ],
+        "readiness_receipt_set_sha256" : "b1b35e30204d5bcd9734fa1b6ec3be24899e5f2576f06fd40aac8060f58334dc",
+        "receipt_id" : "58f51f4b7911231087e2fcea70a76e93c271a4f7e4d78b5ca34fc32dcbd91b3f",
+        "retrieval_algorithm_version" : 1,
+        "retrieval_depth" : "deep",
+        "schema_version" : 1,
+        "scope_sha256" : "7905e5d499f0f4a50ec2431ad5061a316253e1e39c58ec2163c7a1a57e7e4807",
+        "semantic" : {
+          "cache_disposition" : "hit",
+          "candidate_limit" : 60,
+          "maximum_heap_entries" : 0,
+          "maximum_live_page_rows" : 0,
+          "maximum_live_vector_bytes" : 0,
+          "page_count" : 0,
+          "page_size" : 256,
+          "rejected_rows" : 0,
+          "scanned_rows" : 0
+        },
+        "started_at_unix_milliseconds" : 1786832568178
+      },
+      "warmRetrievalMilliseconds" : 6,
+      "warnings" : [
+        "No cited source text supports “Answer: The tracking code on scanned Exhibit F is OCR-F-8842”."
+      ]
+    },
+    {
+      "answerMarkdown" : "> ⚠️ **DOCUMENT SUPPORT NEEDS REVIEW — DO NOT RELY.** No cited source text supports “Answer: The cached total appears in the damages workbook is 275000”.\n\nAnswer: The cached total appears in the damages workbook is 275000 [S3][S4].\n\n## Sources\n- **[S1]** damages-model.xlsx — Damages Summary!A1:C6\n  > TOTAL SYNTHETIC DAMAGES MODEL Formula cache\n- **[S2]** damages-model.xlsx — Damages Summary!A1:C6\n  > SYNTHETIC DAMAGES MODEL TOTAL\n- **[S3]** damages-model.xlsx — Damages Summary!A1:C6\n  > TOTAL SYNTHETIC DAMAGES MODEL 275000\n- **[S4]** damages-model.xlsx — Line Items!A1:C4\n  > Total Source Damages Summary B5",
+      "citationLabels" : [
+        "S3",
+        "S4"
+      ],
+      "coldCandidates" : [
+        {
+          "artifactID" : "damages-model",
+          "documentName" : "damages-model.xlsx",
+          "excerpt" : "TOTAL SYNTHETIC DAMAGES MODEL Formula cache",
+          "ftsMatched" : true,
+          "locator" : "Damages Summary!A1:C6",
+          "rank" : 1,
+          "score" : 0.03278688524590164,
+          "semanticBucket" : "medium"
+        },
+        {
+          "artifactID" : "damages-model",
+          "documentName" : "damages-model.xlsx",
+          "excerpt" : "SYNTHETIC DAMAGES MODEL TOTAL",
+          "ftsMatched" : true,
+          "locator" : "Damages Summary!A1:C6",
+          "rank" : 2,
+          "score" : 0.03200204813108039,
+          "semanticBucket" : "medium"
+        },
+        {
+          "artifactID" : "damages-model",
+          "documentName" : "damages-model.xlsx",
+          "excerpt" : "TOTAL SYNTHETIC DAMAGES MODEL 275000",
+          "ftsMatched" : true,
+          "locator" : "Damages Summary!A1:C6",
+          "rank" : 3,
+          "score" : 0.03200204813108039,
+          "semanticBucket" : "medium"
+        },
+        {
+          "artifactID" : "damages-model",
+          "documentName" : "damages-model.xlsx",
+          "excerpt" : "Total Source Damages Summary B5",
+          "ftsMatched" : true,
+          "locator" : "Line Items!A1:C4",
+          "rank" : 4,
+          "score" : 0.031009615384615385,
+          "semanticBucket" : "medium"
+        }
+      ],
+      "coldExecutionReceipt" : {
+        "chunker_version" : 2,
+        "elapsed_milliseconds" : 80,
+        "embedding_artifact_identity_sha256" : "cafe0e5bd79ce519339769d5f8016fe54b967060ebc7612e03d60b33c872c255",
+        "execution_id" : "rag-ba44baf3-04e2-4d7c-bf11-032e8238a225",
+        "lexical_candidate_count" : 18,
+        "query_sha256" : "a2aae361ab0ba6eab675ce10692a8eacde889bc56215c4a72d2fdc5e95daf000",
+        "ranks" : [
+          {
+            "candidate_identity_sha256" : "219a40923774d83e25356d51c55aa7b4c4aa83b836dbff741a3a5ceae58a2566",
+            "rank" : 1,
+            "score_bucket" : "medium",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "9a1a150e24738954605d6567ab506eaaf6edf3969257e9c6b6cf97b7110b6f7d",
+            "rank" : 2,
+            "score_bucket" : "medium",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "99870344ff28c060c9990ab2b6fc2d3ab2272e91c0e96fa220cfa78936d666a2",
+            "rank" : 3,
+            "score_bucket" : "medium",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "9ee6600fc6af5a78458e5dc5a3acca06e242a12bc673fcc8892aa433751d0f7c",
+            "rank" : 4,
+            "score_bucket" : "medium",
+            "selected" : true
+          }
+        ],
+        "readiness_receipt_set_sha256" : "65da07b5761464248fcce4b73461590180e3b6f657cd845e202a106f0f80a266",
+        "receipt_id" : "788023460f99279c6cd3663617a9e58419bd2180a855432785c7ea122de1119c",
+        "retrieval_algorithm_version" : 1,
+        "retrieval_depth" : "deep",
+        "schema_version" : 1,
+        "scope_sha256" : "d466ddcd7ed0e965f6838405f64ae14a24e8bbd9cd2469a0475a953e89f9ec10",
+        "semantic" : {
+          "cache_disposition" : "computed",
+          "candidate_limit" : 60,
+          "maximum_heap_entries" : 34,
+          "maximum_live_page_rows" : 34,
+          "maximum_live_vector_bytes" : 348160,
+          "page_count" : 1,
+          "page_size" : 256,
+          "rejected_rows" : 0,
+          "scanned_rows" : 34
+        },
+        "started_at_unix_milliseconds" : 1786832602071
+      },
+      "coldRetrievalMilliseconds" : 80,
+      "packedSources" : [
+        {
+          "artifactID" : "damages-model",
+          "citationLabel" : "S1",
+          "excerpt" : "TOTAL SYNTHETIC DAMAGES MODEL Formula cache",
+          "locator" : "Damages Summary!A1:C6"
+        },
+        {
+          "artifactID" : "damages-model",
+          "citationLabel" : "S2",
+          "excerpt" : "SYNTHETIC DAMAGES MODEL TOTAL",
+          "locator" : "Damages Summary!A1:C6"
+        },
+        {
+          "artifactID" : "damages-model",
+          "citationLabel" : "S3",
+          "excerpt" : "TOTAL SYNTHETIC DAMAGES MODEL 275000",
+          "locator" : "Damages Summary!A1:C6"
+        },
+        {
+          "artifactID" : "damages-model",
+          "citationLabel" : "S4",
+          "excerpt" : "Total Source Damages Summary B5",
+          "locator" : "Line Items!A1:C4"
+        }
+      ],
+      "queryID" : "rag-table-damages-total",
+      "scopeArtifactIDs" : [
+        "damages-model"
+      ],
+      "status" : "needs_review",
+      "timeToFirstTokenMilliseconds" : 12254,
+      "totalLatencyMilliseconds" : 46288,
+      "unsupported" : false,
+      "warmCandidates" : [
+        {
+          "artifactID" : "damages-model",
+          "documentName" : "damages-model.xlsx",
+          "excerpt" : "TOTAL SYNTHETIC DAMAGES MODEL Formula cache",
+          "ftsMatched" : true,
+          "locator" : "Damages Summary!A1:C6",
+          "rank" : 1,
+          "score" : 0.03278688524590164,
+          "semanticBucket" : "medium"
+        },
+        {
+          "artifactID" : "damages-model",
+          "documentName" : "damages-model.xlsx",
+          "excerpt" : "SYNTHETIC DAMAGES MODEL TOTAL",
+          "ftsMatched" : true,
+          "locator" : "Damages Summary!A1:C6",
+          "rank" : 2,
+          "score" : 0.03200204813108039,
+          "semanticBucket" : "medium"
+        },
+        {
+          "artifactID" : "damages-model",
+          "documentName" : "damages-model.xlsx",
+          "excerpt" : "TOTAL SYNTHETIC DAMAGES MODEL 275000",
+          "ftsMatched" : true,
+          "locator" : "Damages Summary!A1:C6",
+          "rank" : 3,
+          "score" : 0.03200204813108039,
+          "semanticBucket" : "medium"
+        },
+        {
+          "artifactID" : "damages-model",
+          "documentName" : "damages-model.xlsx",
+          "excerpt" : "Total Source Damages Summary B5",
+          "ftsMatched" : true,
+          "locator" : "Line Items!A1:C4",
+          "rank" : 4,
+          "score" : 0.031009615384615385,
+          "semanticBucket" : "medium"
+        }
+      ],
+      "warmExecutionReceipt" : {
+        "chunker_version" : 2,
+        "elapsed_milliseconds" : 13,
+        "embedding_artifact_identity_sha256" : "cafe0e5bd79ce519339769d5f8016fe54b967060ebc7612e03d60b33c872c255",
+        "execution_id" : "rag-b63a1a47-e34e-43fe-a8d2-482a05337230",
+        "lexical_candidate_count" : 18,
+        "query_sha256" : "a2aae361ab0ba6eab675ce10692a8eacde889bc56215c4a72d2fdc5e95daf000",
+        "ranks" : [
+          {
+            "candidate_identity_sha256" : "219a40923774d83e25356d51c55aa7b4c4aa83b836dbff741a3a5ceae58a2566",
+            "rank" : 1,
+            "score_bucket" : "medium",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "9a1a150e24738954605d6567ab506eaaf6edf3969257e9c6b6cf97b7110b6f7d",
+            "rank" : 2,
+            "score_bucket" : "medium",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "99870344ff28c060c9990ab2b6fc2d3ab2272e91c0e96fa220cfa78936d666a2",
+            "rank" : 3,
+            "score_bucket" : "medium",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "9ee6600fc6af5a78458e5dc5a3acca06e242a12bc673fcc8892aa433751d0f7c",
+            "rank" : 4,
+            "score_bucket" : "medium",
+            "selected" : true
+          }
+        ],
+        "readiness_receipt_set_sha256" : "65da07b5761464248fcce4b73461590180e3b6f657cd845e202a106f0f80a266",
+        "receipt_id" : "f1274d5b3c0ef9d1f75cf9756ac93f15646e95e56acfbf31a09707371615b68e",
+        "retrieval_algorithm_version" : 1,
+        "retrieval_depth" : "deep",
+        "schema_version" : 1,
+        "scope_sha256" : "d466ddcd7ed0e965f6838405f64ae14a24e8bbd9cd2469a0475a953e89f9ec10",
+        "semantic" : {
+          "cache_disposition" : "hit",
+          "candidate_limit" : 60,
+          "maximum_heap_entries" : 0,
+          "maximum_live_page_rows" : 0,
+          "maximum_live_vector_bytes" : 0,
+          "page_count" : 0,
+          "page_size" : 256,
+          "rejected_rows" : 0,
+          "scanned_rows" : 0
+        },
+        "started_at_unix_milliseconds" : 1786832602151
+      },
+      "warmRetrievalMilliseconds" : 13,
+      "warnings" : [
+        "No cited source text supports “Answer: The cached total appears in the damages workbook is 275000”."
+      ]
+    },
+    {
+      "answerMarkdown" : "> ⚠️ **DOCUMENT SUPPORT NEEDS REVIEW — DO NOT RELY.** No cited source text supports “Answer: The final liability cap after Amendment 01 is $275,000”.\n\nAnswer: The final liability cap after Amendment 01 is $275,000 [S1].\n\n## Sources\n- **[S1]** amendment-01.docx — chars 78–175\n  > Section 2 replaces the Section 8.2 liability cap with $275,000. All other terms remain unchanged.\n- **[S2]** master-services-executed.docx — chars 96–170\n  > Signed by Dana Quill and Morgan Vale.\n- **[S3]** master-services-executed-copy.docx — chars 96–170\n  > Section 8.2 liability cap: $250,000.\n- **[S4]** amendment-01.docx — chars 0–22\n  > SYNTHETIC AMENDMENT 01\n- **[S5]** master-services-superseded.docx — chars 0–55\n  > Control No. DI-2026-001-S0\n- **[S6]** master-services-executed-copy.docx — chars 0–44\n  > SYNTHETIC EXECUTED MASTER SERVICES AGREEMENT\n- **[S7]** master-services-superseded.docx — chars 106–162\n  > SUPERSEDED by the January 15 execution and Amendment 01.\n- **[S8]** master-services-executed-copy.docx — chars 69–95\n  > Executed January 15, 2026.\n- **[S9]** master-services-superseded.docx — chars 56–80\n  > Signed January 12, 2026.\n- **[S10]** amendment-01.docx — chars 50–77\n  > Effective February 1, 2026.",
+      "citationLabels" : [
+        "S1"
+      ],
+      "coldCandidates" : [
+        {
+          "artifactID" : "msa-superseded",
+          "documentName" : "master-services-superseded.docx",
+          "excerpt" : "SUPERSEDED by the January 15 execution and Amendment 01.",
+          "ftsMatched" : true,
+          "locator" : "chars 106–162",
+          "rank" : 1,
+          "score" : 0.03177805800756621,
+          "semanticBucket" : "medium"
+        },
+        {
+          "artifactID" : "amendment-01",
+          "documentName" : "amendment-01.docx",
+          "excerpt" : "Section 2 replaces the Section 8.2 liability cap with $275,000. All other terms remain unchanged.",
+          "ftsMatched" : true,
+          "locator" : "chars 78–175",
+          "rank" : 2,
+          "score" : 0.031544957774465976,
+          "semanticBucket" : "medium"
+        },
+        {
+          "artifactID" : "msa-executed-copy",
+          "documentName" : "master-services-executed-copy.docx",
+          "excerpt" : "Section 8.2 liability cap: $250,000.",
+          "ftsMatched" : true,
+          "locator" : "chars 96–170",
+          "rank" : 3,
+          "score" : 0.031754032258064516,
+          "semanticBucket" : "medium"
+        },
+        {
+          "artifactID" : "msa-superseded",
+          "documentName" : "master-services-superseded.docx",
+          "excerpt" : "Liability cap: $225,000.",
+          "ftsMatched" : true,
+          "locator" : "chars 81–105",
+          "rank" : 4,
+          "score" : 0.03149801587301587,
+          "semanticBucket" : "medium"
+        },
+        {
+          "artifactID" : "amendment-01",
+          "documentName" : "amendment-01.docx",
+          "excerpt" : "SYNTHETIC AMENDMENT 01",
+          "ftsMatched" : true,
+          "locator" : "chars 0–22",
+          "rank" : 5,
+          "score" : 0.03128054740957967,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "msa-executed-copy",
+          "documentName" : "master-services-executed-copy.docx",
+          "excerpt" : "Executed January 15, 2026.",
+          "ftsMatched" : false,
+          "locator" : "chars 69–95",
+          "rank" : 6,
+          "score" : 0.014705882352941176,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "msa-superseded",
+          "documentName" : "master-services-superseded.docx",
+          "excerpt" : "Signed January 12, 2026.",
+          "ftsMatched" : false,
+          "locator" : "chars 56–80",
+          "rank" : 7,
+          "score" : 0.014285714285714285,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "amendment-01",
+          "documentName" : "amendment-01.docx",
+          "excerpt" : "Effective February 1, 2026.",
+          "ftsMatched" : false,
+          "locator" : "chars 50–77",
+          "rank" : 8,
+          "score" : 0.014925373134328358,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "msa-executed-copy",
+          "documentName" : "master-services-executed-copy.docx",
+          "excerpt" : "Control No. DI-2026-001",
+          "ftsMatched" : false,
+          "locator" : "chars 45–68",
+          "rank" : 9,
+          "score" : 0.014084507042253521,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "msa-superseded",
+          "documentName" : "master-services-superseded.docx",
+          "excerpt" : "Control No. DI-2026-001-S0",
+          "ftsMatched" : false,
+          "locator" : "chars 0–55",
+          "rank" : 10,
+          "score" : 0.0136986301369863,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "amendment-01",
+          "documentName" : "amendment-01.docx",
+          "excerpt" : "Control No. DI-2026-001-A1",
+          "ftsMatched" : false,
+          "locator" : "chars 23–49",
+          "rank" : 11,
+          "score" : 0.013513513513513514,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "msa-executed-copy",
+          "documentName" : "master-services-executed-copy.docx",
+          "excerpt" : "SYNTHETIC EXECUTED MASTER SERVICES AGREEMENT",
+          "ftsMatched" : false,
+          "locator" : "chars 0–44",
+          "rank" : 12,
+          "score" : 0.012987012987012988,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "msa-executed",
+          "documentName" : "master-services-executed.docx",
+          "excerpt" : "Signed by Dana Quill and Morgan Vale.",
+          "ftsMatched" : false,
+          "locator" : "chars 96–170",
+          "rank" : 13,
+          "score" : 0.01282051282051282,
+          "semanticBucket" : "low"
+        }
+      ],
+      "coldExecutionReceipt" : {
+        "chunker_version" : 2,
+        "elapsed_milliseconds" : 96,
+        "embedding_artifact_identity_sha256" : "cafe0e5bd79ce519339769d5f8016fe54b967060ebc7612e03d60b33c872c255",
+        "execution_id" : "rag-081aa780-1253-443d-b5f9-753302d51e1e",
+        "lexical_candidate_count" : 6,
+        "query_sha256" : "23625f4a0a0782ede57565375308a6d485cd57beeeca8c50ee4d59d1a8dd5823",
+        "ranks" : [
+          {
+            "candidate_identity_sha256" : "21626b066bdff6e7e9d4faff205df1d1f9588084452981f9514cf8b8ed984ed0",
+            "rank" : 1,
+            "score_bucket" : "medium",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "133f7b50a95cf601810336c3380cb066f14b3b2cf5fe27dfbaa73b73bac86c7c",
+            "rank" : 2,
+            "score_bucket" : "medium",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "a96c79f7ceb023a4cafafa9227b73417db4f1f9c8917f2589cc975ae0d963a78",
+            "rank" : 3,
+            "score_bucket" : "medium",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "3dfc23a54258e489c00647b3134174217f7f154ac3b2ce6293f0a015e159a03e",
+            "rank" : 4,
+            "score_bucket" : "medium",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "c095bdd037a1341c324bc5f74001197bc63ee84689715783642fa0478df9f240",
+            "rank" : 5,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "819ab362a710b554451c0e0b19c89b1c0f7af8f4f4332633fc9f2cd535cfeb8e",
+            "rank" : 6,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "4304388303137e680dabf94dd362d6a7a63d4c207f296fa8dec54412f249d71e",
+            "rank" : 7,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "2a761ba18a418347bc8ed597cb4ea3266d9ef188c0bd4a94c707bf778e6eb1d4",
+            "rank" : 8,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "e77833a2502e0df1cd59a827574043e72ff1e96a831eb3df963c2e12247180d8",
+            "rank" : 9,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "dffb93fdfea1913e7a3c3f624a79a026b681102489e8064a36358705acdff124",
+            "rank" : 10,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "1da07629016096edc085bdb286ef5e6143f932f27ece8f9f9c6c9a9279ecf992",
+            "rank" : 11,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "cbf55aac075ad121a669663e0eb8f1912bce770a874afea3689e346af7d6efe1",
+            "rank" : 12,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "c16f6dacc341980799be5c857fe6c85d11ac03d2397e3258628b7e120c44bf33",
+            "rank" : 13,
+            "score_bucket" : "low",
+            "selected" : true
+          }
+        ],
+        "readiness_receipt_set_sha256" : "7b58e9731839bb26694e2733d60f692799f8a0d527edca6eaea017280c83eff1",
+        "receipt_id" : "d662d2e83b94a20c2de092631f5a1fae0ac0075c775ad8f45594b5f6dd04ede0",
+        "retrieval_algorithm_version" : 1,
+        "retrieval_depth" : "deep",
+        "schema_version" : 1,
+        "scope_sha256" : "58c9a530b4d23cfb85e9f051faf01c265fee8b8bc6593189f380523163783681",
+        "semantic" : {
+          "cache_disposition" : "computed",
+          "candidate_limit" : 60,
+          "maximum_heap_entries" : 19,
+          "maximum_live_page_rows" : 19,
+          "maximum_live_vector_bytes" : 194560,
+          "page_count" : 1,
+          "page_size" : 256,
+          "rejected_rows" : 0,
+          "scanned_rows" : 19
+        },
+        "started_at_unix_milliseconds" : 1786832648452
+      },
+      "coldRetrievalMilliseconds" : 96,
+      "packedSources" : [
+        {
+          "artifactID" : "amendment-01",
+          "citationLabel" : "S1",
+          "excerpt" : "Section 2 replaces the Section 8.2 liability cap with $275,000. All other terms remain unchanged.",
+          "locator" : "chars 78–175"
+        },
+        {
+          "artifactID" : "msa-executed",
+          "citationLabel" : "S2",
+          "excerpt" : "Signed by Dana Quill and Morgan Vale.",
+          "locator" : "chars 96–170"
+        },
+        {
+          "artifactID" : "msa-executed-copy",
+          "citationLabel" : "S3",
+          "excerpt" : "Section 8.2 liability cap: $250,000.",
+          "locator" : "chars 96–170"
+        },
+        {
+          "artifactID" : "amendment-01",
+          "citationLabel" : "S4",
+          "excerpt" : "SYNTHETIC AMENDMENT 01",
+          "locator" : "chars 0–22"
+        },
+        {
+          "artifactID" : "msa-superseded",
+          "citationLabel" : "S5",
+          "excerpt" : "Control No. DI-2026-001-S0",
+          "locator" : "chars 0–55"
+        },
+        {
+          "artifactID" : "msa-executed-copy",
+          "citationLabel" : "S6",
+          "excerpt" : "SYNTHETIC EXECUTED MASTER SERVICES AGREEMENT",
+          "locator" : "chars 0–44"
+        },
+        {
+          "artifactID" : "msa-superseded",
+          "citationLabel" : "S7",
+          "excerpt" : "SUPERSEDED by the January 15 execution and Amendment 01.",
+          "locator" : "chars 106–162"
+        },
+        {
+          "artifactID" : "msa-executed-copy",
+          "citationLabel" : "S8",
+          "excerpt" : "Executed January 15, 2026.",
+          "locator" : "chars 69–95"
+        },
+        {
+          "artifactID" : "msa-superseded",
+          "citationLabel" : "S9",
+          "excerpt" : "Signed January 12, 2026.",
+          "locator" : "chars 56–80"
+        },
+        {
+          "artifactID" : "amendment-01",
+          "citationLabel" : "S10",
+          "excerpt" : "Effective February 1, 2026.",
+          "locator" : "chars 50–77"
+        }
+      ],
+      "queryID" : "rag-version-final-liability-cap",
+      "scopeArtifactIDs" : [
+        "amendment-01",
+        "msa-executed",
+        "msa-superseded",
+        "msa-executed-copy"
+      ],
+      "status" : "needs_review",
+      "timeToFirstTokenMilliseconds" : 21394,
+      "totalLatencyMilliseconds" : 65884,
+      "unsupported" : false,
+      "warmCandidates" : [
+        {
+          "artifactID" : "msa-superseded",
+          "documentName" : "master-services-superseded.docx",
+          "excerpt" : "SUPERSEDED by the January 15 execution and Amendment 01.",
+          "ftsMatched" : true,
+          "locator" : "chars 106–162",
+          "rank" : 1,
+          "score" : 0.03177805800756621,
+          "semanticBucket" : "medium"
+        },
+        {
+          "artifactID" : "amendment-01",
+          "documentName" : "amendment-01.docx",
+          "excerpt" : "Section 2 replaces the Section 8.2 liability cap with $275,000. All other terms remain unchanged.",
+          "ftsMatched" : true,
+          "locator" : "chars 78–175",
+          "rank" : 2,
+          "score" : 0.031544957774465976,
+          "semanticBucket" : "medium"
+        },
+        {
+          "artifactID" : "msa-executed-copy",
+          "documentName" : "master-services-executed-copy.docx",
+          "excerpt" : "Section 8.2 liability cap: $250,000.",
+          "ftsMatched" : true,
+          "locator" : "chars 96–170",
+          "rank" : 3,
+          "score" : 0.031754032258064516,
+          "semanticBucket" : "medium"
+        },
+        {
+          "artifactID" : "msa-superseded",
+          "documentName" : "master-services-superseded.docx",
+          "excerpt" : "Liability cap: $225,000.",
+          "ftsMatched" : true,
+          "locator" : "chars 81–105",
+          "rank" : 4,
+          "score" : 0.03149801587301587,
+          "semanticBucket" : "medium"
+        },
+        {
+          "artifactID" : "amendment-01",
+          "documentName" : "amendment-01.docx",
+          "excerpt" : "SYNTHETIC AMENDMENT 01",
+          "ftsMatched" : true,
+          "locator" : "chars 0–22",
+          "rank" : 5,
+          "score" : 0.03128054740957967,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "msa-executed-copy",
+          "documentName" : "master-services-executed-copy.docx",
+          "excerpt" : "Executed January 15, 2026.",
+          "ftsMatched" : false,
+          "locator" : "chars 69–95",
+          "rank" : 6,
+          "score" : 0.014705882352941176,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "msa-superseded",
+          "documentName" : "master-services-superseded.docx",
+          "excerpt" : "Signed January 12, 2026.",
+          "ftsMatched" : false,
+          "locator" : "chars 56–80",
+          "rank" : 7,
+          "score" : 0.014285714285714285,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "amendment-01",
+          "documentName" : "amendment-01.docx",
+          "excerpt" : "Effective February 1, 2026.",
+          "ftsMatched" : false,
+          "locator" : "chars 50–77",
+          "rank" : 8,
+          "score" : 0.014925373134328358,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "msa-executed-copy",
+          "documentName" : "master-services-executed-copy.docx",
+          "excerpt" : "Control No. DI-2026-001",
+          "ftsMatched" : false,
+          "locator" : "chars 45–68",
+          "rank" : 9,
+          "score" : 0.014084507042253521,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "msa-superseded",
+          "documentName" : "master-services-superseded.docx",
+          "excerpt" : "Control No. DI-2026-001-S0",
+          "ftsMatched" : false,
+          "locator" : "chars 0–55",
+          "rank" : 10,
+          "score" : 0.0136986301369863,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "amendment-01",
+          "documentName" : "amendment-01.docx",
+          "excerpt" : "Control No. DI-2026-001-A1",
+          "ftsMatched" : false,
+          "locator" : "chars 23–49",
+          "rank" : 11,
+          "score" : 0.013513513513513514,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "msa-executed-copy",
+          "documentName" : "master-services-executed-copy.docx",
+          "excerpt" : "SYNTHETIC EXECUTED MASTER SERVICES AGREEMENT",
+          "ftsMatched" : false,
+          "locator" : "chars 0–44",
+          "rank" : 12,
+          "score" : 0.012987012987012988,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "msa-executed",
+          "documentName" : "master-services-executed.docx",
+          "excerpt" : "Signed by Dana Quill and Morgan Vale.",
+          "ftsMatched" : false,
+          "locator" : "chars 96–170",
+          "rank" : 13,
+          "score" : 0.01282051282051282,
+          "semanticBucket" : "low"
+        }
+      ],
+      "warmExecutionReceipt" : {
+        "chunker_version" : 2,
+        "elapsed_milliseconds" : 18,
+        "embedding_artifact_identity_sha256" : "cafe0e5bd79ce519339769d5f8016fe54b967060ebc7612e03d60b33c872c255",
+        "execution_id" : "rag-9e58ecdc-c28f-49e7-99a4-b37b8cc094f7",
+        "lexical_candidate_count" : 6,
+        "query_sha256" : "23625f4a0a0782ede57565375308a6d485cd57beeeca8c50ee4d59d1a8dd5823",
+        "ranks" : [
+          {
+            "candidate_identity_sha256" : "21626b066bdff6e7e9d4faff205df1d1f9588084452981f9514cf8b8ed984ed0",
+            "rank" : 1,
+            "score_bucket" : "medium",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "133f7b50a95cf601810336c3380cb066f14b3b2cf5fe27dfbaa73b73bac86c7c",
+            "rank" : 2,
+            "score_bucket" : "medium",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "a96c79f7ceb023a4cafafa9227b73417db4f1f9c8917f2589cc975ae0d963a78",
+            "rank" : 3,
+            "score_bucket" : "medium",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "3dfc23a54258e489c00647b3134174217f7f154ac3b2ce6293f0a015e159a03e",
+            "rank" : 4,
+            "score_bucket" : "medium",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "c095bdd037a1341c324bc5f74001197bc63ee84689715783642fa0478df9f240",
+            "rank" : 5,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "819ab362a710b554451c0e0b19c89b1c0f7af8f4f4332633fc9f2cd535cfeb8e",
+            "rank" : 6,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "4304388303137e680dabf94dd362d6a7a63d4c207f296fa8dec54412f249d71e",
+            "rank" : 7,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "2a761ba18a418347bc8ed597cb4ea3266d9ef188c0bd4a94c707bf778e6eb1d4",
+            "rank" : 8,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "e77833a2502e0df1cd59a827574043e72ff1e96a831eb3df963c2e12247180d8",
+            "rank" : 9,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "dffb93fdfea1913e7a3c3f624a79a026b681102489e8064a36358705acdff124",
+            "rank" : 10,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "1da07629016096edc085bdb286ef5e6143f932f27ece8f9f9c6c9a9279ecf992",
+            "rank" : 11,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "cbf55aac075ad121a669663e0eb8f1912bce770a874afea3689e346af7d6efe1",
+            "rank" : 12,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "c16f6dacc341980799be5c857fe6c85d11ac03d2397e3258628b7e120c44bf33",
+            "rank" : 13,
+            "score_bucket" : "low",
+            "selected" : true
+          }
+        ],
+        "readiness_receipt_set_sha256" : "7b58e9731839bb26694e2733d60f692799f8a0d527edca6eaea017280c83eff1",
+        "receipt_id" : "b9201f7bcae12489c5ecdaac28cbd3e26d46b742931e5446a3ab69dd8c7fb1ee",
+        "retrieval_algorithm_version" : 1,
+        "retrieval_depth" : "deep",
+        "schema_version" : 1,
+        "scope_sha256" : "58c9a530b4d23cfb85e9f051faf01c265fee8b8bc6593189f380523163783681",
+        "semantic" : {
+          "cache_disposition" : "hit",
+          "candidate_limit" : 60,
+          "maximum_heap_entries" : 0,
+          "maximum_live_page_rows" : 0,
+          "maximum_live_vector_bytes" : 0,
+          "page_count" : 0,
+          "page_size" : 256,
+          "rejected_rows" : 0,
+          "scanned_rows" : 0
+        },
+        "started_at_unix_milliseconds" : 1786832648548
+      },
+      "warmRetrievalMilliseconds" : 17,
+      "warnings" : [
+        "No cited source text supports “Answer: The final liability cap after Amendment 01 is $275,000”."
+      ]
+    },
+    {
+      "answerMarkdown" : "> ⚠️ **DOCUMENT SUPPORT NEEDS REVIEW — DO NOT RELY.** No cited source text supports “Answer: The corpus establishes that Exhibit G does not exist and was intentional…”.\n\nAnswer: The corpus establishes that Exhibit G does not exist and was intentionally omitted, as stated in the responses to Requests for Production [S2] and confirmed in the email communication [S1][S3].\n\n## Sources\n- **[S1]** negotiation-thread.eml — email body\n  > Morgan, The responses to Requests for Production are due February 3, 2026. Exhibit G is referenced in the index but was intentionally omitted because no such responsive file exists. [Inline chart: cid:synthetic-chart-001…\n- **[S2]** responses-to-production.docx — chars 194–296\n  > Response to Request No. 12: After reasonable search, Exhibit G does not exist and nothing is withheld.\n- **[S3]** negotiation-thread.eml — email body\n  > cid:synthetic-chart-001 Morgan, The responses to Requests for Production are due February 3, 2026. Exhibit G is referenced in the index but was intentionally omitted because no such responsive file exists. [Inline chart:…\n- **[S4]** responses-to-production.docx — chars 47–96\n  > Response to Request No. 1: Produced as Exhibit A.\n- **[S5]** negotiation-thread.eml — email body\n  > --- Original Message --- From: Morgan Vale Sent: January 26, 2026 Subject: Synthetic production schedule Please confirm the production deadline and complete exhibit set.\n- **[S6]** responses-to-production.docx — chars 97–193\n  > Response to Request No. 7: Schedules A-C are produced; subject to synthetic relevance objection. subject to synthetic relevance objection\n- **[S7]** negotiation-thread.eml — email body\n  > From: Dana Quill <dquill@example.test> To: Morgan Vale <mvale@example.test> Bcc: Synthetic Audit <audit@example.test> Date: Tue, 27 Jan 2026 14:22:00 -0500 Subject: RE: Synthetic production schedule and omitted Exhibit G…\n- **[S8]** responses-to-production.docx — chars 0–46\n  > SYNTHETIC RESPONSES TO REQUESTS FOR PRODUCTION",
+      "citationLabels" : [
+        "S2",
+        "S1",
+        "S3"
+      ],
+      "coldCandidates" : [
+        {
+          "artifactID" : "negotiation-thread",
+          "documentName" : "negotiation-thread.eml",
+          "excerpt" : "Morgan, The responses to Requests for Production are due February 3, 2026. Exhibit G is referenced in the index but was intentionally omitted because no such responsive file exists. [Inline chart: cid:synthetic-chart-001…",
+          "ftsMatched" : true,
+          "locator" : "email body",
+          "rank" : 1,
+          "score" : 0.03252247488101534,
+          "semanticBucket" : "medium"
+        },
+        {
+          "artifactID" : "responses-to-production",
+          "documentName" : "responses-to-production.docx",
+          "excerpt" : "Response to Request No. 12: After reasonable search, Exhibit G does not exist and nothing is withheld.",
+          "ftsMatched" : true,
+          "locator" : "chars 194–296",
+          "rank" : 2,
+          "score" : 0.03177805800756621,
+          "semanticBucket" : "medium"
+        },
+        {
+          "artifactID" : "negotiation-thread",
+          "documentName" : "negotiation-thread.eml",
+          "excerpt" : "cid:synthetic-chart-001 Morgan, The responses to Requests for Production are due February 3, 2026. Exhibit G is referenced in the index but was intentionally omitted because no such responsive file exists. [Inline chart:…",
+          "ftsMatched" : true,
+          "locator" : "email body",
+          "rank" : 3,
+          "score" : 0.031746031746031744,
+          "semanticBucket" : "medium"
+        },
+        {
+          "artifactID" : "responses-to-production",
+          "documentName" : "responses-to-production.docx",
+          "excerpt" : "Response to Request No. 1: Produced as Exhibit A.",
+          "ftsMatched" : true,
+          "locator" : "chars 47–96",
+          "rank" : 4,
+          "score" : 0.03125,
+          "semanticBucket" : "medium"
+        },
+        {
+          "artifactID" : "negotiation-thread",
+          "documentName" : "negotiation-thread.eml",
+          "excerpt" : "--- Original Message --- From: Morgan Vale Sent: January 26, 2026 Subject: Synthetic production schedule Please confirm the production deadline and complete exhibit set.",
+          "ftsMatched" : true,
+          "locator" : "email body",
+          "rank" : 5,
+          "score" : 0.030834914611005692,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "responses-to-production",
+          "documentName" : "responses-to-production.docx",
+          "excerpt" : "Response to Request No. 7: Schedules A-C are produced; subject to synthetic relevance objection. subject to synthetic relevance objection",
+          "ftsMatched" : false,
+          "locator" : "chars 97–193",
+          "rank" : 6,
+          "score" : 0.015151515151515152,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "negotiation-thread",
+          "documentName" : "negotiation-thread.eml",
+          "excerpt" : "From: Dana Quill <dquill@example.test> To: Morgan Vale <mvale@example.test> Bcc: Synthetic Audit <audit@example.test> Date: Tue, 27 Jan 2026 14:22:00 -0500 Subject: RE: Synthetic production schedule and omitted Exhibit G…",
+          "ftsMatched" : true,
+          "locator" : "email body",
+          "rank" : 7,
+          "score" : 0.030536130536130537,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "responses-to-production",
+          "documentName" : "responses-to-production.docx",
+          "excerpt" : "SYNTHETIC RESPONSES TO REQUESTS FOR PRODUCTION",
+          "ftsMatched" : false,
+          "locator" : "chars 0–46",
+          "rank" : 8,
+          "score" : 0.014925373134328358,
+          "semanticBucket" : "low"
+        }
+      ],
+      "coldExecutionReceipt" : {
+        "chunker_version" : 2,
+        "elapsed_milliseconds" : 83,
+        "embedding_artifact_identity_sha256" : "cafe0e5bd79ce519339769d5f8016fe54b967060ebc7612e03d60b33c872c255",
+        "execution_id" : "rag-fbab68c6-deb0-483a-b9a4-c24bf7687dc1",
+        "lexical_candidate_count" : 6,
+        "query_sha256" : "1cf697e16810b0bdba6a7c4b74791daaacb1836a55428da329e4ec2b14011df5",
+        "ranks" : [
+          {
+            "candidate_identity_sha256" : "ce2b955bd4bc48532b7e842bc4029409c5041912f6598810646eee8d8958dd9b",
+            "rank" : 1,
+            "score_bucket" : "medium",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "ffe1be050b05a4ffab3bff35540e6af4e04ea414c2278c575df06ce143a6b9b4",
+            "rank" : 2,
+            "score_bucket" : "medium",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "b35f73f3e3e13a0a42987bb2755e238fe3c994d8074d2ea5201acd3b245f7220",
+            "rank" : 3,
+            "score_bucket" : "medium",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "767c76107e8bcc33bad6cca1db8d3ef63361c59186db80be328846f394fcccb3",
+            "rank" : 4,
+            "score_bucket" : "medium",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "5f163ba9fc9eb52ddbaabeb73d24f8c4c0a918d63c0a83328709b49a1fb7d753",
+            "rank" : 5,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "ee19067e6e26e995d4ec52a6c35e85210cde0e481620e177ad0b69a19b1df9f1",
+            "rank" : 6,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "0a3301515050ff9c86e0747344d3a48696277b1965dd0d5e893221c52699d2b4",
+            "rank" : 7,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "aff4eb2507eafbb3dafcf4e93152b80e712cd11420986f6e7bba24bcde8a02d7",
+            "rank" : 8,
+            "score_bucket" : "low",
+            "selected" : true
+          }
+        ],
+        "readiness_receipt_set_sha256" : "3d244ef0769ebaafc3e03f1806eb22ba8f38316748539841e5fb3975573dd0ba",
+        "receipt_id" : "6b7e155c63ee70efabfa7515a68275e0985db4653fe97b7ee52f3f65186631db",
+        "retrieval_algorithm_version" : 1,
+        "retrieval_depth" : "deep",
+        "schema_version" : 1,
+        "scope_sha256" : "e9a6ce8921656af9e1dd1867db7d1f314444c059bb6c496003093bf5d14d8338",
+        "semantic" : {
+          "cache_disposition" : "computed",
+          "candidate_limit" : 60,
+          "maximum_heap_entries" : 8,
+          "maximum_live_page_rows" : 8,
+          "maximum_live_vector_bytes" : 81920,
+          "page_count" : 1,
+          "page_size" : 256,
+          "rejected_rows" : 0,
+          "scanned_rows" : 8
+        },
+        "started_at_unix_milliseconds" : 1786832714450
+      },
+      "coldRetrievalMilliseconds" : 83,
+      "packedSources" : [
+        {
+          "artifactID" : "negotiation-thread",
+          "citationLabel" : "S1",
+          "excerpt" : "Morgan, The responses to Requests for Production are due February 3, 2026. Exhibit G is referenced in the index but was intentionally omitted because no such responsive file exists. [Inline chart: cid:synthetic-chart-001…",
+          "locator" : "email body"
+        },
+        {
+          "artifactID" : "responses-to-production",
+          "citationLabel" : "S2",
+          "excerpt" : "Response to Request No. 12: After reasonable search, Exhibit G does not exist and nothing is withheld.",
+          "locator" : "chars 194–296"
+        },
+        {
+          "artifactID" : "negotiation-thread",
+          "citationLabel" : "S3",
+          "excerpt" : "cid:synthetic-chart-001 Morgan, The responses to Requests for Production are due February 3, 2026. Exhibit G is referenced in the index but was intentionally omitted because no such responsive file exists. [Inline chart:…",
+          "locator" : "email body"
+        },
+        {
+          "artifactID" : "responses-to-production",
+          "citationLabel" : "S4",
+          "excerpt" : "Response to Request No. 1: Produced as Exhibit A.",
+          "locator" : "chars 47–96"
+        },
+        {
+          "artifactID" : "negotiation-thread",
+          "citationLabel" : "S5",
+          "excerpt" : "--- Original Message --- From: Morgan Vale Sent: January 26, 2026 Subject: Synthetic production schedule Please confirm the production deadline and complete exhibit set.",
+          "locator" : "email body"
+        },
+        {
+          "artifactID" : "responses-to-production",
+          "citationLabel" : "S6",
+          "excerpt" : "Response to Request No. 7: Schedules A-C are produced; subject to synthetic relevance objection. subject to synthetic relevance objection",
+          "locator" : "chars 97–193"
+        },
+        {
+          "artifactID" : "negotiation-thread",
+          "citationLabel" : "S7",
+          "excerpt" : "From: Dana Quill <dquill@example.test> To: Morgan Vale <mvale@example.test> Bcc: Synthetic Audit <audit@example.test> Date: Tue, 27 Jan 2026 14:22:00 -0500 Subject: RE: Synthetic production schedule and omitted Exhibit G…",
+          "locator" : "email body"
+        },
+        {
+          "artifactID" : "responses-to-production",
+          "citationLabel" : "S8",
+          "excerpt" : "SYNTHETIC RESPONSES TO REQUESTS FOR PRODUCTION",
+          "locator" : "chars 0–46"
+        }
+      ],
+      "queryID" : "rag-contrary-exhibit-g",
+      "scopeArtifactIDs" : [
+        "negotiation-thread",
+        "responses-to-production"
+      ],
+      "status" : "needs_review",
+      "timeToFirstTokenMilliseconds" : 21244,
+      "totalLatencyMilliseconds" : 55088,
+      "unsupported" : false,
+      "warmCandidates" : [
+        {
+          "artifactID" : "negotiation-thread",
+          "documentName" : "negotiation-thread.eml",
+          "excerpt" : "Morgan, The responses to Requests for Production are due February 3, 2026. Exhibit G is referenced in the index but was intentionally omitted because no such responsive file exists. [Inline chart: cid:synthetic-chart-001…",
+          "ftsMatched" : true,
+          "locator" : "email body",
+          "rank" : 1,
+          "score" : 0.03252247488101534,
+          "semanticBucket" : "medium"
+        },
+        {
+          "artifactID" : "responses-to-production",
+          "documentName" : "responses-to-production.docx",
+          "excerpt" : "Response to Request No. 12: After reasonable search, Exhibit G does not exist and nothing is withheld.",
+          "ftsMatched" : true,
+          "locator" : "chars 194–296",
+          "rank" : 2,
+          "score" : 0.03177805800756621,
+          "semanticBucket" : "medium"
+        },
+        {
+          "artifactID" : "negotiation-thread",
+          "documentName" : "negotiation-thread.eml",
+          "excerpt" : "cid:synthetic-chart-001 Morgan, The responses to Requests for Production are due February 3, 2026. Exhibit G is referenced in the index but was intentionally omitted because no such responsive file exists. [Inline chart:…",
+          "ftsMatched" : true,
+          "locator" : "email body",
+          "rank" : 3,
+          "score" : 0.031746031746031744,
+          "semanticBucket" : "medium"
+        },
+        {
+          "artifactID" : "responses-to-production",
+          "documentName" : "responses-to-production.docx",
+          "excerpt" : "Response to Request No. 1: Produced as Exhibit A.",
+          "ftsMatched" : true,
+          "locator" : "chars 47–96",
+          "rank" : 4,
+          "score" : 0.03125,
+          "semanticBucket" : "medium"
+        },
+        {
+          "artifactID" : "negotiation-thread",
+          "documentName" : "negotiation-thread.eml",
+          "excerpt" : "--- Original Message --- From: Morgan Vale Sent: January 26, 2026 Subject: Synthetic production schedule Please confirm the production deadline and complete exhibit set.",
+          "ftsMatched" : true,
+          "locator" : "email body",
+          "rank" : 5,
+          "score" : 0.030834914611005692,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "responses-to-production",
+          "documentName" : "responses-to-production.docx",
+          "excerpt" : "Response to Request No. 7: Schedules A-C are produced; subject to synthetic relevance objection. subject to synthetic relevance objection",
+          "ftsMatched" : false,
+          "locator" : "chars 97–193",
+          "rank" : 6,
+          "score" : 0.015151515151515152,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "negotiation-thread",
+          "documentName" : "negotiation-thread.eml",
+          "excerpt" : "From: Dana Quill <dquill@example.test> To: Morgan Vale <mvale@example.test> Bcc: Synthetic Audit <audit@example.test> Date: Tue, 27 Jan 2026 14:22:00 -0500 Subject: RE: Synthetic production schedule and omitted Exhibit G…",
+          "ftsMatched" : true,
+          "locator" : "email body",
+          "rank" : 7,
+          "score" : 0.030536130536130537,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "responses-to-production",
+          "documentName" : "responses-to-production.docx",
+          "excerpt" : "SYNTHETIC RESPONSES TO REQUESTS FOR PRODUCTION",
+          "ftsMatched" : false,
+          "locator" : "chars 0–46",
+          "rank" : 8,
+          "score" : 0.014925373134328358,
+          "semanticBucket" : "low"
+        }
+      ],
+      "warmExecutionReceipt" : {
+        "chunker_version" : 2,
+        "elapsed_milliseconds" : 10,
+        "embedding_artifact_identity_sha256" : "cafe0e5bd79ce519339769d5f8016fe54b967060ebc7612e03d60b33c872c255",
+        "execution_id" : "rag-ecce5880-f217-432f-8ea3-34a40ee1f9c1",
+        "lexical_candidate_count" : 6,
+        "query_sha256" : "1cf697e16810b0bdba6a7c4b74791daaacb1836a55428da329e4ec2b14011df5",
+        "ranks" : [
+          {
+            "candidate_identity_sha256" : "ce2b955bd4bc48532b7e842bc4029409c5041912f6598810646eee8d8958dd9b",
+            "rank" : 1,
+            "score_bucket" : "medium",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "ffe1be050b05a4ffab3bff35540e6af4e04ea414c2278c575df06ce143a6b9b4",
+            "rank" : 2,
+            "score_bucket" : "medium",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "b35f73f3e3e13a0a42987bb2755e238fe3c994d8074d2ea5201acd3b245f7220",
+            "rank" : 3,
+            "score_bucket" : "medium",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "767c76107e8bcc33bad6cca1db8d3ef63361c59186db80be328846f394fcccb3",
+            "rank" : 4,
+            "score_bucket" : "medium",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "5f163ba9fc9eb52ddbaabeb73d24f8c4c0a918d63c0a83328709b49a1fb7d753",
+            "rank" : 5,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "ee19067e6e26e995d4ec52a6c35e85210cde0e481620e177ad0b69a19b1df9f1",
+            "rank" : 6,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "0a3301515050ff9c86e0747344d3a48696277b1965dd0d5e893221c52699d2b4",
+            "rank" : 7,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "aff4eb2507eafbb3dafcf4e93152b80e712cd11420986f6e7bba24bcde8a02d7",
+            "rank" : 8,
+            "score_bucket" : "low",
+            "selected" : true
+          }
+        ],
+        "readiness_receipt_set_sha256" : "3d244ef0769ebaafc3e03f1806eb22ba8f38316748539841e5fb3975573dd0ba",
+        "receipt_id" : "43ca6b5fc2fb843a9e18b9d1db2dc65f0bec1f87c2999277cdd1f418246d7906",
+        "retrieval_algorithm_version" : 1,
+        "retrieval_depth" : "deep",
+        "schema_version" : 1,
+        "scope_sha256" : "e9a6ce8921656af9e1dd1867db7d1f314444c059bb6c496003093bf5d14d8338",
+        "semantic" : {
+          "cache_disposition" : "hit",
+          "candidate_limit" : 60,
+          "maximum_heap_entries" : 0,
+          "maximum_live_page_rows" : 0,
+          "maximum_live_vector_bytes" : 0,
+          "page_count" : 0,
+          "page_size" : 256,
+          "rejected_rows" : 0,
+          "scanned_rows" : 0
+        },
+        "started_at_unix_milliseconds" : 1786832714533
+      },
+      "warmRetrievalMilliseconds" : 10,
+      "warnings" : [
+        "No cited source text supports “Answer: The corpus establishes that Exhibit G does not exist and was intentional…”."
+      ]
+    },
+    {
+      "answerMarkdown" : "> ⚠️ **DOCUMENT SUPPORT NEEDS REVIEW — DO NOT RELY.** A refusal cannot prove absence across the retrieved packet.\n\nThe provided sources do not support an answer to this question.\n\n## Sources\n- **[S1]** damages-model.xlsx — Line Items!A1:C4\n  > Repair Amount 185000\n- **[S2]** damages-model.xlsx — Damages Summary!A1:C6\n  > TOTAL SYNTHETIC DAMAGES MODEL 275000\n- **[S3]** master-services-superseded.docx — chars 81–105\n  > Liability cap: $225,000.\n- **[S4]** master-services-executed-copy.docx — chars 96–132\n  > Section 8.2 liability cap: $250,000.\n- **[S5]** amendment-01.docx — chars 50–175\n  > Section 2 replaces the Section 8.2 liability cap with $275,000. All other terms remain unchanged.\n- **[S6]** damages-model.xlsx — Damages Summary!A1:C6\n  > Repair SYNTHETIC DAMAGES MODEL 185000\n- **[S7]** damages-model.xlsx — Damages Summary!A1:C6\n  > Category SYNTHETIC DAMAGES MODEL Amount\n- **[S8]** master-services-executed.docx — chars 0–95\n  > Control No. DI-2026-001\n- **[S9]** master-services-executed-copy.docx — chars 45–95\n  > Executed January 15, 2026.\n- **[S10]** master-services-executed-copy.docx — chars 0–68\n  > SYNTHETIC EXECUTED MASTER SERVICES AGREEMENT",
+      "citationLabels" : [
+
+      ],
+      "coldCandidates" : [
+        {
+          "artifactID" : "negotiation-thread",
+          "documentName" : "negotiation-thread.eml",
+          "excerpt" : "cid:synthetic-chart-001 Morgan, The responses to Requests for Production are due February 3, 2026. Exhibit G is referenced in the index but was intentionally omitted because no such responsive file exists. [Inline chart:…",
+          "ftsMatched" : true,
+          "locator" : "email body",
+          "rank" : 1,
+          "score" : 0.02548562548562549,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "msa-superseded",
+          "documentName" : "master-services-superseded.docx",
+          "excerpt" : "Signed January 12, 2026.",
+          "ftsMatched" : true,
+          "locator" : "chars 56–80",
+          "rank" : 2,
+          "score" : 0.031544957774465976,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "msa-executed-copy",
+          "documentName" : "master-services-executed-copy.docx",
+          "excerpt" : "Signed by Dana Quill and Morgan Vale.",
+          "ftsMatched" : true,
+          "locator" : "chars 133–170",
+          "rank" : 3,
+          "score" : 0.030017921146953404,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "damages-model",
+          "documentName" : "damages-model.xlsx",
+          "excerpt" : "Repair Amount 185000",
+          "ftsMatched" : false,
+          "locator" : "Line Items!A1:C4",
+          "rank" : 4,
+          "score" : 0.015384615384615385,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "amendment-01",
+          "documentName" : "amendment-01.docx",
+          "excerpt" : "Section 2 replaces the Section 8.2 liability cap with $275,000. All other terms remain unchanged.",
+          "ftsMatched" : false,
+          "locator" : "chars 50–175",
+          "rank" : 5,
+          "score" : 0.015625,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "responses-to-production",
+          "documentName" : "responses-to-production.docx",
+          "excerpt" : "Response to Request No. 1: Produced as Exhibit A.",
+          "ftsMatched" : false,
+          "locator" : "chars 47–96",
+          "rank" : 6,
+          "score" : 0.010526315789473684,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "scanned-exhibit-f",
+          "documentName" : "scanned-exhibit-f.pdf",
+          "excerpt" : "SYNTHETIC SCANNED EXHIBIT F",
+          "ftsMatched" : false,
+          "locator" : "p. 1",
+          "rank" : 7,
+          "score" : 0.01,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "negotiation-thread",
+          "documentName" : "negotiation-thread.eml",
+          "excerpt" : "Morgan, The responses to Requests for Production are due February 3, 2026. Exhibit G is referenced in the index but was intentionally omitted because no such responsive file exists. [Inline chart: cid:synthetic-chart-001…",
+          "ftsMatched" : true,
+          "locator" : "email body",
+          "rank" : 8,
+          "score" : 0.024634009009009007,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "msa-superseded",
+          "documentName" : "master-services-superseded.docx",
+          "excerpt" : "Liability cap: $225,000.",
+          "ftsMatched" : false,
+          "locator" : "chars 81–105",
+          "rank" : 9,
+          "score" : 0.01639344262295082,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "msa-executed-copy",
+          "documentName" : "master-services-executed-copy.docx",
+          "excerpt" : "Section 8.2 liability cap: $250,000.",
+          "ftsMatched" : false,
+          "locator" : "chars 96–132",
+          "rank" : 10,
+          "score" : 0.016129032258064516,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "damages-model",
+          "documentName" : "damages-model.xlsx",
+          "excerpt" : "Repair SYNTHETIC DAMAGES MODEL 185000",
+          "ftsMatched" : false,
+          "locator" : "Damages Summary!A1:C6",
+          "rank" : 11,
+          "score" : 0.014925373134328358,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "amendment-01",
+          "documentName" : "amendment-01.docx",
+          "excerpt" : "Control No. DI-2026-001-A1",
+          "ftsMatched" : false,
+          "locator" : "chars 23–77",
+          "rank" : 12,
+          "score" : 0.010416666666666666,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "responses-to-production",
+          "documentName" : "responses-to-production.docx",
+          "excerpt" : "SYNTHETIC RESPONSES TO REQUESTS FOR PRODUCTION",
+          "ftsMatched" : false,
+          "locator" : "chars 0–46",
+          "rank" : 13,
+          "score" : 0.010309278350515464,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "scanned-exhibit-f",
+          "documentName" : "scanned-exhibit-f.pdf",
+          "excerpt" : "Six attachments were inventoried.",
+          "ftsMatched" : false,
+          "locator" : "p. 1",
+          "rank" : 14,
+          "score" : 0.009615384615384616,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "negotiation-thread",
+          "documentName" : "negotiation-thread.eml",
+          "excerpt" : "--- Original Message --- From: Morgan Vale Sent: January 26, 2026 Subject: Synthetic production schedule Please confirm the production deadline and complete exhibit set.",
+          "ftsMatched" : false,
+          "locator" : "email body",
+          "rank" : 15,
+          "score" : 0.008928571428571428,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "msa-superseded",
+          "documentName" : "master-services-superseded.docx",
+          "excerpt" : "Control No. DI-2026-001-S0",
+          "ftsMatched" : false,
+          "locator" : "chars 0–55",
+          "rank" : 16,
+          "score" : 0.010752688172043012,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "msa-executed-copy",
+          "documentName" : "master-services-executed-copy.docx",
+          "excerpt" : "Executed January 15, 2026.",
+          "ftsMatched" : false,
+          "locator" : "chars 45–95",
+          "rank" : 17,
+          "score" : 0.012195121951219513,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "damages-model",
+          "documentName" : "damages-model.xlsx",
+          "excerpt" : "Category SYNTHETIC DAMAGES MODEL Amount",
+          "ftsMatched" : false,
+          "locator" : "Damages Summary!A1:C6",
+          "rank" : 18,
+          "score" : 0.014705882352941176,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "amendment-01",
+          "documentName" : "amendment-01.docx",
+          "excerpt" : "SYNTHETIC AMENDMENT 01",
+          "ftsMatched" : false,
+          "locator" : "chars 0–22",
+          "rank" : 19,
+          "score" : 0.009259259259259259,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "responses-to-production",
+          "documentName" : "responses-to-production.docx",
+          "excerpt" : "Response to Request No. 12: After reasonable search, Exhibit G does not exist and nothing is withheld.",
+          "ftsMatched" : false,
+          "locator" : "chars 194–296",
+          "rank" : 20,
+          "score" : 0.00980392156862745,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "scanned-exhibit-f",
+          "documentName" : "scanned-exhibit-f.pdf",
+          "excerpt" : "Received January 29, 2026",
+          "ftsMatched" : false,
+          "locator" : "p. 1",
+          "rank" : 21,
+          "score" : 0.009174311926605505,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "msa-superseded",
+          "documentName" : "master-services-superseded.docx",
+          "excerpt" : "SUPERSEDED by the January 15 execution and Amendment 01.",
+          "ftsMatched" : false,
+          "locator" : "chars 106–162",
+          "rank" : 22,
+          "score" : 0.009900990099009901,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "msa-executed-copy",
+          "documentName" : "master-services-executed-copy.docx",
+          "excerpt" : "SYNTHETIC EXECUTED MASTER SERVICES AGREEMENT",
+          "ftsMatched" : false,
+          "locator" : "chars 0–68",
+          "rank" : 23,
+          "score" : 0.011363636363636364,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "damages-model",
+          "documentName" : "damages-model.xlsx",
+          "excerpt" : "TOTAL SYNTHETIC DAMAGES MODEL 275000",
+          "ftsMatched" : false,
+          "locator" : "Damages Summary!A1:C6",
+          "rank" : 24,
+          "score" : 0.014492753623188406,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "responses-to-production",
+          "documentName" : "responses-to-production.docx",
+          "excerpt" : "Response to Request No. 7: Schedules A-C are produced; subject to synthetic relevance objection. subject to synthetic relevance objection",
+          "ftsMatched" : false,
+          "locator" : "chars 97–193",
+          "rank" : 25,
+          "score" : 0.009523809523809525,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "scanned-exhibit-f",
+          "documentName" : "scanned-exhibit-f.pdf",
+          "excerpt" : "Tracking code OCR-F-8842",
+          "ftsMatched" : false,
+          "locator" : "p. 1",
+          "rank" : 26,
+          "score" : 0.008403361344537815,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "msa-executed",
+          "documentName" : "master-services-executed.docx",
+          "excerpt" : "Control No. DI-2026-001",
+          "ftsMatched" : false,
+          "locator" : "chars 0–95",
+          "rank" : 27,
+          "score" : 0.010869565217391304,
+          "semanticBucket" : "low"
+        }
+      ],
+      "coldExecutionReceipt" : {
+        "chunker_version" : 2,
+        "elapsed_milliseconds" : 117,
+        "embedding_artifact_identity_sha256" : "cafe0e5bd79ce519339769d5f8016fe54b967060ebc7612e03d60b33c872c255",
+        "execution_id" : "rag-effa77ae-68e8-40ea-b789-d4a7478f9e8d",
+        "lexical_candidate_count" : 5,
+        "query_sha256" : "002fc25ce79caadaa0cdad6d27efb29f980199882265a61149383df4694e5068",
+        "ranks" : [
+          {
+            "candidate_identity_sha256" : "b35f73f3e3e13a0a42987bb2755e238fe3c994d8074d2ea5201acd3b245f7220",
+            "rank" : 1,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "4304388303137e680dabf94dd362d6a7a63d4c207f296fa8dec54412f249d71e",
+            "rank" : 2,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "cd603c15436e7e561e7f9fc3b397c81cb047bf8a553676e41340a1c807d911c3",
+            "rank" : 3,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "fd75bced2eb6751529f087f7080f0ed12c6827b377d5e1734ebaca0622a038c5",
+            "rank" : 4,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "133f7b50a95cf601810336c3380cb066f14b3b2cf5fe27dfbaa73b73bac86c7c",
+            "rank" : 5,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "767c76107e8bcc33bad6cca1db8d3ef63361c59186db80be328846f394fcccb3",
+            "rank" : 6,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "ba2b18df217e6169075e2f69114ef7aa6aa979f31c90edbdcdf41df360f1f346",
+            "rank" : 7,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "ce2b955bd4bc48532b7e842bc4029409c5041912f6598810646eee8d8958dd9b",
+            "rank" : 8,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "3dfc23a54258e489c00647b3134174217f7f154ac3b2ce6293f0a015e159a03e",
+            "rank" : 9,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "a96c79f7ceb023a4cafafa9227b73417db4f1f9c8917f2589cc975ae0d963a78",
+            "rank" : 10,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "f7249c5a45fa2be872752c61b266a52296ef7e92d5ab64f0da5ea3b7f64b2590",
+            "rank" : 11,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "1da07629016096edc085bdb286ef5e6143f932f27ece8f9f9c6c9a9279ecf992",
+            "rank" : 12,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "aff4eb2507eafbb3dafcf4e93152b80e712cd11420986f6e7bba24bcde8a02d7",
+            "rank" : 13,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "70a7f7fed0cecc82a9fc3e349bafec7afc30a57e6f5d2ffbf0899c8be78e5cf2",
+            "rank" : 14,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "5f163ba9fc9eb52ddbaabeb73d24f8c4c0a918d63c0a83328709b49a1fb7d753",
+            "rank" : 15,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "dffb93fdfea1913e7a3c3f624a79a026b681102489e8064a36358705acdff124",
+            "rank" : 16,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "819ab362a710b554451c0e0b19c89b1c0f7af8f4f4332633fc9f2cd535cfeb8e",
+            "rank" : 17,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "5c81879c1ce66fa3de4a902fba29fde33cd4e2e4e55371f2f8744d1e0b12fed8",
+            "rank" : 18,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "c095bdd037a1341c324bc5f74001197bc63ee84689715783642fa0478df9f240",
+            "rank" : 19,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "ffe1be050b05a4ffab3bff35540e6af4e04ea414c2278c575df06ce143a6b9b4",
+            "rank" : 20,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "ec0d718cb7ef35dc00fd65d48eb5d7c861191fe87425af252824608e4d20a67c",
+            "rank" : 21,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "21626b066bdff6e7e9d4faff205df1d1f9588084452981f9514cf8b8ed984ed0",
+            "rank" : 22,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "cbf55aac075ad121a669663e0eb8f1912bce770a874afea3689e346af7d6efe1",
+            "rank" : 23,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "99870344ff28c060c9990ab2b6fc2d3ab2272e91c0e96fa220cfa78936d666a2",
+            "rank" : 24,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "ee19067e6e26e995d4ec52a6c35e85210cde0e481620e177ad0b69a19b1df9f1",
+            "rank" : 25,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "678e4be272bac2b8fbc41b092d03481fb808f2aa0a4829aa41c5980f3e88a384",
+            "rank" : 26,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "8847d655f858e94e87cb322f25013d5fa2446fb4d469416aaaac36d182f3986e",
+            "rank" : 27,
+            "score_bucket" : "low",
+            "selected" : true
+          }
+        ],
+        "readiness_receipt_set_sha256" : "40e4e4e85a75b0dd3f4c4aff084d4c85edccd2812ff7b93a30e6e9c23aff8899",
+        "receipt_id" : "56bcf843527ef287266feea6eabcc10aff57cfd5aa94e088b3253bcd5c1d4a2a",
+        "retrieval_algorithm_version" : 1,
+        "retrieval_depth" : "deep",
+        "schema_version" : 1,
+        "scope_sha256" : "315af74cc035bf070e8f6fd13787d9cf92d4bc76f769b3fba7e412fb41b88af1",
+        "semantic" : {
+          "cache_disposition" : "computed",
+          "candidate_limit" : 60,
+          "maximum_heap_entries" : 60,
+          "maximum_live_page_rows" : 65,
+          "maximum_live_vector_bytes" : 665600,
+          "page_count" : 1,
+          "page_size" : 256,
+          "rejected_rows" : 0,
+          "scanned_rows" : 65
+        },
+        "started_at_unix_milliseconds" : 1786832769631
+      },
+      "coldRetrievalMilliseconds" : 117,
+      "packedSources" : [
+        {
+          "artifactID" : "damages-model",
+          "citationLabel" : "S1",
+          "excerpt" : "Repair Amount 185000",
+          "locator" : "Line Items!A1:C4"
+        },
+        {
+          "artifactID" : "damages-model",
+          "citationLabel" : "S2",
+          "excerpt" : "TOTAL SYNTHETIC DAMAGES MODEL 275000",
+          "locator" : "Damages Summary!A1:C6"
+        },
+        {
+          "artifactID" : "msa-superseded",
+          "citationLabel" : "S3",
+          "excerpt" : "Liability cap: $225,000.",
+          "locator" : "chars 81–105"
+        },
+        {
+          "artifactID" : "msa-executed-copy",
+          "citationLabel" : "S4",
+          "excerpt" : "Section 8.2 liability cap: $250,000.",
+          "locator" : "chars 96–132"
+        },
+        {
+          "artifactID" : "amendment-01",
+          "citationLabel" : "S5",
+          "excerpt" : "Section 2 replaces the Section 8.2 liability cap with $275,000. All other terms remain unchanged.",
+          "locator" : "chars 50–175"
+        },
+        {
+          "artifactID" : "damages-model",
+          "citationLabel" : "S6",
+          "excerpt" : "Repair SYNTHETIC DAMAGES MODEL 185000",
+          "locator" : "Damages Summary!A1:C6"
+        },
+        {
+          "artifactID" : "damages-model",
+          "citationLabel" : "S7",
+          "excerpt" : "Category SYNTHETIC DAMAGES MODEL Amount",
+          "locator" : "Damages Summary!A1:C6"
+        },
+        {
+          "artifactID" : "msa-executed",
+          "citationLabel" : "S8",
+          "excerpt" : "Control No. DI-2026-001",
+          "locator" : "chars 0–95"
+        },
+        {
+          "artifactID" : "msa-executed-copy",
+          "citationLabel" : "S9",
+          "excerpt" : "Executed January 15, 2026.",
+          "locator" : "chars 45–95"
+        },
+        {
+          "artifactID" : "msa-executed-copy",
+          "citationLabel" : "S10",
+          "excerpt" : "SYNTHETIC EXECUTED MASTER SERVICES AGREEMENT",
+          "locator" : "chars 0–68"
+        }
+      ],
+      "queryID" : "rag-no-answer-settlement-release",
+      "scopeArtifactIDs" : [
+        "amendment-01",
+        "msa-executed",
+        "msa-superseded",
+        "msa-executed-copy",
+        "negotiation-thread",
+        "responses-to-production",
+        "scanned-exhibit-f",
+        "damages-model"
+      ],
+      "status" : "needs_review",
+      "timeToFirstTokenMilliseconds" : 23185,
+      "totalLatencyMilliseconds" : 78370,
+      "unsupported" : true,
+      "warmCandidates" : [
+        {
+          "artifactID" : "negotiation-thread",
+          "documentName" : "negotiation-thread.eml",
+          "excerpt" : "cid:synthetic-chart-001 Morgan, The responses to Requests for Production are due February 3, 2026. Exhibit G is referenced in the index but was intentionally omitted because no such responsive file exists. [Inline chart:…",
+          "ftsMatched" : true,
+          "locator" : "email body",
+          "rank" : 1,
+          "score" : 0.02548562548562549,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "msa-superseded",
+          "documentName" : "master-services-superseded.docx",
+          "excerpt" : "Signed January 12, 2026.",
+          "ftsMatched" : true,
+          "locator" : "chars 56–80",
+          "rank" : 2,
+          "score" : 0.031544957774465976,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "msa-executed-copy",
+          "documentName" : "master-services-executed-copy.docx",
+          "excerpt" : "Signed by Dana Quill and Morgan Vale.",
+          "ftsMatched" : true,
+          "locator" : "chars 133–170",
+          "rank" : 3,
+          "score" : 0.030017921146953404,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "damages-model",
+          "documentName" : "damages-model.xlsx",
+          "excerpt" : "Repair Amount 185000",
+          "ftsMatched" : false,
+          "locator" : "Line Items!A1:C4",
+          "rank" : 4,
+          "score" : 0.015384615384615385,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "amendment-01",
+          "documentName" : "amendment-01.docx",
+          "excerpt" : "Section 2 replaces the Section 8.2 liability cap with $275,000. All other terms remain unchanged.",
+          "ftsMatched" : false,
+          "locator" : "chars 50–175",
+          "rank" : 5,
+          "score" : 0.015625,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "responses-to-production",
+          "documentName" : "responses-to-production.docx",
+          "excerpt" : "Response to Request No. 1: Produced as Exhibit A.",
+          "ftsMatched" : false,
+          "locator" : "chars 47–96",
+          "rank" : 6,
+          "score" : 0.010526315789473684,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "scanned-exhibit-f",
+          "documentName" : "scanned-exhibit-f.pdf",
+          "excerpt" : "SYNTHETIC SCANNED EXHIBIT F",
+          "ftsMatched" : false,
+          "locator" : "p. 1",
+          "rank" : 7,
+          "score" : 0.01,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "negotiation-thread",
+          "documentName" : "negotiation-thread.eml",
+          "excerpt" : "Morgan, The responses to Requests for Production are due February 3, 2026. Exhibit G is referenced in the index but was intentionally omitted because no such responsive file exists. [Inline chart: cid:synthetic-chart-001…",
+          "ftsMatched" : true,
+          "locator" : "email body",
+          "rank" : 8,
+          "score" : 0.024634009009009007,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "msa-superseded",
+          "documentName" : "master-services-superseded.docx",
+          "excerpt" : "Liability cap: $225,000.",
+          "ftsMatched" : false,
+          "locator" : "chars 81–105",
+          "rank" : 9,
+          "score" : 0.01639344262295082,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "msa-executed-copy",
+          "documentName" : "master-services-executed-copy.docx",
+          "excerpt" : "Section 8.2 liability cap: $250,000.",
+          "ftsMatched" : false,
+          "locator" : "chars 96–132",
+          "rank" : 10,
+          "score" : 0.016129032258064516,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "damages-model",
+          "documentName" : "damages-model.xlsx",
+          "excerpt" : "Repair SYNTHETIC DAMAGES MODEL 185000",
+          "ftsMatched" : false,
+          "locator" : "Damages Summary!A1:C6",
+          "rank" : 11,
+          "score" : 0.014925373134328358,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "amendment-01",
+          "documentName" : "amendment-01.docx",
+          "excerpt" : "Control No. DI-2026-001-A1",
+          "ftsMatched" : false,
+          "locator" : "chars 23–77",
+          "rank" : 12,
+          "score" : 0.010416666666666666,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "responses-to-production",
+          "documentName" : "responses-to-production.docx",
+          "excerpt" : "SYNTHETIC RESPONSES TO REQUESTS FOR PRODUCTION",
+          "ftsMatched" : false,
+          "locator" : "chars 0–46",
+          "rank" : 13,
+          "score" : 0.010309278350515464,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "scanned-exhibit-f",
+          "documentName" : "scanned-exhibit-f.pdf",
+          "excerpt" : "Six attachments were inventoried.",
+          "ftsMatched" : false,
+          "locator" : "p. 1",
+          "rank" : 14,
+          "score" : 0.009615384615384616,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "negotiation-thread",
+          "documentName" : "negotiation-thread.eml",
+          "excerpt" : "--- Original Message --- From: Morgan Vale Sent: January 26, 2026 Subject: Synthetic production schedule Please confirm the production deadline and complete exhibit set.",
+          "ftsMatched" : false,
+          "locator" : "email body",
+          "rank" : 15,
+          "score" : 0.008928571428571428,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "msa-superseded",
+          "documentName" : "master-services-superseded.docx",
+          "excerpt" : "Control No. DI-2026-001-S0",
+          "ftsMatched" : false,
+          "locator" : "chars 0–55",
+          "rank" : 16,
+          "score" : 0.010752688172043012,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "msa-executed-copy",
+          "documentName" : "master-services-executed-copy.docx",
+          "excerpt" : "Executed January 15, 2026.",
+          "ftsMatched" : false,
+          "locator" : "chars 45–95",
+          "rank" : 17,
+          "score" : 0.012195121951219513,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "damages-model",
+          "documentName" : "damages-model.xlsx",
+          "excerpt" : "Category SYNTHETIC DAMAGES MODEL Amount",
+          "ftsMatched" : false,
+          "locator" : "Damages Summary!A1:C6",
+          "rank" : 18,
+          "score" : 0.014705882352941176,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "amendment-01",
+          "documentName" : "amendment-01.docx",
+          "excerpt" : "SYNTHETIC AMENDMENT 01",
+          "ftsMatched" : false,
+          "locator" : "chars 0–22",
+          "rank" : 19,
+          "score" : 0.009259259259259259,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "responses-to-production",
+          "documentName" : "responses-to-production.docx",
+          "excerpt" : "Response to Request No. 12: After reasonable search, Exhibit G does not exist and nothing is withheld.",
+          "ftsMatched" : false,
+          "locator" : "chars 194–296",
+          "rank" : 20,
+          "score" : 0.00980392156862745,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "scanned-exhibit-f",
+          "documentName" : "scanned-exhibit-f.pdf",
+          "excerpt" : "Received January 29, 2026",
+          "ftsMatched" : false,
+          "locator" : "p. 1",
+          "rank" : 21,
+          "score" : 0.009174311926605505,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "msa-superseded",
+          "documentName" : "master-services-superseded.docx",
+          "excerpt" : "SUPERSEDED by the January 15 execution and Amendment 01.",
+          "ftsMatched" : false,
+          "locator" : "chars 106–162",
+          "rank" : 22,
+          "score" : 0.009900990099009901,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "msa-executed-copy",
+          "documentName" : "master-services-executed-copy.docx",
+          "excerpt" : "SYNTHETIC EXECUTED MASTER SERVICES AGREEMENT",
+          "ftsMatched" : false,
+          "locator" : "chars 0–68",
+          "rank" : 23,
+          "score" : 0.011363636363636364,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "damages-model",
+          "documentName" : "damages-model.xlsx",
+          "excerpt" : "TOTAL SYNTHETIC DAMAGES MODEL 275000",
+          "ftsMatched" : false,
+          "locator" : "Damages Summary!A1:C6",
+          "rank" : 24,
+          "score" : 0.014492753623188406,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "responses-to-production",
+          "documentName" : "responses-to-production.docx",
+          "excerpt" : "Response to Request No. 7: Schedules A-C are produced; subject to synthetic relevance objection. subject to synthetic relevance objection",
+          "ftsMatched" : false,
+          "locator" : "chars 97–193",
+          "rank" : 25,
+          "score" : 0.009523809523809525,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "scanned-exhibit-f",
+          "documentName" : "scanned-exhibit-f.pdf",
+          "excerpt" : "Tracking code OCR-F-8842",
+          "ftsMatched" : false,
+          "locator" : "p. 1",
+          "rank" : 26,
+          "score" : 0.008403361344537815,
+          "semanticBucket" : "low"
+        },
+        {
+          "artifactID" : "msa-executed",
+          "documentName" : "master-services-executed.docx",
+          "excerpt" : "Control No. DI-2026-001",
+          "ftsMatched" : false,
+          "locator" : "chars 0–95",
+          "rank" : 27,
+          "score" : 0.010869565217391304,
+          "semanticBucket" : "low"
+        }
+      ],
+      "warmExecutionReceipt" : {
+        "chunker_version" : 2,
+        "elapsed_milliseconds" : 38,
+        "embedding_artifact_identity_sha256" : "cafe0e5bd79ce519339769d5f8016fe54b967060ebc7612e03d60b33c872c255",
+        "execution_id" : "rag-2731c500-6a70-4903-a9ef-d726a2290478",
+        "lexical_candidate_count" : 5,
+        "query_sha256" : "002fc25ce79caadaa0cdad6d27efb29f980199882265a61149383df4694e5068",
+        "ranks" : [
+          {
+            "candidate_identity_sha256" : "b35f73f3e3e13a0a42987bb2755e238fe3c994d8074d2ea5201acd3b245f7220",
+            "rank" : 1,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "4304388303137e680dabf94dd362d6a7a63d4c207f296fa8dec54412f249d71e",
+            "rank" : 2,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "cd603c15436e7e561e7f9fc3b397c81cb047bf8a553676e41340a1c807d911c3",
+            "rank" : 3,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "fd75bced2eb6751529f087f7080f0ed12c6827b377d5e1734ebaca0622a038c5",
+            "rank" : 4,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "133f7b50a95cf601810336c3380cb066f14b3b2cf5fe27dfbaa73b73bac86c7c",
+            "rank" : 5,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "767c76107e8bcc33bad6cca1db8d3ef63361c59186db80be328846f394fcccb3",
+            "rank" : 6,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "ba2b18df217e6169075e2f69114ef7aa6aa979f31c90edbdcdf41df360f1f346",
+            "rank" : 7,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "ce2b955bd4bc48532b7e842bc4029409c5041912f6598810646eee8d8958dd9b",
+            "rank" : 8,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "3dfc23a54258e489c00647b3134174217f7f154ac3b2ce6293f0a015e159a03e",
+            "rank" : 9,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "a96c79f7ceb023a4cafafa9227b73417db4f1f9c8917f2589cc975ae0d963a78",
+            "rank" : 10,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "f7249c5a45fa2be872752c61b266a52296ef7e92d5ab64f0da5ea3b7f64b2590",
+            "rank" : 11,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "1da07629016096edc085bdb286ef5e6143f932f27ece8f9f9c6c9a9279ecf992",
+            "rank" : 12,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "aff4eb2507eafbb3dafcf4e93152b80e712cd11420986f6e7bba24bcde8a02d7",
+            "rank" : 13,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "70a7f7fed0cecc82a9fc3e349bafec7afc30a57e6f5d2ffbf0899c8be78e5cf2",
+            "rank" : 14,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "5f163ba9fc9eb52ddbaabeb73d24f8c4c0a918d63c0a83328709b49a1fb7d753",
+            "rank" : 15,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "dffb93fdfea1913e7a3c3f624a79a026b681102489e8064a36358705acdff124",
+            "rank" : 16,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "819ab362a710b554451c0e0b19c89b1c0f7af8f4f4332633fc9f2cd535cfeb8e",
+            "rank" : 17,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "5c81879c1ce66fa3de4a902fba29fde33cd4e2e4e55371f2f8744d1e0b12fed8",
+            "rank" : 18,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "c095bdd037a1341c324bc5f74001197bc63ee84689715783642fa0478df9f240",
+            "rank" : 19,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "ffe1be050b05a4ffab3bff35540e6af4e04ea414c2278c575df06ce143a6b9b4",
+            "rank" : 20,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "ec0d718cb7ef35dc00fd65d48eb5d7c861191fe87425af252824608e4d20a67c",
+            "rank" : 21,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "21626b066bdff6e7e9d4faff205df1d1f9588084452981f9514cf8b8ed984ed0",
+            "rank" : 22,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "cbf55aac075ad121a669663e0eb8f1912bce770a874afea3689e346af7d6efe1",
+            "rank" : 23,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "99870344ff28c060c9990ab2b6fc2d3ab2272e91c0e96fa220cfa78936d666a2",
+            "rank" : 24,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "ee19067e6e26e995d4ec52a6c35e85210cde0e481620e177ad0b69a19b1df9f1",
+            "rank" : 25,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "678e4be272bac2b8fbc41b092d03481fb808f2aa0a4829aa41c5980f3e88a384",
+            "rank" : 26,
+            "score_bucket" : "low",
+            "selected" : true
+          },
+          {
+            "candidate_identity_sha256" : "8847d655f858e94e87cb322f25013d5fa2446fb4d469416aaaac36d182f3986e",
+            "rank" : 27,
+            "score_bucket" : "low",
+            "selected" : true
+          }
+        ],
+        "readiness_receipt_set_sha256" : "40e4e4e85a75b0dd3f4c4aff084d4c85edccd2812ff7b93a30e6e9c23aff8899",
+        "receipt_id" : "c7ee5ea76f44c9abe298060daeeaced5dee1e3f6d9d346a28ef67fe8e1befd77",
+        "retrieval_algorithm_version" : 1,
+        "retrieval_depth" : "deep",
+        "schema_version" : 1,
+        "scope_sha256" : "315af74cc035bf070e8f6fd13787d9cf92d4bc76f769b3fba7e412fb41b88af1",
+        "semantic" : {
+          "cache_disposition" : "hit",
+          "candidate_limit" : 60,
+          "maximum_heap_entries" : 0,
+          "maximum_live_page_rows" : 0,
+          "maximum_live_vector_bytes" : 0,
+          "page_count" : 0,
+          "page_size" : 256,
+          "rejected_rows" : 0,
+          "scanned_rows" : 0
+        },
+        "started_at_unix_milliseconds" : 1786832769748
+      },
+      "warmRetrievalMilliseconds" : 37,
+      "warnings" : [
+        "A refusal cannot prove absence across the retrieved packet."
+      ]
+    }
+  ],
+  "schemaVersion" : 1,
+  "sourceCommitSHA" : "bbf03215567a1c5985b2136fdd0b5d87cab5cc88",
+  "startedAt" : "2026-08-15T22:20:26Z"
+}

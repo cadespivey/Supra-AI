@@ -1,9 +1,9 @@
 schema_version: 1
 control_id: native-rag-control-v1
-status: installed_artifacts_frozen_owner_judgments_and_control_run_pending
+status: installed_artifacts_and_control_run_recorded_owner_approval_pending
 owner: documents-runtime-assurance
 recorded_date: "2026-08-13"
-configuration_freeze_status: pending_owner_judgment_review_control_run_thresholds_and_resource_envelope
+configuration_freeze_status: pending_owner_judgment_and_threshold_approval
 
 installed_artifact_observation:
   observed_date: "2026-08-15"
@@ -53,7 +53,7 @@ scope:
     or index challengers change behavior.
   client_data_allowed: false
   intended_authoritative_evaluator: deterministic_human_reviewed
-  authoritative_evaluator_status: pending_owner_judgment_review
+  authoritative_evaluator_status: control_run_recorded_pending_owner_judgment_review
   advisory_llm_evaluator_may_override: false
   one_independent_variable_per_challenger: true
 
@@ -128,6 +128,66 @@ synthetic_corpus:
     required_owner_role: repository_owner_attorney
     status: pending_owner_review
 
+control_run:
+  status: measured_owner_approval_pending
+  observed_date: "2026-08-15"
+  source_commit: bbf03215567a1c5985b2136fdd0b5d87cab5cc88
+  signed_app_path: /tmp/supra-rag-control-dd/Build/Products/Debug/SupraAI.app
+  signature_validation: codesign_deep_strict_passed
+  signature_team_id: 2DP657YB3K
+  hardware: { model_identifier: Mac16,7, chip: Apple_M4_Pro, unified_memory_bytes: 51539607552 }
+  started_at: "2026-08-15T22:20:26Z"
+  completed_at: "2026-08-15T22:27:28Z"
+  raw_receipt: TestData/Benchmarks/native-rag-control-bbf03215-raw.json
+  raw_receipt_sha256: 606e55df384152663e4b7bf2267f964f99061c965d257a0babf11c87cc1e766f
+  scored_receipt: TestData/Benchmarks/native-rag-control-bbf03215-evaluation.json
+  scored_receipt_sha256: c6eb3f4f56a6065bd84ebb37a7369911be01c707a2be7dc915ed1cfdea227346
+  import_accounting:
+    top_level_manifest_artifacts: 8
+    discovered_rows: 10
+    imported_rows: 9
+    failed_rows: 1
+    indexed_documents: 9
+    disposition: fully_accounted_eml_child_expansion
+    note: The EML expands into child attachments; every admitted document was indexed and every manifest artifact was available to its query scope.
+  query_completion:
+    total: 5
+    runtime_failures: 0
+    supported_needs_review: 4
+    unsupported_no_answer_needs_review: 1
+  runtime_reset_cleanup:
+    status: passed
+    temporary_model_snapshot_directories_after_exit: 0
+  deterministic_gate: pending_owner_review
+  owner_judgment_status: pending_owner_review
+  measured_quality:
+    recall_at_k: 1.0
+    full_evidence_set_recall_at_k: 1.0
+    ndcg_at_k: 0.9201515141900503
+    mean_reciprocal_rank: 1.0
+    context_precision: 0.8
+    context_recall: 1.0
+    citation_precision: 1.0
+    citation_recall: 0.9166666666666666
+    citation_coverage: 1.0
+    zero_result_accuracy: 0.8
+  measured_latency_milliseconds:
+    median_time_to_first_token: 21244
+    p50_total: 55088
+    p95_total: 78370
+  measured_resources:
+    vectors_scanned: 65
+    vector_bytes_scanned: 665600
+    maximum_live_page_rows: 65
+    maximum_live_heap_rows: 60
+    maximum_live_cache_bytes: 18610
+    app_current_phys_footprint_bytes: 50824320
+    app_peak_phys_footprint_bytes: 179143736
+    xpc_current_phys_footprint_bytes: 37571526656
+    xpc_peak_phys_footprint_bytes: 37571526656
+    combined_current_phys_footprint_bytes: 37622350976
+    combined_peak_phys_footprint_bytes: 37750670392
+
 metric_contract:
   stable_order: score_descending_then_chunk_id_ascending
   duplicate_policy: collapse_same_evidence_identity_before_final_k
@@ -178,21 +238,54 @@ noninferiority:
     full-evidence recall, nDCG, MRR, context precision/recall, and citation precision/recall;
     zero-result accuracy may not regress. A declared targeted slice must additionally improve
     its predeclared metric enough to justify its resource and deployment cost.
-  numeric_thresholds: pending_owner_approval_after_control_run
+  numeric_thresholds:
+    status: pending_owner_approval
+    basis: exact_installed_artifact_control_at_bbf03215
+    critical_slice_rule: no_quality_metric_may_regress_from_its_control_cell
+    proposed_overall_minimums:
+      recall_at_k: 1.0
+      full_evidence_set_recall_at_k: 1.0
+      ndcg_at_k: 0.92
+      mean_reciprocal_rank: 1.0
+      context_precision: 0.8
+      context_recall: 1.0
+      citation_precision: 1.0
+      citation_recall: 0.916
+      citation_coverage: 1.0
+      zero_result_accuracy: 0.8
   ties: control_wins_when_quality_is_equal_and_candidate_adds_cost_or_dependency
 
 resource_ceiling_contract:
   asymptotic_scan_state: O(page_plus_candidate_k_plus_embedding_dimension)
   embedding_host_batches: bounded_and_released_before_next_request
   final_answer_semantic_cache_allowed: false
-  app_bytes: pending_measured_control
-  xpc_bytes: pending_measured_control
-  combined_bytes: pending_measured_control
-  live_page_rows: pending_measured_control
-  maximum_live_heap_rows: pending_measured_control
+  app_bytes:
+    observed_peak: 179143736
+    proposed_ceiling: 268435456
+  xpc_bytes:
+    observed_peak: 37571526656
+    proposed_ceiling: 42949672960
+  combined_bytes:
+    observed_peak: 37750670392
+    proposed_ceiling: 44023414784
+  live_page_rows:
+    observed_maximum: 65
+    proposed_ceiling: 256
+  maximum_live_heap_rows:
+    observed_maximum: 60
+    proposed_ceiling: 60
   future_bounded_candidate_heap_capacity: 60
-  cache_bytes: pending_measured_control
-  status: pending_owner_approval_after_instruments_control
+  cache_bytes:
+    observed_maximum: 18610
+    proposed_ceiling: 65536
+  latency_milliseconds:
+    observed_median_time_to_first_token: 21244
+    proposed_median_time_to_first_token_ceiling: 25000
+    observed_p50_total: 55088
+    proposed_p50_total_ceiling: 65000
+    observed_p95_total: 78370
+    proposed_p95_total_ceiling: 80000
+  status: measured_proposal_pending_owner_approval
 
 comparison_matrix:
   validator_status: green

@@ -280,20 +280,21 @@ manifests. Full-tree verification with `Scripts/smoke-model-tool.swift fingerpri
 - embedding revision `b5d88f1fe49b50d2ac01b4692ca2d387f14f9c72`, canonical fingerprint
   `691c8406fa1abf039f26ffbaa2b4613cb94f85026597675a3c73a07ef7c5d454`.
 
-This correction is an installed-artifact identity and integrity receipt. It does not replace the
-pending native control run, resource measurements, model-switch exercise, or Release-runtime
-qualification. The original mistaken observation is retained above so the correction remains
-auditable rather than silently rewriting history.
+This correction is an installed-artifact identity and integrity receipt. The signed native control
+run and app/XPC resource measurements are now recorded separately in `Native-RAG-Control.yml`
+and its exact receipts at source commit `bbf03215`. They do not replace the pending owner review,
+model-switch exercise, or Release-runtime qualification. The original mistaken observation is
+retained above so the correction remains auditable rather than silently rewriting history.
 
 ## 9. Pending evidence and explicit non-guarantees
 
 The following Phase 0 evidence remains **pending**:
 
-- launched app, XPC, and combined idle/current/peak physical footprint;
-- model-load and model-switch peaks, including combined text/embedding residency and pressure
-  behavior;
-- cold/warm generation and embedding behavior, time to first token, latency, throughput, KV
-  residency, vector-scan bytes, and active embedding-model verification;
+- idle and model-switch peaks, including pressure behavior outside the recorded installed-pair
+  control run;
+- generation throughput and KV-residency observations not emitted by the recorded control;
+- repository-owner review of all five synthetic RAG judgments and approval of the proposed
+  noninferiority, latency, and resource ceilings in `Native-RAG-Control.yml`;
 - current protected-CI wall time and exact hosted required-check evidence for this HEAD;
 - owner signature on the executed synthetic restore drill candidate: successful restore/reopen,
   forced activation failure with verified safety rollback, and unsupported-future-schema rejection
