@@ -128,8 +128,14 @@ public final class RuntimeClient: RuntimeClientProtocol, RuntimeRecoveryClientPr
                     }
 
                 case let .failure(error):
-                    Task {
-                        _ = try? await self?.cancelGeneration(request.generationID)
+                    // Snapshot both weak client ownership and the request identity
+                    // before crossing into a sending Task closure. Capturing the
+                    // mutable weak-self box here is rejected by the stock macOS 15
+                    // Swift 6 compiler and could race deinitialization in principle.
+                    let cancellationClient = self
+                    let generationID = request.generationID
+                    Task { [cancellationClient, generationID] in
+                        _ = try? await cancellationClient?.cancelGeneration(generationID)
                     }
                     continuation.finish(throwing: error)
                 }
