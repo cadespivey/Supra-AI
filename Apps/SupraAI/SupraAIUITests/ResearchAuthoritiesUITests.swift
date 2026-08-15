@@ -627,6 +627,39 @@ final class ResearchAuthoritiesUITests: XCTestCase {
         )
     }
 
+    func testStaleOutputNamesChangedDependencyAndOpensDocuments() throws {
+        let app = try launchApp(extraArguments: [
+            "-uiTestRemediationWarnings",
+            "-uiTestInitialMatterTab", "Outputs",
+        ])
+
+        let output = app.buttons["output.row.Stale Dependency Fixture"]
+        XCTAssertTrue(output.waitForExistence(timeout: 20), "Stale output fixture did not appear")
+        sendDebugNavigationCommand("output Stale Dependency Fixture")
+
+        let detail = app.descendants(matching: .any)["output.detail.Stale Dependency Fixture"]
+        XCTAssertTrue(detail.waitForExistence(timeout: 10))
+        let warning = app.descendants(matching: .any)["output.staleWarning"]
+        XCTAssertTrue(warning.waitForExistence(timeout: 10))
+        XCTAssertTrue(
+            warning.label.contains("source_revision_changed")
+                && warning.label.contains("stale-source-document-751")
+                && warning.label.contains("revision-23")
+                && warning.label.contains("revision-24"),
+            "Stale output must name the exact changed dependency: \(warning.debugDescription)"
+        )
+        XCTAssertFalse(app.descendants(matching: .any)["output.export"].isEnabled)
+
+        let repair = app.buttons["output.stale.openDocuments"]
+        XCTAssertTrue(repair.exists)
+        XCTAssertTrue(repair.isHittable)
+        repair.click()
+        XCTAssertTrue(
+            app.descendants(matching: .any)["documents.ask"].waitForExistence(timeout: 10),
+            "Stale-source correction did not open this matter's Documents surface"
+        )
+    }
+
     func testLegacyBillingWarningAnnouncesReviewAndUnavailableExport() throws {
         let app = try launchApp(extraArguments: [
             "-uiTestRemediationWarnings",
