@@ -879,6 +879,9 @@ final class AppEnvironment: ObservableObject {
                 modelLibrary: modelLibrary,
                 runtimeClient: modelExecutionCoordinator
             ).run(invocation)
+            try await resetRuntimeAfterNativeRAGControl(
+                sourceCommitSHA: invocation.sourceCommitSHA
+            )
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
@@ -888,14 +891,26 @@ final class AppEnvironment: ObservableObject {
                 outputURL: invocation.outputURL
             )
         } catch {
+            let failure = error
+            try? await resetRuntimeAfterNativeRAGControl(
+                sourceCommitSHA: invocation.sourceCommitSHA
+            )
             emitNativeRAGControlPayload(
                 json: Self.headlessFailureJSON(
                     status: "control_failed",
-                    detail: error.localizedDescription
+                    detail: failure.localizedDescription
                 ),
                 outputURL: invocation.outputURL
             )
         }
+    }
+
+    private func resetRuntimeAfterNativeRAGControl(sourceCommitSHA: String) async throws {
+        let snapshot = try await runtimeResidencyControlPlane.residencySnapshot()
+        _ = try await runtimeResidencyCoordinator.reset(RuntimeResetRequest(
+            requestID: "native-rag-control-reset-\(sourceCommitSHA.prefix(12))",
+            expectedEpoch: snapshot.epoch
+        ))
     }
 
     private static func headlessFailureJSON(status: String, detail: String) -> String {
