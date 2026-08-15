@@ -1530,3 +1530,65 @@ final class ChatCitationsAndExportUITests: XCTestCase {
         )
     }
 }
+
+final class OwnerWalkthroughGroundedPromotionUITests: XCTestCase {
+    override func setUp() {
+        continueAfterFailure = false
+    }
+
+    func testDemoGroundedAnswerPromotesWithItsRetainedSources() {
+        let app = XCUIApplication()
+        app.launchArguments += [
+            "-ApplePersistenceIgnoreState", "YES",
+            "-demoMode",
+        ]
+        app.launch()
+        XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 25))
+
+        let matter = app.descendants(matching: .any)[
+            "matter.row.Meridian Fabrication v. Northgate Logistics"
+        ]
+        XCTAssertTrue(matter.waitForExistence(timeout: 20), "Demo matter did not appear")
+        matter.click()
+
+        let chat = app.buttons["chat.row.Indemnification coverage"]
+        XCTAssertTrue(chat.waitForExistence(timeout: 15), "Grounded demo chat did not appear")
+        chat.click()
+
+        let save = app.buttons.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "chat.message.saveToOutputs.")
+        ).firstMatch
+        XCTAssertTrue(
+            save.waitForExistence(timeout: 10),
+            "Grounded demo answer must expose its evidence-preserving Saved Work action"
+        )
+        XCTAssertTrue(save.isHittable)
+        save.click()
+
+        let outputsTab = app.buttons["matterTab.Outputs"]
+        XCTAssertTrue(outputsTab.waitForExistence(timeout: 10))
+        outputsTab.click()
+
+        let output = app.descendants(matching: .any).matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "output.row.Saved chat answer")
+        ).firstMatch
+        XCTAssertTrue(
+            output.waitForExistence(timeout: 10),
+            "Promoted grounded answer did not appear in Saved Work"
+        )
+        output.click()
+
+        XCTAssertTrue(
+            app.descendants(matching: .any).matching(
+                NSPredicate(format: "identifier BEGINSWITH %@", "output.detail.Saved chat answer")
+            ).firstMatch.waitForExistence(timeout: 10),
+            "Promoted answer detail did not open"
+        )
+        for label in ["S1", "S2", "S3"] {
+            XCTAssertTrue(
+                app.buttons["output.source.\(label)"].waitForExistence(timeout: 5),
+                "Promoted answer did not retain source \(label)"
+            )
+        }
+    }
+}
