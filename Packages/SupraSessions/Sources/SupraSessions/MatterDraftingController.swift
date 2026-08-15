@@ -581,7 +581,7 @@ public final class MatterDraftingController: ObservableObject {
                 isEnabled: wired.contains(kind),
                 disabledReason: wired.contains(kind)
                     ? nil
-                    : "\(Self.displayTitle(for: kind)) drafting isn't wired into the app yet — use “Custom” to describe it for now."
+                    : "This draft type is not available yet. Use Custom to describe the work product you need."
             )
         }
     }
@@ -870,7 +870,8 @@ public final class MatterDraftingController: ObservableObject {
             }
             if filingIdentity.filingStateName != "Florida"
                 || !FloridaMotionToDismissContract.isSupportedFilingCourt(
-                    filingIdentity.courtHeader
+                    filingIdentity.courtHeader,
+                    filingStateName: filingIdentity.filingStateName
                 ) {
                 reasons.append(FloridaMotionToDismissContract.filingCourtRequirement)
             }
@@ -1017,7 +1018,8 @@ public final class MatterDraftingController: ObservableObject {
             )
             guard initialFilingIdentity.filingStateName == "Florida",
                   FloridaMotionToDismissContract.isSupportedFilingCourt(
-                    initialFilingIdentity.courtHeader
+                    initialFilingIdentity.courtHeader,
+                    filingStateName: initialFilingIdentity.filingStateName
                   ) else {
                 return .failure(.motionBlocked([
                     FloridaMotionToDismissContract.filingCourtRequirement,
@@ -1072,7 +1074,8 @@ public final class MatterDraftingController: ObservableObject {
             )
             guard filingIdentity.filingStateName == "Florida",
                   FloridaMotionToDismissContract.isSupportedFilingCourt(
-                    filingIdentity.courtHeader
+                    filingIdentity.courtHeader,
+                    filingStateName: filingIdentity.filingStateName
                   ) else {
                 return .failure(.motionBlocked([FloridaMotionToDismissContract.filingCourtRequirement]))
             }

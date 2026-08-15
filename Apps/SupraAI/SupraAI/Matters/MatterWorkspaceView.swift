@@ -200,18 +200,55 @@ struct MatterWorkspaceView: View {
     }
 
     private var tabBar: some View {
-        HStack {
-            Spacer(minLength: 0)
-            GhostSegmentedControl(
-                selection: $tab,
-                segments: MatterTab.navigationOrder.map {
-                    ($0, $0.label, "matterTab.\($0.rawValue)")
+        GeometryReader { proxy in
+            HStack {
+                Spacer(minLength: 0)
+                GhostSegmentedControl(
+                    selection: $tab,
+                    segments: visibleTabs(for: proxy.size.width).map {
+                        ($0, $0.label, "matterTab.\($0.rawValue)")
+                    }
+                )
+                if usesCompactTabs(for: proxy.size.width) {
+                    Menu {
+                        ForEach([MatterTab.billing, .audit]) { compactTab in
+                            Button {
+                                tab = compactTab
+                            } label: {
+                                if tab == compactTab {
+                                    Label(compactTab.label, systemImage: "checkmark")
+                                } else {
+                                    Text(compactTab.label)
+                                }
+                            }
+                            .accessibilityIdentifier("matterTab.\(compactTab.rawValue)")
+                        }
+                    } label: {
+                        Label(
+                            tab == .billing || tab == .audit ? tab.label : "More",
+                            systemImage: "ellipsis.circle"
+                        )
+                    }
+                    .menuIndicator(.hidden)
+                    .buttonStyle(.ghost)
+                    .accessibilityIdentifier("matterTab.more")
                 }
-            )
-            Spacer(minLength: 0)
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .padding(.horizontal)
-        .padding(.vertical, 6)
+        .frame(height: 44)
+    }
+
+    private func usesCompactTabs(for width: CGFloat) -> Bool {
+        width < 760
+    }
+
+    private func visibleTabs(for width: CGFloat) -> [MatterTab] {
+        usesCompactTabs(for: width)
+            ? Array(MatterTab.navigationOrder.prefix(5))
+            : MatterTab.navigationOrder
     }
 
     /// Keeps the synthetic edited name in the real editor's own `@State`. The

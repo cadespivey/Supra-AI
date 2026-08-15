@@ -103,8 +103,14 @@ struct MainShellView: View {
             if case .matter = selection { return }
             environment.mattersController.select(matterID: nil)
         }
+        .onAppear {
+            synchronizeControllerScopeWithVisibleSelection()
+        }
         #if DEBUG
-        .onAppear { applyUITestInitialSelection() }
+        .onAppear {
+            applyUITestInitialSelection()
+            applyUITestWindowWidth()
+        }
         // Sandboxes (the app's and any automation harness's) exclude each
         // other's filesystems, so the DEBUG automation channel rides
         // distributed notifications instead of a command file.
@@ -203,6 +209,19 @@ struct MainShellView: View {
         environment.mattersController.select(matterID: nil)
     }
 
+    /// AppEnvironment loads matter data before the shell appears and legacy
+    /// callers may select the first row while doing so. Reconcile that model
+    /// state with the destination the window actually presents before the user
+    /// can interact with either surface.
+    private func synchronizeControllerScopeWithVisibleSelection() {
+        switch selection ?? .route(.globalChats) {
+        case let .matter(id):
+            environment.mattersController.select(matterID: id)
+        case .route, .recycleBin:
+            environment.mattersController.select(matterID: nil)
+        }
+    }
+
     @ViewBuilder
     private var detailView: some View {
 #if DEBUG
@@ -216,8 +235,14 @@ struct MainShellView: View {
                 backup: environment.backupController,
                 onOpenSetup: beginSetupNavigation
             )
+            // The setup screen and the blocked-work fixture expose different
+            // accessibility roots. Give each navigation state a distinct
+            // identity so SwiftUI retires the departing tree before XCUITest
+            // or VoiceOver asks the restored task for its labels.
+            .id("setup-blocker-fixture-\(fixture.request.id)")
         } else {
             standardDetailView
+                .id("standard-detail")
         }
 #else
         standardDetailView
@@ -307,6 +332,30 @@ struct MainShellView: View {
         } else if arguments.contains("-uiTestSelectFirstMatter"),
                   let id = environment.mattersController.matters.first?.id {
             selectMatter(id)
+        }
+    }
+
+    /// Applies width fixtures only after the shell is mounted in SwiftUI's
+    /// already-presented singleton window. Reading `NSApplication.windows` from
+    /// an app-delegate launch callback can race scene creation on macOS 27 and
+    /// strand the process with menus but no window.
+    private func applyUITestWindowWidth() {
+        guard AppEnvironment.isUITestMode else { return }
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let marker = arguments.firstIndex(of: "-uiTestWindowWidth"),
+              arguments.indices.contains(marker + 1),
+              let parsed = Double(arguments[marker + 1]),
+              parsed.isFinite,
+              parsed > 0 else { return }
+        let requestedWidth = CGFloat(parsed)
+        Task { @MainActor in
+            await Task.yield()
+            guard let window = NSApp.keyWindow
+                    ?? NSApp.windows.first(where: \.canBecomeMain) else { return }
+            var frame = window.frame
+            frame.origin.x += (frame.width - requestedWidth) / 2
+            frame.size.width = requestedWidth
+            window.setFrame(frame, display: true)
         }
     }
 
@@ -448,7 +497,14 @@ struct SetupNavigationReturnBar: View {
             }
             Spacer()
             Button("Return to Draft Motion") {
-                onReturn(request)
+                // Let the accessibility action finish before replacing the
+                // focused setup tree. Rebuilding it synchronously can make
+                // SwiftUI ask the departing row and its parent for each
+                // other's labels while VoiceOver/XCUITest is snapshotting.
+                Task { @MainActor in
+                    await Task.yield()
+                    onReturn(request)
+                }
             }
             .accessibilityIdentifier("setup.navigation.return")
         }
@@ -470,8 +526,6 @@ struct SetupRequirementFocusModifier: ViewModifier {
         content
             .id(identifier)
             .accessibilityIdentifier(identifier)
-            .focusable()
-            .focused(focusedIdentifier, equals: identifier)
     }
 }
 
@@ -593,7 +647,6 @@ private struct SetupBlockerFixtureView: View {
             Text(contextSummary)
                 .font(.supraCaption.monospaced())
                 .textSelection(.enabled)
-                .accessibilityLabel(contextSummary)
                 .accessibilityIdentifier("setup.fixture.context")
 
             Text(fixture.input)

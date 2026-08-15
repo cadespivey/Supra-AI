@@ -5,6 +5,7 @@ import SupraCore
 import SupraDrafting
 import SupraDraftingCore
 import SupraExports
+import SupraResearch
 import SupraRuntimeInterface
 @testable import SupraSessions
 @testable import SupraDocuments
@@ -99,9 +100,83 @@ final class MatterDraftingControllerTests: XCTestCase {
 
     private func sampleRecipients() -> [ServiceRecipient] {
         [ServiceRecipient(name: "Daniel Hardman, Esq.", firm: "Hardman & Tanner, LLP",
-                          address: OfficeBlock(street: "1 Independent Drive", suite: "Suite 2400",
+                          address: OfficeBlock(street: "1 Independent Drive", suite: nil,
                                                city: "Jacksonville", state: "Florida", zip: "32202", phone: "", fax: nil),
                           emails: ["dhardman@hardmantanner.example"], role: "Counsel for Plaintiff")]
+    }
+
+    private func setCanonicalNoticeIdentity(
+        store: SupraStore,
+        matterID: String,
+        courtName: String =
+            "Circuit Court of the Fourth Judicial Circuit in and for Duval County",
+        jurisdictionText: String = "Florida"
+    ) throws {
+        let snapshot = try XCTUnwrap(
+            store.matterIdentity.fetchSnapshot(matterID: matterID)
+        )
+        let catalog = JurisdictionCatalog.shared
+        let court = try XCTUnwrap(
+            catalog.resolvePersistedCourtIdentity(courtName)
+        )
+        let jurisdiction = try XCTUnwrap(
+            catalog.canonicalJurisdictionOption(forSelectedOptionID: court.id)
+        )
+        let representedPartyID = "notice-party-liberty-rail"
+        let opposingPartyID = "notice-party-mckernon-motors"
+        _ = try store.matterIdentity.updateMatter(
+            command: MatterIdentityUpdateCommand(
+                matterID: matterID,
+                expectedIdentityRevision: snapshot.identityRevision,
+                legacyJurisdictionText: jurisdictionText,
+                legacyCourtText: courtName,
+                legacyPartyPerspective: .defendant,
+                legacyClientNames: "Liberty Rail, LLC",
+                courtResolutionState: .court,
+                canonicalCatalogVersion: catalog.catalogVersion,
+                canonicalCatalogDigestSHA256: catalog.identityDigestSHA256,
+                canonicalJurisdictionID: CanonicalJurisdictionID(rawValue: jurisdiction.id),
+                canonicalCourtID: CanonicalCourtID(rawValue: court.id),
+                parties: [
+                    MatterPartyIdentity(
+                        id: opposingPartyID,
+                        matterID: matterID,
+                        displayName: "McKernon Motors, Inc.",
+                        captionName: "MCKERNON MOTORS, INC.,",
+                        baseRole: .plaintiff,
+                        captionOrder: 0,
+                        clientStatus: .notRepresented
+                    ),
+                    MatterPartyIdentity(
+                        id: representedPartyID,
+                        matterID: matterID,
+                        displayName: "Liberty Rail, LLC",
+                        captionName: "LIBERTY RAIL, LLC,",
+                        baseRole: .defendant,
+                        captionOrder: 1,
+                        clientStatus: .represented
+                    ),
+                ],
+                representations: [
+                    MatterRepresentationIdentity(
+                        id: "notice-representation-mckernon-counsel",
+                        matterID: matterID,
+                        representedPartyID: opposingPartyID,
+                        relationshipKind: .counsel,
+                        representativeName: "Daniel Hardman, Esq.",
+                        firmName: "Hardman & Tanner, LLP",
+                        serviceAddress: MatterServiceAddress(
+                            street: "1 Independent Drive",
+                            city: "Jacksonville",
+                            state: "Florida",
+                            postalCode: "32202"
+                        ),
+                        serviceEmails: ["dhardman@hardmantanner.example"],
+                        serviceOrder: 0
+                    ),
+                ]
+            )
+        )
     }
 
     // MARK: - Profile → FirmProfile projection
@@ -152,6 +227,7 @@ final class MatterDraftingControllerTests: XCTestCase {
             judge: "CV-G",
             docketNumber: "2026-CA-001847"
         )
+        try setCanonicalNoticeIdentity(store: store, matterID: matter.id)
         let controller = MatterDraftingController(store: store, storage: makeStorage())
 
         let result = await controller.draftNoticeOfAppearance(
@@ -769,6 +845,7 @@ final class MatterDraftingControllerTests: XCTestCase {
             court: "IN THE CIRCUIT COURT OF DUVAL COUNTY, FLORIDA",
             docketNumber: "2026-CA-001847"
         )
+        try setCanonicalNoticeIdentity(store: store, matterID: matter.id)
         let storage = makeStorage()
         let directory = storage.exportsDirectory(forMatterID: matter.id)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -1123,6 +1200,7 @@ final class MatterDraftingControllerTests: XCTestCase {
             court: "IN THE CIRCUIT COURT OF DUVAL COUNTY, FLORIDA",
             docketNumber: "2026-CA-001847"
         )
+        try setCanonicalNoticeIdentity(store: store, matterID: matter.id)
         let storage = makeStorage()
         let directory = storage.exportsDirectory(forMatterID: matter.id)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -1318,6 +1396,7 @@ final class MatterDraftingControllerTests: XCTestCase {
             court: "IN THE CIRCUIT COURT OF THE FOURTH JUDICIAL CIRCUIT,\nIN AND FOR DUVAL COUNTY, FLORIDA",
             docketNumber: "2026-CA-001847"
         )
+        try setCanonicalNoticeIdentity(store: store, matterID: matter.id)
         let storage = makeStorage()
         let renderer = CancellingDraftRenderer()
         let controller = MatterDraftingController(
@@ -1412,6 +1491,7 @@ final class MatterDraftingControllerTests: XCTestCase {
         // bar number + office deliberately missing
         try store.appSettings.setSetting(AssistantProfile.profileKey, value: partial)
         let matter = try store.matters.createMatter(name: "M", docketNumber: "2026-CA-001847")
+        try setCanonicalNoticeIdentity(store: store, matterID: matter.id)
         let controller = MatterDraftingController(store: store, storage: makeStorage())
 
         let result = await controller.draftNoticeOfAppearance(
@@ -1432,6 +1512,7 @@ final class MatterDraftingControllerTests: XCTestCase {
         let store = try makeStore()
         try store.appSettings.setSetting(AssistantProfile.profileKey, value: completeProfile())
         let matter = try store.matters.createMatter(name: "No docket matter")  // no docketNumber
+        try setCanonicalNoticeIdentity(store: store, matterID: matter.id)
         let controller = MatterDraftingController(store: store, storage: makeStorage())
 
         let result = await controller.draftNoticeOfAppearance(
@@ -1452,6 +1533,7 @@ final class MatterDraftingControllerTests: XCTestCase {
             court: "IN THE CIRCUIT COURT OF THE FOURTH JUDICIAL CIRCUIT,\nIN AND FOR DUVAL COUNTY, FLORIDA",
             docketNumber: "2026-CA-001847"
         )
+        try setCanonicalNoticeIdentity(store: store, matterID: matter.id)
         let controller = MatterDraftingController(store: store, storage: makeStorage())
 
         let result = await controller.draftNoticeOfAppearance(
@@ -1463,10 +1545,10 @@ final class MatterDraftingControllerTests: XCTestCase {
         )
 
         guard case let .failure(error) = result else { return XCTFail("expected failure") }
-        guard case let .missingRequiredSlots(missing) = error else {
-            return XCTFail("expected missingRequiredSlots, got \(error)")
+        guard case let .legalIdentityBlocked(message) = error else {
+            return XCTFail("expected legalIdentityBlocked, got \(error)")
         }
-        XCTAssertTrue(missing.contains("service recipients"))
+        XCTAssertTrue(message.contains("verified counsel"), message)
         let events = try store.auditEvents.fetchEvents(matterID: matter.id)
         XCTAssertFalse(events.contains { $0.eventType == "draft_generated" })
     }
@@ -1480,6 +1562,7 @@ final class MatterDraftingControllerTests: XCTestCase {
             court: "IN THE CIRCUIT COURT OF THE FOURTH JUDICIAL CIRCUIT,\nIN AND FOR DUVAL COUNTY, FLORIDA",
             docketNumber: "2026-CA-001847"
         )
+        try setCanonicalNoticeIdentity(store: store, matterID: matter.id)
         let controller = MatterDraftingController(store: store, storage: makeStorage())
 
         let result = await controller.draftNoticeOfAppearance(
@@ -1491,11 +1574,10 @@ final class MatterDraftingControllerTests: XCTestCase {
         )
 
         guard case let .failure(error) = result else { return XCTFail("expected failure") }
-        guard case let .missingRequiredSlots(missing) = error else {
-            return XCTFail("expected missingRequiredSlots, got \(error)")
+        guard case let .legalIdentityBlocked(message) = error else {
+            return XCTFail("expected legalIdentityBlocked, got \(error)")
         }
-        XCTAssertTrue(missing.contains("complete caption parties"))
-        XCTAssertTrue(missing.contains("caption party 1 designation"))
+        XCTAssertTrue(message.contains("caption parties changed"), message)
     }
 
     @MainActor
@@ -1507,6 +1589,7 @@ final class MatterDraftingControllerTests: XCTestCase {
             court: "IN THE CIRCUIT COURT OF THE FOURTH JUDICIAL CIRCUIT,\nIN AND FOR DUVAL COUNTY, FLORIDA",
             docketNumber: "2026-CA-001847"
         )
+        try setCanonicalNoticeIdentity(store: store, matterID: matter.id)
         var recipients = sampleRecipients()
         recipients[0].emails = ["not-an-email"]
         let controller = MatterDraftingController(store: store, storage: makeStorage())
@@ -1520,10 +1603,10 @@ final class MatterDraftingControllerTests: XCTestCase {
         )
 
         guard case let .failure(error) = result else { return XCTFail("expected failure") }
-        guard case let .missingRequiredSlots(missing) = error else {
-            return XCTFail("expected missingRequiredSlots, got \(error)")
+        guard case let .legalIdentityBlocked(message) = error else {
+            return XCTFail("expected legalIdentityBlocked, got \(error)")
         }
-        XCTAssertTrue(missing.contains("valid service recipient 1 service e-mail"))
+        XCTAssertTrue(message.contains("verified counsel"), message)
     }
 
     @MainActor
@@ -1531,10 +1614,16 @@ final class MatterDraftingControllerTests: XCTestCase {
         let store = try makeStore()
         try store.appSettings.setSetting(AssistantProfile.profileKey, value: completeProfile())
         let matter = try store.matters.createMatter(
-            name: "Texas Matter",
-            jurisdiction: "Texas",
-            court: "IN THE DISTRICT COURT OF TRAVIS COUNTY, TEXAS",
+            name: "Georgia Matter",
+            jurisdiction: "Georgia",
+            court: "Superior Court of Fulton County",
             docketNumber: "2026-CI-001847"
+        )
+        try setCanonicalNoticeIdentity(
+            store: store,
+            matterID: matter.id,
+            courtName: "Superior Court of Fulton County",
+            jurisdictionText: "Georgia"
         )
         let controller = MatterDraftingController(store: store, storage: makeStorage())
 
@@ -1629,6 +1718,7 @@ final class MatterDraftingControllerTests: XCTestCase {
             judge: "CV-G",
             docketNumber: "2026-CA-001847"
         )
+        try setCanonicalNoticeIdentity(store: store, matterID: matter.id)
         let spy = StyleSpyRenderer()
         var p = FirmStyleProfile()
         p.captionCaseNumberLabel = "CASE NUMBER: "

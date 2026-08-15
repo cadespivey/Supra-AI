@@ -130,21 +130,15 @@ final class RuntimeXPCIntegrationTests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments += [
             "-ApplePersistenceIgnoreState", "YES",
-            "-runtimeXPCIntegrationMode",
+            "-runtimeXPCIntegrationMode", "YES",
             "-runtimeXPCScenario", scenario,
+            "-uiTestEnsureFreshWindow", "YES",
         ]
         app.launch()
-        app.activate()
-        // macOS can preserve the user's last "all windows closed" state even
-        // when application state restoration is disabled. Open the WindowGroup
-        // explicitly so the hosted harness is mounted and its task can run.
-        if !app.windows.firstMatch.waitForExistence(timeout: 5) {
-            app.typeKey("n", modifierFlags: .command)
-            XCTAssertTrue(
-                app.windows.firstMatch.waitForExistence(timeout: 10),
-                "SupraAI did not publish a window for the hosted integration surface."
-            )
-        }
+        XCTAssertTrue(
+            app.windows.firstMatch.waitForExistence(timeout: 15),
+            "SupraAI did not publish a window for the hosted integration surface."
+        )
         return app
     }
 }

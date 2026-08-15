@@ -1890,6 +1890,24 @@ final class SupraSessionsTests: XCTestCase {
         XCTAssertEqual(try store.chats.fetchMatterChats(matterID: matter.id).count, 2)
     }
 
+    func testMatterListRefreshCanPreserveNoMatterSelection() throws {
+        let store = try makeStore()
+        let stub = StubRuntimeClient { request in
+            .events([.event(request, 1, .generationCompleted)])
+        }
+        let controller = MattersController(store: store, runtimeClient: stub)
+        let matter = try controller.createMatter(name: "Aster Harbor v. Northline Rail")
+        XCTAssertEqual(controller.selectedMatterID, matter.id)
+
+        controller.select(matterID: nil)
+        controller.loadMatters(selectFirstMatterIfNeeded: false)
+
+        XCTAssertEqual(controller.matters.map(\.id), [matter.id])
+        XCTAssertNil(controller.selectedMatterID)
+        XCTAssertNil(controller.chatController)
+        XCTAssertNil(controller.documentsController)
+    }
+
     func testMattersControllerVendsMatterScopedDocumentQAController() throws {
         // T-GQA-01 expected RED: MattersController no longer exposes a
         // documentQAController, so the Documents tab cannot receive the production

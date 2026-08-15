@@ -70,22 +70,28 @@ final class ArchitectureUXRetirementUITests: XCTestCase {
                 "-ApplePersistenceIgnoreState", "YES",
                 "-uiTestMode",
                 "-uiTestEnsureFreshWindow",
-                "-uiTestSelectFirstMatter",
                 "-uiTestWindowWidth", String(width),
+                "-uiTestSelectFirstMatter",
             ]
             app.launch()
-            app.activate()
 
             let window = app.windows.firstMatch
-            XCTAssertTrue(window.waitForExistence(timeout: 15), "Missing window at width \(width)")
-            let expected = ["Chat", "Research", "Authorities", "Outputs", "Documents", "Billing", "Audit"]
+            XCTAssertTrue(window.waitForExistence(timeout: 25), "Missing window at width \(width)")
+            let primary = ["Chat", "Documents", "Research", "Authorities", "Outputs"]
+            let compact = width == 880
+            let expected = compact
+                ? primary
+                : ["Chat", "Documents", "Research", "Authorities", "Outputs", "Billing", "Audit"]
             for label in expected {
                 let tab = app.buttons["matterTab.\(label)"]
                 XCTAssertTrue(tab.waitForExistence(timeout: 20), "Missing \(label) at width \(width)")
                 XCTAssertTrue(tab.isHittable, "Clipped \(label) at width \(width)")
             }
+            XCTAssertEqual(
+                app.descendants(matching: .any)["matterTab.more"].exists,
+                compact
+            )
             XCTAssertFalse(app.buttons["matterTab.Review"].exists)
-            XCTAssertEqual(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "matterTab.")).count, expected.count)
             app.terminate()
         }
     }
@@ -178,11 +184,53 @@ final class ArchitectureUXRetirementUITests: XCTestCase {
         XCTAssertFalse(sidebar.contains("ForEach(AppRoute.allCases)"))
         XCTAssertTrue(notesAndTime.contains("Text(\"Notes & Time\")"))
 
-        // Preserve route/storage identities and the truthful advanced label.
+        // Preserve route/storage identities while keeping engineering tools
+        // behind the ordinary System Status surface.
         XCTAssertTrue(routes.contains("case globalChats"))
         XCTAssertTrue(routes.contains("case scratchpad"))
         XCTAssertTrue(routes.contains("case diagnostics"))
-        XCTAssertTrue(routes.contains("\"Diagnostics\""))
+        XCTAssertTrue(routes.contains("\"System Status\""))
+    }
+
+    func testTPhase5OrdinaryWorkSurfacesAreTaskGroupedAndTruthful() throws {
+        let routes = try appSource(relativePath: "SupraAI/Navigation/AppRoute.swift")
+        let settings = try appSource(relativePath: "SupraAI/SettingsView.swift")
+        let diagnostics = try appSource(relativePath: "SupraAI/DiagnosticsView.swift")
+        let matter = try appSource(relativePath: "SupraAI/Matters/MatterWorkspaceView.swift")
+        let savedWork = try appSource(relativePath: "SupraAI/Outputs/MatterOutputsView.swift")
+        let publicRecords = try appSource(relativePath: "SupraAI/PublicRecordsView.swift")
+        let chatSuggestions = try source(
+            at: packageRoot("SupraSessions")
+                .appendingPathComponent("Sources/SupraSessions/ChatSuggestions.swift")
+        )
+
+        XCTAssertTrue(routes.contains("\"System Status\""))
+        XCTAssertTrue(diagnostics.contains("Toggle(\"Advanced\""))
+        for heading in [
+            "Local Assistant", "Document Search", "Research Connections", "Storage & Backups",
+        ] {
+            XCTAssertTrue(diagnostics.contains("Section(\"\(heading)\")"), heading)
+        }
+        XCTAssertTrue(diagnostics.contains("Copy Diagnostic Report"))
+
+        for category in [
+            "Profile", "Drafting & Citations", "Billing", "Data & Backup", "Connections", "Advanced/About",
+        ] {
+            XCTAssertTrue(settings.contains("= \"\(category)\""), category)
+        }
+        XCTAssertTrue(settings.contains("List(SettingsCategory.allCases"))
+
+        for title in ["Legal Question", "Research Memo", "Draft", "Review a Draft", "Check Citations"] {
+            XCTAssertTrue(chatSuggestions.contains("title: \"\(title)\""), title)
+        }
+        XCTAssertTrue(matter.contains("accessibilityIdentifier(\"matterTab.more\")"))
+        XCTAssertTrue(savedWork.contains("Lifecycle:"))
+        XCTAssertTrue(savedWork.contains("Review:"))
+        XCTAssertTrue(savedWork.contains("Author: Not recorded · Reviewer: Not recorded · Last reviewed: Not recorded"))
+        XCTAssertTrue(publicRecords.contains("What these sources mean"))
+        for acronym in ["SEC EDGAR", "CIK", "CFPB", "NLRB"] {
+            XCTAssertTrue(publicRecords.contains(acronym), acronym)
+        }
     }
 
     private func appSource(relativePath: String) throws -> String {

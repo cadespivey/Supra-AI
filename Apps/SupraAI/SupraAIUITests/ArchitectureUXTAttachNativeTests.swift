@@ -184,7 +184,10 @@ final class ArchitectureUXTAttachNativeTests: XCTestCase {
     }
 
     private func stringValue(_ element: XCUIElement) -> String {
-        (element.value as? String) ?? element.label
+        [element.label, element.value as? String]
+            .compactMap { $0 }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
     }
 
     private func appSource(relativePath: String) throws -> String {

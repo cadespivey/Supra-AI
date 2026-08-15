@@ -1,0 +1,70 @@
+schema_version: 1
+record_id: optional-architecture-decisions-2026-08-14
+candidate_sha_policy: exact_head_required_for_release_receipt
+
+package_boundary_decision:
+  id: DR-PACKAGE-01
+  baseline_package_count: 14
+  baseline_shape: native_swift_modular_monolith
+  trigger: measured_build_or_ownership_problem_not_disk_size
+  pilot_continue_thresholds:
+    clean_build_wall_time_reduction_percent: 15
+    changed_target_rebuild_wall_time_reduction_percent: 20
+    required_public_api_churn_percent_max: 5
+    allowed_new_runtime_processes: 0
+  pilot_outcome: no_pilot
+  disposition: no_change
+  reason: >-
+    The inventory found no measured ownership or build bottleneck attributable to
+    a package boundary. Disk size alone is not evidence; a boundary change would
+    add churn without crossing a predeclared continue threshold.
+
+rag_challenger_decisions:
+  control: Docs/Architecture/Remediation/Native-RAG-Control.yml
+  common_constraints:
+    independent_variables_per_run: 1
+    client_data_allowed: false
+    deterministic_human_reviewed_gate_required: true
+    quality_noninferiority_required: true
+    resource_and_privacy_evidence_required: true
+    new_runtime_processes_allowed: 0
+  candidates:
+    - id: DR-RAG-EXPERIMENT-01
+      variable: experiment_framework
+      disposition: no_change
+      reason: existing_native_harness_owns_the_control_and_no_framework_gap_is_measured
+    - id: DR-RERANK-01
+      variable: reranker
+      disposition: no_change
+      reason: no_approved_control_run_demonstrates_a_quality_gap
+    - id: DR-PARSER-01
+      variable: parser
+      disposition: no_change
+      reason: no_approved_control_run_demonstrates_a_parser_gap
+    - id: DR-CHUNK-01
+      variable: chunker
+      disposition: no_change
+      reason: chunker_v2_is_the_approved_default_and_no_noninferior_challenger_exists
+    - id: DR-EMBED-ART-01
+      variable: embedding_artifact
+      disposition: no_change
+      reason: no_exact_installed_artifact_comparison_crossed_the_control_threshold
+    - id: DR-ANN-01
+      variable: embedded_ann
+      disposition: no_change
+      reason: bounded_exact_native_scan_is_green_and_no_scale_measurement_justifies_an_index
+
+signed_rag_graph:
+  runtime: native_swift_mlx_sqlite
+  package_manifest_count: 14
+  external_model_distribution: user_initiated_direct_download_not_bundled
+  managed_model_authority: revision_pinned_manifest_and_content_fingerprint
+  dependency_lock: SupraAI.xcworkspace/xcshareddata/swiftpm/Package.resolved
+  prohibited_dependencies:
+    - python_runtime
+    - server_daemon
+    - hosted_vector_store
+    - hosted_trace_or_guardrail_service
+    - redis
+    - mandatory_auxiliary_model
+    - second_orchestration_stack

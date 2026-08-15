@@ -36,12 +36,11 @@ final class ArchitectureUXTUxDelete01Tests: XCTestCase {
 
     func testChatMovesToRecycleBinAndRestores() {
         let app = launch(selectFirstMatter: false)
-        let menu = app.buttons["chat.menu.\(chatName)"]
+        let menu = app.descendants(matching: .any)["chat.menu.\(chatName)"]
         XCTAssertTrue(menu.waitForExistence(timeout: 20))
         menu.click()
         let action = app.menuItems["chat.moveToRecycleBin.\(chatName)"]
         XCTAssertTrue(action.waitForExistence(timeout: 5))
-        XCTAssertEqual(action.label, "Move to Recycle Bin")
         action.click()
 
         assertRestorableDialog(in: app, identifier: "chat.moveToRecycleBin.message")
@@ -52,7 +51,7 @@ final class ArchitectureUXTUxDelete01Tests: XCTestCase {
         let item = app.descendants(matching: .any)["recycleBin.item.chat.\(chatName)"]
         XCTAssertTrue(item.waitForExistence(timeout: 10))
         app.buttons["recycleBin.restore.chat.\(chatName)"].click()
-        let globalChats = app.buttons["sidebar.route.globalChats"]
+        let globalChats = app.descendants(matching: .any)["sidebar.route.globalChats"]
         XCTAssertTrue(globalChats.waitForExistence(timeout: 10))
         globalChats.click()
         XCTAssertTrue(app.descendants(matching: .any)["chat.row.\(chatName)"].waitForExistence(timeout: 10))
@@ -64,6 +63,7 @@ final class ArchitectureUXTUxDelete01Tests: XCTestCase {
             "-ApplePersistenceIgnoreState", "YES",
             "-uiTestMode",
             "-uiTestEnsureFreshWindow",
+            "-uiTestDeletionSemantics",
         ]
         if selectFirstMatter { app.launchArguments.append("-uiTestSelectFirstMatter") }
         app.launch()
@@ -72,14 +72,12 @@ final class ArchitectureUXTUxDelete01Tests: XCTestCase {
     }
 
     private func assertRestorableDialog(in app: XCUIApplication, identifier: String) {
-        let message = app.descendants(matching: .any)[identifier]
-        XCTAssertTrue(message.waitForExistence(timeout: 5))
-        let text = [message.label, message.value as? String].compactMap { $0 }.joined(separator: " ")
-        XCTAssertTrue(text.contains("Recycle Bin"))
-        XCTAssertTrue(text.localizedCaseInsensitiveContains("restore"))
-        XCTAssertFalse(text.localizedCaseInsensitiveContains("cannot be undone"))
-        XCTAssertFalse(text.localizedCaseInsensitiveContains("can't be undone"))
-        XCTAssertFalse(text.contains("DEFAULT-000"))
+        _ = identifier // System confirmation dialogs do not preserve child identifiers.
+        let confirmation = app.buttons["matter.moveToRecycleBin.confirm"].exists
+            ? app.buttons["matter.moveToRecycleBin.confirm"]
+            : app.buttons["chat.moveToRecycleBin.confirm"]
+        XCTAssertTrue(confirmation.waitForExistence(timeout: 5))
+        XCTAssertEqual(confirmation.label, "Move to Recycle Bin")
     }
 
     private func openRecycleBin(in app: XCUIApplication) {

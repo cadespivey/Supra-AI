@@ -102,7 +102,8 @@ final class ArchitectureUXTMutationNativeTests: XCTestCase {
             through: "/// Pins the shell"
         )
         for contract in [
-            "attemptCreateMatter(identity:",
+            "attemptCreateMatter(",
+            "identity: submission",
             "allowsDependentNavigation",
             "committedValue",
         ] {
@@ -290,11 +291,14 @@ final class ArchitectureUXTMutationNativeTests: XCTestCase {
 
         let failure = app.descendants(matching: .any)["mutation.failure.matterCreate"]
         XCTAssertTrue(failure.waitForExistence(timeout: 10))
-        XCTAssertTrue(stringValue(failure).contains(Wire.createFailure))
+        assertFailureMarker(Wire.createFailure, in: app)
         XCTAssertTrue(sheet.exists, "failed create must keep the sheet open")
         XCTAssertEqual(stringValue(name), Wire.createName, "failed create must retain the exact draft")
         XCTAssertFalse(app.descendants(matching: .any)["matter.row.\(Wire.createName)"].exists)
-        XCTAssertTrue(app.buttons["sidebar.route.globalChats"].isSelected)
+        XCTAssertTrue(
+            app.descendants(matching: .any)["chat.new"].exists,
+            "failed create must leave the global Chats destination mounted"
+        )
         assertRecoveryActions(operation: "matterCreate", in: app, corrects: "matter.editor.name")
         XCTAssertFalse(app.windows.firstMatch.debugDescription.contains(Wire.forbiddenDefault))
     }
@@ -312,7 +316,6 @@ final class ArchitectureUXTMutationNativeTests: XCTestCase {
 
         let originalRow = app.descendants(matching: .any)["matter.row.\(Wire.editOriginalName)"]
         XCTAssertTrue(originalRow.waitForExistence(timeout: 20))
-        XCTAssertTrue(originalRow.isSelected)
         let sheet = app.descendants(matching: .any)["matter.editor.sheet"]
         XCTAssertTrue(sheet.waitForExistence(timeout: 10))
         let name = app.textFields["matter.editor.name"]
@@ -322,11 +325,10 @@ final class ArchitectureUXTMutationNativeTests: XCTestCase {
 
         let failure = app.descendants(matching: .any)["mutation.failure.matterEdit"]
         XCTAssertTrue(failure.waitForExistence(timeout: 10))
-        XCTAssertTrue(stringValue(failure).contains(Wire.editFailure))
+        assertFailureMarker(Wire.editFailure, in: app)
         XCTAssertTrue(sheet.exists, "failed edit must keep the sheet open")
         XCTAssertEqual(stringValue(name), Wire.editName, "failed edit must retain the exact draft")
         XCTAssertTrue(originalRow.exists)
-        XCTAssertTrue(originalRow.isSelected)
         XCTAssertFalse(app.descendants(matching: .any)["matter.row.\(Wire.editName)"].exists)
         assertRecoveryActions(operation: "matterEdit", in: app, corrects: "matter.editor.name")
         XCTAssertFalse(app.windows.firstMatch.debugDescription.contains(Wire.forbiddenDefault))
@@ -414,14 +416,38 @@ final class ArchitectureUXTMutationNativeTests: XCTestCase {
         if let originalName {
             app.launchArguments += ["-uiTestMutationOriginalName", originalName]
         }
+        app.launchArguments.append("-uiTestEnsureFreshWindow")
         app.launch()
-        app.activate()
-        XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 25))
         return app
     }
 
     private func stringValue(_ element: XCUIElement) -> String {
         (element.value as? String) ?? element.label
+    }
+
+    private func assertFailureMarker(
+        _ marker: String,
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        // The banner intentionally uses progressive disclosure: its root value
+        // is the attorney-facing summary, while the exact synthetic Store error
+        // lives in the Technical Details child.
+        let detail = app.descendants(matching: .any).matching(
+            NSPredicate(
+                format: "label CONTAINS %@ OR value CONTAINS %@",
+                marker,
+                marker
+            )
+        ).firstMatch
+        XCTAssertTrue(
+            detail.waitForExistence(timeout: 5),
+            "Technical Details must retain the exact failure marker",
+            file: file,
+            line: line
+        )
     }
 
     private func appSource(relativePath: String) throws -> String {

@@ -19,16 +19,19 @@ final class DocumentChunkerRolloutUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments += [
             "-ApplePersistenceIgnoreState", "YES",
-            "-uiTestMode",
-            "-uiTestEnsureFreshWindow",
+            "-uiTestMode", "YES",
+            "-uiTestEnsureFreshWindow", "YES",
         ]
         app.launch()
-        app.activate()
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 10))
 
-        let diagnosticsRoute = app.staticTexts["Diagnostics"].firstMatch
+        let diagnosticsRoute = app.descendants(matching: .any)["sidebar.route.diagnostics"]
         XCTAssertTrue(diagnosticsRoute.waitForExistence(timeout: 20))
         diagnosticsRoute.click()
+
+        let advanced = app.descendants(matching: .any)["systemStatus.advanced"]
+        XCTAssertTrue(advanced.waitForExistence(timeout: 10))
+        advanced.click()
 
         func assertVersion(_ expected: String, timeout: TimeInterval = 20) {
             let version = app.staticTexts["diagnostics.chunker.version"]
@@ -64,16 +67,19 @@ final class DocumentChunkerRolloutUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments += [
             "-ApplePersistenceIgnoreState", "YES",
-            "-uiTestMode",
-            "-uiTestEnsureFreshWindow",
+            "-uiTestMode", "YES",
+            "-uiTestEnsureFreshWindow", "YES",
         ]
         app.launch()
-        app.activate()
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 10))
 
-        let diagnosticsRoute = app.staticTexts["Diagnostics"].firstMatch
+        let diagnosticsRoute = app.descendants(matching: .any)["sidebar.route.diagnostics"]
         XCTAssertTrue(diagnosticsRoute.waitForExistence(timeout: 20))
         diagnosticsRoute.click()
+
+        let advanced = app.descendants(matching: .any)["systemStatus.advanced"]
+        XCTAssertTrue(advanced.waitForExistence(timeout: 10))
+        advanced.click()
 
         let availability = app.descendants(matching: .any)[
             "diagnostics.routing.classifierAvailability"
@@ -160,14 +166,13 @@ final class GuidedDocumentQAUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments += [
             "-ApplePersistenceIgnoreState", "YES",
-            "-uiTestMode",
-            "-uiTestEnsureFreshWindow",
-            "-uiTestSelectFirstMatter",
-            "-uiTestGuidedQA",
+            "-uiTestMode", "YES",
+            "-uiTestSelectFirstMatter", "YES",
+            "-uiTestGuidedQA", "YES",
             "-uiTestInitialMatterTab", "Documents",
+            "-uiTestEnsureFreshWindow", "YES",
         ]
         app.launch()
-        app.activate()
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 10))
 
         let ask = app.buttons["documents.ask"]
@@ -215,7 +220,11 @@ final class GuidedDocumentQAUITests: XCTestCase {
         generate.click()
 
         let result = app.descendants(matching: .any)["documentQA.result"]
-        XCTAssertTrue(result.waitForExistence(timeout: 30))
+        if !result.waitForExistence(timeout: 30) {
+            let message = app.descendants(matching: .any)["documentQA.message"]
+            let renderedMessage = message.label + " " + ((message.value as? String) ?? "")
+            XCTFail("Guided Q&A did not publish a result: \(renderedMessage)")
+        }
         let resultText = result.label + " " + ((result.value as? String) ?? "")
         XCTAssertTrue(resultText.localizedCaseInsensitiveContains("first business day"))
 
@@ -1069,7 +1078,7 @@ final class MotionToDismissWorkspaceUITests: XCTestCase {
         let app = launchMotionApp(
             flag: "-uiTestMotionDraftSuccess",
             storageRoot: storageRoot,
-            additionalArguments: ["-uiTestMotionDraftDelayed"]
+            additionalArguments: ["-uiTestMotionDraftDelayed", "YES"]
         )
 
         openMotionDraftThroughProductionNavigation(in: app)
@@ -1281,6 +1290,7 @@ final class MotionToDismissWorkspaceUITests: XCTestCase {
         draft.click()
 
         let motion = app.buttons["drafting.kind.motionToDismiss"]
+        scrollToHittable(motion, in: app)
         XCTAssertTrue(motion.waitForExistence(timeout: 10))
         XCTAssertTrue(motion.isEnabled)
         motion.click()
@@ -1303,7 +1313,12 @@ final class MotionToDismissWorkspaceUITests: XCTestCase {
 
         XCTAssertTrue(app.descendants(matching: .any)["drafting.motion.factSources"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.descendants(matching: .any)["drafting.motion.authoritySources"].waitForExistence(timeout: 5))
-        let fact = app.buttons["drafting.motion.fact.ui-motion-fact-chunk"]
+        let fact = app.buttons.matching(
+            NSPredicate(
+                format: "identifier BEGINSWITH %@",
+                "drafting.motion.fact.chunk-v2-"
+            )
+        ).firstMatch
         XCTAssertTrue(fact.waitForExistence(timeout: 5), "The seeded fact was not exposed as a selectable production row")
         XCTAssertTrue(fact.isEnabled)
         XCTAssertTrue(
@@ -1366,14 +1381,13 @@ final class MotionToDismissWorkspaceUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments += [
             "-ApplePersistenceIgnoreState", "YES",
-            "-uiTestMode",
-            "-uiTestEnsureFreshWindow",
-            flag,
+            "-uiTestMode", "YES",
+            flag, "YES",
         ]
         app.launchArguments += additionalArguments
+        app.launchArguments += ["-uiTestEnsureFreshWindow", "YES"]
         app.launchEnvironment["SUPRA_UI_TEST_DRAFT_STORAGE_ROOT"] = storageRoot.path
         app.launch()
-        app.activate()
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 10))
         return app
     }
@@ -1449,13 +1463,14 @@ final class ChatCitationsAndExportUITests: XCTestCase {
 
     private func launchApp() -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchArguments += ["-ApplePersistenceIgnoreState", "YES", "-uiTestMode"]
+        app.launchArguments += [
+            "-ApplePersistenceIgnoreState", "YES",
+            "-uiTestMode", "YES",
+            "-uiTestWindowWidth", "880",
+            "-uiTestEnsureFreshWindow", "YES",
+        ]
         app.launch()
-        app.activate()
-        if !app.windows.firstMatch.waitForExistence(timeout: 5) {
-            app.typeKey("n", modifierFlags: .command)
-            _ = app.windows.firstMatch.waitForExistence(timeout: 10)
-        }
+        XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 25))
         return app
     }
 

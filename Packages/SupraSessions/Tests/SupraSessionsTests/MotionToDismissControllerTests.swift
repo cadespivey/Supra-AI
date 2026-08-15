@@ -6,6 +6,7 @@ import SupraCore
 import SupraDrafting
 import SupraDraftingCore
 import SupraExports
+import SupraResearch
 @testable import SupraSessions
 import SupraStore
 import XCTest
@@ -146,7 +147,7 @@ final class MotionToDismissControllerTests: XCTestCase {
         let renderedStyle = try XCTUnwrap(renderer.capturedStyle)
         let xml = try CourtFLRenderer().documentXML(model, style: renderedStyle)
         for required in [
-            "IN THE CIRCUIT COURT OF THE FOURTH JUDICIAL CIRCUIT",
+            "Circuit Court of the Fourth Judicial Circuit in and for Duval County",
             "CASE NUMBER: 2026-CA-001847",
             "MOTION TO DISMISS PLAINTIFF'S FIRST AMENDED COMPLAINT",
             "STATEMENT OF FACTS",
@@ -550,8 +551,8 @@ final class MotionToDismissControllerTests: XCTestCase {
         )
 
         for supportedCourt in [
-            "IN THE CIRCUIT COURT OF THE FOURTH JUDICIAL CIRCUIT, IN AND FOR DUVAL COUNTY, FLORIDA",
-            "IN THE COUNTY COURT IN AND FOR DUVAL COUNTY, FLORIDA",
+            "Circuit Court of the Fourth Judicial Circuit in and for Duval County",
+            "County Court in and for Duval County",
         ] {
             try await setCourt(supportedCourt, fixture: fixture)
             XCTAssertTrue(
@@ -561,9 +562,9 @@ final class MotionToDismissControllerTests: XCTestCase {
         }
 
         for unsupportedCourt in [
-            "UNITED STATES DISTRICT COURT FOR THE MIDDLE DISTRICT OF FLORIDA",
-            "FLORIDA FIRST DISTRICT COURT OF APPEAL",
-            "IN THE CIRCUIT COURT OF FULTON COUNTY, GEORGIA",
+            "United States District Court for the Middle District of Florida",
+            "First District Court of Appeal of Florida",
+            "Superior Court of Fulton County",
         ] {
             try await setCourt(unsupportedCourt, fixture: fixture)
             let readiness = controller.motionReadiness(
@@ -1606,10 +1607,11 @@ final class MotionToDismissControllerTests: XCTestCase {
             name: "Fictional Harbor Supply, LLC v. Gulf Works, Inc.",
             jurisdiction: "Florida",
             partyPerspective: .defendant,
-            court: "IN THE CIRCUIT COURT OF THE FOURTH JUDICIAL CIRCUIT,\nIN AND FOR DUVAL COUNTY, FLORIDA",
+            court: "Circuit Court of the Fourth Judicial Circuit in and for Duval County",
             judge: "Avery Stone",
             docketNumber: "2026-CA-001847"
         )
+        try setCanonicalMatterIdentity(store: store, matterID: matter.id)
         let selectedFact = try insertFact(
             store: store,
             matterID: matter.id,
@@ -1957,7 +1959,7 @@ final class MotionToDismissControllerTests: XCTestCase {
             firm: "Rowan & Finch, P.A.",
             address: OfficeBlock(
                 street: "1 Independent Drive",
-                suite: "Suite 2400",
+                suite: nil,
                 city: "Jacksonville",
                 state: "Florida",
                 zip: "32202",
@@ -2028,6 +2030,105 @@ final class MotionToDismissControllerTests: XCTestCase {
             clientID: matter.clientID,
             clientMatterID: matter.clientMatterID,
             notes: matter.notes
+        )
+        let snapshot = try XCTUnwrap(
+            fixture.store.matterIdentity.fetchSnapshot(matterID: fixture.matterID)
+        )
+        let catalog = JurisdictionCatalog.shared
+        let resolvedCourt = court.flatMap(catalog.resolvePersistedCourtIdentity)
+        let resolvedJurisdiction = resolvedCourt.flatMap {
+            catalog.canonicalJurisdictionOption(forSelectedOptionID: $0.id)
+        }
+        _ = try fixture.store.matterIdentity.updateMatter(
+            command: MatterIdentityUpdateCommand(
+                matterID: fixture.matterID,
+                expectedIdentityRevision: snapshot.identityRevision,
+                legacyJurisdictionText: matter.jurisdiction,
+                legacyCourtText: court,
+                legacyPartyPerspective: perspective,
+                legacyClientNames: matter.clientNames,
+                courtResolutionState: resolvedCourt == nil ? .unresolved : .court,
+                canonicalCatalogVersion: catalog.catalogVersion,
+                canonicalCatalogDigestSHA256: catalog.identityDigestSHA256,
+                canonicalJurisdictionID: resolvedJurisdiction.map {
+                    CanonicalJurisdictionID(rawValue: $0.id)
+                },
+                canonicalCourtID: resolvedCourt.map {
+                    CanonicalCourtID(rawValue: $0.id)
+                },
+                parties: snapshot.parties,
+                representations: snapshot.representations
+            )
+        )
+    }
+
+    private func setCanonicalMatterIdentity(
+        store: SupraStore,
+        matterID: String
+    ) throws {
+        let snapshot = try XCTUnwrap(
+            store.matterIdentity.fetchSnapshot(matterID: matterID)
+        )
+        let catalog = JurisdictionCatalog.shared
+        let courtName = "Circuit Court of the Fourth Judicial Circuit in and for Duval County"
+        let court = try XCTUnwrap(catalog.resolvePersistedCourtIdentity(courtName))
+        let jurisdiction = try XCTUnwrap(
+            catalog.canonicalJurisdictionOption(forSelectedOptionID: court.id)
+        )
+        let representedPartyID = "motion-party-gulf-works"
+        let opposingPartyID = "motion-party-harbor-supply"
+        _ = try store.matterIdentity.updateMatter(
+            command: MatterIdentityUpdateCommand(
+                matterID: matterID,
+                expectedIdentityRevision: snapshot.identityRevision,
+                legacyJurisdictionText: "Florida",
+                legacyCourtText: courtName,
+                legacyPartyPerspective: .defendant,
+                legacyClientNames: "Gulf Works, Inc.",
+                courtResolutionState: .court,
+                canonicalCatalogVersion: catalog.catalogVersion,
+                canonicalCatalogDigestSHA256: catalog.identityDigestSHA256,
+                canonicalJurisdictionID: CanonicalJurisdictionID(rawValue: jurisdiction.id),
+                canonicalCourtID: CanonicalCourtID(rawValue: court.id),
+                parties: [
+                    MatterPartyIdentity(
+                        id: opposingPartyID,
+                        matterID: matterID,
+                        displayName: "Fictional Harbor Supply, LLC",
+                        captionName: "FICTIONAL HARBOR SUPPLY, LLC,",
+                        baseRole: .plaintiff,
+                        captionOrder: 0,
+                        clientStatus: .notRepresented
+                    ),
+                    MatterPartyIdentity(
+                        id: representedPartyID,
+                        matterID: matterID,
+                        displayName: "Gulf Works, Inc.",
+                        captionName: "GULF WORKS, INC.,",
+                        baseRole: .defendant,
+                        captionOrder: 1,
+                        clientStatus: .represented
+                    ),
+                ],
+                representations: [
+                    MatterRepresentationIdentity(
+                        id: "motion-representation-harbor-counsel",
+                        matterID: matterID,
+                        representedPartyID: opposingPartyID,
+                        relationshipKind: .counsel,
+                        representativeName: "Jordan Rowan, Esq.",
+                        firmName: "Rowan & Finch, P.A.",
+                        serviceAddress: MatterServiceAddress(
+                            street: "1 Independent Drive",
+                            city: "Jacksonville",
+                            state: "Florida",
+                            postalCode: "32202"
+                        ),
+                        serviceEmails: ["jrowan@example.test"],
+                        serviceOrder: 0
+                    ),
+                ]
+            )
         )
     }
 

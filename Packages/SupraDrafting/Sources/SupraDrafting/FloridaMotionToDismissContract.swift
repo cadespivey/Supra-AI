@@ -11,8 +11,34 @@ public enum FloridaMotionToDismissContract {
     public static func isSupportedFilingCourt(_ explicitCourt: String) -> Bool {
         let court = normalizedWhitespace(explicitCourt).lowercased()
         guard !court.isEmpty,
-              court.range(of: #"\bflorida\b"#, options: .regularExpression) != nil,
-              court.range(of: #"\b(?:circuit|county)\s+court\b"#, options: .regularExpression) != nil else {
+              court.range(of: #"\bflorida\b"#, options: .regularExpression) != nil else {
+            return false
+        }
+        return isSupportedTrialCourtShape(court)
+    }
+
+    /// Uses the canonical filing-state field as jurisdiction authority. Court
+    /// catalog display names need not repeat their state (for example,
+    /// "Circuit Court of the Fourth Judicial Circuit in and for Duval County").
+    public static func isSupportedFilingCourt(
+        _ explicitCourt: String,
+        filingStateName: String
+    ) -> Bool {
+        guard normalizedWhitespace(filingStateName)
+            .caseInsensitiveCompare("Florida") == .orderedSame else {
+            return false
+        }
+        return isSupportedTrialCourtShape(
+            normalizedWhitespace(explicitCourt).lowercased()
+        )
+    }
+
+    private static func isSupportedTrialCourtShape(_ court: String) -> Bool {
+        guard !court.isEmpty,
+              court.range(
+                of: #"\b(?:circuit|county)\s+court\b"#,
+                options: .regularExpression
+              ) != nil else {
             return false
         }
 

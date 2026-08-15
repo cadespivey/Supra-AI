@@ -612,14 +612,17 @@ final class ArchitectureUXTMutation01Tests: XCTestCase {
         XCTAssertFalse(outcome.allowsDependentNavigation, file: file, line: line)
         let failure = try XCTUnwrap(outcome.failure, file: file, line: line)
         XCTAssertEqual(failure.operation, operation, file: file, line: line)
+        let presentedFailure = [failure.userMessage, failure.technicalDetails]
+            .compactMap { $0 }
+            .joined(separator: "\n")
         XCTAssertTrue(
-            failure.userMessage.contains(marker),
+            presentedFailure.contains(marker),
             "the exact non-default injected failure must reach presentation",
             file: file,
             line: line
         )
         XCTAssertFalse(
-            failure.userMessage.contains(Wire.forbiddenDefault),
+            presentedFailure.contains(Wire.forbiddenDefault),
             file: file,
             line: line
         )

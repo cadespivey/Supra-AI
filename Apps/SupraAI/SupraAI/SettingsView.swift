@@ -6,7 +6,18 @@ import SupraSessions
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Generation defaults, model storage location, and app info.
+enum SettingsCategory: String, CaseIterable, Identifiable {
+    case profile = "Profile"
+    case draftingAndCitations = "Drafting & Citations"
+    case billing = "Billing"
+    case dataAndBackup = "Data & Backup"
+    case connections = "Connections"
+    case advancedAbout = "Advanced/About"
+
+    var id: String { rawValue }
+}
+
+/// Task-grouped preferences, connections, local data controls, and app info.
 struct SettingsView: View {
     @ObservedObject var settings: SettingsController
     @ObservedObject var profile: AssistantProfileController
@@ -20,6 +31,7 @@ struct SettingsView: View {
     @FocusState private var focusedSetupRequirementID: String?
     @FocusState private var generationSettingsFocused: Bool
     @State private var retryGenerationSettings: (() -> Void)?
+    @State private var selectedCategory: SettingsCategory = .profile
 
     init(
         settings: SettingsController,
@@ -64,170 +76,30 @@ struct SettingsView: View {
                 .accessibilityIdentifier("settings.mutationFailure")
             }
 
-            ScrollViewReader { proxy in
-                Form {
-                    AssistantProfileSection(profile: profile, billing: billing)
+            HStack(spacing: 0) {
+                List(SettingsCategory.allCases, selection: $selectedCategory) { category in
+                    Text(category.rawValue).tag(category)
+                }
+                .listStyle(.sidebar)
+                .frame(width: 190)
+                .accessibilityIdentifier("settings.categories")
 
-                FirmStyleSection(firmStyle: firmStyle, parseExemplar: parseExemplar)
+                Divider()
 
-                ScratchPadBillingSection(billing: billing)
-
-                BackupSection(
-                    backup: backup,
-                    focusedSetupRequirementID: $focusedSetupRequirementID
-                )
-
-            Section("Generation Defaults") {
-                Picker("Preset", selection: presetBinding) {
-                    ForEach(GenerationPreset.userSelectableDefaults, id: \.self) { preset in
-                        Text(preset.displayName).tag(preset)
+                ScrollViewReader { proxy in
+                    Form {
+                        settingsCategoryContent
                     }
-                }
-
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack {
-                        Text("Temperature")
-                        Spacer()
-                        Text(String(format: "%.2f", settings.temperature))
-                            .foregroundStyle(.secondary)
-                            .monospacedDigit()
-                    }
-                    Slider(value: temperatureBinding, in: 0...1, step: 0.05)
-                        .focused($generationSettingsFocused)
-                    Text("Lower is more precise, deterministic, and consistent — best for legal accuracy. Higher is more varied and creative, with more risk of drift or invented detail.")
-                        .font(.callout).foregroundStyle(.secondary)
-                }
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Stepper(
-                        "Max output tokens: \(settings.maxOutputTokens)",
-                        value: maxOutputTokensBinding,
-                        in: 128...8192,
-                        step: 128
-                    )
-                    Text("The longest a single answer can be (≈¾ of a word per token). Higher allows fuller answers but uses more memory and takes longer; it doesn't change accuracy.")
-                        .font(.callout).foregroundStyle(.secondary)
-                }
-            }
-
-            Section {
-                Text("Connectors ground research in primary law and track legislative or regulatory developments. In Release builds, credentials entered here are stored in the device-bound Keychain and scoped to their provider. Sources marked “Free · no key required” use public endpoints; provider availability and terms can change.")
-                    .font(.callout).foregroundStyle(.secondary)
-                // Case law
-                APIKeyDisclosure(
-                    settings: settings, title: "CourtListener",
-                    description: "Federal & state case law from courts and PACER, via the nonprofit Free Law Project. Updated continuously as new opinions are published.",
-                    kind: .courtListener(signupURL: URL(string: "https://www.courtlistener.com/help/api/rest/")!)
-                )
-                .setupRequirementFocus(
-                    "settings.requirement.provider.courtListener",
-                    focusedIdentifier: $focusedSetupRequirementID
-                )
-                // Codified law
-                APIKeyDisclosure(
-                    settings: settings, title: "govinfo",
-                    description: "The official U.S. Code from the U.S. Government Publishing Office. USCODE editions are issued annually, with supplements between editions.",
-                    kind: .service(.govInfo, prompt: "govinfo (api.data.gov) API key", signupURL: URL(string: "https://api.data.gov/signup/")!)
-                )
-                APIKeyDisclosure(
-                    settings: settings, title: "eCFR",
-                    description: "The official Code of Federal Regulations. Continuously updated; each section carries an effective date, typically current to within a few days.",
-                    kind: .builtIn(sourceID: "ecfr")
-                )
-                APIKeyDisclosure(
-                    settings: settings, title: "Open Legal Codes",
-                    description: "State statutes, the U.S. Code, and the CFR, crawled best-effort. Coverage varies and there is no verified effective date — always confirm currency against the official source.",
-                    kind: .builtIn(sourceID: "open-legal-codes")
-                )
-                // Legislative & regulatory developments (tracked, not cited as authority)
-                APIKeyDisclosure(
-                    settings: settings, title: "Federal Register",
-                    description: "Federal rules, proposed rules, and agency notices. Published every federal business day. Tracked as developments — not cited as authority.",
-                    kind: .builtIn(sourceID: "federal-register")
-                )
-                APIKeyDisclosure(
-                    settings: settings, title: "OpenStates",
-                    description: "State & federal bills, from the Plural civic-data project. Updated daily while legislatures are in session.",
-                    kind: .service(.openStates, prompt: "OpenStates API key", signupURL: URL(string: "https://openstates.org/accounts/profile/")!)
-                )
-                APIKeyDisclosure(
-                    settings: settings, title: "Regulations.gov",
-                    description: "Federal rulemaking dockets and public comments. Updated each federal business day. Tracked as developments — not cited as authority.",
-                    kind: .service(.regulationsGov, prompt: "Regulations.gov API key", signupURL: URL(string: "https://api.data.gov/signup/")!)
-                )
-            } header: {
-                Text("Legal Data Sources")
-            }
-
-            Section("Model Storage") {
-                LabeledContent("Downloaded models") {
-                    Text(settings.modelsDirectoryPath)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .textSelection(.enabled)
-                }
-                Button("Reveal in Finder") {
-                    revealInFinder(settings.modelsDirectoryPath)
-                }
-            }
-
-            Section {
-                Text("When automatic checks are enabled, Sparkle checks the signed feed at supralegal.ai and may download the signed update it names. The updater receives no legal-data credential or matter content. You can disable automatic checks and check manually.")
-                    .font(.callout).foregroundStyle(.secondary)
-                Toggle("Check for updates automatically", isOn: $update.automaticallyChecksForUpdates)
-                HStack {
-                    Button("Check for Updates") { update.checkForUpdates() }
-                        .disabled(!update.canCheckForUpdates)
-                    Spacer()
-                    if let message = update.statusMessage {
-                        Text(message).font(.supraCaption).foregroundStyle(.secondary)
-                    } else {
-                        Text("You're on \(settings.appVersion.marketingVersion).")
-                            .font(.supraCaption).foregroundStyle(.secondary)
-                    }
-                }
-            } header: {
-                Text("Software Update")
-            }
-
-            Section {
-                Text("Supra AI's research is grounded in free, public-interest data projects: CourtListener and the Free Law Project (case law), Open Legal Codes (statutes & codes), and OpenStates (legislation). Please consider creating a free account or otherwise supporting their work.")
-                    .font(.callout).foregroundStyle(.secondary)
-                AboutBanner(version: settings.appVersion.marketingVersion)
-                Link(destination: URL(string: "https://github.com/cadespivey/Supra-AI")!) {
-                    Label("GitHub repository", systemImage: "chevron.left.forwardslash.chevron.right")
-                }
-                Link(destination: URL(string: "https://www.courtlistener.com")!) {
-                    Label("CourtListener", systemImage: "books.vertical")
-                }
-                Link(destination: URL(string: "https://free.law")!) {
-                    Label("Free Law Project", systemImage: "building.columns")
-                }
-                Link(destination: URL(string: "https://openlegalcodes.org")!) {
-                    Label("Open Legal Codes", systemImage: "text.book.closed")
-                }
-                Link(destination: URL(string: "https://openstates.org")!) {
-                    Label("OpenStates", systemImage: "building.2")
-                }
-            } header: {
-                Text("About")
-            }
-                }
-                .formStyle(.grouped)
-                // Larger, bolder section headers — consistent with AI Setup.
-                .headerProminence(.increased)
-                // A clearly-bordered box for every single-line field, so they're easy to
-                // identify (cascades to all TextField/SecureField descendants; MultilineField
-                // has its own border). Left-align the contents so text and spaces flow with
-                // typing instead of the grouped form's default right alignment.
-                .textFieldStyle(.roundedBorder)
-                .multilineTextAlignment(.leading)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .onChange(of: focusedSetupRequirementID) { _, identifier in
-                    guard let identifier else { return }
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        proxy.scrollTo(identifier, anchor: .center)
+                    .formStyle(.grouped)
+                    .headerProminence(.increased)
+                    .textFieldStyle(.roundedBorder)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .onChange(of: focusedSetupRequirementID) { _, identifier in
+                        guard let identifier else { return }
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            proxy.scrollTo(identifier, anchor: .center)
+                        }
                     }
                 }
             }
@@ -235,6 +107,126 @@ struct SettingsView: View {
         .onAppear { focusRequestedSetupRow() }
         .onChange(of: setupNavigationRequest?.id) { _, _ in
             focusRequestedSetupRow()
+        }
+        .onDisappear { focusedSetupRequirementID = nil }
+    }
+
+    @ViewBuilder
+    private var settingsCategoryContent: some View {
+        switch selectedCategory {
+        case .profile:
+            AssistantProfileSection(profile: profile, billing: billing)
+        case .draftingAndCitations:
+            FirmStyleSection(firmStyle: firmStyle, parseExemplar: parseExemplar)
+            generationDefaultsSection
+        case .billing:
+            ScratchPadBillingSection(billing: billing)
+        case .dataAndBackup:
+            BackupSection(
+                backup: backup,
+                focusedSetupRequirementID: $focusedSetupRequirementID
+            )
+            modelStorageSection
+        case .connections:
+            legalDataSourcesSection
+        case .advancedAbout:
+            softwareUpdateSection
+            aboutSection
+        }
+    }
+
+    private var generationDefaultsSection: some View {
+        Section("Generation Defaults") {
+            Picker("Preset", selection: presetBinding) {
+                ForEach(GenerationPreset.userSelectableDefaults, id: \.self) { preset in
+                    Text(preset.displayName).tag(preset)
+                }
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text("Temperature")
+                    Spacer()
+                    Text(String(format: "%.2f", settings.temperature))
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+                Slider(value: temperatureBinding, in: 0...1, step: 0.05)
+                    .focused($generationSettingsFocused)
+                Text("Lower is more precise and consistent — best for legal accuracy. Higher is more varied, with more risk of drift or invented detail.")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                Stepper(
+                    "Max output tokens: \(settings.maxOutputTokens)",
+                    value: maxOutputTokensBinding,
+                    in: 128...8192,
+                    step: 128
+                )
+                Text("The longest a single answer can be. Higher allows fuller answers but uses more memory and takes longer; it does not change accuracy.")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var legalDataSourcesSection: some View {
+        Section("Legal Data Sources") {
+            Text("Connections ground research in primary law and track legislative or regulatory developments. Credentials are stored in the device-bound Keychain and scoped to their provider.")
+                .font(.callout).foregroundStyle(.secondary)
+            APIKeyDisclosure(
+                settings: settings, title: "CourtListener",
+                description: "Federal and state case law from courts and PACER, via the nonprofit Free Law Project.",
+                kind: .courtListener(signupURL: URL(string: "https://www.courtlistener.com/help/api/rest/")!)
+            )
+            .setupRequirementFocus(
+                "settings.requirement.provider.courtListener",
+                focusedIdentifier: $focusedSetupRequirementID
+            )
+            APIKeyDisclosure(settings: settings, title: "govinfo", description: "The official U.S. Code from the U.S. Government Publishing Office.", kind: .service(.govInfo, prompt: "govinfo (api.data.gov) API key", signupURL: URL(string: "https://api.data.gov/signup/")!))
+            APIKeyDisclosure(settings: settings, title: "eCFR", description: "The official, continuously updated Code of Federal Regulations.", kind: .builtIn(sourceID: "ecfr"))
+            APIKeyDisclosure(settings: settings, title: "Open Legal Codes", description: "Best-effort state statutes, U.S. Code, and CFR coverage; confirm currency against an official source.", kind: .builtIn(sourceID: "open-legal-codes"))
+            APIKeyDisclosure(settings: settings, title: "Federal Register", description: "Federal rules, proposed rules, and agency notices; tracked as developments, not authority.", kind: .builtIn(sourceID: "federal-register"))
+            APIKeyDisclosure(settings: settings, title: "OpenStates", description: "State and federal bills from the Plural civic-data project.", kind: .service(.openStates, prompt: "OpenStates API key", signupURL: URL(string: "https://openstates.org/accounts/profile/")!))
+            APIKeyDisclosure(settings: settings, title: "Regulations.gov", description: "Federal rulemaking dockets and public comments; tracked as developments, not authority.", kind: .service(.regulationsGov, prompt: "Regulations.gov API key", signupURL: URL(string: "https://api.data.gov/signup/")!))
+        }
+    }
+
+    private var modelStorageSection: some View {
+        Section("Model Storage") {
+            LabeledContent("Downloaded models") {
+                Text(settings.modelsDirectoryPath)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .textSelection(.enabled)
+            }
+            Button("Reveal in Finder") { revealInFinder(settings.modelsDirectoryPath) }
+        }
+    }
+
+    private var softwareUpdateSection: some View {
+        Section("Software Update") {
+            Text("Automatic checks use Supra AI's signed update feed and do not include matter content or legal-data credentials.")
+                .font(.callout).foregroundStyle(.secondary)
+            Toggle("Check for updates automatically", isOn: $update.automaticallyChecksForUpdates)
+            HStack {
+                Button("Check for Updates") { update.checkForUpdates() }
+                    .disabled(!update.canCheckForUpdates)
+                Spacer()
+                Text(update.statusMessage ?? "You're on \(settings.appVersion.marketingVersion).")
+                    .font(.supraCaption).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var aboutSection: some View {
+        Section("About") {
+            AboutBanner(version: settings.appVersion.marketingVersion)
+            Link(destination: URL(string: "https://github.com/cadespivey/Supra-AI")!) {
+                Label("GitHub repository", systemImage: "chevron.left.forwardslash.chevron.right")
+            }
+            Link(destination: URL(string: "https://free.law")!) {
+                Label("Free Law Project", systemImage: "building.columns")
+            }
         }
     }
 
@@ -298,6 +290,9 @@ struct SettingsView: View {
 
     private func focusRequestedSetupRow() {
         guard let request = settingsRequest else { return }
+        selectedCategory = request.requirement == .backupDestination
+            ? .dataAndBackup
+            : .connections
         let identifier = request.navigationTarget.rowAccessibilityIdentifier
         Task { @MainActor in
             await Task.yield()

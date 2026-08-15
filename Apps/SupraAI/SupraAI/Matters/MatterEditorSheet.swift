@@ -71,7 +71,12 @@ struct MatterEditorSheet: View {
     }
 
     var body: some View {
-        SupraSheetScaffold(mode.title, doneLabel: "Cancel", onClose: { dismiss() }) {
+        SupraSheetScaffold(
+            mode.title,
+            doneLabel: "Cancel",
+            titleAccessibilityIdentifier: "matter.editor.sheet",
+            onClose: { dismiss() }
+        ) {
             VStack(spacing: 0) {
                 if let failure = lastMutationFailure {
                     UserMutationFailureBanner(
@@ -94,7 +99,6 @@ struct MatterEditorSheet: View {
                 .accessibilityIdentifier("matter.editor.commit")
         }
         .frame(minWidth: 480, idealWidth: 600, maxWidth: .infinity, minHeight: 520, idealHeight: 640, maxHeight: .infinity)
-        .accessibilityIdentifier("matter.editor.sheet")
     }
 
     private var editorForm: some View {

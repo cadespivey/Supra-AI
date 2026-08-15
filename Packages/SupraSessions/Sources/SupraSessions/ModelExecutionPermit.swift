@@ -63,12 +63,36 @@ public final class ModelExecutionPermit: RuntimeFeatureClientProtocol, @unchecke
         _ request: GenerateRequest
     ) throws -> AsyncThrowingStream<GenerationEvent, Error> {
         try validate(modelID: request.modelID)
+        var authorizedRequest = request
         if let modelBinding {
-            guard request.expectedModelSHA256 == modelBinding.artifactFingerprintSHA256 else {
+            if let expectedModelSHA256 = request.expectedModelSHA256 {
+                guard expectedModelSHA256 == modelBinding.artifactFingerprintSHA256 else {
+                    throw ModelExecutionError.modelBindingMismatch
+                }
+            } else {
+                // Feature requests created before content-bound admission do not
+                // own runtime authority. Project the permit's already-verified
+                // artifact identity into the wire request so the XPC boundary
+                // still receives an exact fingerprint. A caller-supplied,
+                // conflicting fingerprint continues to fail closed above.
+                authorizedRequest = GenerateRequest(
+                    generationID: request.generationID,
+                    modelID: request.modelID,
+                    expectedModelSHA256: modelBinding.artifactFingerprintSHA256,
+                    prompt: request.prompt,
+                    systemPrompt: request.systemPrompt,
+                    history: request.history,
+                    contextWorkload: request.contextWorkload,
+                    allowsExactSourceRepacking: request.allowsExactSourceRepacking,
+                    options: request.options
+                )
+            }
+            guard authorizedRequest.expectedModelSHA256
+                    == modelBinding.artifactFingerprintSHA256 else {
                 throw ModelExecutionError.modelBindingMismatch
             }
         }
-        let runtimeStream = try runtimeClient.generate(request)
+        let runtimeStream = try runtimeClient.generate(authorizedRequest)
         generationState.begin(generationID: request.generationID)
         return runtimeStream
     }

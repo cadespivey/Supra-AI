@@ -1,3 +1,4 @@
+import AppKit
 import SupraCore
 import SupraRuntimeClient
 import SupraRuntimeInterface
@@ -22,9 +23,78 @@ struct DiagnosticsView: View {
     @State private var runningCoverageProbe = false
     @State private var shadowLoggingEnabled = false
     @State private var additiveRoutingEnabled = false
+    @State private var showAdvanced = false
+    @State private var diagnosticCopyMessage: String?
 
     var body: some View {
         List {
+            Section {
+                Text("System Status")
+                    .font(.supraTitle)
+                Text("A plain-language view of the local assistant, document search, connections, and protected data on this Mac.")
+                    .font(.supraSubheadline)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Local Assistant") {
+                LabeledContent("Status", value: environment.runtimeServiceState.displayName)
+                LabeledContent(
+                    "Model",
+                    value: environment.modelLibrary.loadedModel?.displayName ?? "Not loaded"
+                )
+                if environment.runtimeRecoverySnapshot.phase != .available {
+                    Button("Recover Local Assistant") {
+                        Task { await environment.recoverRuntime() }
+                    }
+                    .disabled(environment.runtimeRecoverySnapshot.phase == .recovering)
+                }
+            }
+
+            Section("Document Search") {
+                LabeledContent(
+                    "Status",
+                    value: environment.documentSetupController.isReadyForImport
+                        ? "Ready"
+                        : "Finish AI Setup"
+                )
+                Text("Document search stays on this Mac and uses the embedding model and document storage configured in AI Setup.")
+                    .font(.supraCaption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Research Connections") {
+                Text("Legal-source connections are configured in Settings. Public Records and network research contact a source only when you start a search.")
+                    .font(.supraBody)
+                Text("Source availability and currentness still require review before relying on a result.")
+                    .font(.supraCaption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Storage & Backups") {
+                LabeledContent("Local data", value: "Available")
+                LabeledContent(
+                    "Backup destination",
+                    value: environment.backupController.hasDestination ? "Configured" : "Not configured"
+                )
+                if let lastSuccessAt = environment.backupController.lastSuccessAt {
+                    LabeledContent("Last protected", value: lastSuccessAt.formatted())
+                }
+            }
+
+            Section {
+                Button("Copy Diagnostic Report") { copyDiagnosticReport() }
+                if let diagnosticCopyMessage {
+                    Text(diagnosticCopyMessage)
+                        .font(.supraCaption)
+                        .foregroundStyle(.secondary)
+                }
+                Toggle("Advanced", isOn: $showAdvanced)
+                    .accessibilityIdentifier("systemStatus.advanced")
+            } footer: {
+                Text("Advanced contains engineering probes and rollback controls. The copied report contains status metadata, not matter or document content.")
+            }
+
+            if showAdvanced {
             Section {
                 LabeledContent("State", value: environment.runtimeServiceState.displayName)
                 LabeledContent("Message") {
@@ -260,6 +330,7 @@ struct DiagnosticsView: View {
             } header: {
                 Text("Next Step").font(.supraHeadline).textCase(nil).foregroundStyle(.primary)
             }
+            }
         }
         // Refresh on appear, then poll every 10 seconds while visible; the task is
         // cancelled automatically when the tab goes away.
@@ -279,6 +350,21 @@ struct DiagnosticsView: View {
                 try? await Task.sleep(for: .seconds(10))
             }
         }
+    }
+
+    private func copyDiagnosticReport() {
+        let report = """
+        Supra AI System Status
+        Local assistant: \(environment.runtimeServiceState.displayName)
+        Loaded model: \(environment.modelLibrary.loadedModel?.displayName ?? "None")
+        Registered models: \(environment.modelLibrary.models.count)
+        Document search: \(environment.documentSetupController.isReadyForImport ? "Ready" : "Setup required")
+        Document chunker: v\(environment.documentChunkerVersion)
+        Backup destination: \(environment.backupController.hasDestination ? "Configured" : "Not configured")
+        """
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(report, forType: .string)
+        diagnosticCopyMessage = "Diagnostic report copied."
     }
 
     private static func percent(_ value: Double) -> String {

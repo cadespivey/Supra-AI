@@ -171,6 +171,34 @@ final class ArchitectureUXTRuntimeBind01Tests: XCTestCase {
         XCTAssertTrue(base.generateRequests.isEmpty, "wrong fingerprint must not reach XPC")
     }
 
+    func testPermitProjectsItsExactBindingIntoARequestWithoutFingerprint() async throws {
+        let base = ArchitectureUXImmediateRuntimeClient()
+        let coordinator = architectureUXRuntimeCoordinator(base: base)
+        let executionRequest = ArchitectureUXRuntimeWire.request(
+            "binding-projection-1251",
+            priority: .foregroundInteractive
+        )
+
+        _ = try await coordinator.execute(executionRequest) { permit in
+            let request = GenerateRequest(
+                generationID: GenerationID(),
+                modelID: ArchitectureUXRuntimeWire.modelID,
+                prompt: "binding-projection-wire-1257",
+                systemPrompt: nil,
+                contextWorkload: .groundedExactEvidence,
+                options: GenerationOptions()
+            )
+            for try await _ in try permit.generate(request) {}
+            return "binding-projected-1261"
+        }
+
+        XCTAssertEqual(base.generateRequests.count, 1)
+        XCTAssertEqual(
+            base.generateRequests.first?.expectedModelSHA256,
+            ArchitectureUXRuntimeWire.fingerprintSHA256
+        )
+    }
+
     func testEmbeddingLoadRequiresTheSameExactArtifactBindingAsItsPermit() async throws {
         // Expected RED: embedding-load requests carry no content binding and
         // ModelExecutionPermit forwards them without exact artifact validation.

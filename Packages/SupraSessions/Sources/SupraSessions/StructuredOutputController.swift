@@ -305,18 +305,24 @@ public final class StructuredOutputController: ObservableObject {
             lastMutationFailure = nil
             return .committed(destination)
         } catch {
-            return rejectExport("Export failed: \(error.localizedDescription)")
+            return rejectExport(
+                "Couldn’t save the exported work product. Save a New Copy or choose another location, then retry.",
+                technicalDetails: error.localizedDescription,
+                recoveryActions: [.retry, .correctInput]
+            )
         }
     }
 
     private func rejectExport(
         _ userMessage: String,
+        technicalDetails: String? = nil,
         recoveryActions: Set<UserMutationRecoveryAction> = [.retry]
     ) -> UserMutationOutcome<URL> {
         message = userMessage
         let failure = UserMutationFailure(
             operation: .export,
             userMessage: userMessage,
+            technicalDetails: technicalDetails,
             recoveryActions: recoveryActions
         )
         lastMutationFailure = failure

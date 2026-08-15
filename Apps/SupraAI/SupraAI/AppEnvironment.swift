@@ -1294,7 +1294,11 @@ final class AppEnvironment: ObservableObject {
     /// True when launched by the XCUITest harness (passes `-uiTestMode`). Drives a
     /// hermetic throwaway store + a seeded matter so UI tests never touch real data.
     static var isUITestMode: Bool {
+#if DEBUG
         ProcessInfo.processInfo.arguments.contains("-uiTestMode")
+#else
+        false
+#endif
     }
 
     /// Resolves the dedicated typed-setup fixture without a fallback value.
@@ -1322,7 +1326,11 @@ final class AppEnvironment: ObservableObject {
     /// and documents; only the case law is real) for marketing screenshots. Never
     /// touches the user's real database.
     static var isDemoMode: Bool {
+#if DEBUG
         ProcessInfo.processInfo.arguments.contains("-demoMode")
+#else
+        false
+#endif
     }
 
     /// The headless probe requested by this launch, if any — resolved once, mutually
@@ -1377,6 +1385,13 @@ final class AppEnvironment: ObservableObject {
         seedUITestCanonicalReadinessIfNeeded()
 #endif
         seedUITestCitationsChatIfNeeded()
+        #if DEBUG
+        seedUITestDeletionSemanticsIfNeeded()
+        #endif
+        // The controller loads before fixtures are inserted during bootstrap.
+        // Reload once after the citations fixture so the real chat history UI
+        // observes the newly committed row in this process.
+        chatController.loadChats()
         seedUITestRemediationWarningsIfNeeded()
         seedUITestInterruptedDraftRecoveryIfNeeded()
         seedUITestImportFailureIfNeeded()
@@ -1386,6 +1401,19 @@ final class AppEnvironment: ObservableObject {
         seedUITestGuidedQAIfNeeded()
         seedUITestMotionDraftIfNeeded()
     }
+
+#if DEBUG
+    /// Creates the one row needed by the deletion round-trip without coupling
+    /// that common workflow to the much richer citation/demo fixture.
+    private func seedUITestDeletionSemanticsIfNeeded() {
+        guard Self.isUITestMode,
+              ProcessInfo.processInfo.arguments.contains("-uiTestDeletionSemantics")
+        else { return }
+        let existing = (try? store.chats.fetchGlobalChats()) ?? []
+        guard !existing.contains(where: { $0.title == "Citations Demo" }) else { return }
+        _ = try? store.chats.createGlobalChat(title: "Citations Demo")
+    }
+#endif
 
 #if DEBUG
     private enum CanonicalMatterIdentityFixtureError: Error {
@@ -2149,6 +2177,7 @@ final class AppEnvironment: ObservableObject {
                 draft.docketNumber = "2026-CA-001847"
                 try mattersController.updateMatter(id: matterID, draft: draft)
             }
+            try ensureUITestMotionCanonicalIdentity(matterID: matterID)
 
             var profile = AssistantProfile()
             profile.fullName = "Harvey Specter"
@@ -2166,79 +2195,19 @@ final class AppEnvironment: ObservableObject {
             try store.appSettings.setSetting(AssistantProfile.profileKey, value: profile)
 
             let factName = "Motion Draft First Amended Complaint.txt"
-            if !(try store.documentLibrary.fetchDocuments(matterID: matterID)).contains(where: { $0.displayName == factName }) {
-                let text = "The fictional pleading alleges that Liberty Rail received rail components, without alleging a breached contractual duty. "
-                    + "It identifies a shipment, describes the component category, and alleges receipt at the fictional project location, but it does not identify a contractual promise that Liberty Rail failed to perform. "
-                    + "Full review tail: the fictional pleading alleges no damages amount."
-                let blob = try store.documentLibrary.upsertBlob(DocumentBlobRecord(
-                    sha256: DocumentStorage.sha256Hex(of: Data("uitest-motion-fact".utf8)),
-                    byteSize: text.utf8.count,
-                    originalExtension: "txt",
-                    managedRelativePath: "uitest/\(factName)"
-                )).blob
-                let document = try store.documentLibrary.insertDocument(MatterDocumentRecord(
-                    matterID: matterID,
-                    blobID: blob.id,
-                    displayName: factName,
-                    status: MatterDocumentStatus.ready.rawValue,
-                    extractionStatus: DocumentExtractionStatus.extracted.rawValue,
-                    indexStatus: DocumentIndexStatus.textIndexed.rawValue,
-                    extractionMethod: "synthetic@toolchain:motion-uitest"
-                ))
-                let part = DocumentPagePartRecord(
-                    id: "ui-motion-fact-part",
-                    documentID: document.id,
-                    partIndex: 0,
-                    sourceKind: DocumentSourceKind.text.rawValue,
-                    normalizedText: text,
-                    charCount: text.count
-                )
-                let revision = DocumentPartRevisionRecord(
-                    id: "ui-motion-fact-revision",
-                    documentID: document.id,
-                    partIndex: 0,
-                    derivationKey: "motion-uitest:\(document.id)",
-                    origin: "parser",
-                    method: "synthetic",
-                    text: text,
-                    charCount: text.count
-                )
-                let selection = DocumentPartSelectionRecord(
-                    id: "ui-motion-fact-selection",
-                    documentID: document.id,
-                    partIndex: 0,
-                    selectedRevisionID: revision.id,
-                    selectionKey: "motion-uitest:\(document.id)",
-                    selectedBy: "policy",
-                    policyVersion: 1,
-                    decisionJSON: #"{"rule":"synthetic_motion_ui_fixture"}"#
-                )
-                _ = try store.documentRevisions.replacePartsAndPersistLineage(
-                    documentID: document.id,
-                    parts: [part],
-                    revisions: [revision],
-                    selections: [selection]
-                )
-                try store.documentIndex.replaceChunks(documentID: document.id, chunks: [
-                    DocumentChunkRecord(
-                        id: "ui-motion-fact-chunk",
-                        documentID: document.id,
-                        pagePartID: part.id,
-                        revisionID: revision.id,
-                        // This hand-authored hosted fixture uses the stable chunk ID
-                        // asserted by XCUITest. Keep it on the supported v1 exact-slice
-                        // contract; v2 IDs are owned by the production chunk producer.
-                        chunkerVersion: 1,
-                        chunkIndex: 0,
-                        sourceKind: DocumentSourceKind.text.rawValue,
-                        charStart: 0,
-                        charEnd: text.count,
-                        normalizedText: text,
-                        displayExcerpt: text,
-                        tokenCount: 24
-                    )
-                ])
-            }
+            let factText = "The fictional pleading alleges that Liberty Rail received rail components, without alleging a breached contractual duty. "
+                + "It identifies a shipment, describes the component category, and alleges receipt at the fictional project location, but it does not identify a contractual promise that Liberty Rail failed to perform. "
+                + "Full review tail: the fictional pleading alleges no damages amount."
+            try configureCanonicalReadinessEmbeddingModel()
+            _ = try seedCanonicalReadinessDocumentGraph(
+                documentID: "ui-motion-fact-document",
+                matterID: matterID,
+                name: factName,
+                shaSeed: "uitest-motion-fact",
+                text: factText,
+                includeSemanticIndex: true,
+                draftingSnapshotCompatible: true
+            )
 
             let authorityName = blocked
                 ? "Fictional Motion Authority — Review Required"
@@ -2307,6 +2276,94 @@ final class AppEnvironment: ObservableObject {
         } catch {
             assertionFailure("Could not seed motion drafting UI fixture: \(error)")
         }
+    }
+
+    /// Legacy fixture setup predates the canonical identity graph. Re-publish the
+    /// exact fictional Florida court, parties, and opposing counsel after the
+    /// legacy matter update so the shipping Draft eligibility gate is exercised
+    /// rather than bypassed. The second bootstrap pass is an exact no-op.
+    private func ensureUITestMotionCanonicalIdentity(matterID: String) throws {
+        let catalog = JurisdictionCatalog.shared
+        let jurisdictionID = CanonicalJurisdictionID(rawValue: "state-florida-courts")
+        let courtID = CanonicalCourtID(
+            rawValue: "state-florida-circuit-court-of-the-fourth-judicial-circuit-in-and-for-duval-county"
+        )
+        let plaintiffID = "party-motion-mckernon-2201"
+        let defendantID = "party-motion-liberty-2203"
+        let expectedParties = [
+            MatterPartyIdentity(
+                id: plaintiffID,
+                matterID: matterID,
+                displayName: "McKernon Motors, Inc.",
+                captionName: "MCKERNON MOTORS, INC.,",
+                baseRole: .plaintiff,
+                captionOrder: 0,
+                clientStatus: .notRepresented
+            ),
+            MatterPartyIdentity(
+                id: defendantID,
+                matterID: matterID,
+                displayName: "Liberty Rail, LLC",
+                captionName: "LIBERTY RAIL, LLC,",
+                baseRole: .defendant,
+                captionOrder: 1,
+                clientStatus: .represented
+            ),
+        ]
+        let expectedRepresentations = [
+            MatterRepresentationIdentity(
+                id: "representation-motion-hardman-2207",
+                matterID: matterID,
+                representedPartyID: plaintiffID,
+                relationshipKind: .counsel,
+                representativeName: "Daniel Hardman, Esq.",
+                firmName: "Hardman & Tanner, LLP",
+                serviceAddress: MatterServiceAddress(
+                    street: "1 Independent Drive",
+                    city: "Jacksonville",
+                    state: "Florida",
+                    postalCode: "32202"
+                ),
+                serviceEmails: ["dhardman@example.test"],
+                serviceOrder: 0
+            ),
+        ]
+        guard let snapshot = try store.matterIdentity.fetchSnapshot(matterID: matterID),
+              snapshot.courtResolutionState != .court
+                || snapshot.canonicalJurisdictionID != jurisdictionID
+                || snapshot.canonicalCourtID != courtID
+                || snapshot.parties != expectedParties
+                || snapshot.representations != expectedRepresentations
+        else { return }
+        guard let matter = try store.matters.fetchMatter(id: matterID) else {
+            throw MatterIdentityRepositoryError.matterUnavailable
+        }
+        _ = try store.matterIdentity.updateMatter(command: MatterIdentityUpdateCommand(
+            matterID: matterID,
+            expectedIdentityRevision: snapshot.identityRevision,
+            legacyJurisdictionText: "Florida",
+            legacyCourtText: "IN THE CIRCUIT COURT OF THE FOURTH JUDICIAL CIRCUIT,\nIN AND FOR DUVAL COUNTY, FLORIDA",
+            legacyPartyPerspective: .defendant,
+            legacyClientNames: "Liberty Rail, LLC",
+            courtResolutionState: .court,
+            canonicalCatalogVersion: catalog.catalogVersion,
+            canonicalCatalogDigestSHA256: catalog.identityDigestSHA256,
+            canonicalJurisdictionID: jurisdictionID,
+            canonicalCourtID: courtID,
+            parties: expectedParties,
+            representations: expectedRepresentations,
+            workspaceDetails: MatterIdentityWorkspaceDetails(
+                name: matter.name,
+                judge: matter.judge,
+                docketNumber: matter.docketNumber,
+                practiceArea: matter.practiceArea,
+                matterDescription: matter.matterDescription,
+                internalMatterID: matter.internalMatterID,
+                clientID: matter.clientID,
+                clientMatterID: matter.clientMatterID,
+                notes: matter.notes
+            )
+        ))
     }
 
     /// Seeds one completed encrypted-source rejection for the T-OPS-07 warning
@@ -3230,7 +3287,8 @@ final class AppEnvironment: ObservableObject {
         name: String,
         shaSeed: String,
         text: String,
-        includeSemanticIndex: Bool
+        includeSemanticIndex: Bool,
+        draftingSnapshotCompatible: Bool = false
     ) throws -> String {
         if try store.documentLibrary.fetchDocument(id: documentID) != nil {
             return documentID
@@ -3315,12 +3373,33 @@ final class AppEnvironment: ObservableObject {
             selections: [selection]
         )
 
+        let chunkID: String
+        let unitKind: String?
+        if draftingSnapshotCompatible {
+            // DraftingSourceRepository independently reconstructs the shipping
+            // v2 producer output before it captures an immutable source
+            // snapshot. With no structure nodes, v2 deliberately falls back to
+            // one v1-style text range and binds it with the production
+            // content-addressed identity.
+            let identity = [
+                "chunk-v2", document.id, revision.id, part.id, "", "0", "0",
+                String(text.count), text,
+            ].joined(separator: "\u{001f}")
+            let digest = SHA256.hash(data: Data(identity.utf8))
+                .map { String(format: "%02x", $0) }
+                .joined()
+            chunkID = "chunk-v2-\(digest)"
+            unitKind = nil
+        } else {
+            chunkID = "\(documentID)-chunk-23"
+            unitKind = "document"
+        }
         let chunk = DocumentChunkRecord(
-            id: "\(documentID)-chunk-23",
+            id: chunkID,
             documentID: document.id,
             pagePartID: part.id,
             revisionID: revision.id,
-            unitKind: "document",
+            unitKind: unitKind,
             chunkerVersion: CanonicalReadinessSeed.chunkerVersion,
             chunkIndex: 0,
             sourceKind: DocumentSourceKind.text.rawValue,

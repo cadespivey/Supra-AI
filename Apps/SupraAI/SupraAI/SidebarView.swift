@@ -133,7 +133,9 @@ struct SidebarView: View {
             .background(.bar)
         }
         .onAppear {
-            Task { @MainActor in matters.loadMatters() }
+            Task { @MainActor in
+                matters.loadMatters(selectFirstMatterIfNeeded: false)
+            }
         }
     }
 

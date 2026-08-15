@@ -37,7 +37,7 @@ enum AppRoute: String, CaseIterable, Identifiable {
         case .models:
             "AI Setup"
         case .diagnostics:
-            "Diagnostics"
+            "System Status"
         case .settings:
             "Settings"
         }
@@ -54,7 +54,7 @@ enum AppRoute: String, CaseIterable, Identifiable {
         case .models:
             "cpu"
         case .diagnostics:
-            "waveform.path.ecg"
+            "checkmark.shield"
         case .settings:
             "gearshape"
         }

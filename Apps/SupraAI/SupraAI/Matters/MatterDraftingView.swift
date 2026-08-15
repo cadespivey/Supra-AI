@@ -427,21 +427,21 @@ struct MatterDraftingView: View {
 
     // MARK: - Work-product picker
 
+    @ViewBuilder
     private var workProductSection: some View {
         Section {
-            ForEach(availableKinds) { kind in
+            ForEach(availableKinds.filter(\.isEnabled)) { kind in
                 Button {
-                    if kind.isEnabled { selection = .kind(kind.id) }
+                    selection = .kind(kind.id)
                 } label: {
                     workProductRow(
                         title: kind.title,
                         selected: selection == .kind(kind.id),
-                        enabled: kind.isEnabled,
-                        subtitle: kind.disabledReason
+                        enabled: true,
+                        subtitle: nil
                     )
                 }
                 .buttonStyle(.plain)
-                .disabled(!kind.isEnabled)
                 .accessibilityIdentifier("drafting.kind.\(kind.id.rawValue)")
             }
             Button { selection = .custom } label: {
@@ -456,7 +456,21 @@ struct MatterDraftingView: View {
         } header: {
             Text("Work product")
         } footer: {
-            Text("Pick what to draft. Disabled kinds aren't wired into the app yet — describe them under Custom.")
+            Text("Choose an available draft type, or describe another work product under Custom. Review every statement and citation before use.")
+        }
+
+        if availableKinds.contains(where: { !$0.isEnabled }) {
+            Section("Coming Soon") {
+                ForEach(availableKinds.filter { !$0.isEnabled }) { kind in
+                    workProductRow(
+                        title: kind.title,
+                        selected: false,
+                        enabled: false,
+                        subtitle: kind.disabledReason
+                    )
+                    .accessibilityIdentifier("drafting.kind.unavailable.\(kind.id.rawValue)")
+                }
+            }
         }
     }
 
@@ -597,7 +611,7 @@ struct MatterDraftingView: View {
         } header: {
             Text("Supported Florida motion")
         } footer: {
-            Text("Supra assembles this motion locally from only the fact excerpts and reviewed authorities you select. The pre-file gate checks required structure and exact selected-source reproduction; saved lineage records source provenance and reviewed-authority bindings. It does not decide fact-to-ground applicability, legal sufficiency, or filing readiness. This first supported ground is failure to state a claim; no drafting model is used. Review every proposition and citation before filing.")
+            Text("Supra assembles this motion locally from only the fact excerpts and reviewed authorities you select. It checks that required sections are present and that selected sources are reproduced exactly, and the saved record keeps those exact sources and accepted authorities. It does not decide whether a fact supports a legal ground, whether the motion is legally sufficient, or whether it is ready to file. This first supported ground is failure to state a claim; no drafting model is used. Review every proposition and citation before filing.")
         }
     }
 

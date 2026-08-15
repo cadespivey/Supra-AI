@@ -350,12 +350,18 @@ public final class MattersController: ObservableObject {
             .makePresentation(for: snapshot)
     }
 
-    public func loadMatters() {
+    /// Refreshes the list without silently inventing navigation state unless a
+    /// caller explicitly wants the legacy first-matter fallback. Window shells
+    /// and global destinations pass `false` so a visible global route cannot
+    /// retain or acquire a hidden matter-scoped controller.
+    public func loadMatters(selectFirstMatterIfNeeded: Bool = true) {
         reload()
         if let selectedMatterID, matters.contains(where: { $0.id == selectedMatterID }) {
             if chatController == nil { select(matterID: selectedMatterID) }
-        } else {
+        } else if selectFirstMatterIfNeeded {
             select(matterID: matters.first?.id)
+        } else {
+            select(matterID: nil)
         }
     }
 

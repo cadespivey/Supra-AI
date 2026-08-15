@@ -88,12 +88,11 @@ final class RestoreSettingsUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments += [
             "-ApplePersistenceIgnoreState", "YES",
-            "-uiTestMode",
-            "-uiTestEnsureFreshWindow",
-            "-uiTestRestoreRecoveryRequired",
+            "-uiTestMode", "YES",
+            "-uiTestRestoreRecoveryRequired", "YES",
+            "-uiTestEnsureFreshWindow", "YES",
         ]
         app.launch()
-        app.activate()
 
         let shell = app.descendants(matching: .any)["restore.recovery.shell"]
         XCTAssertTrue(shell.waitForExistence(timeout: 20))
@@ -113,15 +112,17 @@ final class RestoreSettingsUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments += [
             "-ApplePersistenceIgnoreState", "YES",
-            "-uiTestMode",
-            "-uiTestEnsureFreshWindow",
+            "-uiTestMode", "YES",
             "-uiTestInitialRoute", "settings",
             "-uiTestRestoreScenario", scenario,
+            "-uiTestEnsureFreshWindow", "YES",
         ]
         app.launch()
-        app.activate()
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 10))
         XCTAssertTrue(app.staticTexts["Settings"].waitForExistence(timeout: 20))
+        let dataAndBackup = app.staticTexts["Data & Backup"].firstMatch
+        XCTAssertTrue(dataAndBackup.waitForExistence(timeout: 10))
+        dataAndBackup.click()
         return app
     }
 

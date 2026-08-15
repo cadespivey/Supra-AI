@@ -54,11 +54,13 @@ struct MatterOutputsView: View {
                         HStack {
                             Text(output.title).font(.supraHeadline)
                             Spacer()
-                            Text(output.status).font(.supraCaption).foregroundStyle(.secondary)
+                            Text("Lifecycle: \(output.status.replacingOccurrences(of: "_", with: " ").capitalized)")
+                                .font(.supraCaption)
+                                .foregroundStyle(.secondary)
                         }
                         HStack(spacing: 8) {
                             Text(StructuredOutputLabels.label(output.outputType))
-                            Text(output.updatedAt, format: .dateTime.month().day())
+                            Text("Updated \(output.updatedAt.formatted(.relative(presentation: .named)))")
                             if output.missingCount > 0 {
                                 Text("\(output.missingCount) missing").foregroundStyle(.orange)
                             }
@@ -66,6 +68,12 @@ struct MatterOutputsView: View {
                         .font(.supraCaption)
                         .foregroundStyle(.secondary)
                         AssuranceBadge(state: output.assuranceState)
+                        Text("Review: \(output.assuranceText)")
+                            .font(.supraCaption)
+                            .foregroundStyle(.secondary)
+                        Text("Author: Not recorded · Reviewer: Not recorded · Last reviewed: Not recorded")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
                     }
                 }
                 .accessibilityIdentifier("output.row.\(output.title)")

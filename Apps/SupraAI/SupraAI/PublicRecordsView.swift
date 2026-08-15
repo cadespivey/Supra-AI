@@ -29,6 +29,7 @@ struct PublicRecordsView: View {
     @State private var nlrbParty = ""
     @State private var nlrbCaseNumber = ""
     @State private var showNlrbFileImporter = false
+    @State private var showSourceGuide = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -51,6 +52,20 @@ struct PublicRecordsView: View {
             }
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
+                    DisclosureGroup("What these sources mean", isExpanded: $showSourceGuide) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("SEC EDGAR — the Securities and Exchange Commission's public company-filing archive.")
+                            Text("CIK — the Central Index Key that EDGAR assigns to a filer; it is an identifier, not a case number.")
+                            Text("CFPB — the Consumer Financial Protection Bureau. Complaint records are consumer allegations, not agency findings.")
+                            Text("NLRB — the National Labor Relations Board. This view searches an export you import locally; it does not contact the NLRB while idle.")
+                            Text("Example identifiers are illustrative only and do not trigger a search. Open an official linked record and confirm currency before relying on it.")
+                                .foregroundStyle(.secondary)
+                        }
+                        .font(.supraCaption)
+                        .padding(.top, 6)
+                    }
+                    .accessibilityIdentifier("publicRecords.sourceGuide")
+
                     switch source {
                     case .sec: secSection
                     case .cfpb: cfpbSection

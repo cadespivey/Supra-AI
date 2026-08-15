@@ -88,11 +88,11 @@ struct GlobalChatsView: View {
             // standalone (.picker) chat grabs focus on appear; matter (.inline) chat waits for
             // the user to click into it.
             if listStyle == .picker { inputFocused = true }
-            matters?.loadMatters()
+            matters?.loadMatters(selectFirstMatterIfNeeded: false)
             if attachments.isEmpty, !initialQuickAttachments.isEmpty {
                 attachments = initialQuickAttachments
             }
-            if suggestions.isEmpty { suggestions = ChatSuggestions.sample() }
+            if suggestions.isEmpty { suggestions = ChatSuggestions.starters }
             // Warm the chat model when the chat opens (safety net over the launch
             // preload) so the first message doesn't wait on the load — e.g. after the
             // model was unloaded, or in a matter chat opened before any message.
@@ -102,7 +102,7 @@ struct GlobalChatsView: View {
         // (new chat, deleted chat, or a moved chat) so they don't get stale.
         .onChange(of: controller.selectedChatID) { _, _ in
             cancelAttachmentLoading(clearAttachments: true)
-            suggestions = ChatSuggestions.sample()
+            suggestions = ChatSuggestions.starters
         }
         .onChange(of: chatSearch) { _, newValue in
             let query = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -188,13 +188,15 @@ struct GlobalChatsView: View {
                 Spacer()
                 Button {
                     controller.startNewChat()
-                    suggestions = ChatSuggestions.sample()
+                    suggestions = ChatSuggestions.starters
                     inputFocused = true
                 } label: {
                     Image(systemName: "square.and.pencil")
                 }
                 .buttonStyle(.borderless)
                 .help("New chat")
+                .accessibilityLabel("New chat")
+                .accessibilityIdentifier("chat.new")
             }
             .padding(.horizontal, 12)
             .padding(.top, 12)
@@ -577,8 +579,8 @@ struct GlobalChatsView: View {
 
     // MARK: - Example prompts (global chat empty state)
 
-    /// The blank global-chat state: a friendly heading plus a 2×2 grid of rotating
-    /// example prompts. Tapping one sends it (the same path as typing + Send).
+    /// The blank global-chat state: five stable legal-task entry points. Tapping
+    /// one fills the composer so the user can add the necessary specifics.
     private var suggestionsEmptyState: some View {
         VStack(spacing: 18) {
             VStack(spacing: 6) {
@@ -602,14 +604,6 @@ struct GlobalChatsView: View {
             }
             .frame(maxWidth: 620)
 
-            Button {
-                suggestions = ChatSuggestions.sample()
-            } label: {
-                Label("Show different examples", systemImage: "arrow.triangle.2.circlepath")
-                    .font(.caption)
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
         }
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -646,6 +640,7 @@ struct GlobalChatsView: View {
             .hoverShade(cornerRadius: 10)
         }
         .buttonStyle(.plain)
+        .accessibilityIdentifier("chat.starter.\(suggestion.id)")
         .help("Use this prompt: \(suggestion.prompt)")
     }
 
@@ -1321,7 +1316,9 @@ private struct QuickAttachmentDisclosure: View {
                 .strokeBorder(Color.secondary.opacity(0.16))
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Quick attachment")
+        .accessibilityLabel(
+            "Quick attachment. \(presentation.accessibilityDescription)"
+        )
         .accessibilityValue(presentation.accessibilityDescription)
         .accessibilityIdentifier(accessibilityIdentifier)
     }
@@ -1428,7 +1425,7 @@ private struct MessageRow: View {
                             .font(.supraCaption)
                             .foregroundStyle(.secondary)
                             .accessibilityElement(children: .ignore)
-                            .accessibilityLabel("Quick attachment handoff")
+                            .accessibilityLabel("Quick attachment handoff. \(outcome)")
                             .accessibilityValue(outcome)
                             .accessibilityIdentifier(
                                 "chat.quickAttachment.handoff.\(presentation.attachmentID)"

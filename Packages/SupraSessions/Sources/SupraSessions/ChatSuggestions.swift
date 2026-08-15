@@ -27,6 +27,42 @@ public struct ChatSuggestion: Identifiable, Sendable, Equatable {
 }
 
 public enum ChatSuggestions {
+    /// Stable, task-oriented entry points for the ordinary blank-chat state.
+    /// They fill the composer without sending so the user can add matter facts,
+    /// jurisdiction, and the desired form before invoking the local assistant.
+    public static let starters: [ChatSuggestion] = [
+        ChatSuggestion(
+            id: "starter-legal-question",
+            title: "Legal Question",
+            prompt: "Answer this legal question and identify what jurisdiction, facts, or current authority you still need:",
+            systemImage: "questionmark.bubble"
+        ),
+        ChatSuggestion(
+            id: "starter-research-memo",
+            title: "Research Memo",
+            prompt: "Prepare a research memo on this issue, separating controlling authority from persuasive authority and open questions:",
+            systemImage: "books.vertical"
+        ),
+        ChatSuggestion(
+            id: "starter-draft",
+            title: "Draft",
+            prompt: "Draft the following legal work product using only the facts and authorities I provide, and flag missing inputs:",
+            systemImage: "doc.badge.plus"
+        ),
+        ChatSuggestion(
+            id: "starter-review-draft",
+            title: "Review a Draft",
+            prompt: "/critique Review this draft for legal and factual weaknesses, missing support, internal inconsistencies, and unclear language:",
+            systemImage: "checkmark.bubble"
+        ),
+        ChatSuggestion(
+            id: "starter-check-citations",
+            title: "Check Citations",
+            prompt: "Check these citations for proposition support, citation-form issues, and authority that requires current-source confirmation:",
+            systemImage: "checkmark.seal"
+        ),
+    ]
+
     /// How many suggestions to show at once on the empty state.
     public static let displayCount = 4
 

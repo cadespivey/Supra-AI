@@ -12,6 +12,7 @@ struct UserMutationFailureBanner: View {
     let correct: (() -> Void)?
 
     @AccessibilityFocusState private var failureFocused: Bool
+    @State private var showTechnicalDetails = false
 
     init(
         failure: UserMutationFailure,
@@ -41,6 +42,16 @@ struct UserMutationFailureBanner: View {
                     .font(.supraCaption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                if let technicalDetails = failure.technicalDetails,
+                   !technicalDetails.isEmpty {
+                    DisclosureGroup("Technical Details", isExpanded: $showTechnicalDetails) {
+                        Text(technicalDetails)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                            .accessibilityIdentifier("mutation.failure.technicalDetails")
+                    }
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 

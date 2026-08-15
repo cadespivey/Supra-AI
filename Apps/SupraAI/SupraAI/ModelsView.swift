@@ -72,6 +72,7 @@ struct ModelsView: View {
         .onChange(of: setupNavigationRequest?.id) { _, _ in
             focusRequestedSetupRow()
         }
+        .onDisappear { focusedSetupRequirementID = nil }
     }
 
     private var aiSetupRequest: SetupNavigationRequest? {

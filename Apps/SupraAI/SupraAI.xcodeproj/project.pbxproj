@@ -85,6 +85,8 @@
 		D1E706060000000000000006 /* ArchitectureUXTDataReady01Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1E706060000000000000106 /* ArchitectureUXTDataReady01Tests.swift */; };
 		D1E707070000000000000007 /* CanonicalMatterIdentityUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1E707070000000000000107 /* CanonicalMatterIdentityUITests.swift */; };
 		D1E708080000000000000008 /* ArchitectureUXTAttachNativeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1E708080000000000000108 /* ArchitectureUXTAttachNativeTests.swift */; };
+		E5A500000000000000000001 /* ArchitectureUXPhase5VisualTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5A500000000000000000101 /* ArchitectureUXPhase5VisualTests.swift */; };
+		E5A500000000000000000002 /* ArchitectureUXPhase5ContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5A500000000000000000102 /* ArchitectureUXPhase5ContractTests.swift */; };
 		D1E709090000000000000009 /* ArchitectureUXTDataIdentityConsumerSourceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1E709090000000000000109 /* ArchitectureUXTDataIdentityConsumerSourceTests.swift */; };
 		D1E70A0A000000000000000A /* ArchitectureUXTMutationNativeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1E70A0A000000000000010A /* ArchitectureUXTMutationNativeTests.swift */; };
 		D1E70B0B000000000000000B /* UserMutationFailureBanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1E70B0B000000000000010B /* UserMutationFailureBanner.swift */; };
@@ -135,6 +137,8 @@
 		D1E706060000000000000106 /* ArchitectureUXTDataReady01Tests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ArchitectureUXTDataReady01Tests.swift; sourceTree = "<group>"; };
 		D1E707070000000000000107 /* CanonicalMatterIdentityUITests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CanonicalMatterIdentityUITests.swift; sourceTree = "<group>"; };
 		D1E708080000000000000108 /* ArchitectureUXTAttachNativeTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ArchitectureUXTAttachNativeTests.swift; sourceTree = "<group>"; };
+		E5A500000000000000000101 /* ArchitectureUXPhase5VisualTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ArchitectureUXPhase5VisualTests.swift; sourceTree = "<group>"; };
+		E5A500000000000000000102 /* ArchitectureUXPhase5ContractTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ArchitectureUXPhase5ContractTests.swift; sourceTree = "<group>"; };
 		D1E709090000000000000109 /* ArchitectureUXTDataIdentityConsumerSourceTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ArchitectureUXTDataIdentityConsumerSourceTests.swift; sourceTree = "<group>"; };
 		D1E70A0A000000000000010A /* ArchitectureUXTMutationNativeTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ArchitectureUXTMutationNativeTests.swift; sourceTree = "<group>"; };
 		D1E70B0B000000000000010B /* UserMutationFailureBanner.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = UserMutationFailureBanner.swift; sourceTree = "<group>"; };
@@ -393,6 +397,8 @@
 				D1E706060000000000000106 /* ArchitectureUXTDataReady01Tests.swift */,
 				D1E707070000000000000107 /* CanonicalMatterIdentityUITests.swift */,
 				D1E708080000000000000108 /* ArchitectureUXTAttachNativeTests.swift */,
+				E5A500000000000000000101 /* ArchitectureUXPhase5VisualTests.swift */,
+				E5A500000000000000000102 /* ArchitectureUXPhase5ContractTests.swift */,
 				D1E709090000000000000109 /* ArchitectureUXTDataIdentityConsumerSourceTests.swift */,
 				D1E70A0A000000000000010A /* ArchitectureUXTMutationNativeTests.swift */,
 			);
@@ -695,6 +701,8 @@
 				D1E706060000000000000006 /* ArchitectureUXTDataReady01Tests.swift in Sources */,
 				D1E707070000000000000007 /* CanonicalMatterIdentityUITests.swift in Sources */,
 				D1E708080000000000000008 /* ArchitectureUXTAttachNativeTests.swift in Sources */,
+				E5A500000000000000000001 /* ArchitectureUXPhase5VisualTests.swift in Sources */,
+				E5A500000000000000000002 /* ArchitectureUXPhase5ContractTests.swift in Sources */,
 				D1E709090000000000000009 /* ArchitectureUXTDataIdentityConsumerSourceTests.swift in Sources */,
 				D1E70A0A000000000000000A /* ArchitectureUXTMutationNativeTests.swift in Sources */,
 			);

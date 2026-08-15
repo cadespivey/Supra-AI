@@ -29,15 +29,18 @@ public enum UserMutationRecoveryAction: String, Codable, CaseIterable, Hashable,
 public struct UserMutationFailure: Error, LocalizedError, Equatable, Sendable {
     public let operation: UserMutationOperation
     public let userMessage: String
+    public let technicalDetails: String?
     public let recoveryActions: Set<UserMutationRecoveryAction>
 
     public init(
         operation: UserMutationOperation,
         userMessage: String,
+        technicalDetails: String? = nil,
         recoveryActions: Set<UserMutationRecoveryAction> = [.retry]
     ) {
         self.operation = operation
         self.userMessage = userMessage
+        self.technicalDetails = technicalDetails
         self.recoveryActions = recoveryActions
     }
 
