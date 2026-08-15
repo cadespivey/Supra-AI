@@ -264,12 +264,17 @@ private struct DeterministicCorpusWorkload: Sendable {
         try store.documentSettings.updateSettings { $0.chunkerVersion = chunkerVersion }
         let storage = DocumentStorage(root: temporaryRoot.appendingPathComponent("storage", isDirectory: true))
         let embedder = DeterministicBagOfWordsEmbedder()
+        try configureBenchmarkEmbeddingModel(in: store, embedder: embedder)
         let importer = DocumentImportService(store: store, storage: storage, ocr: VisionOCRService())
 
         let benchmarkMatter = try store.matters.createMatter(name: specification.matterName)
         let corpusRoot = repositoryRoot.appendingPathComponent(manifest.root, isDirectory: true)
         let importOutcome = try await importer.importSources([corpusRoot], matterID: benchmarkMatter.id)
-        _ = try await DocumentIndexingService(store: store, embedder: embedder)
+        _ = try await DocumentIndexingService(
+            store: store,
+            embedder: embedder,
+            deterministicLegacyChunkIDs: true
+        )
             .indexMatter(matterID: benchmarkMatter.id)
 
         // A second, synthetic lookalike matter makes the isolation probe real: the
@@ -280,7 +285,11 @@ private struct DeterministicCorpusWorkload: Sendable {
         try Data("SYNTHETIC LOOKALIKE LEDGER. Net unpaid balance: $163,815.".utf8).write(to: lookalikeURL)
         let lookalikeMatter = try store.matters.createMatter(name: "Synthetic Cross-Matter Lookalike")
         _ = try await importer.importSources([lookalikeRoot], matterID: lookalikeMatter.id)
-        _ = try await DocumentIndexingService(store: store, embedder: embedder)
+        _ = try await DocumentIndexingService(
+            store: store,
+            embedder: embedder,
+            deterministicLegacyChunkIDs: true
+        )
             .indexMatter(matterID: lookalikeMatter.id)
 
         var observations = sourceAccountingObservations(importOutcome.report)
@@ -994,11 +1003,18 @@ private struct DeterministicCorpusWorkload: Sendable {
         let storage = DocumentStorage(root: temporaryRoot.appendingPathComponent("recovery-blobs", isDirectory: true))
         let importer = DocumentImportService(store: store, storage: storage, ocr: nil)
         let embedder = DeterministicBagOfWordsEmbedder()
+        try configureBenchmarkEmbeddingModel(in: store, embedder: embedder)
         let makeRelaunchedQueue = {
             DocumentProcessingQueue(
                 store: store,
                 importService: importer,
-                makeIndexingService: { DocumentIndexingService(store: store, embedder: embedder) },
+                makeIndexingService: {
+                    DocumentIndexingService(
+                        store: store,
+                        embedder: embedder,
+                        deterministicLegacyChunkIDs: true
+                    )
+                },
                 notifier: BenchmarkDocumentNotifier()
             )
         }
@@ -1680,6 +1696,41 @@ private struct DeterministicBagOfWordsEmbedder: TextEmbedder {
         }
         return Int(hash % UInt64(dimension))
     }
+}
+
+func configureBenchmarkEmbeddingModel(
+    in store: SupraStore,
+    embedder: any TextEmbedder,
+    runtimeFamily: String = "supra-bench-deterministic",
+    setupInvalidationReason: String = "deterministic benchmark fixture"
+) throws {
+    let verifiedAt = Date(timeIntervalSince1970: 1_700_000_000)
+    _ = try store.documentSettings.loadSettings()
+    let identity = DocumentReadinessEmbeddingModelIdentity(
+        id: embedder.modelID,
+        repoID: embedder.modelRepoID,
+        revision: embedder.modelRevision,
+        dimension: embedder.dimension
+    )
+    try store.documentSettings.upsertEmbeddingModel(
+        DocumentEmbeddingModelRecord(
+            id: identity.id,
+            repoID: identity.repoID,
+            displayName: embedder.modelDisplayName,
+            dimension: identity.dimension,
+            runtimeFamily: runtimeFamily,
+            revision: identity.revision,
+            lastTestLoadAt: verifiedAt,
+            lastTestLoadResult: "passed"
+        )
+    )
+    _ = try store.documentSettings.activateVerifiedEmbeddingModel(
+        DocumentVerifiedEmbeddingModelSelectionCommand(
+            expectedModel: identity,
+            verifiedAt: verifiedAt,
+            setupInvalidationReason: setupInvalidationReason
+        )
+    )
 }
 
 private struct BenchmarkDocumentNotifier: DocumentNotifying {

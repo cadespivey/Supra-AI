@@ -70,6 +70,12 @@ struct FixedPerformanceWorkload {
         let matter = try store.matters.createMatter(name: "Synthetic performance scale \(documentCount)")
         let storage = DocumentStorage(root: root.appendingPathComponent("Managed", isDirectory: true))
         let embedder = PerformanceBagOfWordsEmbedder()
+        try configureBenchmarkEmbeddingModel(
+            in: store,
+            embedder: embedder,
+            runtimeFamily: "supra-bench-performance",
+            setupInvalidationReason: "fixed performance benchmark fixture"
+        )
         let importStarted = ProcessInfo.processInfo.systemUptime
         _ = try await DocumentImportService(store: store, storage: storage)
             .importSources([sourceRoot], matterID: matter.id)

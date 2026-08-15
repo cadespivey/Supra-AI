@@ -14,19 +14,22 @@ public final class DocumentIndexingService: @unchecked Sendable {
     private let embedder: (any TextEmbedder)?
     private let stagedRolloutActiveChunkerVersion: Int?
     private let semanticBatchSize: Int
+    private let deterministicLegacyChunkIDs: Bool
 
     public init(
         store: SupraStore,
         chunker: DocumentChunker? = nil,
         embedder: (any TextEmbedder)? = nil,
         stagedRolloutActiveChunkerVersion: Int? = nil,
-        semanticBatchSize: Int = 32
+        semanticBatchSize: Int = 32,
+        deterministicLegacyChunkIDs: Bool = false
     ) {
         self.store = store
         self.chunker = chunker
         self.embedder = embedder
         self.stagedRolloutActiveChunkerVersion = stagedRolloutActiveChunkerVersion
         self.semanticBatchSize = max(1, semanticBatchSize)
+        self.deterministicLegacyChunkIDs = deterministicLegacyChunkIDs
     }
 
     /// Chunks + FTS-indexes a document, then embeds its chunks if an embedder is
@@ -190,11 +193,15 @@ public final class DocumentIndexingService: @unchecked Sendable {
         revisionID: String?,
         chunk: DocumentChunk
     ) -> String {
-        // v1 keeps its historical row-identity behavior. V2 needs stable ids so
-        // retries can prove the exact graph/text projection is unchanged.
-        guard chunk.chunkerVersion == 2 else { return UUID().uuidString }
+        // Shipping v1 keeps its historical row-identity behavior. Hermetic
+        // benchmark fixtures can opt into stable legacy ids so equal-score
+        // retrieval order is repeatable. V2 always needs stable ids so retries
+        // can prove the exact graph/text projection is unchanged.
+        guard chunk.chunkerVersion == 2 || deterministicLegacyChunkIDs else {
+            return UUID().uuidString
+        }
         let identity = [
-            "chunk-v2",
+            chunk.chunkerVersion == 2 ? "chunk-v2" : "chunk-v1-fixture",
             documentID,
             revisionID ?? "",
             chunk.partID ?? "",
@@ -205,7 +212,8 @@ public final class DocumentIndexingService: @unchecked Sendable {
             chunk.text,
         ].joined(separator: "\u{001f}")
         let digest = SHA256.hash(data: Data(identity.utf8))
-        return "chunk-v2-" + digest.map { String(format: "%02x", $0) }.joined()
+        let prefix = chunk.chunkerVersion == 2 ? "chunk-v2-" : "chunk-v1-fixture-"
+        return prefix + digest.map { String(format: "%02x", $0) }.joined()
     }
 
     /// Indexes every document in a matter that is extracted but not yet (fully)
