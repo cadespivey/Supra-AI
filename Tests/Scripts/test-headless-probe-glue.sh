@@ -70,6 +70,17 @@ else
   fail 'coverage probe degraded/Debug branch does not report unavailability'
 fi
 
+# Native installed-model RAG control: app-target dispatch must invoke the
+# isolated runner and emit a delimited, re-scorable record even on failure.
+if grep -Fq 'case .single(.nativeRAGControl):' <<<"$code" \
+    && grep -Fq 'runNativeRAGControlIfRequested' <<<"$code" \
+    && grep -Fq '===NATIVE_RAG_CONTROL_REPORT_BEGIN===' <<<"$code" \
+    && grep -Fq '===NATIVE_RAG_CONTROL_REPORT_END===' <<<"$code"; then
+  printf '%s\n' 'PASS: native RAG control is dispatched and emits a delimited record'
+else
+  fail 'native installed-model RAG control is not fully wired through AppEnvironment'
+fi
+
 if (( failures != 0 )); then
   printf 'Headless probe glue tests failed: %d\n' "$failures" >&2
   exit 1
