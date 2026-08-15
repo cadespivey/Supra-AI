@@ -1697,3 +1697,48 @@ final class PublicRecordsMatterHandoffUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["CFPB-Complaint-884211.txt"].waitForExistence(timeout: 20))
     }
 }
+
+/// Owner journey 4: the Matter Draft entry point must reach the authoritative
+/// versioned-work lifecycle before any optional create-only file export.
+///
+/// Expected RED: the Draft sheet only exposes direct artifact generation and
+/// has no explicit route to a new Saved Work product.
+@MainActor
+final class DraftSavedWorkHandoffUITests: XCTestCase {
+    override func setUp() {
+        continueAfterFailure = false
+    }
+
+    func testMatterDraftRoutesToNewVersionedSavedWorkProduct() {
+        let app = XCUIApplication()
+        app.launchArguments += [
+            "-ApplePersistenceIgnoreState", "YES",
+            "-uiTestMode",
+            "-uiTestEnsureFreshWindow",
+            "-uiTestSelectFirstMatter",
+            "-uiTestOpenDraftSheet",
+        ]
+        app.launch()
+        app.activate()
+        XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 15))
+
+        let handoff = app.buttons["drafting.openSavedWork"]
+        XCTAssertTrue(
+            handoff.waitForExistence(timeout: 15),
+            "Matter Draft must expose its versioned Saved Work entry point"
+        )
+        XCTAssertTrue(handoff.isHittable)
+        handoff.click()
+
+        XCTAssertTrue(
+            app.descendants(matching: .any)["savedWork.new.sheet"]
+                .waitForExistence(timeout: 15),
+            "The handoff must open the ordinary New Work Product sheet, not a parallel draft store"
+        )
+        XCTAssertTrue(app.buttons["matterTab.Outputs"].exists)
+        XCTAssertFalse(
+            app.descendants(matching: .any)["drafting.result"].exists,
+            "Routing to versioned work must not fabricate a completed file artifact"
+        )
+    }
+}
