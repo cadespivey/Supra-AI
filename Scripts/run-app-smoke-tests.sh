@@ -7,6 +7,8 @@ accessibility_test="${SUPRA_ACCESSIBILITY_SMOKE_TEST_FILE:-${repo_root}/Apps/Sup
 recovery_test="${SUPRA_DRAFT_RECOVERY_UI_TEST_FILE:-${accessibility_test}}"
 restore_test="${SUPRA_RESTORE_UI_TEST_FILE:-${repo_root}/Apps/SupraAI/SupraAIUITests/RestoreSettingsUITests.swift}"
 retirement_test="${SUPRA_ARCHITECTURE_UX_RETIREMENT_UI_TEST_FILE:-${repo_root}/Apps/SupraAI/SupraAIUITests/ArchitectureUXRetirementUITests.swift}"
+phase5_contract_test="${SUPRA_ARCHITECTURE_UX_PHASE5_CONTRACT_TEST_FILE:-${repo_root}/Apps/SupraAI/SupraAIUITests/ArchitectureUXPhase5ContractTests.swift}"
+phase5_visual_test="${SUPRA_ARCHITECTURE_UX_PHASE5_VISUAL_TEST_FILE:-${repo_root}/Apps/SupraAI/SupraAIUITests/ArchitectureUXPhase5VisualTests.swift}"
 check_only=0
 if [[ "${1:-}" == "--check" ]]; then
   check_only=1
@@ -80,6 +82,23 @@ if [[ ! -f "$retirement_test" ]] \
   printf '%s\n' 'ERROR: architecture and Review-retirement smoke tests are missing' >&2
   exit 1
 fi
+if [[ ! -f "$phase5_contract_test" ]] \
+    || ! class_contains_test "$phase5_contract_test" ArchitectureUXPhase5ContractTests testParityEnvironmentFailsClosedInSignedRelease \
+    || ! class_contains_test "$phase5_contract_test" ArchitectureUXPhase5ContractTests testAccessibilityContrastTermsAndPublicRecordsStayLiteral; then
+  printf '%s\n' 'ERROR: architecture and UX Phase 5 contract tests are missing' >&2
+  exit 1
+fi
+if [[ ! -f "$phase5_visual_test" ]] \
+    || ! class_contains_test "$phase5_visual_test" ArchitectureUXPhase5VisualTests testTaskOrientedPrimarySurfacesAcrossSupportedWidthsAndAppearances \
+    || ! class_contains_test "$phase5_visual_test" ArchitectureUXPhase5VisualTests testMatterTabsReflowAcrossSupportedWidthsAndAppearances \
+    || ! grep -Fq 'private let supportedWidths = [880, 1_100, 1_420]' "$phase5_visual_test" \
+    || ! grep -Fq 'case dark = "Dark"' "$phase5_visual_test" \
+    || ! grep -Fq '"-uiTestAppearance", appearance.rawValue.lowercased()' "$phase5_visual_test" \
+    || ! grep -Fq 'XCTAssertEqual(appearanceProbe.label, appearance.rawValue)' "$phase5_visual_test" \
+    || ! grep -Fq 'app.windows.firstMatch.screenshot()' "$phase5_visual_test"; then
+  printf '%s\n' 'ERROR: architecture and UX Phase 5 width/appearance visual tests are missing' >&2
+  exit 1
+fi
 if (( $# != 0 )); then
   printf 'Usage: %s [--check]\n' "$0" >&2
   exit 2
@@ -141,11 +160,16 @@ fi
 printf '%s\n' 'Hosted XPC integration hook passed.'
 (( check_only != 0 )) && exit 0
 
+result_root="$(mktemp -d "${TMPDIR:-/tmp}/supra-app-smoke.XXXXXX")"
+result_bundle="${result_root}/AppSmoke.xcresult"
+trap 'rm -r -- "$result_root"' EXIT
+
 xcodebuild \
   -workspace "${repo_root}/SupraAI.xcworkspace" \
   -scheme SupraAI \
   -configuration Debug \
   -destination 'platform=macOS,arch=arm64' \
+  -resultBundlePath "$result_bundle" \
   CODE_SIGNING_ALLOWED=YES \
   CODE_SIGNING_REQUIRED=YES \
   CODE_SIGN_STYLE=Manual \
@@ -164,5 +188,19 @@ xcodebuild \
   -only-testing:SupraAIUITests/ArchitectureUXRetirementUITests/testTReviewRetireUI01RemainingTabsReflowAtSupportedWidths \
   -only-testing:SupraAIUITests/ArchitectureUXRetirementUITests/testTDELUI01BothDocumentTrashSurfacesShareConfirmationAndRenderFailure \
   -only-testing:SupraAIUITests/ArchitectureUXRetirementUITests/testTXPCReviewRemove01OrdinaryRuntimeRecoveryHasAnOwnedAppSurface \
+  -only-testing:SupraAIUITests/ArchitectureUXPhase5ContractTests \
+  -only-testing:SupraAIUITests/ArchitectureUXPhase5VisualTests \
   -only-testing:SupraAIUITests/RuntimeXPCIntegrationTests \
   test
+
+runtime_warning_count="$(
+  xcrun xcresulttool get test-results summary --path "$result_bundle" \
+    | jq -r '(.runtimeWarnings // []) | length'
+)"
+[[ "$runtime_warning_count" == '0' ]] || {
+  printf 'ERROR: app smoke emitted %s SwiftUI/runtime warning(s)\n' "$runtime_warning_count" >&2
+  xcrun xcresulttool get test-results summary --path "$result_bundle" \
+    | jq -r '(.runtimeWarnings // [])[]'
+  exit 1
+}
+printf '%s\n' 'App smoke runtime-warning gate passed.'

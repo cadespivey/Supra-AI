@@ -92,6 +92,8 @@ struct DiagnosticsView: View {
                     .accessibilityIdentifier("systemStatus.advanced")
             } footer: {
                 Text("Advanced contains engineering probes and rollback controls. The copied report contains status metadata, not matter or document content.")
+                    .lineLimit(nil)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             if showAdvanced {

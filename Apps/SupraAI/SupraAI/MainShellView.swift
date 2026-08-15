@@ -183,7 +183,7 @@ struct MainShellView: View {
                     selectMatter(id)
                 } else {
                     selection = newValue
-                    environment.mattersController.select(matterID: nil)
+                    clearMatterScopeAfterSidebarUpdate()
                 }
             }
         )
@@ -206,7 +206,26 @@ struct MainShellView: View {
     /// targeted path as the sidebar.
     private func selectRoute(_ route: AppRoute) {
         selection = .route(route)
+        clearMatterScopeIfNeeded()
+    }
+
+    /// A native `List(selection:)` writes its binding while SwiftUI is updating
+    /// the sidebar. Re-clearing an already-empty `MattersController` at that
+    /// moment needlessly publishes every scoped controller as `nil`, which
+    /// produces the framework runtime warning about publishing during a view
+    /// update. Preserve the real transition (matter -> global route) while
+    /// making route -> route navigation publication-free.
+    private func clearMatterScopeIfNeeded() {
+        guard environment.mattersController.selectedMatterID != nil else { return }
         environment.mattersController.select(matterID: nil)
+    }
+
+    private func clearMatterScopeAfterSidebarUpdate() {
+        Task { @MainActor in
+            await Task.yield()
+            if case .matter = selection { return }
+            clearMatterScopeIfNeeded()
+        }
     }
 
     /// AppEnvironment loads matter data before the shell appears and legacy
@@ -218,7 +237,7 @@ struct MainShellView: View {
         case let .matter(id):
             environment.mattersController.select(matterID: id)
         case .route, .recycleBin:
-            environment.mattersController.select(matterID: nil)
+            clearMatterScopeIfNeeded()
         }
     }
 

@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 
 struct SupraAIApp: App {
@@ -7,6 +8,14 @@ struct SupraAIApp: App {
         Window("Supra AI", id: "main") {
             RootView()
                 .environmentObject(environment)
+                .preferredColorScheme(Self.uiTestColorScheme)
+#if DEBUG
+                .overlay(alignment: .topLeading) {
+                    if ProcessInfo.processInfo.arguments.contains("-uiTestMode") {
+                        UITestAppearanceProbe()
+                    }
+                }
+#endif
         }
         // The splash is shown alone (the shell is swapped in afterward), and a bare
         // splash has no intrinsic size — pin the first-launch window so it opens at
@@ -37,4 +46,37 @@ struct SupraAIApp: App {
             }
         }
     }
+
+    /// `AppleInterfaceStyle=Light` does not override a dark macOS host reliably;
+    /// an explicit DEBUG-only root preference makes the visual qualification
+    /// matrix exercise both appearances instead of producing mislabeled copies.
+    private static var uiTestColorScheme: ColorScheme? {
+#if DEBUG
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let marker = arguments.firstIndex(of: "-uiTestAppearance"),
+              arguments.indices.contains(marker + 1) else { return nil }
+        switch arguments[marker + 1].lowercased() {
+        case "light": return .light
+        case "dark": return .dark
+        default: return nil
+        }
+#else
+        nil
+#endif
+    }
 }
+
+#if DEBUG
+private struct UITestAppearanceProbe: View {
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        Color.clear
+            .frame(width: 1, height: 1)
+            .allowsHitTesting(false)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(colorScheme == .dark ? "Dark" : "Light")
+            .accessibilityIdentifier("uiTest.appearance")
+    }
+}
+#endif

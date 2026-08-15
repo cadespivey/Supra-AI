@@ -5,6 +5,14 @@ owner: documents-runtime-assurance
 recorded_date: "2026-08-13"
 configuration_freeze_status: pending_exact_installed_artifacts_prompts_owner_judgment_review_and_control_run
 
+installed_artifact_observation:
+  observed_date: "2026-08-15"
+  chat_model_root: "/Users/cadespivey/Library/Application Support/ai.supra.SupraAI/Models"
+  embedding_model_root: "/Users/cadespivey/Library/Application Support/ai.supra.SupraAI/EmbeddingModels"
+  chat_model_subdirectory_count: 0
+  embedding_model_subdirectory_count: 0
+  disposition: control_run_blocked_until_owner_selects_and_installs_exact_artifacts
+
 scope:
   purpose: >-
     Freeze the shipping native Swift SQLite MLX retrieval configuration and deterministic
@@ -40,13 +48,20 @@ control_configuration:
     failure_fallback: retrieval_order_prefix
   packer:
     mode: runtime_token_budgeted_source_packet
-    fixed_excerpt_character_ceiling: none
-    callsite_limit_inventory: pending
-    version: pending_inventory
+    fixed_excerpt_character_ceiling: 3000
+    callsite_limit_inventory:
+      documents_qa: runtime_token_budgeted_largest_safe_prefix
+      matter_chat_fast_packed_sources: 8
+      matter_chat_deep_packed_sources: 12
+      matter_chat_deep_candidate_pool: 40
+      reranker_candidate_snippet_character_ceiling: 600
+    version: document-qa-v1
   tokenizer:
     fingerprint: pending_installed_chat_artifact
   prompt:
-    version: pending_inventory
+    version: document-qa-v1
+    source_envelope: sorted_json_between_untrusted_source_data_markers
+    reranker_signature: "You are a retrieval reranker. Output only the source labels."
   generation_model:
     repository: pending_installed_chat_artifact
     revision: pending_installed_chat_artifact

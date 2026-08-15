@@ -1677,10 +1677,11 @@ public final class GlobalChatController: ObservableObject {
         var researchSessionID: String?
     }
 
-    /// R0 containment until provider-bound `EgressGrant` preview/approval lands.
-    /// Global chat retains its existing behavior because it has no matter scope;
-    /// a matter chat may either stay entirely local or send one deterministic
-    /// public reporter-citation lookup. Everything else must move through reviewed Research.
+    /// Matter-chat containment at the automatic boundary. Global chat retains its
+    /// existing behavior because it has no matter scope; a matter chat may either
+    /// stay entirely local or send one deterministic public reporter-citation
+    /// lookup. Everything else moves through Research, whose visible saved query
+    /// and explicit Run/Rerun/Load More action mint the exact short-lived grant.
     private enum AutomaticLegalEgressDisposition: Equatable {
         case unrestricted
         case deterministicPublicCaseLookup(citation: String)
