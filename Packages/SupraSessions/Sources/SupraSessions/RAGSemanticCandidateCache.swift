@@ -365,6 +365,15 @@ final class RAGDerivedCacheRegistry: @unchecked Sendable {
     }
 }
 
+/// Whitelist-only control telemetry for the derived semantic-candidate cache.
+/// The public surface exposes byte counts only; cached keys, candidates, source
+/// text, prompts, and model output remain private to the sessions package.
+public enum RAGSemanticCandidateCacheMetrics {
+    public static var liveBytes: Int {
+        RAGDerivedCacheRegistry.shared.totalBytes()
+    }
+}
+
 enum RAGCacheResolutionSource: Equatable, Sendable {
     case cache
     case computed

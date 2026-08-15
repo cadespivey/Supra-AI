@@ -148,6 +148,7 @@ public struct NativeRAGControlMemoryRecord: Codable, Equatable, Sendable {
     public var xpcPeakPhysFootprintBytes: UInt64
     public var combinedCurrentPhysFootprintBytes: UInt64
     public var combinedPeakPhysFootprintBytes: UInt64
+    public var maximumLiveSemanticCacheBytes: UInt64
 
     public init(
         appCurrentPhysFootprintBytes: UInt64,
@@ -155,7 +156,8 @@ public struct NativeRAGControlMemoryRecord: Codable, Equatable, Sendable {
         xpcCurrentPhysFootprintBytes: UInt64,
         xpcPeakPhysFootprintBytes: UInt64,
         combinedCurrentPhysFootprintBytes: UInt64,
-        combinedPeakPhysFootprintBytes: UInt64
+        combinedPeakPhysFootprintBytes: UInt64,
+        maximumLiveSemanticCacheBytes: UInt64
     ) {
         self.appCurrentPhysFootprintBytes = appCurrentPhysFootprintBytes
         self.appPeakPhysFootprintBytes = appPeakPhysFootprintBytes
@@ -163,6 +165,7 @@ public struct NativeRAGControlMemoryRecord: Codable, Equatable, Sendable {
         self.xpcPeakPhysFootprintBytes = xpcPeakPhysFootprintBytes
         self.combinedCurrentPhysFootprintBytes = combinedCurrentPhysFootprintBytes
         self.combinedPeakPhysFootprintBytes = combinedPeakPhysFootprintBytes
+        self.maximumLiveSemanticCacheBytes = maximumLiveSemanticCacheBytes
     }
 }
 

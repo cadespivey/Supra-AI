@@ -184,6 +184,7 @@ struct NativeRAGControlRunner {
         )
         let timingGateway = NativeRAGTimingGateway(base: runtimeClient)
         var queryRecords: [NativeRAGControlQueryRecord] = []
+        var maximumLiveSemanticCacheBytes = 0
         for query in manifest.queries {
             let scopeDocumentIDs = try query.scopeArtifactIDs.map { artifactID -> String in
                 guard let documentID = documentIDByArtifactID[artifactID] else {
@@ -197,10 +198,18 @@ struct NativeRAGControlRunner {
             let cold = try await retrieval.retrieve(
                 matterID: matter.id, query: query.prompt, scope: scope, limit: 40, depth: .deep
             )
+            maximumLiveSemanticCacheBytes = max(
+                maximumLiveSemanticCacheBytes,
+                RAGSemanticCandidateCacheMetrics.liveBytes
+            )
             let coldMilliseconds = Self.elapsedMilliseconds(since: coldStarted)
             let warmStarted = ProcessInfo.processInfo.systemUptime
             let warm = try await retrieval.retrieve(
                 matterID: matter.id, query: query.prompt, scope: scope, limit: 40, depth: .deep
+            )
+            maximumLiveSemanticCacheBytes = max(
+                maximumLiveSemanticCacheBytes,
+                RAGSemanticCandidateCacheMetrics.liveBytes
             )
             let warmMilliseconds = Self.elapsedMilliseconds(since: warmStarted)
 
@@ -220,6 +229,10 @@ struct NativeRAGControlRunner {
                 modelLineage: modelLibrary.generationLineage(for: chatModelID),
                 route: route,
                 depth: .deep
+            )
+            maximumLiveSemanticCacheBytes = max(
+                maximumLiveSemanticCacheBytes,
+                RAGSemanticCandidateCacheMetrics.liveBytes
             )
             let totalMilliseconds = Self.elapsedMilliseconds(since: qaStarted)
             let packedRows = try result.map {
@@ -253,7 +266,9 @@ struct NativeRAGControlRunner {
             ))
         }
 
-        let memory = try await memoryRecord()
+        let memory = try await memoryRecord(
+            maximumLiveSemanticCacheBytes: maximumLiveSemanticCacheBytes
+        )
         return NativeRAGControlRunRecord(
             controlID: "native-rag-control-v1",
             sourceCommitSHA: invocation.sourceCommitSHA,
@@ -371,7 +386,9 @@ struct NativeRAGControlRunner {
         return (modelID, try Self.binding(manifest), route)
     }
 
-    private func memoryRecord() async throws -> NativeRAGControlMemoryRecord {
+    private func memoryRecord(
+        maximumLiveSemanticCacheBytes: Int
+    ) async throws -> NativeRAGControlMemoryRecord {
         guard let app = Self.appMemory(),
               let runtimeMetrics = try await runtimeClient.runtimeStatus().metrics,
               let xpcCurrentMiB = runtimeMetrics.currentMemoryMb,
@@ -387,7 +404,8 @@ struct NativeRAGControlRunner {
             xpcCurrentPhysFootprintBytes: xpcCurrent,
             xpcPeakPhysFootprintBytes: xpcPeak,
             combinedCurrentPhysFootprintBytes: app.current + xpcCurrent,
-            combinedPeakPhysFootprintBytes: app.peak + xpcPeak
+            combinedPeakPhysFootprintBytes: app.peak + xpcPeak,
+            maximumLiveSemanticCacheBytes: UInt64(max(0, maximumLiveSemanticCacheBytes))
         )
     }
 
