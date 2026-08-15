@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import SupraSessions
 
@@ -404,5 +405,40 @@ public enum NativeRAGControlScorer {
         guard !sorted.isEmpty else { return nil }
         let rank = max(1, Int(ceil(probability * Double(sorted.count))))
         return sorted[min(sorted.count - 1, rank - 1)]
+    }
+}
+
+/// File-backed entry point shared by tests and SupraBench. It recomputes the
+/// manifest digest from the exact input bytes and writes canonical, newline-
+/// terminated JSON so a score can be reproduced without the signed app.
+public enum NativeRAGControlScoreFileCommand {
+    public static func run(
+        rawURL: URL,
+        manifestURL: URL,
+        outputURL: URL,
+        retrievalK: Int = 8
+    ) throws {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let rawData = try Data(contentsOf: rawURL)
+        let manifestData = try Data(contentsOf: manifestURL)
+        let run = try decoder.decode(NativeRAGControlRunRecord.self, from: rawData)
+        let manifest = try decoder.decode(RAGBenchmarkCorpusManifest.self, from: manifestData)
+        let evaluation = try NativeRAGControlScorer.score(
+            run: run,
+            manifest: manifest,
+            manifestSHA256: sha256(manifestData),
+            retrievalK: retrievalK
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        var output = try encoder.encode(evaluation)
+        output.append(0x0a)
+        try output.write(to: outputURL, options: .atomic)
+    }
+
+    public static func sha256(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 }

@@ -18,6 +18,10 @@ struct SupraBenchCommand {
                 try checkPerformance(arguments: arguments)
                 return
             }
+            if arguments.contains("--score-native-rag") {
+                try scoreNativeRAG(arguments: arguments)
+                return
+            }
             let outputURL = try outputURL(from: arguments)
             let root = try repositoryRoot()
             let repositorySHA = try gitHead(in: root)
@@ -114,6 +118,28 @@ struct SupraBenchCommand {
         ))
     }
 
+    private static func scoreNativeRAG(arguments: [String]) throws {
+        let rawURL = try requiredURL(after: "--raw", in: arguments)
+        let manifestURL = try requiredURL(after: "--manifest", in: arguments)
+        let outputURL = try requiredURL(after: "--output", in: arguments)
+        let retrievalK: Int
+        if let index = arguments.firstIndex(of: "--k"),
+           arguments.indices.contains(index + 1),
+           let value = Int(arguments[index + 1]), value > 0 {
+            retrievalK = value
+        } else if arguments.contains("--k") {
+            throw BenchmarkCLIError.invalidRetrievalK
+        } else {
+            retrievalK = 8
+        }
+        try NativeRAGControlScoreFileCommand.run(
+            rawURL: rawURL,
+            manifestURL: manifestURL,
+            outputURL: outputURL,
+            retrievalK: retrievalK
+        )
+    }
+
     private static func write(_ report: Data, to outputURL: URL?) throws {
         var bytes = report
         bytes.append(0x0a)
@@ -199,11 +225,12 @@ private enum BenchmarkCLIError: LocalizedError {
     case recoveryFixtureFailed
     case invalidOCRSelectionKey(String)
     case invalidDocumentRelationKey(String)
+    case invalidRetrievalK
 
     var errorDescription: String? {
         switch self {
         case .usage:
-            return "usage: swift run SupraBench (--deterministic [--compare-chunkers] | --performance) [--output path]; or --check-performance --report path --thresholds path [--require-owner-approval]"
+            return "usage: swift run SupraBench (--deterministic [--compare-chunkers] | --performance) [--output path]; --score-native-rag --raw path --manifest path --output path [--k 8]; or --check-performance --report path --thresholds path [--require-owner-approval]"
         case .missingOutputPath: return "--output requires a path"
         case .repositoryRootNotFound: return "could not locate the repository root"
         case .repositorySHANotFound: return "could not resolve the repository SHA"
@@ -214,6 +241,7 @@ private enum BenchmarkCLIError: LocalizedError {
         case .recoveryFixtureFailed: return "could not establish the deterministic recovery fixture"
         case .invalidOCRSelectionKey(let id): return "invalid OCR selection benchmark key: \(id)"
         case .invalidDocumentRelationKey(let detail): return "invalid document relation benchmark key: \(detail)"
+        case .invalidRetrievalK: return "--k requires a positive integer"
         }
     }
 }

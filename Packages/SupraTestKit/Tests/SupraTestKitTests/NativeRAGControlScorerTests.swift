@@ -98,6 +98,7 @@ final class NativeRAGControlScorerTests: XCTestCase {
     func testFileCommandRecomputesManifestDigestAndWritesCanonicalEvaluation() throws {
         var fixture = makeFixture(noAnswerPackedArtifactID: nil)
         let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         let manifestData = try encoder.encode(fixture.manifest)
         fixture.run.corpusManifestSHA256 = NativeRAGControlScoreFileCommand.sha256(manifestData)
