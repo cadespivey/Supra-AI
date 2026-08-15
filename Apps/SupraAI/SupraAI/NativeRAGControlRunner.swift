@@ -259,6 +259,7 @@ struct NativeRAGControlRunner {
                 timeToFirstTokenMilliseconds: timingGateway.firstAnswerTokenMilliseconds,
                 answerMarkdown: result?.markdown,
                 status: result?.status ?? "failed",
+                unsupported: result?.unsupported ?? true,
                 failure: result == nil ? (qa.message ?? "generation returned no result") : nil,
                 warnings: result?.warnings ?? [],
                 citationLabels: result?.citationLabels ?? [],

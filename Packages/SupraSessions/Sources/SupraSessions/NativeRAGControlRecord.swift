@@ -96,6 +96,7 @@ public struct NativeRAGControlQueryRecord: Codable, Equatable, Sendable {
     public var timeToFirstTokenMilliseconds: Int?
     public var answerMarkdown: String?
     public var status: String
+    public var unsupported: Bool
     public var failure: String?
     public var warnings: [String]
     public var citationLabels: [String]
@@ -114,6 +115,7 @@ public struct NativeRAGControlQueryRecord: Codable, Equatable, Sendable {
         timeToFirstTokenMilliseconds: Int?,
         answerMarkdown: String?,
         status: String,
+        unsupported: Bool,
         failure: String?,
         warnings: [String],
         citationLabels: [String],
@@ -131,6 +133,7 @@ public struct NativeRAGControlQueryRecord: Codable, Equatable, Sendable {
         self.timeToFirstTokenMilliseconds = timeToFirstTokenMilliseconds
         self.answerMarkdown = answerMarkdown
         self.status = status
+        self.unsupported = unsupported
         self.failure = failure
         self.warnings = warnings
         self.citationLabels = citationLabels
