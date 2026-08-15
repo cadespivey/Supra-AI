@@ -346,13 +346,20 @@ public final class SignedReleaseModelAuthorization: @unchecked Sendable {
         )
     }
 
-    private static func sha256(of url: URL) throws -> String {
+    static func sha256(of url: URL) throws -> String {
         let handle = try FileHandle(forReadingFrom: url)
         defer { try? handle.close() }
         var hasher = SHA256()
-        while let data = try handle.read(upToCount: 1_048_576), !data.isEmpty {
+        while true {
             try Task.checkCancellation()
-            hasher.update(data: data)
+            let reachedEnd = try autoreleasepool { () throws -> Bool in
+                guard let data = try handle.read(upToCount: 1_048_576), !data.isEmpty else {
+                    return true
+                }
+                hasher.update(data: data)
+                return false
+            }
+            if reachedEnd { break }
         }
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
