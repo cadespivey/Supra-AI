@@ -279,7 +279,8 @@ struct MainShellView: View {
                 library: environment.modelLibrary,
                 queue: environment.documentQueue,
                 settings: environment.settingsController,
-                matterID: id
+                matterID: id,
+                onOpenImportSetup: { beginDocumentImportSetup(matterID: id) }
             )
         case .recycleBin:
             RecycleBinView(
@@ -474,6 +475,48 @@ struct MainShellView: View {
         }
     }
 
+    /// Opens the first exact AI Setup row that currently blocks document import.
+    /// The request carries an import-specific intent and matter identity so the
+    /// return action cannot substitute a drafting task or whichever matter later
+    /// happens to be selected.
+    private func beginDocumentImportSetup(matterID: String) {
+        let setup = environment.documentSetupController
+        let requirement: SetupRequirement
+        if !setup.chatModelReady {
+            requirement = .localAssistant(role: .drafting)
+        } else if setup.selectedEmbeddingModel == nil || !setup.embeddingTestPassed {
+            requirement = .documentSearch(step: .embeddingModel)
+        } else if !(setup.toolchain?.meetsMinimumForSetup ?? false) {
+            requirement = .documentSearch(step: .extractionToolchain)
+        } else if !setup.storageInitialized {
+            requirement = .documentSearch(step: .storage)
+        } else {
+            // `isReadyForImport` automatically completes once all required
+            // checks pass. A stale view should refresh rather than fabricate a
+            // fallback setup row.
+            environment.mattersController.documentsController?.reload()
+            return
+        }
+
+        let intent = WorkIntent.importDocuments
+        let context = WorkContext(
+            matterID: matterID,
+            intent: intent,
+            sourceSet: nil,
+            authorityPacket: nil,
+            workProduct: nil,
+            returnDestination: .matterTask(matterID: matterID, intent: intent),
+            checkpointID: "document-import"
+        )
+        beginSetupNavigation(
+            SetupNavigationRequest(
+                id: "document-import-setup-\(UUID().uuidString.lowercased())",
+                requirement: requirement,
+                returnContext: context
+            )
+        )
+    }
+
     /// Restores only the work context that opened the active setup request.
     /// A stale return control cannot redirect a newer request.
     private func returnFromSetup(_ request: SetupNavigationRequest) {
@@ -512,7 +555,7 @@ struct SetupNavigationReturnBar: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            Button("Return to Draft Motion") {
+            Button(returnTitle) {
                 // Let the accessibility action finish before replacing the
                 // focused setup tree. Rebuilding it synchronously can make
                 // SwiftUI ask the departing row and its parent for each
@@ -528,6 +571,15 @@ struct SetupNavigationReturnBar: View {
         .padding(.vertical, 10)
         .background(.bar)
         .overlay(alignment: .bottom) { Divider() }
+    }
+
+    private var returnTitle: String {
+        switch request.returnContext.intent {
+        case .draftMotion:
+            "Return to Draft Motion"
+        case .importDocuments:
+            "Return to Documents"
+        }
     }
 }
 
@@ -799,10 +851,18 @@ private struct MatterDetailView: View {
     let queue: DocumentProcessingQueue
     @ObservedObject var settings: SettingsController
     let matterID: String
+    let onOpenImportSetup: () -> Void
 
     var body: some View {
         if let matter = controller.matters.first(where: { $0.id == matterID }) {
-            MatterWorkspaceView(controller: controller, library: library, queue: queue, settings: settings, matter: matter)
+            MatterWorkspaceView(
+                controller: controller,
+                library: library,
+                queue: queue,
+                settings: settings,
+                matter: matter,
+                onOpenImportSetup: onOpenImportSetup
+            )
         } else {
             ContentUnavailableView(
                 "Select a Matter",

@@ -11,6 +11,7 @@ struct MatterWorkspaceView: View {
     @ObservedObject var queue: DocumentProcessingQueue
     @ObservedObject var settings: SettingsController
     let matter: MatterSummary
+    let onOpenImportSetup: () -> Void
 
     @State private var tab: MatterTab = .chat
     @State private var showEditor = false
@@ -394,7 +395,8 @@ struct MatterWorkspaceView: View {
                     queue: queue,
                     library: library,
                     qaController: controller.documentQAController,
-                    chronologyController: controller.documentChronologyController
+                    chronologyController: controller.documentChronologyController,
+                    onOpenImportSetup: onOpenImportSetup
                 )
             } else {
                 placeholder(

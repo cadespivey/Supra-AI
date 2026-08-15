@@ -141,6 +141,7 @@ public struct VersionedWorkReference: Codable, Hashable, Sendable {
 /// The work operation that was blocked by a missing setup requirement.
 public enum WorkIntent: String, Codable, Hashable, Sendable {
     case draftMotion
+    case importDocuments
 }
 
 /// The exact destination to restore after setup is complete or cancelled.

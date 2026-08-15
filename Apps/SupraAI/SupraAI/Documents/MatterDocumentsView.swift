@@ -16,6 +16,7 @@ struct MatterDocumentsView: View {
     @ObservedObject var library: ModelLibrary
     var qaController: DocumentQAController?
     var chronologyController: DocumentChronologyController?
+    let onOpenImportSetup: () -> Void
 
     @State private var showImporter = false
     @State private var newFolderName = ""
@@ -184,7 +185,7 @@ struct MatterDocumentsView: View {
             }
             .disabled(!controller.setupReady)
             .accessibilityValue(controller.setupReady ? "Available" : "Unavailable until Document Intelligence setup is complete")
-            .accessibilityHint(controller.setupReady ? "Opens the document picker" : "Complete setup in Settings before importing documents")
+            .accessibilityHint(controller.setupReady ? "Opens the document picker" : "Open AI Setup to finish document setup")
 
             Divider().frame(height: 20)
 
@@ -654,19 +655,22 @@ struct MatterDocumentsView: View {
     }
 
     private var setupBanner: some View {
-        HStack {
+        HStack(spacing: 10) {
             Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-            Text("Document import is disabled until Document Intelligence setup is complete in Settings.")
+            Text("Document import is disabled until Document Intelligence setup is complete in AI Setup.")
                 .font(.supraCaption)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer()
+            Button("Open AI Setup", action: onOpenImportSetup)
+                .buttonStyle(.borderedProminent)
+                .accessibilityIdentifier("documents.importSetupAction")
         }
         .padding(8)
         .background(Color.orange.opacity(0.12))
-        .accessibilityElement(children: .ignore)
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("documents.importUnavailableWarning")
         .accessibilityLabel("Document import unavailable")
-        .accessibilityValue("Complete Document Intelligence setup in Settings before importing files")
+        .accessibilityValue("Complete Document Intelligence setup in AI Setup before importing files")
         .accessibilityFocused($mutationCorrectionFocused)
     }
 
