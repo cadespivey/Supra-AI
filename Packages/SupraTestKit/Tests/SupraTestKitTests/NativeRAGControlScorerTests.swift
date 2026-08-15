@@ -95,6 +95,39 @@ final class NativeRAGControlScorerTests: XCTestCase {
         }
     }
 
+    func testFileCommandRecomputesManifestDigestAndWritesCanonicalEvaluation() throws {
+        var fixture = makeFixture(noAnswerPackedArtifactID: nil)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        let manifestData = try encoder.encode(fixture.manifest)
+        fixture.run.corpusManifestSHA256 = NativeRAGControlScoreFileCommand.sha256(manifestData)
+
+        let temporary = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "NativeRAGControlScorerTests-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        let rawURL = temporary.appendingPathComponent("raw.json")
+        let manifestURL = temporary.appendingPathComponent("manifest.json")
+        let outputURL = temporary.appendingPathComponent("evaluation.json")
+        try encoder.encode(fixture.run).write(to: rawURL)
+        try manifestData.write(to: manifestURL)
+
+        try NativeRAGControlScoreFileCommand.run(
+            rawURL: rawURL,
+            manifestURL: manifestURL,
+            outputURL: outputURL,
+            retrievalK: 8
+        )
+
+        let output = try Data(contentsOf: outputURL)
+        let decoded = try JSONDecoder().decode(NativeRAGControlEvaluation.self, from: output)
+        XCTAssertEqual(decoded.corpusManifestSHA256, fixture.run.corpusManifestSHA256)
+        XCTAssertEqual(decoded.queries.count, 2)
+        XCTAssertTrue(String(decoding: output, as: UTF8.self).hasSuffix("\n"))
+    }
+
     private func makeFixture(
         noAnswerPackedArtifactID: String?
     ) -> (manifest: RAGBenchmarkCorpusManifest, run: NativeRAGControlRunRecord) {
