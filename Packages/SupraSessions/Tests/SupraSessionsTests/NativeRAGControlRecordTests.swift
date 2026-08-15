@@ -48,6 +48,7 @@ final class NativeRAGControlRecordTests: XCTestCase {
                     timeToFirstTokenMilliseconds: 41,
                     answerMarkdown: "Supported [S1].",
                     status: "complete",
+                    unsupported: false,
                     failure: nil,
                     warnings: [],
                     citationLabels: ["S1"],
@@ -77,6 +78,7 @@ final class NativeRAGControlRecordTests: XCTestCase {
         XCTAssertEqual(decoded.schemaVersion, 1)
         XCTAssertEqual(decoded.queries.only?.coldCandidates.only?.artifactID, "artifact-1")
         XCTAssertEqual(decoded.queries.only?.packedSources.only?.citationLabel, "S1")
+        XCTAssertEqual(decoded.queries.only?.unsupported, false)
         XCTAssertEqual(decoded.memory.combinedPeakPhysFootprintBytes, 60)
         XCTAssertEqual(decoded.memory.maximumLiveSemanticCacheBytes, 50)
     }
