@@ -295,8 +295,9 @@ The following Phase 0 evidence remains **pending**:
 - cold/warm generation and embedding behavior, time to first token, latency, throughput, KV
   residency, vector-scan bytes, and active embedding-model verification;
 - current protected-CI wall time and exact hosted required-check evidence for this HEAD;
-- owner-signed synthetic restore drill: successful restore/reopen, forced activation failure
-  with verified safety rollback, and unsupported-future-schema rejection;
+- owner signature on the executed synthetic restore drill candidate: successful restore/reopen,
+  forced activation failure with verified safety rollback, and unsupported-future-schema rejection
+  are recorded in `Synthetic-Restore-Drill-Receipt.md`;
 - signed Release runtime, native visual journeys, notarization, packaging, and publication
   qualification.
 
