@@ -103,6 +103,16 @@ final class ArchitectureUXPhase5VisualTests: XCTestCase {
         }
     }
 
+    func testOversizedVisualFixtureKeepsLeadingNavigationHittable() {
+        let app = launch(width: 4_000, appearance: .light)
+        let chats = app.descendants(matching: .any)["sidebar.route.globalChats"]
+        XCTAssertTrue(chats.waitForExistence(timeout: 20))
+        XCTAssertTrue(chats.isHittable)
+        chats.click()
+        XCTAssertTrue(app.descendants(matching: .any)["chat.new"].waitForExistence(timeout: 10))
+        app.terminate()
+    }
+
     private func launch(
         width: Int,
         appearance: Appearance,
