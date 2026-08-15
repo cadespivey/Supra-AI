@@ -37,6 +37,16 @@ public final class DocumentIndexingService: @unchecked Sendable {
     @discardableResult
     public func indexDocument(documentID: String) async throws -> Int {
         let document = try store.documentLibrary.fetchDocument(id: documentID)
+        let legacyFixtureDocumentIdentity: String?
+        if deterministicLegacyChunkIDs, let document {
+            let blobSHA256 = try store.documentLibrary.fetchBlob(id: document.blobID)?.sha256
+            legacyFixtureDocumentIdentity = [
+                document.importedRelativePath ?? document.displayName,
+                blobSHA256 ?? document.extractedTextChecksum ?? document.displayName,
+            ].joined(separator: "\u{001f}")
+        } else {
+            legacyFixtureDocumentIdentity = nil
+        }
         let selectedChunker = try chunker ?? DocumentChunker(
             version: store.documentSettings.loadSettings().chunkerVersion
         )
@@ -121,6 +131,7 @@ public final class DocumentIndexingService: @unchecked Sendable {
             return DocumentChunkRecord(
                 id: deterministicChunkID(
                     documentID: documentID,
+                    legacyFixtureDocumentIdentity: legacyFixtureDocumentIdentity,
                     revisionID: revisionID,
                     chunk: chunk
                 ),
@@ -190,6 +201,7 @@ public final class DocumentIndexingService: @unchecked Sendable {
 
     private func deterministicChunkID(
         documentID: String,
+        legacyFixtureDocumentIdentity: String?,
         revisionID: String?,
         chunk: DocumentChunk
     ) -> String {
@@ -200,8 +212,26 @@ public final class DocumentIndexingService: @unchecked Sendable {
         guard chunk.chunkerVersion == 2 || deterministicLegacyChunkIDs else {
             return UUID().uuidString
         }
+        if chunk.chunkerVersion == 1,
+           let legacyFixtureDocumentIdentity {
+            let identity = [
+                "chunk-v1-fixture",
+                legacyFixtureDocumentIdentity,
+                chunk.sourceKind.rawValue,
+                chunk.pageLabel ?? "",
+                chunk.sheetName ?? "",
+                chunk.cellRange ?? "",
+                chunk.emailPartPath ?? "",
+                String(chunk.chunkIndex),
+                String(chunk.charStart),
+                String(chunk.charEnd),
+                chunk.text,
+            ].joined(separator: "\u{001f}")
+            let digest = SHA256.hash(data: Data(identity.utf8))
+            return "chunk-v1-fixture-" + digest.map { String(format: "%02x", $0) }.joined()
+        }
         let identity = [
-            chunk.chunkerVersion == 2 ? "chunk-v2" : "chunk-v1-fixture",
+            "chunk-v2",
             documentID,
             revisionID ?? "",
             chunk.partID ?? "",
@@ -212,8 +242,7 @@ public final class DocumentIndexingService: @unchecked Sendable {
             chunk.text,
         ].joined(separator: "\u{001f}")
         let digest = SHA256.hash(data: Data(identity.utf8))
-        let prefix = chunk.chunkerVersion == 2 ? "chunk-v2-" : "chunk-v1-fixture-"
-        return prefix + digest.map { String(format: "%02x", $0) }.joined()
+        return "chunk-v2-" + digest.map { String(format: "%02x", $0) }.joined()
     }
 
     /// Indexes every document in a matter that is extracted but not yet (fully)

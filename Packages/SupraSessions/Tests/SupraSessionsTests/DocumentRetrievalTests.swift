@@ -158,6 +158,44 @@ final class DocumentRetrievalTests: XCTestCase {
         XCTAssertTrue(result.incompleteScopeWarning?.contains("0/1 documents ready") == true)
     }
 
+    func testDeterministicLegacyFixtureChunkIDsIgnoreStoreGeneratedLineageIDs() async throws {
+        // Deterministic benchmark stores are rebuilt from scratch. Their document,
+        // part, and revision IDs are intentionally fresh, but the same fixture bytes
+        // must still produce the same chunk IDs so equal-score retrieval ties cannot
+        // drift between local and hosted runs.
+        func fixtureChunkIDs() async throws -> [String] {
+            let store = try makeStore()
+            try store.documentSettings.updateSettings { $0.chunkerVersion = 1 }
+            let matter = try store.matters.createMatter(name: "Deterministic fixture matter")
+            let blob = try store.documentLibrary.upsertBlob(DocumentBlobRecord(
+                sha256: "deterministic-legacy-fixture",
+                byteSize: 1,
+                originalExtension: "txt",
+                managedRelativePath: "blobs/deterministic-legacy-fixture.txt"
+            )).blob
+            let document = try makeDocument(
+                store,
+                matter.id,
+                blob.id,
+                nil,
+                "stable-fixture.txt",
+                String(repeating: "Stable benchmark evidence with equal-score terms. ", count: 80)
+            )
+            _ = try await DocumentIndexingService(
+                store: store,
+                embedder: nil,
+                deterministicLegacyChunkIDs: true
+            ).indexDocument(documentID: document.id)
+            return try store.documentIndex.fetchChunks(documentID: document.id).map(\.id)
+        }
+
+        let first = try await fixtureChunkIDs()
+        let second = try await fixtureChunkIDs()
+
+        XCTAssertGreaterThan(first.count, 1)
+        XCTAssertEqual(first, second)
+    }
+
     func testRRFContributionRewardsTopRanksAndDualMatches() {
         XCTAssertGreaterThan(
             DocumentRetrievalService.rrfContribution(rank: 1),
