@@ -190,17 +190,31 @@ enum ModelArtifactIntegrity {
         switch algorithm {
         case .sha256:
             var hasher = SHA256()
-            while let data = try handle.read(upToCount: 1_048_576), !data.isEmpty {
+            while true {
                 try Task.checkCancellation()
-                hasher.update(data: data)
+                let reachedEnd = try autoreleasepool { () throws -> Bool in
+                    guard let data = try handle.read(upToCount: 1_048_576), !data.isEmpty else {
+                        return true
+                    }
+                    hasher.update(data: data)
+                    return false
+                }
+                if reachedEnd { break }
             }
             return hasher.finalize().hexString
         case .gitBlobSHA1:
             var hasher = Insecure.SHA1()
             hasher.update(data: Data("blob \(size)\0".utf8))
-            while let data = try handle.read(upToCount: 1_048_576), !data.isEmpty {
+            while true {
                 try Task.checkCancellation()
-                hasher.update(data: data)
+                let reachedEnd = try autoreleasepool { () throws -> Bool in
+                    guard let data = try handle.read(upToCount: 1_048_576), !data.isEmpty else {
+                        return true
+                    }
+                    hasher.update(data: data)
+                    return false
+                }
+                if reachedEnd { break }
             }
             return hasher.finalize().hexString
         }
