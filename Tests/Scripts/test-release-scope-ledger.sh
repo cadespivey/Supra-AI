@@ -5,6 +5,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 verifier="${repo_root}/Scripts/verify-release-scope-ledger.sh"
 ledger="${repo_root}/Docs/Architecture/Remediation/Release-Scope-Ledger.yml"
 architecture_ledger="${repo_root}/Docs/Architecture/Remediation/Architecture-UX-Test-Ledger.yml"
+native_rag_control="${repo_root}/Docs/Architecture/Remediation/Native-RAG-Control.yml"
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/supra-release-scope-test.XXXXXX")"
 trap 'rm -r -- "$scratch"' EXIT
 failures=0
@@ -26,6 +27,7 @@ make_fixture() {
   mkdir -p "${FIXTURE_ROOT}/Docs/Architecture/Remediation"
   cp "$ledger" "${FIXTURE_ROOT}/Docs/Architecture/Remediation/Release-Scope-Ledger.yml"
   cp "$architecture_ledger" "${FIXTURE_ROOT}/Docs/Architecture/Remediation/Architecture-UX-Test-Ledger.yml"
+  cp "$native_rag_control" "${FIXTURE_ROOT}/Docs/Architecture/Remediation/Native-RAG-Control.yml"
 }
 
 mutate_fixture() {
@@ -88,6 +90,20 @@ make_fixture fully-approved
 mutate_fixture fully-approved
 if ! run_fixture "$FIXTURE_ROOT" --require-owner-approval >/dev/null; then
   fail 'fully satisfied synthetic owner scope did not pass the release-only gate'
+fi
+
+make_fixture wrong-model-root
+ruby -ryaml - "${FIXTURE_ROOT}/Docs/Architecture/Remediation/Native-RAG-Control.yml" <<'RUBY'
+path = ARGV.fetch(0)
+data = YAML.safe_load(File.read(path), permitted_classes: [], permitted_symbols: [], aliases: false)
+data.fetch("installed_artifact_observation")["chat_model_root"] =
+  "/Users/synthetic/Library/Application Support/ai.supra.SupraAI/Models"
+File.write(path, YAML.dump(data))
+RUBY
+wrong_model_root_output="${scratch}/wrong-model-root.log"
+if run_fixture "$FIXTURE_ROOT" >"$wrong_model_root_output" 2>&1 \
+    || ! grep -Fq 'chat model root is not the shipping sandbox path' "$wrong_model_root_output"; then
+  fail 'a satisfied installed-artifact gate accepted the non-sandboxed chat model root'
 fi
 
 if (( failures != 0 )); then
