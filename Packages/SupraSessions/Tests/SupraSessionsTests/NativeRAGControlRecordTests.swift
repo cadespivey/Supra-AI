@@ -1,5 +1,6 @@
 import Foundation
 import SupraDiagnostics
+import SupraStore
 @testable import SupraSessions
 import XCTest
 
@@ -64,7 +65,8 @@ final class NativeRAGControlRecordTests: XCTestCase {
                 xpcCurrentPhysFootprintBytes: 30,
                 xpcPeakPhysFootprintBytes: 40,
                 combinedCurrentPhysFootprintBytes: 40,
-                combinedPeakPhysFootprintBytes: 60
+                combinedPeakPhysFootprintBytes: 60,
+                maximumLiveSemanticCacheBytes: 50
             )
         )
 
@@ -76,6 +78,47 @@ final class NativeRAGControlRecordTests: XCTestCase {
         XCTAssertEqual(decoded.queries.only?.coldCandidates.only?.artifactID, "artifact-1")
         XCTAssertEqual(decoded.queries.only?.packedSources.only?.citationLabel, "S1")
         XCTAssertEqual(decoded.memory.combinedPeakPhysFootprintBytes, 60)
+        XCTAssertEqual(decoded.memory.maximumLiveSemanticCacheBytes, 50)
+    }
+
+    func testControlTelemetryReportsLiveSemanticCacheBytes() throws {
+        let cache = RAGSemanticCandidateCache(maximumBytes: 4_096)
+        let key = RAGDerivedCacheKey(
+            querySHA256: String(repeating: "7", count: 64),
+            matterID: "native-control-matter",
+            documentIDs: ["native-control-document"],
+            readinessReceiptIDs: ["native-control-readiness"],
+            embeddingModel: DocumentReadinessEmbeddingModelIdentity(
+                id: "native-control-model",
+                repoID: "synthetic/native-control-model",
+                revision: "revision-1",
+                dimension: 3
+            ),
+            artifactIdentitySHA256: String(repeating: "a", count: 64),
+            pageSize: 3,
+            candidateLimit: 2,
+            minimumSimilarity: 0.5,
+            retrievalDepth: "deep",
+            algorithmVersion: 1
+        )
+        let access = RAGDerivedCacheAccess(
+            readinessReceiptIDs: ["native-control-readiness"],
+            allDocumentsBaseReady: true,
+            policyAllowsUse: true
+        )
+        try cache.store(
+            RAGSemanticCandidateCacheValue(candidates: [
+                RAGCachedSemanticCandidate(
+                    chunkID: "native-control-chunk",
+                    documentID: "native-control-document",
+                    similarity: 0.9
+                ),
+            ]),
+            for: key,
+            access: access
+        )
+
+        XCTAssertGreaterThan(RAGSemanticCandidateCacheMetrics.liveBytes, 0)
     }
 }
 
