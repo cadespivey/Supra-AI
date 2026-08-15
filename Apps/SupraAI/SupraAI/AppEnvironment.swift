@@ -1301,6 +1301,24 @@ final class AppEnvironment: ObservableObject {
 #endif
     }
 
+    /// Places width-driven visual fixtures without coupling the shipping shell layout to
+    /// AppKit display metrics. Oversized hosted-runner fixtures retain their requested width
+    /// while anchoring the leading navigation to the visible display edge.
+    @MainActor
+    static func placeUITestWindow(width requestedWidth: CGFloat, window: NSWindow) {
+        guard isUITestMode else { return }
+        var frame = window.frame
+        let centeredX = frame.origin.x + (frame.width - requestedWidth) / 2
+        if let visibleFrame = (window.screen ?? NSScreen.main)?.visibleFrame {
+            let maximumX = max(visibleFrame.minX, visibleFrame.maxX - requestedWidth)
+            frame.origin.x = min(max(centeredX, visibleFrame.minX), maximumX)
+        } else {
+            frame.origin.x = centeredX
+        }
+        frame.size.width = requestedWidth
+        window.setFrame(frame, display: true)
+    }
+
     /// Resolves the dedicated typed-setup fixture without a fallback value.
     /// Release builds cannot activate this path, and malformed or duplicated
     /// launch arguments are rejected rather than silently choosing a target.

@@ -371,19 +371,7 @@ struct MainShellView: View {
             await Task.yield()
             guard let window = NSApp.keyWindow
                     ?? NSApp.windows.first(where: \.canBecomeMain) else { return }
-            var frame = window.frame
-            let centeredX = frame.origin.x + (frame.width - requestedWidth) / 2
-            if let visibleFrame = (window.screen ?? NSScreen.main)?.visibleFrame {
-                // Hosted macOS runners expose a 1,024-point display, which is narrower than
-                // the supported 1,420-point visual fixture. Keep the leading navigation on
-                // screen while preserving the requested content width for window screenshots.
-                let maximumX = max(visibleFrame.minX, visibleFrame.maxX - requestedWidth)
-                frame.origin.x = min(max(centeredX, visibleFrame.minX), maximumX)
-            } else {
-                frame.origin.x = centeredX
-            }
-            frame.size.width = requestedWidth
-            window.setFrame(frame, display: true)
+            AppEnvironment.placeUITestWindow(width: requestedWidth, window: window)
         }
     }
 
