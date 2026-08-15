@@ -30,6 +30,9 @@ public enum HeadlessProbeMode: String, CaseIterable, Sendable, Equatable {
     case capability = "-runCapabilityProbe"
     /// Runs the typed-vs-prose A/B over authored fixtures.
     case typedProseAB = "-runTypedProseABProbe"
+    /// Runs the fixed synthetic legal corpus through the installed embedding and
+    /// chat artifacts, emitting a re-scorable raw RAG control record.
+    case nativeRAGControl = "-runNativeRAGControl"
 
     /// The outcome of resolving a launch-argument list.
     public enum Resolution: Equatable, Sendable {
@@ -57,7 +60,8 @@ public enum HeadlessProbeMode: String, CaseIterable, Sendable, Equatable {
         public var permitsUserStoreOpen: Bool {
             switch self {
             case .none, .single(.coverageShadow): return true
-            case .single(.capability), .single(.typedProseAB), .conflict: return false
+            case .single(.capability), .single(.typedProseAB),
+                 .single(.nativeRAGControl), .conflict: return false
             }
         }
     }
@@ -77,7 +81,7 @@ public enum HeadlessProbeMode: String, CaseIterable, Sendable, Equatable {
     public var requiresIsolatedStore: Bool {
         switch self {
         case .coverageShadow: return false
-        case .capability, .typedProseAB: return true
+        case .capability, .typedProseAB, .nativeRAGControl: return true
         }
     }
 
