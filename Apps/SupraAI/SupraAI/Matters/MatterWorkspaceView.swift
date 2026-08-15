@@ -18,6 +18,8 @@ struct MatterWorkspaceView: View {
     @State private var showEditor = false
     @State private var confirmingDelete = false
     @State private var showDraftSheet = false
+    @State private var showNewSavedWork = false
+    @State private var pendingDraftToSavedWorkHandoff = false
     @State private var lastUITestTabCommand: String?
     /// Set when an action outside the Research tab (the Authorities "New Research
     /// Session" button) wants the planner to open as the Research tab appears.
@@ -88,8 +90,23 @@ struct MatterWorkspaceView: View {
         }
         .sheet(isPresented: $showDraftSheet) {
             if let drafting = controller.draftingController {
-                MatterDraftingView(controller: drafting, library: library, matterID: matter.id, matterName: matter.name)
+                MatterDraftingView(
+                    controller: drafting,
+                    library: library,
+                    matterID: matter.id,
+                    matterName: matter.name,
+                    onOpenSavedWork: {
+                        pendingDraftToSavedWorkHandoff = true
+                        showDraftSheet = false
+                    }
+                )
             }
+        }
+        .onChange(of: showDraftSheet) { _, isPresented in
+            guard !isPresented, pendingDraftToSavedWorkHandoff else { return }
+            pendingDraftToSavedWorkHandoff = false
+            tab = .outputs
+            showNewSavedWork = true
         }
         .confirmationDialog(
             moveToRecycleBinPresentation.confirmationTitle,
@@ -373,6 +390,7 @@ struct MatterWorkspaceView: View {
                     controller: outputs,
                     library: library,
                     matter: matter,
+                    showNew: $showNewSavedWork,
                     onOpenDocuments: { tab = .documents },
                     onOpenNotesAndTime: onOpenNotesAndTime,
                     onOpenBilling: { tab = .billing }

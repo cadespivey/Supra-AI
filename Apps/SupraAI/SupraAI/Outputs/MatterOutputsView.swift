@@ -8,11 +8,11 @@ struct MatterOutputsView: View {
     @ObservedObject var controller: StructuredOutputController
     @ObservedObject var library: ModelLibrary
     let matter: MatterSummary
+    @Binding var showNew: Bool
     let onOpenDocuments: () -> Void
     let onOpenNotesAndTime: (SavedWorkNotesHandoff) -> Void
     let onOpenBilling: () -> Void
 
-    @State private var showNew = false
     @State private var navigationPath: [String] = []
 
     var body: some View {
@@ -271,6 +271,8 @@ private struct NewOutputSheet: View {
             .padding()
         }
         .frame(minWidth: 460, idealWidth: 540, maxWidth: .infinity, minHeight: 460, idealHeight: 600, maxHeight: .infinity)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("savedWork.new.sheet")
         .onAppear {
             library.refresh()
             documents = controller.documentChoices()

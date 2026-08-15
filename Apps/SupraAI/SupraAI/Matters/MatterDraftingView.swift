@@ -14,6 +14,7 @@ struct MatterDraftingView: View {
     @ObservedObject var library: ModelLibrary
     let matterID: String
     let matterName: String
+    let onOpenSavedWork: () -> Void
     @Environment(\.dismiss) private var dismiss
 
     // Caption parties (e.g. "MCKERNON MOTORS, INC.," / "Plaintiff,").
@@ -101,12 +102,14 @@ struct MatterDraftingView: View {
         controller: MatterDraftingController,
         library: ModelLibrary,
         matterID: String,
-        matterName: String
+        matterName: String,
+        onOpenSavedWork: @escaping () -> Void
     ) {
         _controller = ObservedObject(wrappedValue: controller)
         _library = ObservedObject(wrappedValue: library)
         self.matterID = matterID
         self.matterName = matterName
+        self.onOpenSavedWork = onOpenSavedWork
 
     }
 
@@ -415,6 +418,15 @@ struct MatterDraftingView: View {
                 Text(matterName).font(.supraSubheadline).foregroundStyle(.secondary)
             }
             Spacer()
+            Button {
+                onOpenSavedWork()
+            } label: {
+                Label("New Versioned Work", systemImage: "doc.text")
+            }
+            .buttonStyle(.ghost)
+            .disabled(isWorking)
+            .help("Create editable, source-checkable work with immutable versions in Saved Work")
+            .accessibilityIdentifier("drafting.openSavedWork")
             Button { dismiss() } label: { Image(systemName: "xmark.circle.fill") }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
