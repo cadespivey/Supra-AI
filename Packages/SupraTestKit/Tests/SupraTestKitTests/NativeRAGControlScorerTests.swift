@@ -83,11 +83,11 @@ final class NativeRAGControlScorerTests: XCTestCase {
             XCTAssertEqual(error as? NativeRAGControlScoringError, .manifestDigestMismatch)
         }
 
-        var incomplete = fixture.manifest
+        var incomplete = fixture.run
         incomplete.queries.removeLast()
         XCTAssertThrowsError(try NativeRAGControlScorer.score(
-            run: fixture.run,
-            manifest: incomplete,
+            run: incomplete,
+            manifest: fixture.manifest,
             manifestSHA256: fixture.run.corpusManifestSHA256,
             retrievalK: 8
         )) { error in
@@ -188,6 +188,7 @@ final class NativeRAGControlScorerTests: XCTestCase {
                     timeToFirstTokenMilliseconds: 25,
                     answerMarkdown: "The synthetic fact [S1].",
                     status: "complete",
+                    unsupported: false,
                     failure: nil,
                     warnings: [],
                     citationLabels: ["S1"],
@@ -208,6 +209,7 @@ final class NativeRAGControlScorerTests: XCTestCase {
                     timeToFirstTokenMilliseconds: nil,
                     answerMarkdown: noAnswerPackedArtifactID == nil ? nil : "Unsupported answer [S9].",
                     status: "insufficient_evidence",
+                    unsupported: noAnswerPackedArtifactID == nil,
                     failure: nil,
                     warnings: [],
                     citationLabels: noAnswerPackedArtifactID == nil ? [] : ["S9"],
