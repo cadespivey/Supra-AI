@@ -777,8 +777,7 @@ public struct RuntimeContextAdmissionPlanner: Sendable {
         let maximum = try maximumAdmittedContextTokens(for: profile)
         let maximumPromptByHardware = max(0, maximum - request.reservedOutputTokens)
         let maximumPrompt = min(request.requestedContextTokens, maximumPromptByHardware)
-        let fits = requestedKVTokens <= maximum
-            && actualPeakKVTokens <= maximum
+        let fits = actualPeakKVTokens <= maximum
             && request.actualPromptTokens <= maximumPrompt
 
         let disposition: RuntimeContextAdmissionDisposition

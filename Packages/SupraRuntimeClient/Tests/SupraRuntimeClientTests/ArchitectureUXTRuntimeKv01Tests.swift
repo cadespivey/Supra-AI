@@ -55,6 +55,36 @@ final class ArchitectureUXTRuntimeKv01Tests: XCTestCase {
         assertCanonicalBinding(nPlusOne)
     }
 
+    func testPreparedPromptAdmitsWhenItFitsInsideHardwareLimitedWindow() throws {
+        let profile = ArchitectureUXTXpcBudget05Tests.modelProfile(
+            profileID: "T_RUNTIME_KV_01_WIRE_731",
+            modelArtifactID: "model-wire-713",
+            modelRevision: "rev-7"
+        )
+        let planner = RuntimeContextAdmissionPlanner(
+            resourcePlanner: RuntimeResourceAdmissionPlanner(
+                envelope: ArchitectureUXTXpcBudget05Tests.memoryEnvelope(
+                    unifiedMemoryCeilingBytes: 1_162
+                )
+            )
+        )
+        let decision = try planner.evaluate(
+            contextRequest(
+                requestedContextTokens: 3,
+                actualPromptTokens: 2,
+                workload: .groundedExactEvidence,
+                allowsExactSourceRepacking: false
+            ),
+            profile: profile
+        )
+
+        XCTAssertEqual(decision.disposition, .admit)
+        XCTAssertEqual(decision.requestedKVTokens, 3)
+        XCTAssertEqual(decision.actualPeakKVTokens, 2)
+        XCTAssertEqual(decision.maximumAdmittedContextTokens, 2)
+        XCTAssertEqual(decision.maximumAdmittedPromptTokens, 2)
+    }
+
     func testGroundedNPlusOneDefersWhenExactSourcesCannotBeRepacked() throws {
         let profile = ArchitectureUXTXpcBudget05Tests.modelProfile(
             profileID: "T_RUNTIME_KV_01_WIRE_731",
