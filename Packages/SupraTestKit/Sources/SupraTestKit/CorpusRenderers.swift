@@ -181,7 +181,7 @@ public enum CorpusRenderers {
             let formulas = Dictionary(uniqueKeysWithValues: (sheet.formulas ?? []).map { ($0.cell, $0) })
             var rowsXML = ""
             for (rowIndex, row) in sheet.cells.enumerated() {
-                let cells = row.enumerated().map { col, value in
+                let cells = row.enumerated().map { col, value -> String in
                     let reference = "\(columnLetter(col))\(rowIndex + 1)"
                     if let formula = formulas[reference], features.contains(.formulasCachedValues) {
                         let style = features.contains(.cellFormats) ? " s=\"1\"" : ""
