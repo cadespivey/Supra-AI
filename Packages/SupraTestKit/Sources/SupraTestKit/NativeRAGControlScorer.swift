@@ -231,10 +231,16 @@ public enum NativeRAGControlScorer {
         let ownerStatus: NativeRAGOwnerJudgmentStatus = manifest.queries.allSatisfy {
             $0.humanReview.status == .approved
         } ? .approved : .pendingOwnerReview
-        let rawRunComplete = run.importSummary.discovered == manifest.artifacts.count
-            && run.importSummary.imported == manifest.artifacts.count
-            && run.importSummary.failed == 0
-            && run.importSummary.indexedDocuments == manifest.artifacts.count
+        // EML artifacts may expand into imported or unsupported child attachments.
+        // The signed runner has already failed if any manifest artifact is absent;
+        // require every discovered row to be accounted for and every admitted row
+        // to be indexed without assuming one import row per top-level artifact.
+        let importRowsAccounted = run.importSummary.discovered >= run.importSummary.imported
+            && run.importSummary.failed
+                == run.importSummary.discovered - run.importSummary.imported
+        let rawRunComplete = run.importSummary.imported >= manifest.artifacts.count
+            && run.importSummary.indexedDocuments == run.importSummary.imported
+            && importRowsAccounted
             && run.queries.allSatisfy { $0.failure == nil }
         let gate: RAGDeterministicGate = if !rawRunComplete {
             .failed

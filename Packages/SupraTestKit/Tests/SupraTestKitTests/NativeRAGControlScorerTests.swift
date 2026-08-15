@@ -71,6 +71,25 @@ final class NativeRAGControlScorerTests: XCTestCase {
         XCTAssertEqual(try measured(cell("zero_result_accuracy", "overall", in: evaluation)), 0.5)
     }
 
+    func testGateAcceptsFullyAccountedEmailAttachmentExpansion() throws {
+        var fixture = makeFixture(noAnswerPackedArtifactID: nil)
+        fixture.run.importSummary = .init(
+            discovered: 5,
+            imported: 4,
+            failed: 1,
+            indexedDocuments: 4
+        )
+
+        let evaluation = try NativeRAGControlScorer.score(
+            run: fixture.run,
+            manifest: fixture.manifest,
+            manifestSHA256: fixture.run.corpusManifestSHA256,
+            retrievalK: 8
+        )
+
+        XCTAssertEqual(evaluation.deterministicGate, .pending)
+    }
+
     func testRejectsDigestAndQuerySetMismatchesBeforeScoring() throws {
         let fixture = makeFixture(noAnswerPackedArtifactID: nil)
 
