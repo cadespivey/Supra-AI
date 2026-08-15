@@ -145,6 +145,52 @@ final class ArchitectureUXTUxSetup01Tests: XCTestCase {
         XCTAssertTrue(shell.contains("documentSetup.storageInitialized"))
     }
 
+    // Owner walkthrough RED (2026-08-15): the shipping Documents banner names
+    // Settings even though AI Setup owns the requirement, and exposes no action.
+    func testDocumentImportBlockerOpensExactAISetupRowAndReturnsToDocuments() {
+        let app = XCUIApplication()
+        app.launchArguments += [
+            "-ApplePersistenceIgnoreState", "YES",
+            "-uiTestMode",
+            "-uiTestEnsureFreshWindow",
+            "-uiTestSelectFirstMatter",
+            "-uiTestInitialMatterTab", "Documents",
+        ]
+        app.launch()
+        defer { app.terminate() }
+
+        XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 10))
+        XCTAssertTrue(
+            app.descendants(matching: .any)["documents.importUnavailableWarning"]
+                .waitForExistence(timeout: 15)
+        )
+
+        let correction = app.buttons["documents.importSetupAction"]
+        XCTAssertTrue(correction.waitForExistence(timeout: 10))
+        XCTAssertEqual(correction.label, "Open AI Setup")
+        correction.click()
+
+        XCTAssertTrue(
+            focusedElement(
+                identifier: "aiSetup.requirement.localAssistant.drafting",
+                in: app
+            ).waitForExistence(timeout: 10)
+        )
+        let returnAction = app.buttons["setup.navigation.return"]
+        XCTAssertTrue(returnAction.waitForExistence(timeout: 10))
+        XCTAssertTrue(returnAction.label.localizedCaseInsensitiveContains("documents"))
+        returnAction.click()
+
+        XCTAssertTrue(
+            app.descendants(matching: .any)["matterTab.Documents"]
+                .waitForExistence(timeout: 10)
+        )
+        XCTAssertTrue(
+            app.descendants(matching: .any)["documents.importUnavailableWarning"]
+                .waitForExistence(timeout: 10)
+        )
+    }
+
     private static let aiSetupRowIDs = [
         "aiSetup.requirement.localAssistant.drafting",
         "aiSetup.requirement.documentSearch.embeddingModel",

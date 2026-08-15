@@ -160,4 +160,38 @@ final class ArchitectureUXTSetupRequirementNavigationTests: XCTestCase {
         XCTAssertFalse(encodedText.localizedCaseInsensitiveContains("current matter"))
         XCTAssertFalse(encodedText.localizedCaseInsensitiveContains("default route"))
     }
+
+    // Owner walkthrough RED (2026-08-15): the Documents import blocker points to
+    // Settings and has no working action. Its corrective detour must retain an
+    // import-specific intent instead of silently substituting draftMotion.
+    func testDocumentImportSetupRequestRoundTripsWithoutDraftIntentSubstitution() throws {
+        let context = WorkContext(
+            matterID: Wire.matterID,
+            intent: .importDocuments,
+            sourceSet: nil,
+            authorityPacket: nil,
+            workProduct: nil,
+            returnDestination: .matterTask(
+                matterID: Wire.matterID,
+                intent: .importDocuments
+            ),
+            checkpointID: "document-import"
+        )
+        let request = SetupNavigationRequest(
+            id: "document-import-setup-wire",
+            requirement: .documentSearch(step: .embeddingModel),
+            returnContext: context
+        )
+
+        let encoded = try JSONEncoder().encode(request)
+        let decoded = try JSONDecoder().decode(SetupNavigationRequest.self, from: encoded)
+
+        XCTAssertEqual(decoded.returnContext.intent, .importDocuments)
+        XCTAssertEqual(
+            decoded.returnContext.returnDestination,
+            .matterTask(matterID: Wire.matterID, intent: .importDocuments)
+        )
+        XCTAssertNotEqual(decoded.returnContext.intent, .draftMotion)
+        XCTAssertTrue(try XCTUnwrap(String(data: encoded, encoding: .utf8)).contains("importDocuments"))
+    }
 }
