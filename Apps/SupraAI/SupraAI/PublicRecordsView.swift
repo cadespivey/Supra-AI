@@ -9,6 +9,8 @@ import SwiftUI
 /// finding or legal conclusion.
 struct PublicRecordsView: View {
     @ObservedObject var controller: PublicRecordsController
+    @ObservedObject var matters: MattersController
+    let matterHandoff: PublicRecordMatterHandoff?
 
     enum Source: String, CaseIterable, Identifiable {
         case sec = "SEC EDGAR"
@@ -17,7 +19,9 @@ struct PublicRecordsView: View {
         var id: String { rawValue }
     }
 
-    @State private var source: Source = .sec
+    @State private var source: Source = AppEnvironment.isUITestMode
+        && ProcessInfo.processInfo.arguments.contains("-uiTestPublicRecordsHandoff")
+        ? .cfpb : .sec
     // SEC
     @State private var secCIK = ""
     @State private var secScope: PublicRecordsController.SecFormScope = .all
@@ -30,6 +34,9 @@ struct PublicRecordsView: View {
     @State private var nlrbCaseNumber = ""
     @State private var showNlrbFileImporter = false
     @State private var showSourceGuide = false
+    @State private var matterTargetSnapshot: PublicRecordSnapshot?
+    @State private var handoffsInFlight: Set<String> = []
+    @State private var handoffMessages: [String: String] = [:]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -184,9 +191,11 @@ struct PublicRecordsView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            if let url = URL(string: filing.primaryDocumentUrl ?? filing.filingUrl) {
-                Link("View", destination: url).font(.supraCaption)
-            }
+            publicRecordActions(
+                snapshot: .sec(filing),
+                viewURL: filing.primaryDocumentUrl ?? filing.filingUrl,
+                viewLabel: "View"
+            )
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -276,9 +285,11 @@ struct PublicRecordsView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            if let url = URL(string: complaint.sourceUrl) {
-                Link("View", destination: url).font(.supraCaption)
-            }
+            publicRecordActions(
+                snapshot: .cfpb(complaint),
+                viewURL: complaint.sourceUrl,
+                viewLabel: "View"
+            )
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -430,12 +441,103 @@ struct PublicRecordsView: View {
                 }
             }
             Spacer()
-            if let url = URL(string: record.sourceUrl) {
-                Link("Case page", destination: url).font(.supraCaption)
-            }
+            publicRecordActions(
+                snapshot: .nlrb(record),
+                viewURL: record.sourceUrl,
+                viewLabel: "Case page"
+            )
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+    }
+
+    private func publicRecordActions(
+        snapshot: PublicRecordSnapshot,
+        viewURL: String,
+        viewLabel: String
+    ) -> some View {
+        VStack(alignment: .trailing, spacing: 5) {
+            if let url = URL(string: viewURL) {
+                Link(viewLabel, destination: url).font(.supraCaption)
+            }
+            Button("Add to Matter") {
+                matterTargetSnapshot = matterTargetSnapshot?.id == snapshot.id ? nil : snapshot
+            }
+            .buttonStyle(.borderless)
+            .disabled(handoffsInFlight.contains(snapshot.id))
+            .accessibilityIdentifier("publicRecords.addToMatter.\(uiID(snapshot.id))")
+
+            if matterTargetSnapshot?.id == snapshot.id {
+                VStack(alignment: .trailing, spacing: 3) {
+                    Text("Choose a matter")
+                        .font(.supraCaption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    ForEach(matters.matters) { matter in
+                        Button(matter.name) {
+                            matterTargetSnapshot = nil
+                            add(snapshot: snapshot, to: matter)
+                        }
+                        .buttonStyle(.borderless)
+                        .accessibilityIdentifier(
+                            "publicRecords.target.\(uiID(snapshot.id)).\(matter.id)"
+                        )
+                    }
+                }
+                .padding(8)
+                .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+            }
+            if handoffsInFlight.contains(snapshot.id) {
+                HStack(spacing: 5) {
+                    ProgressView().controlSize(.small)
+                    Text("Adding through matter Documents…")
+                }
+                .font(.supraCaption)
+                .foregroundStyle(.secondary)
+            } else if let message = handoffMessages[snapshot.id] {
+                Text(message)
+                    .font(.supraCaption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("Public record handoff. \(message)")
+                    .accessibilityValue(message)
+                    .accessibilityIdentifier("publicRecords.handoff.\(uiID(snapshot.id))")
+            }
+        }
+    }
+
+    private func add(snapshot: PublicRecordSnapshot, to matter: MatterSummary) {
+        guard !handoffsInFlight.contains(snapshot.id) else { return }
+        guard let matterHandoff else {
+            handoffMessages[snapshot.id] =
+                "Add to Matter is unavailable. Open the official record and import a saved copy from Documents."
+            return
+        }
+        handoffsInFlight.insert(snapshot.id)
+        handoffMessages[snapshot.id] = nil
+        Task { @MainActor in
+            let outcome = await matterHandoff.addToMatter(
+                snapshot: snapshot,
+                matterID: matter.id
+            )
+            handoffsInFlight.remove(snapshot.id)
+            switch outcome {
+            case .completed:
+                handoffMessages[snapshot.id] = "Ready in matter \(matter.name)."
+            case let .awaitingReadiness(receipt):
+                let blocker = receipt.readinessReceipt.primaryExclusion?.rawValue
+                    ?? "document_processing_incomplete"
+                handoffMessages[snapshot.id] =
+                    "Added to matter \(matter.name). Still preparing: \(blocker). Open that matter's Documents tab for the exact recovery action."
+            case let .failed(failure):
+                handoffMessages[snapshot.id] =
+                    "Could not add to matter \(matter.name). \(failure.message)"
+            }
+        }
+    }
+
+    private func uiID(_ snapshotID: String) -> String {
+        snapshotID.replacingOccurrences(of: ":", with: ".")
     }
 
     private func nlrbCaseSubtitle(_ record: NlrbCaseRecord) -> String {

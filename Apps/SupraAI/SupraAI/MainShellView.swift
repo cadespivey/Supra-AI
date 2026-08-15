@@ -449,7 +449,11 @@ struct MainShellView: View {
                 onReturnFromSetup: returnFromSetup
             )
         case .publicRecords:
-            PublicRecordsView(controller: environment.publicRecordsController)
+            PublicRecordsView(
+                controller: environment.publicRecordsController,
+                matters: environment.mattersController,
+                matterHandoff: environment.publicRecordsMatterHandoff
+            )
         case .diagnostics:
             DiagnosticsView()
         case .settings:

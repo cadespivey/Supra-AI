@@ -1652,3 +1652,48 @@ final class OwnerWalkthroughGroundedPromotionUITests: XCTestCase {
         )
     }
 }
+
+@MainActor
+final class PublicRecordsMatterHandoffUITests: XCTestCase {
+    override func setUp() {
+        continueAfterFailure = false
+    }
+
+    func testExplicitPublicRecordHandoffUsesMatterDocumentsReadiness() {
+        let app = XCUIApplication()
+        app.launchArguments += [
+            "-ApplePersistenceIgnoreState", "YES",
+            "-uiTestMode", "YES",
+            "-uiTestEnsureFreshWindow", "YES",
+            "-uiTestPublicRecordsHandoff", "YES",
+            "-uiTestInitialRoute", "publicRecords",
+        ]
+        app.launch()
+        XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 15))
+
+        let add = app.buttons["publicRecords.addToMatter.cfpb.884211"]
+        XCTAssertTrue(add.waitForExistence(timeout: 15))
+        add.click()
+        let target = app.buttons.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "publicRecords.target.cfpb.884211.")
+        ).firstMatch
+        XCTAssertTrue(target.waitForExistence(timeout: 10))
+        target.click()
+
+        let result = app.descendants(matching: .any)["publicRecords.handoff.cfpb.884211"]
+        XCTAssertTrue(result.waitForExistence(timeout: 20))
+        let message = result.value as? String ?? result.label
+        XCTAssertTrue(message.contains("Added to matter"))
+        XCTAssertTrue(message.contains("Still preparing:"))
+
+        let matter = app.descendants(matching: .any).matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "matter.row.")
+        ).firstMatch
+        XCTAssertTrue(matter.waitForExistence(timeout: 10))
+        matter.click()
+        let documents = app.buttons["matterTab.Documents"]
+        XCTAssertTrue(documents.waitForExistence(timeout: 10))
+        documents.click()
+        XCTAssertTrue(app.staticTexts["CFPB-Complaint-884211.txt"].waitForExistence(timeout: 20))
+    }
+}

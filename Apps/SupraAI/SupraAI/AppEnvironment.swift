@@ -373,6 +373,7 @@ final class AppEnvironment: ObservableObject {
     let scratchPadController: ScratchPadController
     /// Key-less government-data searches (SEC EDGAR, CFPB, NLRB).
     let publicRecordsController: PublicRecordsController
+    private(set) var publicRecordsMatterHandoff: PublicRecordMatterHandoff?
     let billingDraftController: BillingDraftController
     let billingSettingsController: BillingSettingsController
     // Milestone 3: document intelligence setup.
@@ -552,10 +553,17 @@ final class AppEnvironment: ObservableObject {
         self.sparkleUpdater = SparkleUpdaterController()
         self.recycleBinController = RecycleBinController(store: store)
         self.scratchPadController = ScratchPadController(store: store)
-        self.publicRecordsController = PublicRecordsController(
+        let publicRecordsController = PublicRecordsController(
             store: store,
             keyStore: tokenStore
         )
+        #if DEBUG
+        if Self.isUITestMode,
+           ProcessInfo.processInfo.arguments.contains("-uiTestPublicRecordsHandoff") {
+            publicRecordsController.seedSyntheticMatterHandoffFixture()
+        }
+        #endif
+        self.publicRecordsController = publicRecordsController
         // Phase 7: the billing draft controller is seeded from the firm's persisted
         // ScratchPad billing settings (timekeeper, rounding, sensitivity, etc.).
         let billingSettings = BillingSettingsController(store: store)
@@ -620,6 +628,17 @@ final class AppEnvironment: ObservableObject {
         }
         let importService = DocumentImportService(store: store)
         self.quickAttachmentMatterHandoff = QuickAttachmentMatterHandoff(
+            store: store,
+            importService: importService,
+            makeIndexingService: {
+                let model = try? store.documentSettings.fetchSelectedEmbeddingModel()
+                let embedder = model.flatMap {
+                    RuntimeTextEmbedder(model: $0, runtimeClient: modelExecutionCoordinator)
+                }
+                return DocumentIndexingService(store: store, embedder: embedder)
+            }
+        )
+        self.publicRecordsMatterHandoff = PublicRecordMatterHandoff(
             store: store,
             importService: importService,
             makeIndexingService: {

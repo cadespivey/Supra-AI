@@ -278,6 +278,36 @@ public final class PublicRecordsController: ObservableObject {
         nlrbImportStatus?.hasPrefix("Imported") == true || !nlrbCaseMatches.isEmpty
     }
 
+    #if DEBUG
+    /// Hermetic result used only by the explicit native walkthrough launch. It
+    /// performs no provider request and cannot be reached in a signed Release.
+    public func seedSyntheticMatterHandoffFixture() {
+        cfpbResult = CfpbComplaintSearchResult(
+            complaints: [
+                CfpbComplaintRecord(
+                    complaintId: "884211",
+                    company: "Synthetic Harbor Bank",
+                    product: "Checking account",
+                    issue: "Account closure",
+                    state: "FL",
+                    dateReceived: "2026-08-01",
+                    narrative: "Synthetic consumer allegation for the owner walkthrough fixture.",
+                    sourceUrl: "https://www.consumerfinance.gov/data-research/consumer-complaints/search/detail/884211",
+                    retrievedAt: Date(timeIntervalSince1970: 1_786_700_000),
+                    raw: .object(["complaint_id": .string("884211")])
+                ),
+            ],
+            totalCount: 1,
+            pagesFetched: 1,
+            sourceLimitations: [
+                "Synthetic fixture — no provider request was made.",
+                "Complaint records are allegations, not findings.",
+            ]
+        )
+        cfpbPhase = .loaded
+    }
+    #endif
+
     // MARK: - Errors
 
     /// Connector errors carry sanitized, user-safe messages by contract;
