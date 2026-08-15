@@ -771,6 +771,8 @@ final class AppEnvironment: ObservableObject {
             Task { await self.runCapabilityProbeIfRequested() }
         case .single(.typedProseAB):
             Task { await self.runTypedProseABProbeIfRequested() }
+        case .single(.nativeRAGControl):
+            Task { await self.runNativeRAGControlIfRequested() }
         }
     }
 
@@ -848,6 +850,72 @@ final class AppEnvironment: ObservableObject {
         print("===COVERAGE_SHADOW_UNAVAILABLE_BEGIN===")
         print(json)
         print("===COVERAGE_SHADOW_UNAVAILABLE_END===")
+        terminateAfterHeadlessProbe()
+    }
+
+    /// Runs the exact downloaded embedding/chat pair over the fixed synthetic
+    /// legal corpus. The runner owns a throwaway Store and temp document storage;
+    /// this method only resolves the typed invocation and emits a re-scorable raw
+    /// record. Failures use the same delimited channel so a harness never hangs.
+    private func runNativeRAGControlIfRequested() async {
+        guard case .single(.nativeRAGControl) = Self.headlessProbeResolution else { return }
+        let invocation: NativeRAGControlInvocation
+        do {
+            invocation = try NativeRAGControlInvocation.resolve()
+        } catch {
+            emitNativeRAGControlPayload(
+                json: Self.headlessFailureJSON(
+                    status: "invalid_invocation",
+                    detail: error.localizedDescription
+                ),
+                outputURL: nil
+            )
+            return
+        }
+
+        do {
+            let record = try await NativeRAGControlRunner(
+                store: store,
+                modelLibrary: modelLibrary,
+                runtimeClient: modelExecutionCoordinator
+            ).run(invocation)
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+            let data = try encoder.encode(record)
+            emitNativeRAGControlPayload(
+                json: String(data: data, encoding: .utf8) ?? "{}",
+                outputURL: invocation.outputURL
+            )
+        } catch {
+            emitNativeRAGControlPayload(
+                json: Self.headlessFailureJSON(
+                    status: "control_failed",
+                    detail: error.localizedDescription
+                ),
+                outputURL: invocation.outputURL
+            )
+        }
+    }
+
+    private static func headlessFailureJSON(status: String, detail: String) -> String {
+        let payload: [String: String] = ["status": status, "detail": detail]
+        return (try? JSONSerialization.data(
+            withJSONObject: payload,
+            options: [.prettyPrinted, .sortedKeys]
+        )).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+    }
+
+    private func emitNativeRAGControlPayload(json: String, outputURL: URL?) {
+        if let outputURL {
+            try? Data(json.utf8).write(to: outputURL, options: .atomic)
+        }
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString("===NATIVE_RAG_CONTROL_REPORT===\n\(json)", forType: .string)
+        print("===NATIVE_RAG_CONTROL_REPORT_BEGIN===")
+        print(json)
+        print("===NATIVE_RAG_CONTROL_REPORT_END===")
         terminateAfterHeadlessProbe()
     }
 

@@ -72,6 +72,7 @@
 		A42B02020000000000000002 /* RuntimeXPCIntegrationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A42B02020000000000000102 /* RuntimeXPCIntegrationView.swift */; };
 		A42B02030000000000000003 /* RuntimeModelDirectoryAccess.swift in Sources */ = {isa = PBXBuildFile; fileRef = A42B02030000000000000103 /* RuntimeModelDirectoryAccess.swift */; };
 		A42B02040000000000000004 /* SignedReleaseSmokeHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = A42B02040000000000000104 /* SignedReleaseSmokeHost.swift */; };
+		B6A815000000000000000001 /* NativeRAGControlRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6A815000000000000000101 /* NativeRAGControlRunner.swift */; };
 		A42B02050000000000000005 /* SupraRuntimeModelSecurity in Frameworks */ = {isa = PBXBuildFile; productRef = A42B02050000000000000422 /* SupraRuntimeModelSecurity */; };
 		C8914D48FD9E94ED7FA33488 /* ScratchPadView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8792ADFD107281343AFEEA5C /* ScratchPadView.swift */; };
 		D43B113C5FCE7B2343E29B6A /* PublicRecordsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEBC0EB0D3FD3BAFBA6FE8C8 /* PublicRecordsView.swift */; };
@@ -145,6 +146,7 @@
 		45DF0346474345DA98F88B95 /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/Cocoa.framework; sourceTree = DEVELOPER_DIR; };
 		5A0000000000000000000101 /* SupraAIApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupraAIApp.swift; sourceTree = "<group>"; };
 		5A0000000000000000000102 /* AppEnvironment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppEnvironment.swift; sourceTree = "<group>"; };
+		B6A815000000000000000101 /* NativeRAGControlRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeRAGControlRunner.swift; sourceTree = "<group>"; };
 		5A0000000000000000000103 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		5A0000000000000000000104 /* MainShellView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainShellView.swift; sourceTree = "<group>"; };
 		5A0000000000000000000105 /* SidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarView.swift; sourceTree = "<group>"; };
@@ -260,6 +262,7 @@
 				5A0000000000000000000101 /* SupraAIApp.swift */,
 				A42B02040000000000000104 /* SignedReleaseSmokeHost.swift */,
 				5A0000000000000000000102 /* AppEnvironment.swift */,
+				B6A815000000000000000101 /* NativeRAGControlRunner.swift */,
 				5A0000000000000000000103 /* RootView.swift */,
 				D1E70B0B000000000000010B /* UserMutationFailureBanner.swift */,
 				A42B02020000000000000102 /* RuntimeXPCIntegrationView.swift */,
@@ -632,6 +635,7 @@
 				5A0000000000000000000001 /* SupraAIApp.swift in Sources */,
 				A42B02040000000000000004 /* SignedReleaseSmokeHost.swift in Sources */,
 				5A0000000000000000000002 /* AppEnvironment.swift in Sources */,
+				B6A815000000000000000001 /* NativeRAGControlRunner.swift in Sources */,
 				5A0000000000000000000003 /* RootView.swift in Sources */,
 				D1E70B0B000000000000000B /* UserMutationFailureBanner.swift in Sources */,
 				A42B02020000000000000002 /* RuntimeXPCIntegrationView.swift in Sources */,
