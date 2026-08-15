@@ -4,6 +4,7 @@ set -euo pipefail
 repo_root="${SUPRA_REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 ledger="${repo_root}/Docs/Architecture/Remediation/Release-Scope-Ledger.yml"
 architecture_ledger="${repo_root}/Docs/Architecture/Remediation/Architecture-UX-Test-Ledger.yml"
+native_rag_control="${repo_root}/Docs/Architecture/Remediation/Native-RAG-Control.yml"
 require_owner_approval=0
 if [[ "${1:-}" == "--require-owner-approval" ]]; then
   require_owner_approval=1
@@ -15,14 +16,25 @@ if (( $# != 0 )); then
 fi
 [[ -f "$ledger" ]] || { printf 'release scope ledger is missing: %s\n' "$ledger" >&2; exit 1; }
 [[ -f "$architecture_ledger" ]] || { printf 'architecture test ledger is missing: %s\n' "$architecture_ledger" >&2; exit 1; }
+[[ -f "$native_rag_control" ]] || { printf 'native RAG control is missing: %s\n' "$native_rag_control" >&2; exit 1; }
 
-ruby -ryaml - "$ledger" "$architecture_ledger" "$require_owner_approval" <<'RUBY'
-path, architecture_path, require_approval = ARGV
+ruby -ryaml - "$ledger" "$architecture_ledger" "$native_rag_control" "$require_owner_approval" <<'RUBY'
+path, architecture_path, native_rag_path, require_approval = ARGV
 data = YAML.safe_load(File.read(path), permitted_classes: [], permitted_symbols: [], aliases: false)
 architecture = YAML.safe_load(File.read(architecture_path), permitted_classes: [], permitted_symbols: [], aliases: false)
+native_rag = YAML.safe_load(File.read(native_rag_path), permitted_classes: [], permitted_symbols: [], aliases: false)
 abort "invalid release scope schema" unless data["schema_version"] == 1
 abort "invalid canonical plan digest" unless data["canonical_plan_sha256"].to_s.match?(/\A[0-9a-f]{64}\z/)
 abort "release scope and architecture ledger plan digests differ" unless data["canonical_plan_sha256"] == architecture["canonical_plan_sha256"]
+abort "invalid native RAG control schema" unless native_rag["schema_version"] == 1
+
+artifact_observation = native_rag.fetch("installed_artifact_observation")
+chat_root = artifact_observation["chat_model_root"].to_s
+embedding_root = artifact_observation["embedding_model_root"].to_s
+chat_suffix = "/Library/Containers/ai.supra.SupraAI/Data/Library/Application Support/ai.supra.SupraAI/Models"
+embedding_suffix = "/Library/Containers/ai.supra.SupraAI/Data/Library/Application Support/ai.supra.SupraAI/EmbeddingModels"
+abort "chat model root is not the shipping sandbox path" unless chat_root.end_with?(chat_suffix)
+abort "embedding model root is not the shipping sandbox path" unless embedding_root.end_with?(embedding_suffix)
 
 expected_findings = (1..9).map { |n| format("P-%02d", n) } +
   (1..20).map { |n| format("A-%02d", n) } +
@@ -92,6 +104,38 @@ abort "owner acceptance gate IDs are duplicated" unless owner_gate_ids.uniq.leng
 owner_gates.each do |gate|
   abort "#{gate['id']} has blank status" if gate["status"].to_s.strip.empty?
   abort "#{gate['id']} has blank evidence" if gate["evidence"].to_s.strip.empty?
+end
+installed_artifact_gate = owner_gates.find { |gate| gate["id"] == "installed-rag-artifacts" }
+if installed_artifact_gate["status"] == "satisfied"
+  abort "satisfied installed-artifact gate has no owner direction" unless artifact_observation["owner_direction"] == "use_already_downloaded_selected_pair"
+  abort "satisfied installed-artifact gate has an unresolved disposition" unless artifact_observation["disposition"] == "satisfied_existing_active_pair_integrity_verified"
+  abort "satisfied installed-artifact gate has no installed chat directories" unless artifact_observation["chat_model_subdirectory_count"].to_i.positive?
+  abort "satisfied installed-artifact gate has no installed embedding directories" unless artifact_observation["embedding_model_subdirectory_count"].to_i.positive?
+
+  sha256 = /\A[0-9a-f]{64}\z/
+  revision = /\A[0-9a-f]{40}\z/
+  selected_chat = artifact_observation.fetch("selected_chat")
+  selected_embedding = artifact_observation.fetch("selected_embedding")
+  [["chat", selected_chat], ["embedding", selected_embedding]].each do |role, artifact|
+    abort "#{role} artifact repository is not exact" unless artifact["repository"].to_s.match?(%r{\A[^/]+/[^/]+\z})
+    abort "#{role} artifact revision is not exact" unless artifact["revision"].to_s.match?(revision)
+    abort "#{role} artifact fingerprint is not exact" unless artifact["canonical_fingerprint"].to_s.match?(sha256)
+    abort "#{role} artifact uses the wrong fingerprint algorithm" unless artifact["canonical_fingerprint_algorithm"] == "supra-release-model-sha256-v1"
+    abort "#{role} artifact integrity is not verified" unless artifact["integrity_status"] == "verified"
+    abort "#{role} artifact manifest is empty" unless artifact["manifest_file_count"].to_i.positive?
+    abort "#{role} artifact has no weights" unless artifact["weight_file_count"].to_i.positive?
+  end
+
+  control = native_rag.fetch("control_configuration")
+  generation = control.fetch("generation_model")
+  embedding = control.fetch("embedding")
+  abort "generation control does not bind the selected chat repository" unless generation["repository"] == selected_chat["repository"]
+  abort "generation control does not bind the selected chat revision" unless generation["revision"] == selected_chat["revision"]
+  abort "generation control does not bind the selected chat fingerprint" unless generation["fingerprint"] == selected_chat["canonical_fingerprint"]
+  abort "embedding control does not bind the selected embedding repository" unless embedding["control_repository"] == selected_embedding["repository"]
+  abort "embedding control does not bind the selected embedding revision" unless embedding["artifact_revision"] == selected_embedding["revision"]
+  abort "embedding control does not bind the selected embedding fingerprint" unless embedding["artifact_fingerprint"] == selected_embedding["canonical_fingerprint"]
+  abort "tokenizer fingerprint is not exact" unless control.fetch("tokenizer")["fingerprint"].to_s.match?(sha256)
 end
 acceptance_status = owner_acceptance["status"]
 abort "invalid owner acceptance status" unless %w[pending satisfied].include?(acceptance_status)

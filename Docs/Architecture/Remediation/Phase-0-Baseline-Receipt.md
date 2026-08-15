@@ -262,6 +262,29 @@ read-only observation time. It does not prove that no external model folders exi
 runtime process has never loaded a model, or that model download/load/switch paths work. No
 active embedding-model identifier could be recorded from an empty registry.
 
+### 8.1 Correction: sandboxed shipping-profile model inventory
+
+The Section 8 observation inspected the non-sandboxed Application Support path, not the
+shipping app's sandbox container. It therefore does not describe the installed shipping-profile
+models. A read-only correction on 2026-08-15 observed the actual roots at
+`~/Library/Containers/ai.supra.SupraAI/Data/Library/Application Support/ai.supra.SupraAI/Models`
+and `EmbeddingModels`, containing four chat-model directories and six embedding-model
+directories respectively.
+
+The shipping-profile Store already selected `mlx-community/Qwen3-32B-4bit` for chat and
+`mlx-community/Qwen3-Embedding-4B-4bit-DWQ` for embeddings. Both selected trees have managed
+manifests. Full-tree verification with `Scripts/smoke-model-tool.swift fingerprint` succeeded:
+
+- chat revision `bcaaf7f538adf166c1080a2befdb4f6019f66639`, canonical fingerprint
+  `00445d9be9b7e3cd38f258a13df2952ac00a23280d7aa50e4f8fa0613b966766`;
+- embedding revision `b5d88f1fe49b50d2ac01b4692ca2d387f14f9c72`, canonical fingerprint
+  `691c8406fa1abf039f26ffbaa2b4613cb94f85026597675a3c73a07ef7c5d454`.
+
+This correction is an installed-artifact identity and integrity receipt. It does not replace the
+pending native control run, resource measurements, model-switch exercise, or Release-runtime
+qualification. The original mistaken observation is retained above so the correction remains
+auditable rather than silently rewriting history.
+
 ## 9. Pending evidence and explicit non-guarantees
 
 The following Phase 0 evidence remains **pending**:

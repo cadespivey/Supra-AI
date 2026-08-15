@@ -1,17 +1,50 @@
 schema_version: 1
 control_id: native-rag-control-v1
-status: source_inventory_recorded_full_control_freeze_pending
+status: installed_artifacts_frozen_owner_judgments_and_control_run_pending
 owner: documents-runtime-assurance
 recorded_date: "2026-08-13"
-configuration_freeze_status: pending_exact_installed_artifacts_prompts_owner_judgment_review_and_control_run
+configuration_freeze_status: pending_owner_judgment_review_control_run_thresholds_and_resource_envelope
 
 installed_artifact_observation:
   observed_date: "2026-08-15"
-  chat_model_root: "/Users/cadespivey/Library/Application Support/ai.supra.SupraAI/Models"
-  embedding_model_root: "/Users/cadespivey/Library/Application Support/ai.supra.SupraAI/EmbeddingModels"
-  chat_model_subdirectory_count: 0
-  embedding_model_subdirectory_count: 0
-  disposition: control_run_blocked_until_owner_selects_and_installs_exact_artifacts
+  method: read_only_sandbox_inventory_store_selection_and_manifest_integrity_verification
+  ordinary_profile_launched: false
+  chat_model_root: "/Users/cadespivey/Library/Containers/ai.supra.SupraAI/Data/Library/Application Support/ai.supra.SupraAI/Models"
+  embedding_model_root: "/Users/cadespivey/Library/Containers/ai.supra.SupraAI/Data/Library/Application Support/ai.supra.SupraAI/EmbeddingModels"
+  chat_model_subdirectory_count: 4
+  embedding_model_subdirectory_count: 6
+  selected_chat_store_id: D633D311-2364-4382-9E50-4BB8680E966C
+  selected_embedding_store_id: D5C8D5A9-758E-44A7-A117-8B0BBED318FB
+  selected_embedding_last_test_load_result: passed
+  selected_chat:
+    repository: mlx-community/Qwen3-32B-4bit
+    revision: bcaaf7f538adf166c1080a2befdb4f6019f66639
+    canonical_fingerprint_algorithm: supra-release-model-sha256-v1
+    canonical_fingerprint: 00445d9be9b7e3cd38f258a13df2952ac00a23280d7aa50e4f8fa0613b966766
+    manifest_file_count: 14
+    weight_file_count: 4
+    observed_tree_bytes: 18445910016
+    integrity_status: verified
+  selected_embedding:
+    repository: mlx-community/Qwen3-Embedding-4B-4bit-DWQ
+    revision: b5d88f1fe49b50d2ac01b4692ca2d387f14f9c72
+    canonical_fingerprint_algorithm: supra-release-model-sha256-v1
+    canonical_fingerprint: 691c8406fa1abf039f26ffbaa2b4613cb94f85026597675a3c73a07ef7c5d454
+    manifest_file_count: 13
+    weight_file_count: 1
+    observed_tree_bytes: 2278617088
+    integrity_status: verified
+  unselected_directory_inventory:
+    - { role: chat, directory: mlx-community__Qwen2.5-14B-Instruct-4bit, weight_file_count: 2, status: unmanaged_observed_not_control_qualified }
+    - { role: chat, directory: guided-qa-ui-model, weight_file_count: 1, status: synthetic_ui_fixture_excluded }
+    - { role: chat, directory: lmstudio-community__Qwen3-30B-A3B-Thinking-2507-MLX-6bit, weight_file_count: 0, status: download_state_present_no_weights_excluded }
+    - { role: embedding, directory: BAAI__bge-m3, weight_file_count: 0, status: unmanaged_observed_not_control_qualified }
+    - { role: embedding, directory: BAAI__bge-large-en-v1.5, weight_file_count: 0, status: download_state_present_no_weights_excluded }
+    - { role: embedding, directory: BAAI__bge-small-en-v1.5, weight_file_count: 1, status: managed_unselected_not_control_qualified }
+    - { role: embedding, directory: mlx-community__Qwen3-Embedding-8B-4bit-DWQ, weight_file_count: 0, status: download_state_present_no_weights_excluded }
+    - { role: embedding, directory: nomic-ai__nomic-embed-text-v1.5, weight_file_count: 1, status: unmanaged_observed_not_control_qualified }
+  owner_direction: use_already_downloaded_selected_pair
+  disposition: satisfied_existing_active_pair_integrity_verified
 
 scope:
   purpose: >-
@@ -31,8 +64,9 @@ control_configuration:
   embedding:
     catalog_role: document_search
     catalog_default_repository: mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ
-    artifact_revision: pending_exact_installed_artifact
-    artifact_fingerprint: pending_exact_installed_artifact
+    control_repository: mlx-community/Qwen3-Embedding-4B-4bit-DWQ
+    artifact_revision: b5d88f1fe49b50d2ac01b4692ca2d387f14f9c72
+    artifact_fingerprint: 691c8406fa1abf039f26ffbaa2b4613cb94f85026597675a3c73a07ef7c5d454
   retriever:
     lexical: sqlite_fts5
     semantic: exact_cosine
@@ -44,7 +78,7 @@ control_configuration:
     candidate_pool: 40
     candidate_snippet_character_ceiling: 600
     artifact_binding: request_generation_model
-    exact_artifact: pending_installed_chat_artifact
+    exact_artifact: mlx-community/Qwen3-32B-4bit@bcaaf7f538adf166c1080a2befdb4f6019f66639
     failure_fallback: retrieval_order_prefix
   packer:
     mode: runtime_token_budgeted_source_packet
@@ -57,15 +91,17 @@ control_configuration:
       reranker_candidate_snippet_character_ceiling: 600
     version: document-qa-v1
   tokenizer:
-    fingerprint: pending_installed_chat_artifact
+    artifact: tokenizer.json
+    digest_algorithm: sha256
+    fingerprint: aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4
   prompt:
     version: document-qa-v1
     source_envelope: sorted_json_between_untrusted_source_data_markers
     reranker_signature: "You are a retrieval reranker. Output only the source labels."
   generation_model:
-    repository: pending_installed_chat_artifact
-    revision: pending_installed_chat_artifact
-    fingerprint: pending_installed_chat_artifact
+    repository: mlx-community/Qwen3-32B-4bit
+    revision: bcaaf7f538adf166c1080a2befdb4f6019f66639
+    fingerprint: 00445d9be9b7e3cd38f258a13df2952ac00a23280d7aa50e4f8fa0613b966766
 
 synthetic_corpus:
   id: supra-rag-synthetic-legal
