@@ -1356,9 +1356,25 @@ final class SupraRuntimeService: NSObject, SupraRuntimeServiceProtocol, @uncheck
     }
 
     private static func maximumResidentMiB() -> Int {
-        var usage = rusage()
-        guard getrusage(RUSAGE_SELF, &usage) == 0 else { return 0 }
-        return Int(usage.ru_maxrss / (1_024 * 1_024))
+        var information = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(
+            MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size
+        )
+        let result = withUnsafeMutablePointer(to: &information) { pointer in
+            pointer.withMemoryRebound(
+                to: integer_t.self,
+                capacity: Int(count)
+            ) { rebound in
+                task_info(
+                    mach_task_self_,
+                    task_flavor_t(TASK_VM_INFO),
+                    rebound,
+                    &count
+                )
+            }
+        }
+        guard result == KERN_SUCCESS else { return 0 }
+        return Int(information.ledger_phys_footprint_peak / (1_024 * 1_024))
     }
 
     private static func currentResidentMiB() -> Int {

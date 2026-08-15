@@ -122,6 +122,10 @@ final class ArchitectureUXTRagScan02Tests: XCTestCase {
             serviceSource.contains("currentMemoryMb: Self.currentResidentMiB()"),
             "Expected RED: the hosted XPC does not publish current resident memory"
         )
+        XCTAssertTrue(
+            serviceSource.contains("information.ledger_phys_footprint_peak"),
+            "Peak XPC memory must use the same physical-footprint metric as current memory"
+        )
         for exactWire in [
             "public struct HostedRAGScanResourceProbe",
             "T_RAG_SCAN_02_WIRE_731",
