@@ -260,7 +260,9 @@ struct NativeRAGControlRunner {
                 answerMarkdown: result?.markdown,
                 status: result?.status ?? "failed",
                 unsupported: result?.unsupported ?? true,
-                failure: result == nil ? (qa.message ?? "generation returned no result") : nil,
+                failure: result == nil
+                    ? (timingGateway.answerFailureDetail ?? qa.message ?? "generation returned no result")
+                    : nil,
                 warnings: result?.warnings ?? [],
                 citationLabels: result?.citationLabels ?? [],
                 packedSources: packedSources
@@ -486,6 +488,7 @@ private final class NativeRAGTimingGateway: ModelExecutionGateway, @unchecked Se
     private let base: any ModelExecutionGateway
     private let lock = NSLock()
     private var answerFirstTokenMilliseconds: Int?
+    private var retainedAnswerFailureDetail: String?
 
     init(base: any ModelExecutionGateway) { self.base = base }
 
@@ -493,8 +496,15 @@ private final class NativeRAGTimingGateway: ModelExecutionGateway, @unchecked Se
         lock.withLock { answerFirstTokenMilliseconds }
     }
 
+    var answerFailureDetail: String? {
+        lock.withLock { retainedAnswerFailureDetail }
+    }
+
     func beginQuery() {
-        lock.withLock { answerFirstTokenMilliseconds = nil }
+        lock.withLock {
+            answerFirstTokenMilliseconds = nil
+            retainedAnswerFailureDetail = nil
+        }
     }
 
     func connect() async throws { try await base.connect() }
@@ -519,6 +529,12 @@ private final class NativeRAGTimingGateway: ModelExecutionGateway, @unchecked Se
                                 if self.answerFirstTokenMilliseconds == nil {
                                     self.answerFirstTokenMilliseconds = elapsed
                                 }
+                            }
+                        }
+                        if !isReranker, event.type == .generationFailed {
+                            self.lock.withLock {
+                                self.retainedAnswerFailureDetail =
+                                    event.error?.technicalDetails ?? event.error?.message
                             }
                         }
                         continuation.yield(event)
