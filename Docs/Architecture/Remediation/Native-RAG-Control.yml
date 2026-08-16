@@ -1,9 +1,9 @@
 schema_version: 1
 control_id: native-rag-control-v1
-status: installed_artifacts_and_control_run_recorded_owner_approval_pending
+status: approved_fixed_hardware_control
 owner: documents-runtime-assurance
 recorded_date: "2026-08-13"
-configuration_freeze_status: pending_owner_judgment_and_threshold_approval
+configuration_freeze_status: approved_for_fixed_hardware_control
 
 installed_artifact_observation:
   observed_date: "2026-08-15"
@@ -53,7 +53,7 @@ scope:
     or index challengers change behavior.
   client_data_allowed: false
   intended_authoritative_evaluator: deterministic_human_reviewed
-  authoritative_evaluator_status: control_run_recorded_pending_owner_judgment_review
+  authoritative_evaluator_status: owner_judgments_approved
   advisory_llm_evaluator_may_override: false
   one_independent_variable_per_challenger: true
 
@@ -126,10 +126,13 @@ synthetic_corpus:
     - corpus_large
   judgments:
     required_owner_role: repository_owner_attorney
-    status: pending_owner_review
+    status: approved
+    approved_by: Cade Spivey
+    approved_at: "2026-08-16"
+    approval_basis: interactive_review_of_all_five_expected_answers_and_evidence_grades
 
 control_run:
-  status: measured_owner_approval_pending
+  status: measured_and_owner_approved
   observed_date: "2026-08-15"
   source_commit: bbf03215567a1c5985b2136fdd0b5d87cab5cc88
   signed_app_path: /tmp/supra-rag-control-dd/Build/Products/Debug/SupraAI.app
@@ -158,8 +161,8 @@ control_run:
   runtime_reset_cleanup:
     status: passed
     temporary_model_snapshot_directories_after_exit: 0
-  deterministic_gate: pending_owner_review
-  owner_judgment_status: pending_owner_review
+  deterministic_gate: owner_judgments_approved
+  owner_judgment_status: approved
   measured_quality:
     recall_at_k: 1.0
     full_evidence_set_recall_at_k: 1.0
@@ -239,7 +242,9 @@ noninferiority:
     zero-result accuracy may not regress. A declared targeted slice must additionally improve
     its predeclared metric enough to justify its resource and deployment cost.
   numeric_thresholds:
-    status: pending_owner_approval
+    status: approved
+    approved_by: Cade Spivey
+    approved_at: "2026-08-16"
     basis: exact_installed_artifact_control_at_bbf03215
     critical_slice_rule: no_quality_metric_may_regress_from_its_control_cell
     proposed_overall_minimums:
@@ -256,6 +261,8 @@ noninferiority:
   ties: control_wins_when_quality_is_equal_and_candidate_adds_cost_or_dependency
 
 resource_ceiling_contract:
+  hardware_scope: mac16_7_apple_m4_pro_48_gib_qwen3_32b_fixed_control
+  lower_memory_tier_claim_status: separate_smaller_model_control_required
   asymptotic_scan_state: O(page_plus_candidate_k_plus_embedding_dimension)
   embedding_host_batches: bounded_and_released_before_next_request
   final_answer_semantic_cache_allowed: false
@@ -280,12 +287,14 @@ resource_ceiling_contract:
     proposed_ceiling: 65536
   latency_milliseconds:
     observed_median_time_to_first_token: 21244
-    proposed_median_time_to_first_token_ceiling: 25000
+    approved_median_time_to_first_token_ceiling: 30000
     observed_p50_total: 55088
-    proposed_p50_total_ceiling: 65000
+    approved_p50_total_ceiling: 75000
     observed_p95_total: 78370
-    proposed_p95_total_ceiling: 80000
-  status: measured_proposal_pending_owner_approval
+    approved_p95_total_ceiling: 100000
+  status: approved
+  approved_by: Cade Spivey
+  approved_at: "2026-08-16"
 
 comparison_matrix:
   validator_status: green

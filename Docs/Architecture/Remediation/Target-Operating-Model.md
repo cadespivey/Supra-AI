@@ -2,6 +2,8 @@
 
 Status: **architecture and authority boundaries approved; moderated workflow baseline pending**
 
+Canonical journey set: **9 journeys approved by Cade Spivey on 2026-08-16; moderated UI measurements pending**
+
 This model freezes ownership, terminal records, handoff context, interruption behavior, and
 authority boundaries before presentation labels and navigation order become test contracts.
 
@@ -20,6 +22,9 @@ authority boundaries before presentation labels and navigation order become test
 - **Saved Work** is the presentation name for durable structured work products and versions.
   Notes & Time/Billing remain a separately owned matter workflow until measured attorney tasks
   support consolidation.
+- **ScratchPad** owns the attorney's cross-matter daily task notes and the on-demand conversion of
+  those notes into a reviewable billing draft. Nothing is billed automatically; source notes and
+  generated billing lines remain separately editable.
 
 ## Canonical typed handoff
 
@@ -148,9 +153,20 @@ verification; `unknown` is recovery-required, not completed.
 | Interruption/relaunch | Entry/draft and exact optional link restore independently; no repeated matter identity entry when already known. |
 | Terminal result | Saved note/time entry or billing draft/export with its own audit; it does not change legal assurance of the linked work product. |
 
+### 9. ScratchPad entries → matter tags → daily billing draft → edit
+
+| Contract | Definition |
+|---|---|
+| Authoritative aggregate | One dated `ScratchPadDayRecord`, its separately editable entries and exact matter mentions, plus the latest versioned billing draft and editable line items derived from that day's current evidence. |
+| Entry points | ScratchPad; the selected calendar day; an existing day's latest billing draft. |
+| States | day open/locked; entry drafting/saved/edited; matter tag resolved/unassigned; billing draft absent/generating/ready/needs-review/edited/validated/exported. |
+| Blocking/correction | An unknown matter tag requires explicit assignment; a locked day requires deliberate reopen; missing Local Assistant, timekeeper, billing profile, or matter/client identifiers opens the exact corrective surface. Nothing is auto-billed. |
+| Interruption/relaunch | The selected day, entries, exact matter links, latest draft version, and manual billing-line edits restore from Store. Regeneration preserves matched user-edited lines and visibly reports anything requiring reassignment or review. |
+| Terminal result | Multiple edited daily notes are bound to their intended matters and produce a reconciled, user-edited billing draft for the day, ready for further review or explicit export. |
+
 ## Walkthrough gate
 
-Before presentation-order tests freeze, synthetic owner-run tasks at 880, 1100, and wide widths
+Before presentation-order tests freeze, synthetic owner-run tasks for all nine canonical journeys at 880, 1100, and wide widths
 record completion, wrong turns, surface switches, repeated entry, context loss, time to first
 grounded result, blocker recovery, source-status comprehension, and confidence calibration.
 Zero silent fallback/context loss and one working next action for every blocker are hard gates.

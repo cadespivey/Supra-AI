@@ -2,7 +2,7 @@
 
 **Execution date:** 2026-08-15  
 **Execution candidate:** `f09216f3b7341091d61e6a38483b59629e9f17c2`  
-**Owner decision:** Pending signature  
+**Owner decision:** Approved
 **Data classification:** Deterministic synthetic fixtures only; no user, client, or privileged data
 
 ## Environment
@@ -84,6 +84,8 @@ To approve this drill, the owner should confirm the following statement without 
 > verified safety rollback, and unsupported-future-schema rejection evidence for this release
 > candidate.
 
-**Owner:** Pending  
-**Decision date:** Pending  
-**Decision:** Pending
+**Owner:** Cade Spivey
+
+**Decision date:** 2026-08-16
+
+**Decision:** Approved
