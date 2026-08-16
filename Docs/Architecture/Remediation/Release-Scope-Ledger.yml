@@ -5,18 +5,18 @@ ledger_id: supra-architecture-ux-release-scope-v1
 canonical_plan_revision: 3
 canonical_plan_sha256: 5582d4da708d0dfb8ab7ba182da7f6130b35f9b8a10c2d89376ab172c9301bc5
 approval:
-  status: pending_owner_approval
+  status: approved
   required_owner: repository_owner_attorney
-  approved_by: null
-  approved_at: null
+  approved_by: Cade Spivey
+  approved_at: "2026-08-16T21:36:30Z"
 owner_acceptance:
-  status: pending
+  status: satisfied
   gates:
-    - { id: target-operating-model-walkthrough, status: pending_owner_walkthrough, evidence: "Target-Operating-Model.md walkthrough gate" }
-    - { id: synthetic-rag-judgments, status: approved_by_owner, evidence: "Native-RAG-Control.yml judgments approved by Cade Spivey on 2026-08-16" }
+    - { id: target-operating-model-walkthrough, status: satisfied, evidence: "Repository-owner walkthrough accepted by Cade Spivey on 2026-08-16 at implementation head 4c84d0b6f214fa03a5c6a240f3cd7283996f672a" }
+    - { id: synthetic-rag-judgments, status: satisfied, evidence: "Native-RAG-Control.yml judgments approved by Cade Spivey on 2026-08-16" }
     - { id: installed-rag-artifacts, status: satisfied, evidence: "Native-RAG-Control.yml selected sandbox artifacts, Store binding, and verified canonical fingerprints" }
-    - { id: rag-thresholds-and-resource-envelope, status: approved_by_owner, evidence: "Native-RAG-Control.yml 48 GiB/32B fixed-hardware control approved by Cade Spivey on 2026-08-16; separate smaller-model control required for lower-memory claims" }
-    - { id: backup-restore-drill, status: approved_by_owner, evidence: "Synthetic-Restore-Drill-Receipt.md approved by Cade Spivey on 2026-08-16" }
+    - { id: rag-thresholds-and-resource-envelope, status: satisfied, evidence: "Native-RAG-Control.yml 48 GiB/32B fixed-hardware control approved by Cade Spivey on 2026-08-16; separate smaller-model control required for lower-memory claims" }
+    - { id: backup-restore-drill, status: satisfied, evidence: "Synthetic-Restore-Drill-Receipt.md approved by Cade Spivey on 2026-08-16" }
 
 allowed_dispositions:
   - must_implement_before_next_public_release
@@ -25,14 +25,14 @@ allowed_dispositions:
   - moot_through_review_retirement
 
 findings:
-  - { id: P-01, disposition: must_implement_before_next_public_release, closure: implementation_green_owner_gate_pending, evidence: "Target-Operating-Model.md walkthrough gate" }
+  - { id: P-01, disposition: must_implement_before_next_public_release, closure: implementation_green, evidence: "Target-Operating-Model.md walkthrough accepted by Cade Spivey on 2026-08-16" }
   - { id: P-02, disposition: must_implement_before_next_public_release, closure: implementation_green, evidence: "T-WINDOW-01" }
   - { id: P-03, disposition: must_implement_before_next_public_release, closure: implementation_green, evidence: "T-MUTATION-01" }
   - { id: P-04, disposition: must_implement_before_next_public_release, closure: implementation_green, evidence: "T-WORK-CONTEXT-01 and T-HANDOFF-01" }
   - { id: P-05, disposition: must_implement_before_next_public_release, closure: implementation_green, evidence: "T-UX-SETUP-01 and T-SETTINGS-01" }
   - { id: P-06, disposition: must_implement_before_next_public_release, closure: implementation_green, evidence: "T-RUNTIME-SCHED-01 and T-RUNTIME-LIFECYCLE-01" }
   - { id: P-07, disposition: must_implement_before_next_public_release, closure: implementation_green, evidence: "T-SAVED-WORK-01 and T-SAVED-WORK-02" }
-  - { id: P-08, disposition: must_implement_before_next_public_release, closure: implementation_green_owner_gate_pending, evidence: "Target-Operating-Model.md walkthrough gate" }
+  - { id: P-08, disposition: must_implement_before_next_public_release, closure: implementation_green, evidence: "Target-Operating-Model.md walkthrough accepted by Cade Spivey on 2026-08-16" }
   - { id: P-09, disposition: must_implement_before_next_public_release, closure: implementation_green, evidence: "T-NO-MULTI-AGENT-01 and T-RUNTIME-SCHED-01" }
   - { id: A-01, disposition: must_implement_before_next_public_release, closure: implementation_green, evidence: "T-PUB-CHAT-01 and T-PUB-CHAT-02" }
   - { id: A-02, disposition: must_implement_before_next_public_release, closure: implementation_green, evidence: "T-PUB-WORK-01" }
@@ -56,7 +56,7 @@ findings:
   - { id: A-20, disposition: must_decide_before_release_no_change_may_satisfy, closure: no_change_recorded, evidence: "DR-CORPUS-OWNER-01" }
   - { id: RAG-01, disposition: must_implement_before_next_public_release, closure: implementation_green, evidence: "T-RAG-SCAN-01 and T-RAG-SCAN-02" }
   - { id: RAG-02, disposition: must_implement_before_next_public_release, closure: implementation_green, evidence: "T-EMBED-STREAM-01" }
-  - { id: RAG-03, disposition: must_implement_before_next_public_release, closure: implementation_green_owner_gate_pending, evidence: "T-RAG-CORPUS-01, T-RAG-EVAL-01, T-RAG-BASELINE-01" }
+  - { id: RAG-03, disposition: must_implement_before_next_public_release, closure: implementation_green, evidence: "T-RAG-CORPUS-01, T-RAG-EVAL-01, T-RAG-BASELINE-01; owner acceptance recorded 2026-08-16" }
   - { id: RAG-04, disposition: must_implement_before_next_public_release, closure: implementation_green, evidence: "T-RAG-CACHE-01 and T-RAG-CACHE-02" }
   - { id: RAG-05, disposition: must_implement_before_next_public_release, closure: implementation_green, evidence: "T-RAG-TRACE-01 and T-RAG-TRACE-02" }
   - { id: RAG-06, disposition: must_decide_before_release_no_change_may_satisfy, closure: no_change_recorded, evidence: "DR-RAG-EXPERIMENT-01" }
@@ -87,7 +87,7 @@ work_packages:
   - { id: WP-0.2, disposition: must_implement_before_next_public_release, closure: implementation_green, evidence: "migration receipts, fixed shipping fixtures, and owner-approved Synthetic-Restore-Drill-Receipt.md" }
   - { id: WP-0.3, disposition: must_implement_before_next_public_release, closure: implementation_green, evidence: "typed assurance and audit gates" }
   - { id: WP-0.4, disposition: must_implement_before_next_public_release, closure: implementation_green, evidence: "Architecture-UX-Test-Ledger.yml and owner-approved Native-RAG-Control.yml judgments and fixed-hardware control" }
-  - { id: WP-0.5, disposition: must_implement_before_next_public_release, closure: implementation_green_owner_gate_pending, evidence: "Target-Operating-Model.md walkthrough gate" }
+  - { id: WP-0.5, disposition: must_implement_before_next_public_release, closure: implementation_green, evidence: "Target-Operating-Model.md walkthrough accepted by Cade Spivey on 2026-08-16" }
   - { id: WP-1.1, disposition: must_implement_before_next_public_release, closure: implementation_green, evidence: "T-DATA-* and Canonical-Matter-Identity-Migration-Receipt.md" }
   - { id: WP-1.2, disposition: must_implement_before_next_public_release, closure: implementation_green, evidence: "T-DATA-READY-*" }
   - { id: WP-1.3, disposition: must_implement_before_next_public_release, closure: implementation_green, evidence: "T-UX-DELETE-* and T-RECOVERY-01" }
@@ -118,7 +118,7 @@ work_packages:
   - { id: WP-5.4, disposition: must_implement_before_next_public_release, closure: implementation_green, evidence: "T-TRUST-PATTERN-01" }
   - { id: WP-5.5, disposition: must_implement_before_next_public_release, closure: implementation_green, evidence: "drafting, Saved Work, relations, and Public Records gates" }
   - { id: WP-5.6, disposition: must_implement_before_next_public_release, closure: implementation_green, evidence: "T-ERROR-01 and T-RECOVERY-01" }
-  - { id: WP-5.7, disposition: must_implement_before_next_public_release, closure: implementation_green_owner_gate_pending, evidence: "component/accessibility/contrast gates; moderated walkthrough pending" }
+  - { id: WP-5.7, disposition: must_implement_before_next_public_release, closure: implementation_green, evidence: "component/accessibility/contrast gates; moderated walkthrough accepted by Cade Spivey on 2026-08-16" }
   - { id: WP-6.1, disposition: must_implement_before_next_public_release, closure: implementation_green, evidence: "T-OOXML-01" }
   - { id: WP-6.2, disposition: must_implement_before_next_public_release, closure: implementation_green, evidence: "T-UTILITY-01 and T-MARKDOWN-01" }
   - { id: WP-6.3, disposition: must_implement_before_next_public_release, closure: implementation_green, evidence: "T-MIGRATION-01" }
