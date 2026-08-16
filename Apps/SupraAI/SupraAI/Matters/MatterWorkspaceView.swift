@@ -22,6 +22,7 @@ struct MatterWorkspaceView: View {
     @State private var showDraftSheet = false
     @State private var showNewSavedWork = false
     @State private var pendingDraftToSavedWorkHandoff = false
+    @State private var pendingDraftToMatterEditor = false
     @State private var lastUITestTabCommand: String?
     /// Set when an action outside the Research tab (the Authorities "New Research
     /// Session" button) wants the planner to open as the Research tab appears.
@@ -97,6 +98,10 @@ struct MatterWorkspaceView: View {
                     library: library,
                     matterID: matter.id,
                     matterName: matter.name,
+                    onEditMatterIdentity: {
+                        pendingDraftToMatterEditor = true
+                        showDraftSheet = false
+                    },
                     onOpenSavedWork: {
                         pendingDraftToSavedWorkHandoff = true
                         showDraftSheet = false
@@ -105,7 +110,13 @@ struct MatterWorkspaceView: View {
             }
         }
         .onChange(of: showDraftSheet) { _, isPresented in
-            guard !isPresented, pendingDraftToSavedWorkHandoff else { return }
+            guard !isPresented else { return }
+            if pendingDraftToMatterEditor {
+                pendingDraftToMatterEditor = false
+                showEditor = true
+                return
+            }
+            guard pendingDraftToSavedWorkHandoff else { return }
             pendingDraftToSavedWorkHandoff = false
             tab = .outputs
             showNewSavedWork = true

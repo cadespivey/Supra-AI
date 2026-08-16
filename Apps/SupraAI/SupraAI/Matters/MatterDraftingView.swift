@@ -14,6 +14,7 @@ struct MatterDraftingView: View {
     @ObservedObject var library: ModelLibrary
     let matterID: String
     let matterName: String
+    let onEditMatterIdentity: () -> Void
     let onOpenSavedWork: () -> Void
     @Environment(\.dismiss) private var dismiss
 
@@ -103,12 +104,14 @@ struct MatterDraftingView: View {
         library: ModelLibrary,
         matterID: String,
         matterName: String,
+        onEditMatterIdentity: @escaping () -> Void,
         onOpenSavedWork: @escaping () -> Void
     ) {
         _controller = ObservedObject(wrappedValue: controller)
         _library = ObservedObject(wrappedValue: library)
         self.matterID = matterID
         self.matterName = matterName
+        self.onEditMatterIdentity = onEditMatterIdentity
         self.onOpenSavedWork = onOpenSavedWork
 
     }
@@ -369,6 +372,8 @@ struct MatterDraftingView: View {
                 .foregroundStyle(.orange)
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityIdentifier("drafting.identity.blocked")
+                Button("Edit Matter", action: onEditMatterIdentity)
+                    .accessibilityIdentifier("drafting.identity.editMatter")
             }
         } header: {
             Text("Matter identity")
