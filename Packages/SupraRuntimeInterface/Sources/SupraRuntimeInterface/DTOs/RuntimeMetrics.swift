@@ -5,6 +5,10 @@ public struct RuntimeMetrics: Codable, Sendable {
     public let firstTokenLatencyMs: Int?
     public let tokensPerSecond: Double?
     public let cancellationLatencyMs: Int?
+    /// Current physical footprint of the process that produced the metrics.
+    /// Runtime status reports this from inside the XPC service so hosted
+    /// qualification can account for app and service memory separately.
+    public let currentMemoryMb: Int?
     public let peakMemoryMb: Int?
     public let generatedTokenCount: Int?
     /// True when generation stopped because it hit the output-token cap rather
@@ -31,6 +35,7 @@ public struct RuntimeMetrics: Codable, Sendable {
         firstTokenLatencyMs: Int? = nil,
         tokensPerSecond: Double? = nil,
         cancellationLatencyMs: Int? = nil,
+        currentMemoryMb: Int? = nil,
         peakMemoryMb: Int? = nil,
         generatedTokenCount: Int? = nil,
         truncated: Bool? = nil,
@@ -42,6 +47,7 @@ public struct RuntimeMetrics: Codable, Sendable {
         self.firstTokenLatencyMs = firstTokenLatencyMs
         self.tokensPerSecond = tokensPerSecond
         self.cancellationLatencyMs = cancellationLatencyMs
+        self.currentMemoryMb = currentMemoryMb
         self.peakMemoryMb = peakMemoryMb
         self.generatedTokenCount = generatedTokenCount
         self.truncated = truncated

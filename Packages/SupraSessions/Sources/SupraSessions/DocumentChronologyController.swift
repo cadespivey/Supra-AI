@@ -47,7 +47,8 @@ public final class DocumentChronologyController: ObservableObject {
 
     public let matterID: String
     private let store: SupraStore
-    private let runtimeClient: any RuntimeClientProtocol
+    private let runtimeClient: any ModelExecutionGateway
+    private var modelExecutionGateway: any ModelExecutionGateway { runtimeClient }
     private let retrieval: DocumentRetrievalService
     private let defaultSystemPrompt: String?
     /// Total safety cap on harvested sources (metadata-date and text-chunk
@@ -59,7 +60,7 @@ public final class DocumentChronologyController: ObservableObject {
     public init(
         matterID: String,
         store: SupraStore,
-        runtimeClient: any RuntimeClientProtocol,
+        runtimeClient: any ModelExecutionGateway,
         defaultSystemPrompt: String? = nil,
         maxSources: Int = 1_000
     ) {
@@ -74,7 +75,51 @@ public final class DocumentChronologyController: ObservableObject {
     }
 
     public func scopeReadiness(scope: RetrievalScope) -> ScopeReadiness? {
-        try? retrieval.scopeReadiness(matterID: matterID, scope: scope)
+        guard var readiness = try? retrieval.scopeReadiness(
+            matterID: matterID,
+            scope: scope
+        ) else {
+            return nil
+        }
+
+        let scopedDocumentIDs = Set(readiness.documentReadiness.map(\.documentID))
+        guard let documents = try? store.documentLibrary.fetchDocuments(matterID: matterID) else {
+            return nil
+        }
+        let documentsByID = Dictionary(
+            uniqueKeysWithValues: documents
+                .filter { scopedDocumentIDs.contains($0.id) }
+                .map { ($0.id, $0) }
+        )
+        guard documentsByID.count == scopedDocumentIDs.count else {
+            return nil
+        }
+
+        var dateEvidenceByDocumentID: [String: Bool] = [:]
+        for documentID in scopedDocumentIDs {
+            guard let document = documentsByID[documentID],
+                  let chunks = try? store.documentIndex.fetchChunks(documentID: documentID)
+            else {
+                return nil
+            }
+            dateEvidenceByDocumentID[documentID] = document.metadataCreatedAt != nil
+                || chunks.contains { DateExtraction.containsDate($0.normalizedText) }
+        }
+
+        readiness.documentReadiness = readiness.documentReadiness.map { projection in
+            let taskExclusions: [DocumentTaskEligibilityExclusion]
+            if dateEvidenceByDocumentID[projection.documentID] == true {
+                taskExclusions = []
+            } else {
+                taskExclusions = [.missingChronologyDateEvidence]
+            }
+            return DocumentReadinessConsumerProjection(
+                consumer: .chronology,
+                baseReceipt: projection.baseReceipt,
+                taskExclusions: taskExclusions
+            )
+        }
+        return readiness
     }
 
     @discardableResult
@@ -170,8 +215,8 @@ public final class DocumentChronologyController: ObservableObject {
 
     private func cancelActiveRuntimeGeneration() {
         guard let activeGenerationID else { return }
-        let runtimeClient = runtimeClient
-        Task { _ = try? await runtimeClient.cancelGeneration(activeGenerationID) }
+        let modelExecutionGateway = modelExecutionGateway
+        Task { _ = try? await modelExecutionGateway.cancelGeneration(activeGenerationID) }
     }
 
     @discardableResult
@@ -186,9 +231,9 @@ public final class DocumentChronologyController: ObservableObject {
         let effectiveRoute = route ?? ModelRouter().route(forStructuredOutput: format.outputType)
         guard let modelID else {
             message = if let effectiveRoute {
-                "Assign a \(effectiveRoute.role.displayName) model in the Models tab to build a chronology."
+                "Assign a \(effectiveRoute.role.displayName) model in AI Setup to build a chronology."
             } else {
-                "Assign a task model in the Models tab to build a chronology."
+                "Assign a task model in AI Setup to build a chronology."
             }
             return nil
         }
@@ -1421,13 +1466,14 @@ public final class DocumentChronologyController: ObservableObject {
             // Keep chronology structure isolated from the user's free-form profile
             // while still applying task-specific routing instructions.
             systemPrompt: routedSystemPrompt(route),
+            contextWorkload: .groundedExactEvidence,
             options: route?.options ?? GenerationOptions()
         )
         // Track the in-flight generation so cancel() can stop the runtime, not
         // just this task.
         activeGenerationID = request.generationID
         defer { activeGenerationID = nil }
-        let output = try await runtimeClient.collectGeneratedText(request)
+        let output = try await modelExecutionGateway.collectGeneratedText(request)
         return ReasoningContent.answer(from: output)
     }
 

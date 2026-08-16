@@ -22,7 +22,7 @@ let package = Package(
             name: "SupraDocuments",
             dependencies: [
                 .product(name: "SupraCore", package: "SupraCore"),
-                .product(name: "SupraExports", package: "SupraExports"),
+                .product(name: "SupraOOXML", package: "SupraExports"),
                 .product(name: "ZIPFoundation", package: "ZIPFoundation")
             ]
         ),
@@ -31,6 +31,7 @@ let package = Package(
             dependencies: [
                 "SupraDocuments",
                 .product(name: "SupraCore", package: "SupraCore"),
+                .product(name: "SupraOOXML", package: "SupraExports"),
                 .product(name: "ZIPFoundation", package: "ZIPFoundation")
             ]
         )

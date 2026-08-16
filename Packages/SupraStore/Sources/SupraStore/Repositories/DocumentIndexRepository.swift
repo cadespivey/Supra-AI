@@ -86,9 +86,141 @@ public final class DocumentIndexRepository: @unchecked Sendable {
         }
     }
 
+    /// Replaces chunks and their exact FTS projection, then marks the text index
+    /// complete, only while the selected part lineage and configured chunker
+    /// still match the producer's observed snapshot.
+    public func commitTextIndex(
+        _ command: DocumentTextIndexCommitCommand
+    ) throws -> DocumentTextIndexCommitReceipt {
+        try writer.write { database in
+            guard try MatterDocumentRecord.fetchOne(database, key: command.documentID) != nil else {
+                throw DocumentReadinessTransitionError.documentNotFound(command.documentID)
+            }
+            let parts = try DocumentPagePartRecord.fetchAll(
+                database,
+                sql: """
+                    SELECT *
+                    FROM document_pages_parts
+                    WHERE document_id = ?
+                    ORDER BY part_index, id
+                    """,
+                arguments: [command.documentID]
+            )
+            let currentBindings = parts.map {
+                DocumentReadinessPartBinding(
+                    partIndex: $0.partIndex,
+                    partID: $0.id,
+                    currentRevisionID: $0.currentRevisionID,
+                    currentSelectionID: $0.currentSelectionID
+                )
+            }
+            guard currentBindings == command.expectedPartBindings else {
+                throw DocumentReadinessTransitionError.partBindingsChanged(command.documentID)
+            }
+            guard let settings = try DocumentIntelligenceSettingsRecord.fetchOne(
+                database,
+                key: DocumentIntelligenceSettingsRecord.singletonID
+            ) else {
+                throw DocumentReadinessTransitionError.settingsNotFound
+            }
+            guard settings.chunkerVersion == command.expectedActiveChunkerVersion else {
+                throw DocumentReadinessTransitionError.chunkerVersionChanged(
+                    expected: command.expectedActiveChunkerVersion,
+                    actual: settings.chunkerVersion
+                )
+            }
+
+            let chunks = command.chunks.sorted {
+                ($0.chunkIndex, $0.id) < ($1.chunkIndex, $1.id)
+            }
+            try Self.validateTextIndexBatch(
+                chunks,
+                documentID: command.documentID,
+                parts: parts,
+                expectedBindings: currentBindings,
+                chunkerVersion: command.expectedChunkerVersion
+            )
+
+            try database.execute(
+                sql: "DELETE FROM document_chunks WHERE document_id = ?",
+                arguments: [command.documentID]
+            )
+            try database.execute(
+                sql: "DELETE FROM document_chunk_fts WHERE document_id = ?",
+                arguments: [command.documentID]
+            )
+            for chunk in chunks {
+                try chunk.insert(database)
+                try database.execute(
+                    sql: """
+                        INSERT INTO document_chunk_fts (text, chunk_id, document_id)
+                        VALUES (?, ?, ?)
+                        """,
+                    arguments: [chunk.normalizedText, chunk.id, command.documentID]
+                )
+            }
+            try database.execute(
+                sql: """
+                    UPDATE matter_documents
+                    SET index_status = ?,
+                        status = CASE
+                            WHEN status IN (?, ?) THEN ?
+                            ELSE status
+                        END,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                arguments: [
+                    DocumentIndexStatus.textIndexed.rawValue,
+                    MatterDocumentStatus.indexing.rawValue,
+                    MatterDocumentStatus.embedding.rawValue,
+                    command.semanticIndexExpected
+                        ? MatterDocumentStatus.embedding.rawValue
+                        : MatterDocumentStatus.ready.rawValue,
+                    Date(),
+                    command.documentID,
+                ]
+            )
+
+            guard let document = try MatterDocumentRecord.fetchOne(
+                database,
+                key: command.documentID
+            ) else {
+                throw DocumentReadinessTransitionError.documentNotFound(command.documentID)
+            }
+            let readiness = try DocumentReadinessRepository.deriveReceipt(
+                for: document,
+                in: database
+            )
+            let isStagedRollout = command.expectedActiveChunkerVersion
+                != command.expectedChunkerVersion
+            let isExactWhitespaceEmpty = chunks.isEmpty
+            guard readiness.partBindings == currentBindings,
+                  readiness.chunkerVersion == command.expectedActiveChunkerVersion,
+                  readiness.chunkIDs == chunks.map(\.id),
+                  (isStagedRollout
+                    || !readiness.exclusions.contains(.staleRevision)),
+                  (isStagedRollout
+                    || isExactWhitespaceEmpty
+                    || !readiness.exclusions.contains(.textIndexIncomplete)),
+                  readiness.textIndexedChunkCount == chunks.count else {
+                throw DocumentReadinessTransitionError.textIndexPostconditionFailed(
+                    command.documentID
+                )
+            }
+            return DocumentTextIndexCommitReceipt(
+                documentID: command.documentID,
+                partBindings: readiness.partBindings,
+                chunkerVersion: command.expectedChunkerVersion,
+                chunkIDs: readiness.chunkIDs,
+                readinessReceipt: readiness
+            )
+        }
+    }
+
     public func fetchChunks(documentID: String) throws -> [DocumentChunkRecord] {
         try writer.read { db in
-            try DocumentChunkRecord.fetchAll(
+            return try DocumentChunkRecord.fetchAll(
                 db,
                 sql: "SELECT * FROM document_chunks WHERE document_id = ? ORDER BY chunk_index ASC",
                 arguments: [documentID]
@@ -140,6 +272,70 @@ public final class DocumentIndexRepository: @unchecked Sendable {
         }
     }
 
+    /// Fetches only each selected chunk and its immediate same-part neighbors.
+    /// The result is bounded by three rows per unique selected identity and is
+    /// used after ranking rather than materializing every chunk in a document.
+    public func fetchChunkNeighborhoods(ids: [String]) throws -> [DocumentChunkRecord] {
+        let selectedIDs = Array(Set(ids)).sorted()
+        guard !selectedIDs.isEmpty else { return [] }
+        return try writer.read { database in
+            try DocumentChunkRecord.fetchAll(
+                database,
+                sql: """
+                    SELECT DISTINCT neighbor.*
+                    FROM document_chunks selected
+                    JOIN document_chunks neighbor
+                      ON neighbor.document_id = selected.document_id
+                     AND neighbor.page_part_id IS selected.page_part_id
+                     AND neighbor.chunk_index BETWEEN selected.chunk_index - 1
+                                                  AND selected.chunk_index + 1
+                    WHERE selected.id IN (\(databaseQuestionMarks(count: selectedIDs.count)))
+                    ORDER BY neighbor.document_id, neighbor.chunk_index, neighbor.id
+                    """,
+                arguments: StatementArguments(selectedIDs)
+            )
+        }
+    }
+
+    /// Bounded typed-structure candidates for explicit structure-intent queries.
+    /// Current revision and active chunker bindings are enforced before any
+    /// chunk text reaches Sessions.
+    public func fetchStructureCandidateChunks(
+        documentIDs: [String],
+        unitKinds: [String],
+        limit: Int
+    ) throws -> [DocumentChunkRecord] {
+        let scopedDocumentIDs = Array(Set(documentIDs)).sorted()
+        let scopedKinds = Array(Set(unitKinds)).sorted()
+        guard !scopedDocumentIDs.isEmpty,
+              !scopedKinds.isEmpty,
+              limit > 0 else { return [] }
+        return try writer.read { database in
+            var arguments: [DatabaseValueConvertible] = scopedDocumentIDs
+            arguments.append(contentsOf: scopedKinds)
+            arguments.append(limit)
+            return try DocumentChunkRecord.fetchAll(
+                database,
+                sql: """
+                    SELECT c.*
+                    FROM document_chunks c
+                    JOIN document_pages_parts p
+                      ON p.id = c.page_part_id
+                     AND p.document_id = c.document_id
+                    JOIN document_intelligence_settings settings
+                      ON settings.id = 'default'
+                    WHERE c.document_id IN (\(databaseQuestionMarks(count: scopedDocumentIDs.count)))
+                      AND c.unit_kind IN (\(databaseQuestionMarks(count: scopedKinds.count)))
+                      AND c.chunker_version = settings.chunker_version
+                      AND c.revision_id = p.current_revision_id
+                    ORDER BY c.document_id, c.chunk_index, c.id
+                    LIMIT ?
+                    """,
+                arguments: StatementArguments(arguments)
+            )
+        }
+    }
+
     /// Turns arbitrary user text into a safe FTS5 MATCH expression: alphanumeric
     /// tokens joined by OR as prefix queries. Returns nil when there are no usable
     /// tokens (so callers can skip the search).
@@ -162,6 +358,382 @@ public final class DocumentIndexRepository: @unchecked Sendable {
                 arguments: [embedding.chunkID, embedding.embeddingModelID]
             )
             try embedding.insert(db)
+        }
+    }
+
+    /// Returns only the current chunk identities whose vectors already satisfy
+    /// the exact active model binding. Vector payloads are inspected through a
+    /// cursor and are never returned to the caller, keeping relaunch progress
+    /// independent of document size.
+    public func fetchCompletedSemanticChunkIDs(
+        documentID: String,
+        expectedChunkIDs: [String],
+        expectedActiveModel: DocumentReadinessEmbeddingModelIdentity,
+        expectedModelVerifiedAt: Date
+    ) throws -> [String] {
+        try writer.read { database in
+            let context = try Self.semanticIndexContext(
+                database: database,
+                documentID: documentID,
+                expectedChunkIDs: expectedChunkIDs,
+                expectedActiveModel: expectedActiveModel,
+                expectedModelVerifiedAt: expectedModelVerifiedAt
+            )
+            return try Self.validatedCurrentEmbeddingChunkIDs(
+                database: database,
+                documentID: documentID,
+                chunks: context.chunks,
+                model: context.model
+            )
+        }
+    }
+
+    /// Atomically publishes one bounded semantic batch while deliberately
+    /// retaining a non-terminal text-index state. Each committed batch is a
+    /// durable relaunch checkpoint; terminal readiness is a separate exact
+    /// finalization step.
+    public func commitSemanticIndexBatch(
+        _ command: DocumentSemanticIndexBatchCommitCommand
+    ) throws -> DocumentSemanticIndexBatchCommitReceipt {
+        try writer.write { database in
+            let context = try Self.semanticIndexContext(
+                database: database,
+                documentID: command.documentID,
+                expectedChunkIDs: command.expectedChunkIDs,
+                expectedActiveModel: command.expectedActiveModel,
+                expectedModelVerifiedAt: command.expectedModelVerifiedAt
+            )
+            try Self.validateSemanticIndexSubset(
+                command.embeddings,
+                documentID: command.documentID,
+                chunks: context.chunks,
+                model: context.model
+            )
+            for embedding in command.embeddings {
+                try database.execute(
+                    sql: """
+                        DELETE FROM document_chunk_embeddings
+                        WHERE chunk_id = ? AND embedding_model_id = ?
+                        """,
+                    arguments: [embedding.chunkID, embedding.embeddingModelID]
+                )
+                try embedding.insert(database)
+            }
+            try database.execute(
+                sql: """
+                    UPDATE matter_documents
+                    SET index_status = ?,
+                        status = CASE
+                            WHEN status IN (?, ?, ?) THEN ?
+                            ELSE status
+                        END,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                arguments: [
+                    DocumentIndexStatus.textIndexed.rawValue,
+                    MatterDocumentStatus.ready.rawValue,
+                    MatterDocumentStatus.indexing.rawValue,
+                    MatterDocumentStatus.embedding.rawValue,
+                    MatterDocumentStatus.embedding.rawValue,
+                    Date(),
+                    command.documentID,
+                ]
+            )
+            let completed = try Self.validatedCurrentEmbeddingChunkIDs(
+                database: database,
+                documentID: command.documentID,
+                chunks: context.chunks,
+                model: context.model
+            )
+            guard let document = try MatterDocumentRecord.fetchOne(
+                database,
+                key: command.documentID
+            ) else {
+                throw DocumentReadinessTransitionError.documentNotFound(command.documentID)
+            }
+            let readiness = try DocumentReadinessRepository.deriveReceipt(
+                for: document,
+                in: database
+            )
+            guard !readiness.isBaseReady,
+                  readiness.chunkIDs == command.expectedChunkIDs,
+                  readiness.activeEmbeddingModel == command.expectedActiveModel else {
+                throw DocumentReadinessTransitionError.semanticIndexPostconditionFailed(
+                    command.documentID
+                )
+            }
+            return DocumentSemanticIndexBatchCommitReceipt(
+                documentID: command.documentID,
+                committedChunkIDs: command.embeddings.map(\.chunkID),
+                completedChunkCount: completed.count,
+                totalChunkCount: context.chunks.count,
+                readinessReceipt: readiness
+            )
+        }
+    }
+
+    /// Completes a streamed semantic projection without accepting vector bytes
+    /// from the caller. The Store walks persisted rows one at a time, then
+    /// promotes terminal flags in the same transaction.
+    public func finalizeSemanticIndex(
+        _ command: DocumentSemanticIndexFinalizationCommand
+    ) throws -> DocumentSemanticIndexCommitReceipt {
+        try writer.write { database in
+            let context = try Self.semanticIndexContext(
+                database: database,
+                documentID: command.documentID,
+                expectedChunkIDs: command.expectedChunkIDs,
+                expectedActiveModel: command.expectedActiveModel,
+                expectedModelVerifiedAt: command.expectedModelVerifiedAt
+            )
+            let completed = try Self.validatedCurrentEmbeddingChunkIDs(
+                database: database,
+                documentID: command.documentID,
+                chunks: context.chunks,
+                model: context.model
+            )
+            guard completed == command.expectedChunkIDs else {
+                throw DocumentReadinessTransitionError.invalidEmbeddingBatch(
+                    "the complete current vector set has not been persisted"
+                )
+            }
+            try database.execute(
+                sql: """
+                    UPDATE matter_documents
+                    SET index_status = ?,
+                        status = CASE
+                            WHEN status IN (?, ?) THEN ?
+                            ELSE status
+                        END,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                arguments: [
+                    DocumentIndexStatus.ready.rawValue,
+                    MatterDocumentStatus.indexing.rawValue,
+                    MatterDocumentStatus.embedding.rawValue,
+                    MatterDocumentStatus.ready.rawValue,
+                    Date(),
+                    command.documentID,
+                ]
+            )
+            guard let document = try MatterDocumentRecord.fetchOne(
+                database,
+                key: command.documentID
+            ) else {
+                throw DocumentReadinessTransitionError.documentNotFound(command.documentID)
+            }
+            let readiness = try DocumentReadinessRepository.deriveReceipt(
+                for: document,
+                in: database
+            )
+            guard readiness.activeEmbeddingModel == command.expectedActiveModel,
+                  readiness.chunkIDs == command.expectedChunkIDs,
+                  readiness.semanticIndexedChunkCount == context.chunks.count,
+                  !readiness.exclusions.contains(.semanticIndexIncomplete) else {
+                throw DocumentReadinessTransitionError.semanticIndexPostconditionFailed(
+                    command.documentID
+                )
+            }
+            let embeddingIDs = try String.fetchAll(
+                database,
+                sql: """
+                    SELECT e.id
+                    FROM document_chunk_embeddings e
+                    JOIN document_chunks c ON c.id = e.chunk_id
+                    WHERE c.document_id = ? AND e.embedding_model_id = ?
+                    ORDER BY c.chunk_index, c.id
+                    """,
+                arguments: [command.documentID, command.expectedActiveModel.id]
+            )
+            return DocumentSemanticIndexCommitReceipt(
+                documentID: command.documentID,
+                chunkIDs: command.expectedChunkIDs,
+                activeModel: command.expectedActiveModel,
+                verifiedAt: command.expectedModelVerifiedAt,
+                embeddingIDs: embeddingIDs,
+                readinessReceipt: readiness
+            )
+        }
+    }
+
+    /// Replaces the selected model's vectors for one exact current chunk set and
+    /// promotes terminal flags only after the complete, verified batch exists.
+    public func commitSemanticIndex(
+        _ command: DocumentSemanticIndexCommitCommand
+    ) throws -> DocumentSemanticIndexCommitReceipt {
+        try writer.write { database in
+            guard let document = try MatterDocumentRecord.fetchOne(
+                database,
+                key: command.documentID
+            ) else {
+                throw DocumentReadinessTransitionError.documentNotFound(command.documentID)
+            }
+            let chunks = try DocumentChunkRecord.fetchAll(
+                database,
+                sql: """
+                    SELECT *
+                    FROM document_chunks
+                    WHERE document_id = ?
+                    ORDER BY chunk_index, id
+                    """,
+                arguments: [command.documentID]
+            )
+            guard !chunks.isEmpty,
+                  chunks.map(\.id) == command.expectedChunkIDs else {
+                throw DocumentReadinessTransitionError.chunksChanged(command.documentID)
+            }
+            guard let settings = try DocumentIntelligenceSettingsRecord.fetchOne(
+                database,
+                key: DocumentIntelligenceSettingsRecord.singletonID
+            ) else {
+                throw DocumentReadinessTransitionError.settingsNotFound
+            }
+            guard settings.selectedEmbeddingModelID == command.expectedActiveModel.id else {
+                throw DocumentReadinessTransitionError.modelSelectionInconsistent(
+                    command.expectedActiveModel.id
+                )
+            }
+            guard let model = try DocumentEmbeddingModelRecord.fetchOne(
+                database,
+                key: command.expectedActiveModel.id
+            ) else {
+                throw DocumentReadinessTransitionError.modelNotFound(
+                    command.expectedActiveModel.id
+                )
+            }
+            let persistedIdentity = DocumentReadinessEmbeddingModelIdentity(
+                id: model.id,
+                repoID: model.repoID,
+                revision: model.revision,
+                dimension: model.dimension
+            )
+            guard persistedIdentity == command.expectedActiveModel,
+                  model.dimension > 0 else {
+                throw DocumentReadinessTransitionError.modelIdentityChanged(model.id)
+            }
+            guard model.lastTestLoadResult == "passed",
+                  model.lastTestLoadAt != nil else {
+                throw DocumentReadinessTransitionError.modelNotVerified(model.id)
+            }
+            guard model.lastTestLoadAt == command.expectedModelVerifiedAt,
+                  settings.embeddingModelLastTestedAt == command.expectedModelVerifiedAt else {
+                throw DocumentReadinessTransitionError.modelVerificationChanged(model.id)
+            }
+            let selectedModelIDs = try String.fetchAll(
+                database,
+                sql: """
+                    SELECT id
+                    FROM document_embedding_models
+                    WHERE is_selected = 1
+                    ORDER BY id
+                    """
+            )
+            guard selectedModelIDs == [model.id] else {
+                throw DocumentReadinessTransitionError.modelSelectionInconsistent(model.id)
+            }
+
+            let before = try DocumentReadinessRepository.deriveReceipt(
+                for: document,
+                in: database
+            )
+            guard before.activeEmbeddingModel == persistedIdentity,
+                  !before.exclusions.contains(.staleRevision),
+                  !before.exclusions.contains(.textIndexIncomplete),
+                  !before.exclusions.contains(.selectionInconsistent),
+                  !before.exclusions.contains(.unverified) else {
+                throw DocumentReadinessTransitionError.chunksChanged(command.documentID)
+            }
+            try Self.validateSemanticIndexBatch(
+                command.embeddings,
+                documentID: command.documentID,
+                chunks: chunks,
+                model: model
+            )
+
+            try database.execute(
+                sql: """
+                    DELETE FROM document_chunk_embeddings
+                    WHERE document_id = ? AND embedding_model_id = ?
+                    """,
+                arguments: [command.documentID, model.id]
+            )
+            let embeddingsByChunkID = Dictionary(
+                uniqueKeysWithValues: command.embeddings.map { ($0.chunkID, $0) }
+            )
+            let embeddings = try chunks.map { chunk in
+                guard let embedding = embeddingsByChunkID[chunk.id] else {
+                    throw DocumentReadinessTransitionError.invalidEmbeddingBatch(
+                        "one current chunk has no vector"
+                    )
+                }
+                try embedding.insert(database)
+                return embedding
+            }
+
+            let persistedEmbeddingCount = try Int.fetchOne(
+                database,
+                sql: """
+                    SELECT COUNT(*)
+                    FROM document_chunk_embeddings
+                    WHERE document_id = ? AND embedding_model_id = ?
+                    """,
+                arguments: [command.documentID, model.id]
+            ) ?? 0
+            guard persistedEmbeddingCount == chunks.count else {
+                throw DocumentReadinessTransitionError.invalidEmbeddingBatch(
+                    "the complete current vector set was not persisted"
+                )
+            }
+
+            try database.execute(
+                sql: """
+                    UPDATE matter_documents
+                    SET index_status = ?,
+                        status = CASE
+                            WHEN status IN (?, ?) THEN ?
+                            ELSE status
+                        END,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                arguments: [
+                    DocumentIndexStatus.ready.rawValue,
+                    MatterDocumentStatus.indexing.rawValue,
+                    MatterDocumentStatus.embedding.rawValue,
+                    MatterDocumentStatus.ready.rawValue,
+                    Date(),
+                    command.documentID,
+                ]
+            )
+
+            guard let promotedDocument = try MatterDocumentRecord.fetchOne(
+                database,
+                key: command.documentID
+            ) else {
+                throw DocumentReadinessTransitionError.documentNotFound(command.documentID)
+            }
+            let readiness = try DocumentReadinessRepository.deriveReceipt(
+                for: promotedDocument,
+                in: database
+            )
+            guard readiness.activeEmbeddingModel == persistedIdentity,
+                  readiness.chunkIDs == command.expectedChunkIDs,
+                  readiness.semanticIndexedChunkCount == chunks.count,
+                  !readiness.exclusions.contains(.semanticIndexIncomplete) else {
+                throw DocumentReadinessTransitionError.semanticIndexPostconditionFailed(
+                    command.documentID
+                )
+            }
+            return DocumentSemanticIndexCommitReceipt(
+                documentID: command.documentID,
+                chunkIDs: readiness.chunkIDs,
+                activeModel: persistedIdentity,
+                verifiedAt: command.expectedModelVerifiedAt,
+                embeddingIDs: embeddings.map(\.id),
+                readinessReceipt: readiness
+            )
         }
     }
 
@@ -216,6 +788,396 @@ public final class DocumentIndexRepository: @unchecked Sendable {
                 arguments: [matterID, embeddingModelID]
             )
         }
+    }
+
+    /// Fetches one fixed semantic page whose matter, document, deletion,
+    /// current-revision, chunker, and selected-model bindings are all enforced
+    /// by SQL inside one Store read snapshot. No chunk text is hydrated here.
+    public func fetchEmbeddingScanPage(
+        matterID: String,
+        documentIDs: [String],
+        activeModel: DocumentReadinessEmbeddingModelIdentity,
+        pageSize: Int,
+        after cursor: DocumentEmbeddingScanCursor? = nil
+    ) throws -> DocumentEmbeddingScanPage {
+        guard pageSize > 0 else {
+            throw DocumentEmbeddingScanError.invalidPageSize(pageSize)
+        }
+        let scopedDocumentIDs = Array(Set(documentIDs)).sorted()
+        guard !scopedDocumentIDs.isEmpty else {
+            throw DocumentEmbeddingScanError.emptyDocumentScope
+        }
+        return try writer.read { database in
+            guard let settings = try DocumentIntelligenceSettingsRecord.fetchOne(
+                database,
+                key: DocumentIntelligenceSettingsRecord.singletonID
+            ) else {
+                throw DocumentEmbeddingScanError.settingsNotFound
+            }
+            guard activeModel.dimension > 0,
+                  settings.selectedEmbeddingModelID == activeModel.id,
+                  settings.embeddingModelLastTestedAt != nil,
+                  let model = try DocumentEmbeddingModelRecord.fetchOne(
+                      database,
+                      key: activeModel.id
+                  ),
+                  model.repoID == activeModel.repoID,
+                  model.revision == activeModel.revision,
+                  model.dimension == activeModel.dimension,
+                  model.isSelected,
+                  model.lastTestLoadResult == "passed",
+                  model.lastTestLoadAt == settings.embeddingModelLastTestedAt else {
+                throw DocumentEmbeddingScanError.activeModelMismatch(activeModel.id)
+            }
+
+            let sql = """
+                SELECT c.id AS chunk_id,
+                       c.document_id AS document_id,
+                       e.dimension AS dimension,
+                       e.vector AS vector
+                FROM document_chunks c
+                JOIN matter_documents d
+                  ON d.id = c.document_id
+                JOIN document_pages_parts p
+                  ON p.id = c.page_part_id
+                 AND p.document_id = c.document_id
+                JOIN document_chunk_embeddings e
+                  ON e.chunk_id = c.id
+                 AND e.document_id = c.document_id
+                 AND e.embedding_model_id = ?
+                 AND e.model_revision IS ?
+                 AND e.model_display_name = ?
+                WHERE d.matter_id = ?
+                  AND d.deleted_at IS NULL
+                  AND c.revision_id = p.current_revision_id
+                  AND c.chunker_version = ?
+                  AND e.dimension = ?
+                  AND e.normalized = 1
+                  AND length(e.vector) = ?
+                  AND d.id IN (\(databaseQuestionMarks(count: scopedDocumentIDs.count)))
+                  AND c.id > ?
+                ORDER BY c.id
+                LIMIT ?
+                """
+            let vectorByteCount = activeModel.dimension.multipliedReportingOverflow(
+                by: MemoryLayout<UInt32>.size
+            )
+            guard !vectorByteCount.overflow else {
+                throw DocumentEmbeddingScanError.activeModelMismatch(activeModel.id)
+            }
+            var arguments: [DatabaseValueConvertible] = [
+                activeModel.id,
+                activeModel.revision,
+                model.displayName,
+                matterID,
+                settings.chunkerVersion,
+                activeModel.dimension,
+                vectorByteCount.partialValue,
+            ]
+            arguments.append(contentsOf: scopedDocumentIDs)
+            arguments.append(cursor?.lastChunkID ?? "")
+            arguments.append(pageSize)
+            let rows = try Row.fetchAll(
+                database,
+                sql: sql,
+                arguments: StatementArguments(arguments)
+            )
+            let entries = rows.map { row in
+                DocumentEmbeddingScanEntry(
+                    chunkID: row["chunk_id"],
+                    documentID: row["document_id"],
+                    dimension: row["dimension"],
+                    vector: row["vector"]
+                )
+            }
+            let nextCursor = entries.count == pageSize
+                ? entries.last.map { DocumentEmbeddingScanCursor(lastChunkID: $0.chunkID) }
+                : nil
+            return DocumentEmbeddingScanPage(entries: entries, nextCursor: nextCursor)
+        }
+    }
+
+    private struct SemanticIndexContext {
+        let document: MatterDocumentRecord
+        let chunks: [DocumentChunkRecord]
+        let model: DocumentEmbeddingModelRecord
+    }
+
+    private static func semanticIndexContext(
+        database: Database,
+        documentID: String,
+        expectedChunkIDs: [String],
+        expectedActiveModel: DocumentReadinessEmbeddingModelIdentity,
+        expectedModelVerifiedAt: Date
+    ) throws -> SemanticIndexContext {
+        guard let document = try MatterDocumentRecord.fetchOne(database, key: documentID) else {
+            throw DocumentReadinessTransitionError.documentNotFound(documentID)
+        }
+        let chunks = try DocumentChunkRecord.fetchAll(
+            database,
+            sql: """
+                SELECT *
+                FROM document_chunks
+                WHERE document_id = ?
+                ORDER BY chunk_index, id
+                """,
+            arguments: [documentID]
+        )
+        guard !chunks.isEmpty,
+              chunks.map(\.id) == expectedChunkIDs else {
+            throw DocumentReadinessTransitionError.chunksChanged(documentID)
+        }
+        guard let settings = try DocumentIntelligenceSettingsRecord.fetchOne(
+            database,
+            key: DocumentIntelligenceSettingsRecord.singletonID
+        ) else {
+            throw DocumentReadinessTransitionError.settingsNotFound
+        }
+        guard settings.selectedEmbeddingModelID == expectedActiveModel.id else {
+            throw DocumentReadinessTransitionError.modelSelectionInconsistent(
+                expectedActiveModel.id
+            )
+        }
+        guard let model = try DocumentEmbeddingModelRecord.fetchOne(
+            database,
+            key: expectedActiveModel.id
+        ) else {
+            throw DocumentReadinessTransitionError.modelNotFound(expectedActiveModel.id)
+        }
+        let persistedIdentity = DocumentReadinessEmbeddingModelIdentity(
+            id: model.id,
+            repoID: model.repoID,
+            revision: model.revision,
+            dimension: model.dimension
+        )
+        guard persistedIdentity == expectedActiveModel,
+              model.dimension > 0 else {
+            throw DocumentReadinessTransitionError.modelIdentityChanged(model.id)
+        }
+        guard model.lastTestLoadResult == "passed",
+              model.lastTestLoadAt != nil else {
+            throw DocumentReadinessTransitionError.modelNotVerified(model.id)
+        }
+        guard model.lastTestLoadAt == expectedModelVerifiedAt,
+              settings.embeddingModelLastTestedAt == expectedModelVerifiedAt else {
+            throw DocumentReadinessTransitionError.modelVerificationChanged(model.id)
+        }
+        let selectedModelIDs = try String.fetchAll(
+            database,
+            sql: """
+                SELECT id
+                FROM document_embedding_models
+                WHERE is_selected = 1
+                ORDER BY id
+                """
+        )
+        guard selectedModelIDs == [model.id] else {
+            throw DocumentReadinessTransitionError.modelSelectionInconsistent(model.id)
+        }
+        let readiness = try DocumentReadinessRepository.deriveReceipt(
+            for: document,
+            in: database
+        )
+        guard readiness.activeEmbeddingModel == persistedIdentity,
+              !readiness.exclusions.contains(.staleRevision),
+              !readiness.exclusions.contains(.textIndexIncomplete),
+              !readiness.exclusions.contains(.selectionInconsistent),
+              !readiness.exclusions.contains(.unverified) else {
+            throw DocumentReadinessTransitionError.chunksChanged(documentID)
+        }
+        return SemanticIndexContext(document: document, chunks: chunks, model: model)
+    }
+
+    private static func validateSemanticIndexSubset(
+        _ embeddings: [DocumentChunkEmbeddingRecord],
+        documentID: String,
+        chunks: [DocumentChunkRecord],
+        model: DocumentEmbeddingModelRecord
+    ) throws {
+        let currentChunkIDs = Set(chunks.map(\.id))
+        guard !embeddings.isEmpty,
+              Set(embeddings.map(\.id)).count == embeddings.count,
+              Set(embeddings.map(\.chunkID)).count == embeddings.count,
+              Set(embeddings.map(\.chunkID)).isSubset(of: currentChunkIDs) else {
+            throw DocumentReadinessTransitionError.invalidEmbeddingBatch(
+                "the bounded batch must contain one unique vector per included current chunk"
+            )
+        }
+        for embedding in embeddings {
+            guard !embedding.id.isEmpty,
+                  embedding.documentID == documentID,
+                  embedding.embeddingModelID == model.id,
+                  embedding.modelDisplayName == model.displayName,
+                  embedding.modelRevision == model.revision,
+                  embedding.dimension == model.dimension,
+                  embedding.normalized,
+                  isFiniteUnitVector(embedding.vector, dimension: model.dimension) else {
+                throw DocumentReadinessTransitionError.invalidEmbeddingBatch(
+                    "a vector's document, chunk, model, dimension, or normalization proof is invalid"
+                )
+            }
+        }
+    }
+
+    private static func validatedCurrentEmbeddingChunkIDs(
+        database: Database,
+        documentID: String,
+        chunks: [DocumentChunkRecord],
+        model: DocumentEmbeddingModelRecord
+    ) throws -> [String] {
+        let cursor = try DocumentChunkEmbeddingRecord.fetchCursor(
+            database,
+            sql: """
+                SELECT e.*
+                FROM document_chunks c
+                JOIN document_chunk_embeddings e
+                  ON e.chunk_id = c.id AND e.embedding_model_id = ?
+                WHERE c.document_id = ?
+                ORDER BY c.chunk_index, c.id
+                """,
+            arguments: [model.id, documentID]
+        )
+        let currentChunkIDs = Set(chunks.map(\.id))
+        var completed: [String] = []
+        while let embedding = try cursor.next() {
+            guard currentChunkIDs.contains(embedding.chunkID),
+                  embedding.documentID == documentID,
+                  embedding.embeddingModelID == model.id,
+                  embedding.modelDisplayName == model.displayName,
+                  embedding.modelRevision == model.revision,
+                  embedding.dimension == model.dimension,
+                  embedding.normalized,
+                  isFiniteUnitVector(embedding.vector, dimension: model.dimension) else {
+                continue
+            }
+            completed.append(embedding.chunkID)
+        }
+        return completed
+    }
+
+    private static func validateTextIndexBatch(
+        _ chunks: [DocumentChunkRecord],
+        documentID: String,
+        parts: [DocumentPagePartRecord],
+        expectedBindings: [DocumentReadinessPartBinding],
+        chunkerVersion: Int
+    ) throws {
+        guard chunkerVersion > 0,
+              !expectedBindings.isEmpty else {
+            throw DocumentReadinessTransitionError.invalidChunkBatch(
+                "the part graph and chunker must be nonempty"
+            )
+        }
+        let partIDs = expectedBindings.map(\.partID)
+        let partIndexes = expectedBindings.map(\.partIndex)
+        let selectedRevisionIDs = expectedBindings.compactMap(\.currentRevisionID)
+        guard Set(partIDs).count == expectedBindings.count,
+              Set(partIndexes).count == expectedBindings.count,
+              selectedRevisionIDs.count == expectedBindings.count,
+              expectedBindings.allSatisfy({ $0.currentSelectionID != nil }) else {
+            throw DocumentReadinessTransitionError.invalidChunkBatch(
+                "the selected part lineage is incomplete or duplicated"
+            )
+        }
+        if chunks.isEmpty {
+            guard parts.count == expectedBindings.count,
+                  parts.allSatisfy({
+                      $0.normalizedText.trimmingCharacters(
+                          in: .whitespacesAndNewlines
+                      ).isEmpty
+                  }) else {
+                throw DocumentReadinessTransitionError.invalidChunkBatch(
+                    "only an exact whitespace-only selected part graph may publish an empty text index"
+                )
+            }
+            return
+        }
+        let revisionByPartID = Dictionary(
+            uniqueKeysWithValues: zip(partIDs, selectedRevisionIDs)
+        )
+        let chunkIDs = chunks.map(\.id)
+        let chunkIndexes = chunks.map(\.chunkIndex)
+        guard Set(chunkIDs).count == chunks.count,
+              Set(chunkIndexes).count == chunks.count,
+              chunkIndexes == Array(0 ..< chunks.count),
+              chunks.allSatisfy({
+                  !$0.id.isEmpty
+                      && $0.documentID == documentID
+                      && $0.chunkerVersion == chunkerVersion
+                      && !$0.normalizedText.isEmpty
+              }) else {
+            throw DocumentReadinessTransitionError.invalidChunkBatch(
+                "chunk identities, order, scope, version, or text are invalid"
+            )
+        }
+        for chunk in chunks {
+            guard let partID = chunk.pagePartID,
+                  let revisionID = chunk.revisionID,
+                  revisionByPartID[partID] == revisionID else {
+                throw DocumentReadinessTransitionError.invalidChunkBatch(
+                    "a chunk is not bound to its part's current selected revision"
+                )
+            }
+        }
+        guard Set(chunks.compactMap(\.pagePartID)) == Set(partIDs),
+              Set(chunks.compactMap(\.revisionID)) == Set(selectedRevisionIDs) else {
+            throw DocumentReadinessTransitionError.invalidChunkBatch(
+                "the chunk batch does not cover the exact selected part lineage"
+            )
+        }
+    }
+
+    private static func validateSemanticIndexBatch(
+        _ embeddings: [DocumentChunkEmbeddingRecord],
+        documentID: String,
+        chunks: [DocumentChunkRecord],
+        model: DocumentEmbeddingModelRecord
+    ) throws {
+        let currentChunkIDs = chunks.map(\.id)
+        guard embeddings.count == chunks.count,
+              Set(embeddings.map(\.id)).count == embeddings.count,
+              Set(embeddings.map(\.chunkID)) == Set(currentChunkIDs) else {
+            throw DocumentReadinessTransitionError.invalidEmbeddingBatch(
+                "the batch must contain exactly one uniquely identified vector per current chunk"
+            )
+        }
+        for embedding in embeddings {
+            guard !embedding.id.isEmpty,
+                  embedding.documentID == documentID,
+                  embedding.embeddingModelID == model.id,
+                  embedding.modelDisplayName == model.displayName,
+                  embedding.modelRevision == model.revision,
+                  embedding.dimension == model.dimension,
+                  embedding.normalized,
+                  isFiniteUnitVector(embedding.vector, dimension: model.dimension) else {
+                throw DocumentReadinessTransitionError.invalidEmbeddingBatch(
+                    "a vector's document, chunk, model, dimension, or normalization proof is invalid"
+                )
+            }
+        }
+    }
+
+    private static func isFiniteUnitVector(_ data: Data, dimension: Int) -> Bool {
+        guard dimension > 0 else { return false }
+        let expectedByteCount = dimension.multipliedReportingOverflow(
+            by: MemoryLayout<UInt32>.size
+        )
+        guard !expectedByteCount.overflow,
+              data.count == expectedByteCount.partialValue else {
+            return false
+        }
+        let normSquared = data.withUnsafeBytes { bytes -> Double? in
+            var result = 0.0
+            for offset in stride(from: 0, to: data.count, by: MemoryLayout<UInt32>.size) {
+                let stored = bytes.loadUnaligned(fromByteOffset: offset, as: UInt32.self)
+                let value = Float(bitPattern: UInt32(littleEndian: stored))
+                guard value.isFinite else { return nil }
+                result += Double(value) * Double(value)
+            }
+            return result.isFinite ? result : nil
+        }
+        guard let normSquared else { return false }
+        return abs(normSquared - 1) <= 0.001
     }
 
 }

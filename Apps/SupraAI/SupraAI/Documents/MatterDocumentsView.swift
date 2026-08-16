@@ -16,6 +16,7 @@ struct MatterDocumentsView: View {
     @ObservedObject var library: ModelLibrary
     var qaController: DocumentQAController?
     var chronologyController: DocumentChronologyController?
+    let onOpenImportSetup: () -> Void
 
     @State private var showImporter = false
     @State private var newFolderName = ""
@@ -37,6 +38,9 @@ struct MatterDocumentsView: View {
     }
     @State private var dismissedImportFailureID: String?
     @AccessibilityFocusState private var importFailureFocused: Bool
+    @State private var pendingImportURLs: [URL] = []
+    @State private var pendingImportFolderID: String?
+    @AccessibilityFocusState private var mutationCorrectionFocused: Bool
     /// The single row whose action buttons (move/preview/open/delete) are revealed.
     @State private var selectedDocID: String?
     /// Documents ticked for multi-select sharing.
@@ -45,6 +49,9 @@ struct MatterDocumentsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+#if DEBUG
+            demoReadinessQualificationElements
+#endif
             if !controller.setupReady {
                 setupBanner
             }
@@ -53,6 +60,16 @@ struct MatterDocumentsView: View {
             resumeImportBanner
             jobProgress
             importFailureBanner
+            if let failure = controller.lastMutationFailure,
+               !pendingImportURLs.isEmpty {
+                UserMutationFailureBanner(
+                    failure: failure,
+                    retry: retryPendingImport,
+                    correct: correctPendingImport
+                )
+                .padding(.horizontal, 8)
+                .accessibilityIdentifier("documents.mutationFailure")
+            }
             classifyPendingBanner
             // A fixed-width folder rail (not a resizable split): HSplitView rebalanced its
             // panes to their ideal widths whenever the document list changed on folder
@@ -81,7 +98,9 @@ struct MatterDocumentsView: View {
             allowedContentTypes: controller.allowedContentTypes,
             allowsMultipleSelection: true
         ) { result in
-            if case let .success(urls) = result { controller.importItems(urls) }
+            if case let .success(urls) = result {
+                attemptImport(urls, targetFolderID: controller.selectedFolderID)
+            }
         }
         .onDrop(of: [.fileURL], isTargeted: $dropTargeted) { providers in
             handleDrop(providers)
@@ -166,7 +185,7 @@ struct MatterDocumentsView: View {
             }
             .disabled(!controller.setupReady)
             .accessibilityValue(controller.setupReady ? "Available" : "Unavailable until Document Intelligence setup is complete")
-            .accessibilityHint(controller.setupReady ? "Opens the document picker" : "Complete setup in Settings before importing documents")
+            .accessibilityHint(controller.setupReady ? "Opens the document picker" : "Open AI Setup to finish document setup")
 
             Divider().frame(height: 20)
 
@@ -207,7 +226,10 @@ struct MatterDocumentsView: View {
 
             Spacer()
 
-            SupraToolbarIconButton("Trash", systemImage: "trash", role: .destructive) {
+            SupraToolbarIconButton(
+                RecycleBinNavigationPresentation.standard.title,
+                systemImage: "trash"
+            ) {
                 showTrash = true
             }
         }
@@ -224,14 +246,14 @@ struct MatterDocumentsView: View {
 
     /// The folder tree flattened for a plain List: depth drives indentation, so
     /// subfolders read as nested without disclosure chevrons.
-    private var flattenedFolders: [(folder: DocumentFolderRecord, depth: Int)] {
+    private var flattenedFolders: [(folder: DocumentFolderSummary, depth: Int)] {
         // Roots are the top-level folders PLUS any live folder whose parent
         // isn't live — a subfolder restored from Trash while its parent is
         // still trashed must stay visible, or the restore looks like it failed.
         // (It re-nests automatically when the parent is restored.)
         let liveIDs = Set(controller.folders.map(\.id))
         var visited = Set<String>()
-        func walk(_ folder: DocumentFolderRecord, _ depth: Int) -> [(DocumentFolderRecord, Int)] {
+        func walk(_ folder: DocumentFolderSummary, _ depth: Int) -> [(DocumentFolderSummary, Int)] {
             guard visited.insert(folder.id).inserted else { return [] }
             return [(folder, depth)] + controller.subfolders(of: folder.id).flatMap { walk($0, depth + 1) }
         }
@@ -259,8 +281,14 @@ struct MatterDocumentsView: View {
                             } label: {
                                 Label("New Subfolder", systemImage: "folder.badge.plus")
                             }
-                            Button(role: .destructive) { controller.deleteFolder(id: item.folder.id) } label: {
-                                Label("Delete Folder", systemImage: "trash")
+                            let presentation = softDeletePresentation(
+                                target: .folder,
+                                displayName: item.folder.name
+                            )
+                            Button(role: presentation.tone.buttonRole) {
+                                controller.deleteFolder(id: item.folder.id)
+                            } label: {
+                                Label(presentation.actionTitle, systemImage: "trash")
                             }
                         }
                 }
@@ -337,7 +365,7 @@ struct MatterDocumentsView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private func documentRow(_ doc: MatterDocumentRecord) -> some View {
+    private func documentRow(_ doc: MatterDocumentSummary) -> some View {
         // The row itself is just identity: a multi-select tick, the name, its readiness
         // status, and the tags applied on import. The move/preview/open/delete actions
         // appear on the right only once the row is selected.
@@ -397,7 +425,7 @@ struct MatterDocumentsView: View {
     /// The trailing action cluster shown on the selected document row: preview, open in
     /// the default app, tag, move, and delete.
     @ViewBuilder
-    private func rowActions(_ doc: MatterDocumentRecord) -> some View {
+    private func rowActions(_ doc: MatterDocumentSummary) -> some View {
         Button { showPreview(doc) } label: { Image(systemName: "eye") }
             .buttonStyle(.plain)
             .help("Preview")
@@ -417,7 +445,7 @@ struct MatterDocumentsView: View {
             Image(systemName: "arrow.clockwise")
         }
         .buttonStyle(.plain)
-        .help(doc.status == MatterDocumentStatus.failed.rawValue
+        .help(doc.status == .failed
             ? "Retry processing"
             : "Reprocess extracted text")
         .accessibilityIdentifier("documents.reprocess")
@@ -452,14 +480,20 @@ struct MatterDocumentsView: View {
             }
             .menuStyle(.borderlessButton).fixedSize().help("Move to folder")
         }
-        Button(role: .destructive) {
+        let presentation = softDeletePresentation(
+            target: .document,
+            displayName: doc.displayName
+        )
+        Button(role: presentation.tone.buttonRole) {
             controller.softDelete(documentID: doc.id)
             checkedDocIDs.remove(doc.id)
             if selectedDocID == doc.id { selectedDocID = nil }
         } label: {
             Image(systemName: "trash")
         }
-        .buttonStyle(.ghostDanger).help("Move to trash")
+        .deletionButtonStyle(presentation.tone)
+        .help(presentation.actionTitle)
+        .accessibilityLabel(presentation.actionTitle)
     }
 
     private func toggleChecked(_ id: String) {
@@ -468,7 +502,7 @@ struct MatterDocumentsView: View {
 
     /// Opens the managed original in the user's default app. Because it opens the file
     /// Supra manages, saving in that app writes straight back to Supra's copy.
-    private func openInDefaultApp(_ doc: MatterDocumentRecord) {
+    private func openInDefaultApp(_ doc: MatterDocumentSummary) {
         guard let url = controller.fileURL(forDocument: doc.id) else { return }
         NSWorkspace.shared.open(url)
     }
@@ -518,7 +552,7 @@ struct MatterDocumentsView: View {
     }
 
     /// Opens (or refreshes) the preview pane for a document.
-    private func showPreview(_ doc: MatterDocumentRecord) {
+    private func showPreview(_ doc: MatterDocumentSummary) {
         if let model = controller.preview(documentID: doc.id) {
             preview = PreviewItem(model: model)
         }
@@ -621,19 +655,23 @@ struct MatterDocumentsView: View {
     }
 
     private var setupBanner: some View {
-        HStack {
+        HStack(spacing: 10) {
             Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-            Text("Document import is disabled until Document Intelligence setup is complete in Settings.")
+            Text("Document import is disabled until Document Intelligence setup is complete in AI Setup.")
                 .font(.supraCaption)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer()
+            Button("Open AI Setup", action: onOpenImportSetup)
+                .buttonStyle(.borderedProminent)
+                .accessibilityIdentifier("documents.importSetupAction")
         }
         .padding(8)
         .background(Color.orange.opacity(0.12))
-        .accessibilityElement(children: .ignore)
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("documents.importUnavailableWarning")
         .accessibilityLabel("Document import unavailable")
-        .accessibilityValue("Complete Document Intelligence setup in Settings before importing files")
+        .accessibilityValue("Complete Document Intelligence setup in AI Setup before importing files")
+        .accessibilityFocused($mutationCorrectionFocused)
     }
 
     /// In-app banner for the most recent import that completed with failures
@@ -646,7 +684,7 @@ struct MatterDocumentsView: View {
            dismissedImportFailureID != failure.id {
             let itemNoun = failure.failedCount == 1 ? "item" : "items"
             let message = failure.details.isEmpty
-                ? "Imported \(failure.importedCount) of \(failure.discoveredCount). \(failure.failedCount) need attention — see the Audit tab for details."
+                ? "Imported \(failure.importedCount) of \(failure.discoveredCount). \(failure.failedCount) need attention — see Activity for details."
                 : "Imported \(failure.importedCount) of \(failure.discoveredCount). Review the \(failure.failedCount) \(itemNoun) below."
             VStack(alignment: .leading, spacing: 6) {
                 SupraWarningBanner(
@@ -702,7 +740,7 @@ struct MatterDocumentsView: View {
                     }
                     .buttonStyle(.ghost)
                     .accessibilityIdentifier("documents.dismissImportFailureWarning")
-                    .accessibilityHint("Removes this warning; rejection details remain in the Audit tab")
+                    .accessibilityHint("Removes this warning; rejection details remain in Activity")
                 }
             }
             .padding(.horizontal, 8)
@@ -760,9 +798,16 @@ struct MatterDocumentsView: View {
     }
 
     private var trashSheet: some View {
-        SupraSheetScaffold("Trash", onClose: { showTrash = false }) {
+        SupraSheetScaffold(
+            RecycleBinNavigationPresentation.standard.title,
+            onClose: { showTrash = false }
+        ) {
             if controller.trashedDocuments.isEmpty && controller.trashedFolders.isEmpty {
-                ContentUnavailableView("Trash is Empty", systemImage: "trash", description: Text("Soft-deleted documents and folders appear here."))
+                ContentUnavailableView(
+                    "Recycle Bin is Empty",
+                    systemImage: "trash",
+                    description: Text("Restorable documents and folders appear here.")
+                )
                     .frame(minWidth: 460, minHeight: 240)
             } else {
                 List {
@@ -785,13 +830,17 @@ struct MatterDocumentsView: View {
                                 Spacer()
                                 Button("Restore") { controller.restore(documentID: doc.id) }
                                     .buttonStyle(.ghost)
-                                Button("Remove Source", role: .destructive) {
-                                    pendingPermanentDeletion = .document(
-                                        id: doc.id,
-                                        name: doc.displayName
-                                    )
+                                let target = PermanentDeletionTarget.document(
+                                    id: doc.id,
+                                    name: doc.displayName
+                                )
+                                Button(
+                                    target.presentation.actionTitle,
+                                    role: target.presentation.tone.buttonRole
+                                ) {
+                                    pendingPermanentDeletion = target
                                 }
-                                    .buttonStyle(.ghostDanger)
+                                    .deletionButtonStyle(target.presentation.tone)
                             }
                         }
                     }
@@ -806,30 +855,154 @@ struct MatterDocumentsView: View {
         controller.permanentlyDelete(documentID: id)
     }
 
-    private func statusBadge(_ document: MatterDocumentRecord) -> some View {
-        let reindexing = controller.isCorrectionReindexing(document)
-        let (label, color) = reindexing
-            ? ("Reindexing", Color.blue)
-            : Self.statusAppearance(document.status)
-        return Text(label)
-            .font(.supraCaption.weight(.medium))
-            .padding(.horizontal, 5).padding(.vertical, 1)
-            .background(color.opacity(0.18), in: Capsule())
-            .foregroundStyle(color)
-            .accessibilityIdentifier(reindexing ? "documents.reindexingBadge" : "")
+    private func softDeletePresentation(
+        target: DeletionTargetKind,
+        displayName: String
+    ) -> DeletionActionPresentation {
+        .make(action: .moveToRecycleBin, target: target, displayName: displayName)
     }
 
-    private static func statusAppearance(_ status: String) -> (String, Color) {
-        switch MatterDocumentStatus(rawValue: status) {
-        case .ready: ("Ready", .green)
-        case .failed: ("Failed", .red)
-        case .needsReview: ("Needs review", .orange)
-        case .needsOCR, .ocrPending: ("OCR", .orange)
-        case .importing, .extracting, .indexing, .embedding: ("Processing", .blue)
-        case .deleted: ("Deleted", .secondary)
-        case .none: (status, .secondary)
+    private func statusBadge(_ document: MatterDocumentSummary) -> some View {
+        let reindexing = controller.isCorrectionReindexing(document)
+        let projection = controller.readiness(documentID: document.id)
+        let appearance = reindexing
+            ? ReadinessBadgeAppearance(
+                label: "Reindexing",
+                accessibilityValue: "Base not ready: updated text is being reindexed",
+                color: .blue
+            )
+            : Self.statusAppearance(projection)
+        return HStack(spacing: 0) {
+            Text(appearance.label)
+                .font(.supraCaption.weight(.medium))
+                .padding(.horizontal, 5).padding(.vertical, 1)
+                .background(appearance.color.opacity(0.18), in: Capsule())
+                .foregroundStyle(appearance.color)
+                .accessibilityValue(appearance.accessibilityValue)
+                .accessibilityIdentifier("documents.readinessBadge.\(document.id)")
+
+            // Preserve the established correction-flow identifier while the
+            // visible badge now owns one stable per-document readiness identity.
+            if reindexing {
+                Text("Reindexing")
+                    .foregroundStyle(.clear)
+                    .frame(width: 1, height: 1)
+                    .accessibilityIdentifier("documents.reindexingBadge")
+            }
         }
     }
+
+    private struct ReadinessBadgeAppearance {
+        let label: String
+        let accessibilityValue: String
+        let color: Color
+    }
+
+    private static func statusAppearance(
+        _ projection: DocumentReadinessConsumerProjection?
+    ) -> ReadinessBadgeAppearance {
+        guard let projection else {
+            return ReadinessBadgeAppearance(
+                label: "Readiness unavailable",
+                accessibilityValue: "Base readiness unavailable; refresh the document list",
+                color: .secondary
+            )
+        }
+        if projection.isBaseReady {
+            return ReadinessBadgeAppearance(
+                label: "Ready",
+                accessibilityValue: "Base ready",
+                color: .green
+            )
+        }
+
+        return switch projection.primaryBaseExclusion {
+        case .deleted:
+            ReadinessBadgeAppearance(
+                label: "Deleted",
+                accessibilityValue: "Base not ready: document is in the Recycle Bin",
+                color: .secondary
+            )
+        case .extractionFailed, .processingFailed, .textIndexFailed:
+            ReadinessBadgeAppearance(
+                label: "Processing failed",
+                accessibilityValue: "Base not ready: document processing failed; retry processing",
+                color: .red
+            )
+        case .reviewRequired:
+            ReadinessBadgeAppearance(
+                label: "Needs review",
+                accessibilityValue: "Base not ready: review the extracted document text",
+                color: .orange
+            )
+        case .extractionIncomplete:
+            ReadinessBadgeAppearance(
+                label: "Processing",
+                accessibilityValue: "Base not ready: text extraction is still in progress",
+                color: .blue
+            )
+        case .selectedRevisionIncoherent, .staleRevision, .textIndexIncomplete:
+            ReadinessBadgeAppearance(
+                label: "Needs reindexing",
+                accessibilityValue: "Base not ready: the source changed or its text index is stale; reindex required",
+                color: .orange
+            )
+        case .activeEmbeddingModelMissing:
+            ReadinessBadgeAppearance(
+                label: "Setup required",
+                accessibilityValue: "Base not ready: set up a document search model",
+                color: .orange
+            )
+        case .selectionInconsistent, .unverified:
+            ReadinessBadgeAppearance(
+                label: "Setup required",
+                accessibilityValue: "Base not ready: verify the selected document search model",
+                color: .orange
+            )
+        case .semanticIndexIncomplete:
+            ReadinessBadgeAppearance(
+                label: "Needs reindexing",
+                accessibilityValue: "Base not ready: the semantic model index is incomplete; reindex required",
+                color: .orange
+            )
+        case .none:
+            ReadinessBadgeAppearance(
+                label: "Not ready",
+                accessibilityValue: "Base not ready: refresh or retry document processing",
+                color: .secondary
+            )
+        }
+    }
+
+#if DEBUG
+    /// T-DATA-READY-02's native seam. These values are derived from the exact
+    /// Store receipts cached by the shipping Documents controller. All other
+    /// consumer adapters preserve that same base receipt; package gates cover
+    /// their additive task exclusions separately.
+    @ViewBuilder
+    private var demoReadinessQualificationElements: some View {
+        if ProcessInfo.processInfo.arguments.contains("-uiTestCanonicalDemoReadiness") {
+            let projections = controller.documents.compactMap {
+                controller.readiness(documentID: $0.id)
+            }
+            let readyCount = projections.filter(\.isBaseReady).count
+            let baseSummary = "\(readyCount) of \(controller.documents.count) base ready"
+            ZStack {
+                ForEach(DocumentReadinessConsumer.allCases, id: \.rawValue) { consumer in
+                    Text(consumer.rawValue)
+                        .foregroundStyle(.clear)
+                        .frame(width: 1, height: 1)
+                        .accessibilityLabel(consumer.rawValue)
+                        .accessibilityValue(baseSummary)
+                        .accessibilityIdentifier(
+                            "readiness.demo.consumer.\(consumer.rawValue)"
+                        )
+                }
+            }
+            .frame(width: 1, height: 1)
+        }
+    }
+#endif
 
     private func phaseLabel(_ phase: String) -> String {
         switch DocumentProcessingPhase(rawValue: phase) {
@@ -866,9 +1039,35 @@ struct MatterDocumentsView: View {
         }
         group.notify(queue: .main) {
             let urls = collector.drain()
-            if !urls.isEmpty { controller.importItems(urls, targetFolderID: targetFolderID) }
+            if !urls.isEmpty {
+                attemptImport(urls, targetFolderID: targetFolderID)
+            }
         }
         return true
+    }
+
+    private func attemptImport(_ urls: [URL], targetFolderID: String?) {
+        pendingImportURLs = urls
+        pendingImportFolderID = targetFolderID
+        let outcome = controller.attemptImportItems(
+            urls,
+            targetFolderID: targetFolderID
+        )
+        guard outcome.didCommit else { return }
+        pendingImportURLs = []
+        pendingImportFolderID = nil
+    }
+
+    private func retryPendingImport() {
+        guard !pendingImportURLs.isEmpty else { return }
+        attemptImport(
+            pendingImportURLs,
+            targetFolderID: pendingImportFolderID
+        )
+    }
+
+    private func correctPendingImport() {
+        mutationCorrectionFocused = true
     }
 }
 
@@ -1320,7 +1519,7 @@ struct DocumentQASheet: View {
                     .foregroundStyle(.secondary)
                     .accessibilityIdentifier("documentQA.routeStatus")
             } else {
-                Text("Assign a \(route.role.displayName) model in Models to ask documents.")
+                Text("Assign a \(route.role.displayName) model in AI Setup to ask documents.")
                     .font(.supraCaption)
                     .foregroundStyle(.orange)
                     .accessibilityIdentifier("documentQA.routeStatus")
@@ -1329,7 +1528,7 @@ struct DocumentQASheet: View {
     }
 
     private var generateAccessibilityHint: String {
-        if routeModel == nil { return "Assign the routed model in Models first" }
+        if routeModel == nil { return "Assign the routed model in AI Setup first" }
         if questionIsEmpty { return "Enter a question first" }
         if sourceMode == .auto {
             guard let readiness = autoReadiness else {
@@ -1550,7 +1749,7 @@ struct DocumentChronologySheet: View {
                     .font(.supraCaption)
                     .foregroundStyle(.secondary)
             } else {
-                Text("Assign a \(route.role.displayName) model in Models to build a chronology.")
+                Text("Assign a \(route.role.displayName) model in AI Setup to build a chronology.")
                     .font(.supraCaption)
                     .foregroundStyle(.orange)
             }

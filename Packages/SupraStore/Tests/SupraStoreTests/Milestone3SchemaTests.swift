@@ -93,7 +93,11 @@ final class Milestone3SchemaTests: XCTestCase {
         XCTAssertEqual(try store.documentLibrary.fetchDocuments(matterID: matter.id).count, 0)
         let deletedDoc = try XCTUnwrap(try store.documentLibrary.fetchDocument(id: doc.id))
         XCTAssertNotNil(deletedDoc.deletedAt)
-        XCTAssertEqual(deletedDoc.status, MatterDocumentStatus.deleted.rawValue)
+        XCTAssertEqual(
+            deletedDoc.status,
+            MatterDocumentStatus.ready.rawValue,
+            "soft deletion must preserve the document's processing state"
+        )
 
         try store.documentLibrary.restoreFolder(id: parent.id)
         XCTAssertEqual(try store.documentLibrary.fetchFolders(matterID: matter.id).count, 2)
@@ -474,6 +478,60 @@ final class Milestone3SchemaTests: XCTestCase {
 
         try store.documentJobs.completeJob(id: job1.id)
         XCTAssertEqual(try store.documentJobs.fetchJob(id: job1.id)?.status, DocumentProcessingJobStatus.complete.rawValue)
+    }
+
+    func testActivateQueuedJobIfIdlePromotesOnlyTheExactQueuedIdentity() throws {
+        // T-REVIEW-RETIRE-JOB-01 expected RED: Store only exposes FIFO-head
+        // activation, so a session policy cannot skip an inert compatibility row
+        // and atomically promote the first retained follower by exact identity.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic exact activation 811")
+        let fifoHead = try store.documentJobs.enqueueJob(matterID: matter.id)
+        let selectedFollower = try store.documentJobs.enqueueJob(matterID: matter.id)
+
+        let activated = try XCTUnwrap(
+            store.documentJobs.activateQueuedJobIfIdle(id: selectedFollower.id)
+        )
+
+        XCTAssertEqual(activated.id, selectedFollower.id)
+        XCTAssertEqual(activated.status, DocumentProcessingJobStatus.active.rawValue)
+        XCTAssertNotNil(activated.startedAt)
+        XCTAssertGreaterThanOrEqual(activated.updatedAt, selectedFollower.updatedAt)
+        let unchangedHead = try XCTUnwrap(store.documentJobs.fetchJob(id: fifoHead.id))
+        XCTAssertEqual(unchangedHead.status, DocumentProcessingJobStatus.queued.rawValue)
+        XCTAssertEqual(unchangedHead.queuePosition, 0)
+        XCTAssertNil(unchangedHead.startedAt)
+        XCTAssertEqual(try store.documentJobs.fetchActiveJob()?.id, selectedFollower.id)
+    }
+
+    func testActivateQueuedJobIfIdleRefusesWhenActiveOrExactIdentityIsNotQueued() throws {
+        // T-REVIEW-RETIRE-JOB-01 standing guard: exact activation remains a
+        // generic single-owner CAS. It must not steal an active slot or revive a
+        // paused compatibility row.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic exact activation guard 823")
+        let active = try store.documentJobs.enqueueJob(matterID: matter.id)
+        let waiting = try store.documentJobs.enqueueJob(matterID: matter.id)
+        XCTAssertEqual(try store.documentJobs.activateNextJobIfIdle()?.id, active.id)
+
+        XCTAssertNil(try store.documentJobs.activateQueuedJobIfIdle(id: waiting.id))
+        let stillWaiting = try XCTUnwrap(store.documentJobs.fetchJob(id: waiting.id))
+        XCTAssertEqual(stillWaiting.status, DocumentProcessingJobStatus.queued.rawValue)
+        XCTAssertNil(stillWaiting.startedAt)
+
+        XCTAssertTrue(try store.documentJobs.cancelActiveJob(id: active.id))
+        try store.documentJobs.pauseJob(id: waiting.id)
+        let pausedBefore = try XCTUnwrap(store.documentJobs.fetchJob(id: waiting.id))
+
+        XCTAssertNil(try store.documentJobs.activateQueuedJobIfIdle(id: waiting.id))
+        XCTAssertNil(try store.documentJobs.activateQueuedJobIfIdle(id: "missing-exact-job-829"))
+        let pausedAfter = try XCTUnwrap(store.documentJobs.fetchJob(id: waiting.id))
+        XCTAssertEqual(pausedAfter.status, pausedBefore.status)
+        XCTAssertEqual(pausedAfter.phase, pausedBefore.phase)
+        XCTAssertEqual(pausedAfter.pausedAt, pausedBefore.pausedAt)
+        XCTAssertEqual(pausedAfter.startedAt, pausedBefore.startedAt)
+        XCTAssertEqual(pausedAfter.updatedAt, pausedBefore.updatedAt)
+        XCTAssertNil(try store.documentJobs.fetchActiveJob())
     }
 
     func testSourceSetsAttachToOutputVersionsAndExportsPersist() throws {

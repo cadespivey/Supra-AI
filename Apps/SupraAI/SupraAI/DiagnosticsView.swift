@@ -1,4 +1,6 @@
+import AppKit
 import SupraCore
+import SupraRuntimeClient
 import SupraRuntimeInterface
 import SupraSessions
 import SupraStore
@@ -11,7 +13,7 @@ struct DiagnosticsView: View {
     /// Recent model-load / generation timings (category `performance`), so pre-warming
     /// wins are visible: a warmed model shows its load time up front, and the first
     /// message's first-token latency no longer includes a multi-second load.
-    @State private var timings: [DiagnosticEventRecord] = []
+    @State private var timings: [DiagnosticEventSummary] = []
     @State private var networkCleanupMessage: String?
     @State private var capabilityReport: CapabilityReport?
     @State private var runningCapabilityProbe = false
@@ -21,9 +23,80 @@ struct DiagnosticsView: View {
     @State private var runningCoverageProbe = false
     @State private var shadowLoggingEnabled = false
     @State private var additiveRoutingEnabled = false
+    @State private var showAdvanced = false
+    @State private var diagnosticCopyMessage: String?
 
     var body: some View {
         List {
+            Section {
+                Text("System Status")
+                    .font(.supraTitle)
+                Text("A plain-language view of the local assistant, document search, connections, and protected data on this Mac.")
+                    .font(.supraSubheadline)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Local Assistant") {
+                LabeledContent("Status", value: environment.runtimeServiceState.displayName)
+                LabeledContent(
+                    "Model",
+                    value: environment.modelLibrary.loadedModel?.displayName ?? "Not loaded"
+                )
+                if environment.runtimeRecoverySnapshot.phase != .available {
+                    Button("Recover Local Assistant") {
+                        Task { await environment.recoverRuntime() }
+                    }
+                    .disabled(environment.runtimeRecoverySnapshot.phase == .recovering)
+                }
+            }
+
+            Section("Document Search") {
+                LabeledContent(
+                    "Status",
+                    value: environment.documentSetupController.isReadyForImport
+                        ? "Ready"
+                        : "Finish AI Setup"
+                )
+                Text("Document search stays on this Mac and uses the embedding model and document storage configured in AI Setup.")
+                    .font(.supraCaption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Research Connections") {
+                Text("Legal-source connections are configured in Settings. Public Records and network research contact a source only when you start a search.")
+                    .font(.supraBody)
+                Text("Source availability and currentness still require review before relying on a result.")
+                    .font(.supraCaption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Storage & Backups") {
+                LabeledContent("Local data", value: "Available")
+                LabeledContent(
+                    "Backup destination",
+                    value: environment.backupController.hasDestination ? "Configured" : "Not configured"
+                )
+                if let lastSuccessAt = environment.backupController.lastSuccessAt {
+                    LabeledContent("Last protected", value: lastSuccessAt.formatted())
+                }
+            }
+
+            Section {
+                Button("Copy Diagnostic Report") { copyDiagnosticReport() }
+                if let diagnosticCopyMessage {
+                    Text(diagnosticCopyMessage)
+                        .font(.supraCaption)
+                        .foregroundStyle(.secondary)
+                }
+                Toggle("Advanced", isOn: $showAdvanced)
+                    .accessibilityIdentifier("systemStatus.advanced")
+            } footer: {
+                Text("Advanced contains engineering probes and rollback controls. The copied report contains status metadata, not matter or document content.")
+                    .lineLimit(nil)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if showAdvanced {
             Section {
                 LabeledContent("State", value: environment.runtimeServiceState.displayName)
                 LabeledContent("Message") {
@@ -39,8 +112,28 @@ struct DiagnosticsView: View {
                     "Registered models",
                     value: "\(environment.modelLibrary.models.count)"
                 )
+
+                if environment.runtimeRecoverySnapshot.phase != .available {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Local runtime recovery required")
+                            .font(.supraBody.weight(.semibold))
+                        if let message = environment.runtimeRecoverySnapshot.message {
+                            Text(message)
+                                .font(.supraCaption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Button("Recover Local Runtime") {
+                            Task { await environment.recoverRuntime() }
+                        }
+                        .disabled(environment.runtimeRecoverySnapshot.phase == .recovering)
+                        .accessibilityIdentifier("runtime.recovery.action")
+                    }
+                    .accessibilityIdentifier("runtime.recovery.required")
+                }
             } header: {
                 Text("Runtime").font(.supraHeadline).textCase(nil).foregroundStyle(.primary)
+            } footer: {
+                Text("Recovery waits for admitted work, restarts the local runtime connection, and confirms it is idle before new model work can begin.")
             }
 
             if !timings.isEmpty {
@@ -146,7 +239,7 @@ struct DiagnosticsView: View {
                             let report = await environment.runReasoningCapabilityProbe()
                             capabilityReport = report
                             if report == nil {
-                                capabilityProbeMessage = "Load a model in the Models tab first."
+                                capabilityProbeMessage = "Load a model in AI Setup first."
                             }
                             runningCapabilityProbe = false
                         }
@@ -239,6 +332,7 @@ struct DiagnosticsView: View {
             } header: {
                 Text("Next Step").font(.supraHeadline).textCase(nil).foregroundStyle(.primary)
             }
+            }
         }
         // Refresh on appear, then poll every 10 seconds while visible; the task is
         // cancelled automatically when the tab goes away.
@@ -260,13 +354,29 @@ struct DiagnosticsView: View {
         }
     }
 
+    private func copyDiagnosticReport() {
+        let report = """
+        Supra AI System Status
+        Local assistant: \(environment.runtimeServiceState.displayName)
+        Loaded model: \(environment.modelLibrary.loadedModel?.displayName ?? "None")
+        Registered models: \(environment.modelLibrary.models.count)
+        Document search: \(environment.documentSetupController.isReadyForImport ? "Ready" : "Setup required")
+        Document chunker: v\(environment.documentChunkerVersion)
+        Backup destination: \(environment.backupController.hasDestination ? "Configured" : "Not configured")
+        """
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(report, forType: .string)
+        diagnosticCopyMessage = "Diagnostic report copied."
+    }
+
     private static func percent(_ value: Double) -> String {
         "\(Int((value * 100).rounded()))%"
     }
 
     private func refreshTimings() {
-        let recent = (try? environment.store.diagnostics.fetchRecentDiagnostics(limit: 100)) ?? []
-        timings = recent.filter { $0.category == "performance" }.prefix(8).map { $0 }
+        let controller = DiagnosticsController(store: environment.store)
+        controller.reload(limit: 100)
+        timings = controller.performanceEvents(limit: 8)
     }
 
     private var chunkerSwitchTitle: String {
@@ -276,9 +386,15 @@ struct DiagnosticsView: View {
     }
 
     private var nextStep: String {
-        switch environment.runtimeServiceState {
+        if environment.runtimeRecoverySnapshot.phase == .recoveryRequired {
+            return "Use Recover Local Runtime above before starting another model-backed task."
+        }
+        if environment.runtimeRecoverySnapshot.phase == .recovering {
+            return "Local runtime recovery is in progress."
+        }
+        return switch environment.runtimeServiceState {
         case .modelUnloaded, .connected:
-            "Load or assign a model from the Models tab before running model-backed tasks."
+            "Load or assign a model in AI Setup before running model-backed tasks."
         case .disconnected:
             "The runtime service is unavailable; relaunch the app if it does not reconnect."
         case .failed:

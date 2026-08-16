@@ -13,6 +13,8 @@ struct ScratchPadView: View {
     @ObservedObject var billing: BillingDraftController
     @ObservedObject var billingSettings: BillingSettingsController
     @ObservedObject var library: ModelLibrary
+    let savedWorkHandoff: SavedWorkNotesHandoff?
+    let onSavedWorkHandoffConsumed: () -> Void
 
     enum Tab: Hashable { case note, draft }
     @State private var tab: Tab = .note
@@ -42,6 +44,7 @@ struct ScratchPadView: View {
     @State private var editingEntryID: String?
     @State private var editingText: String = ""
     @State private var editingFocused: Bool = false
+    @State private var pendingSavedWorkHandoff: SavedWorkNotesHandoff?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -66,6 +69,7 @@ struct ScratchPadView: View {
             }
             controller.refreshCalendarState()
             billing.applySettings(billingSettings.settings)
+            receiveSavedWorkHandoff(savedWorkHandoff)
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { controller.refreshCalendarState() }
@@ -75,6 +79,9 @@ struct ScratchPadView: View {
         }
         .onChange(of: billingSettings.settings) { _, settings in
             billing.applySettings(settings)
+        }
+        .onChange(of: savedWorkHandoff) { _, handoff in
+            receiveSavedWorkHandoff(handoff)
         }
         .fileImporter(
             isPresented: $showingImporter,
@@ -92,6 +99,10 @@ struct ScratchPadView: View {
             searchResultsList
         } else {
             VStack(spacing: 0) {
+                if let handoff = pendingSavedWorkHandoff {
+                    savedWorkHandoffBanner(handoff)
+                    Divider()
+                }
                 entryList
                 attachmentBar
                 errorBanner
@@ -129,6 +140,55 @@ struct ScratchPadView: View {
         }
     }
 
+    private func receiveSavedWorkHandoff(_ handoff: SavedWorkNotesHandoff?) {
+        guard let handoff, handoff != pendingSavedWorkHandoff else { return }
+        tab = .note
+        pendingSavedWorkHandoff = handoff
+    }
+
+    private func savedWorkHandoffBanner(_ handoff: SavedWorkNotesHandoff) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "link.badge.plus")
+                .foregroundStyle(.tint)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Saved Work reference ready")
+                    .font(.supraHeadline)
+                Text("\(handoff.matterName) · \(handoff.outputTitle) · v\(handoff.versionIndex). No legal content was copied.")
+                    .font(.supraCaption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+            Button("Insert reference") {
+                insertSavedWorkReference(handoff)
+            }
+            .buttonStyle(.ghostAccent)
+            .accessibilityIdentifier("scratchpad.savedWorkHandoff.insert")
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(Color.accentColor.opacity(0.08))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("scratchpad.savedWorkHandoff")
+    }
+
+    private func insertSavedWorkReference(_ handoff: SavedWorkNotesHandoff) {
+        let matterHandle = Self.savedWorkMatterHandle(for: handoff.matterName)
+        let reference = "[Saved Work: Saved chat answer · v\(handoff.versionIndex) · \(handoff.outputID)@\(handoff.versionID)] @\(matterHandle)"
+        let existing = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
+        composerText = existing.isEmpty ? "\(reference) " : "\(existing)\n\(reference) "
+        pendingMentions[matterHandle] = handoff.matterID
+        composerFocused = true
+        pendingSavedWorkHandoff = nil
+        onSavedWorkHandoffConsumed()
+    }
+
+    private static func savedWorkMatterHandle(for matterName: String) -> String {
+        let shortName = matterName.components(separatedBy: " v. ").first ?? matterName
+        return mentionHandle(for: shortName)
+    }
+
     private var isSearching: Bool {
         searchTerm.trimmingCharacters(in: .whitespacesAndNewlines).count >= 2
     }
@@ -149,7 +209,7 @@ struct ScratchPadView: View {
                     .padding(.top, 60)
             } else {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(controller.searchResults, id: \.entryID) { hit in
+                    ForEach(controller.searchResults) { hit in
                         Button {
                             controller.openDay(dayString: hit.day)
                             searchTerm = ""
@@ -166,7 +226,7 @@ struct ScratchPadView: View {
     }
 
     @ViewBuilder
-    private func searchHitRow(_ hit: ScratchPadRepository.EntryHit) -> some View {
+    private func searchHitRow(_ hit: ScratchPadSearchHit) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Text(Self.displayDate(hit.day)).font(.supraCaption).foregroundStyle(.secondary)
@@ -225,7 +285,7 @@ struct ScratchPadView: View {
 
     private var moduleIdentity: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("ScratchPad")
+            Text("Notes & Time")
                 .font(.supraTitle)
             GhostSegmentedControl(
                 selection: $tab,
@@ -613,6 +673,7 @@ struct ScratchPadView: View {
                                     return true
                                 }
                             )
+                            .accessibilityIdentifier("scratchpad.composer")
                             .onChange(of: composerText) { _, _ in selectedSuggestion = 0 }
                             Button(action: submit) {
                                 if isSubmitting {

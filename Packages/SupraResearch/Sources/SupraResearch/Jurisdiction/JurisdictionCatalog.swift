@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 public enum JurisdictionSystem: String, Codable, CaseIterable, Sendable {
@@ -150,8 +151,27 @@ public struct JurisdictionAuthorityScope: Hashable, Sendable {
 public struct JurisdictionCatalog: Sendable {
     public static let shared = JurisdictionCatalog()
 
+    /// Stable identity of the bundled court catalog whose option IDs may be
+    /// persisted. Changing the resource or its ID-generation rules requires a
+    /// new version and an explicit compatibility map.
+    public let catalogVersion: String
+
+    /// SHA-256 of the exact UTF-8 catalog input. The release gate pins this value
+    /// as source provenance, separately from the parsed identity manifest.
+    public let sourceResourceSHA256: String
+
+    /// SHA-256 of the ordered, length-prefixed option metadata and explicit
+    /// aliases. This binds the identities produced by parsing rather than only
+    /// the source file bytes.
+    public let identityDigestSHA256: String
+
     public let options: [JurisdictionOption]
     private let optionByID: [String: JurisdictionOption]
+    private let canonicalJurisdictionOptionIDBySelectedOptionID: [String: String]
+    private let persistedOptionIDByExactName: [String: String]
+    private let persistedAliasTargetIDByExactKey: [String: String]
+    private let persistedAliasKeys: [String]
+    private let persistedIdentityConfigurationIsValid: Bool
     /// The per-state jurisdiction aggregates (one per state/territory), sorted by name —
     /// the "State" side of a segmented jurisdiction picker.
     public let stateJurisdictions: [JurisdictionOption]
@@ -174,10 +194,73 @@ public struct JurisdictionCatalog: Sendable {
         let jurisdiction: String
     }
 
+    public static let bundledCatalogVersion = "jurisdiction-courts-v1"
+
+    /// Explicit legacy aliases for the v1 persisted-identity contract. These
+    /// values are not suggestions: each entry is a reviewed one-to-one legal
+    /// identity decision. Fuzzy search and `bestMatch` never participate.
+    private static let v1PersistedCourtAliases: [(key: String, optionID: String)] = [
+        (
+            "S.D. Fla.",
+            "federal-florida-united-states-district-court-for-the-southern-district-of-florida"
+        ),
+    ]
+
     public init(text: String? = nil) {
-        let parsed = Self.parse(text ?? Self.loadBundledCourtList())
+        let usesBundledIdentityContract = text == nil
+        let catalogText = text ?? Self.loadBundledCourtList()
+        let parsed = Self.parse(catalogText)
+        let version = usesBundledIdentityContract
+            ? Self.bundledCatalogVersion
+            : "unversioned-fixture"
+        let identityAliases = usesBundledIdentityContract
+            ? Self.v1PersistedCourtAliases
+            : []
+        self.catalogVersion = version
+        self.sourceResourceSHA256 = SHA256.hash(data: Data(catalogText.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+        self.identityDigestSHA256 = Self.identityManifestDigest(
+            version: version,
+            options: parsed,
+            aliases: identityAliases
+        )
         self.options = parsed
         self.optionByID = Dictionary(uniqueKeysWithValues: parsed.map { ($0.id, $0) })
+        self.canonicalJurisdictionOptionIDBySelectedOptionID =
+            Self.canonicalJurisdictionOptionIDIndex(options: parsed)
+
+        var optionIDsByExactName: [String: Set<String>] = [:]
+        for option in parsed {
+            for name in [option.courtName, option.displayName] {
+                guard !name.isEmpty else { continue }
+                optionIDsByExactName[name, default: []].insert(option.id)
+            }
+        }
+        let exactNameIndex = optionIDsByExactName.compactMapValues { ids in
+            ids.count == 1 ? ids.first : nil
+        }
+        self.persistedOptionIDByExactName = exactNameIndex
+
+        var aliases: [String: String] = [:]
+        var aliasConfigurationIsValid = true
+        for alias in identityAliases {
+            guard !alias.key.isEmpty,
+                  aliases.updateValue(alias.optionID, forKey: alias.key) == nil,
+                  let target = parsed.first(where: { $0.id == alias.optionID }),
+                  target.level != .jurisdiction
+            else {
+                aliasConfigurationIsValid = false
+                continue
+            }
+            if let exactNameTarget = exactNameIndex[alias.key], exactNameTarget != target.id {
+                aliasConfigurationIsValid = false
+            }
+        }
+        self.persistedAliasTargetIDByExactKey = aliases
+        self.persistedAliasKeys = identityAliases.map(\.key)
+        self.persistedIdentityConfigurationIsValid = usesBundledIdentityContract
+            && aliasConfigurationIsValid
         self.searchIndex = parsed.map { option in
             IndexEntry(
                 option: option,
@@ -199,6 +282,40 @@ public struct JurisdictionCatalog: Sendable {
         optionByID[id]
     }
 
+    /// Returns the one canonical jurisdiction related to an explicitly selected
+    /// catalog option ID. The relationship index is built from parsed catalog
+    /// members only; names, aliases, search results, and normalized text are not
+    /// accepted as selection identity.
+    public func canonicalJurisdictionOption(
+        forSelectedOptionID selectedOptionID: String
+    ) -> JurisdictionOption? {
+        canonicalJurisdictionOptionIDBySelectedOptionID[selectedOptionID]
+            .flatMap { optionByID[$0] }
+    }
+
+    /// The exact, reviewed legacy spellings admitted by the persisted-identity
+    /// contract. The presentation spellings are returned in deterministic order;
+    /// callers must not extend this set with search results.
+    public var explicitPersistedCourtAliasKeys: [String] {
+        persistedAliasKeys
+    }
+
+    /// Resolves a persisted court value only by exact option ID, exact canonical
+    /// court/display name, or the versioned explicit alias map. Ambiguous names,
+    /// unknown values, substrings, and fuzzy suggestions fail closed.
+    public func resolvePersistedCourtIdentity(_ value: String) -> JurisdictionOption? {
+        guard persistedIdentityConfigurationIsValid else { return nil }
+        if let exactID = optionByID[value] { return exactID }
+
+        let canonicalID = persistedOptionIDByExactName[value]
+        let aliasID = persistedAliasTargetIDByExactKey[value]
+
+        if let canonicalID, let aliasID, canonicalID != aliasID {
+            return nil
+        }
+        return (canonicalID ?? aliasID).flatMap { optionByID[$0] }
+    }
+
     public func search(_ query: String, limit: Int = 80) -> [JurisdictionOption] {
         let normalized = Self.normalized(query)
         guard !normalized.isEmpty else {
@@ -217,6 +334,9 @@ public struct JurisdictionCatalog: Sendable {
         return matches.prefix(limit).map(\.option)
     }
 
+    /// Suggestion helper for interactive search and non-persisted inference. It
+    /// may perform containment/fuzzy matching and therefore must never establish
+    /// a persisted matter's canonical legal identity.
     public func bestMatch(jurisdiction: String, court: String? = nil) -> JurisdictionOption? {
         let normalizedJurisdiction = Self.normalized(jurisdiction)
         let normalizedCourt = Self.normalized(court ?? "")
@@ -287,6 +407,59 @@ public struct JurisdictionCatalog: Sendable {
     public static func courtFilterString(_ ids: [String]) -> String? {
         let value = uniquePreservingOrder(ids).joined(separator: ",")
         return value.isEmpty ? nil : value
+    }
+
+    private static func identityManifestDigest(
+        version: String,
+        options: [JurisdictionOption],
+        aliases: [(key: String, optionID: String)]
+    ) -> String {
+        var manifest = Data()
+
+        func appendToken(_ value: String) {
+            let valueBytes = Data(value.utf8)
+            manifest.append(Data("\(valueBytes.count):".utf8))
+            manifest.append(valueBytes)
+        }
+
+        func appendOptional(_ value: String?) {
+            if let value {
+                appendToken("1")
+                appendToken(value)
+            } else {
+                appendToken("0")
+            }
+        }
+
+        appendToken("supra-jurisdiction-catalog-identity-v1")
+        appendToken(version)
+        appendToken(String(options.count))
+        for option in options {
+            appendToken("option")
+            appendToken(option.id)
+            appendToken(option.displayName)
+            appendToken(option.jurisdictionName)
+            appendToken(option.courtName)
+            appendToken(option.system.rawValue)
+            appendToken(option.level.rawValue)
+            appendOptional(option.state)
+            appendOptional(option.county)
+            appendOptional(option.judicialCircuit)
+            appendToken(String(option.courtListenerIDs.count))
+            for courtListenerID in option.courtListenerIDs {
+                appendToken(courtListenerID)
+            }
+        }
+        appendToken(String(aliases.count))
+        for alias in aliases {
+            appendToken("alias")
+            appendToken(alias.key)
+            appendToken(alias.optionID)
+        }
+
+        return SHA256.hash(data: manifest)
+            .map { String(format: "%02x", $0) }
+            .joined()
     }
 
     private func stateScope(for option: JurisdictionOption) -> JurisdictionAuthorityScope {
@@ -425,6 +598,58 @@ private extension JurisdictionCatalog {
         case none
         case federal
         case state
+    }
+
+    static func canonicalJurisdictionOptionIDIndex(
+        options: [JurisdictionOption]
+    ) -> [String: String] {
+        var stateJurisdictionIDsByExactState: [String: Set<String>] = [:]
+        var federalAppellateIDsByExactName: [String: Set<String>] = [:]
+
+        for option in options {
+            if option.system == .state,
+               option.level == .jurisdiction,
+               let state = option.state {
+                stateJurisdictionIDsByExactState[state, default: []].insert(option.id)
+            }
+            if option.system == .federal, option.level == .federalAppellate {
+                federalAppellateIDsByExactName[option.displayName, default: []]
+                    .insert(option.id)
+            }
+        }
+
+        let stateJurisdictionIDByExactState =
+            stateJurisdictionIDsByExactState.compactMapValues { ids in
+                ids.count == 1 ? ids.first : nil
+            }
+        let federalAppellateIDByExactName =
+            federalAppellateIDsByExactName.compactMapValues { ids in
+                ids.count == 1 ? ids.first : nil
+            }
+        var relationships: [String: String] = [:]
+        for option in options {
+            if option.level == .jurisdiction {
+                relationships[option.id] = option.id
+                continue
+            }
+
+            switch option.system {
+            case .state:
+                guard let state = option.state,
+                      let jurisdictionID = stateJurisdictionIDByExactState[state]
+                else { continue }
+                relationships[option.id] = jurisdictionID
+
+            case .federal:
+                if option.level == .supreme || option.level == .federalAppellate {
+                    relationships[option.id] = option.id
+                } else if let appellateID =
+                    federalAppellateIDByExactName[option.jurisdictionName] {
+                    relationships[option.id] = appellateID
+                }
+            }
+        }
+        return relationships
     }
 
     static func loadBundledCourtList() -> String {

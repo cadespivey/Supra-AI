@@ -8,7 +8,8 @@ let package = Package(
         .macOS(.v15)
     ],
     products: [
-        .library(name: "SupraExports", targets: ["SupraExports"])
+        .library(name: "SupraExports", targets: ["SupraExports"]),
+        .library(name: "SupraOOXML", targets: ["SupraOOXML"])
     ],
     dependencies: [
         .package(path: "../SupraDraftingCore"),
@@ -16,10 +17,16 @@ let package = Package(
     ],
     targets: [
         .target(
+            name: "SupraOOXML",
+            dependencies: [
+                .product(name: "ZIPFoundation", package: "ZIPFoundation")
+            ]
+        ),
+        .target(
             name: "SupraExports",
             dependencies: [
+                "SupraOOXML",
                 .product(name: "SupraDraftingCore", package: "SupraDraftingCore"),
-                .product(name: "ZIPFoundation", package: "ZIPFoundation")
             ]
         ),
         .testTarget(

@@ -19,16 +19,19 @@ final class DocumentChunkerRolloutUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments += [
             "-ApplePersistenceIgnoreState", "YES",
-            "-uiTestMode",
-            "-uiTestEnsureFreshWindow",
+            "-uiTestMode", "YES",
+            "-uiTestEnsureFreshWindow", "YES",
         ]
         app.launch()
-        app.activate()
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 10))
 
-        let diagnosticsRoute = app.staticTexts["Diagnostics"].firstMatch
+        let diagnosticsRoute = app.descendants(matching: .any)["sidebar.route.diagnostics"]
         XCTAssertTrue(diagnosticsRoute.waitForExistence(timeout: 20))
         diagnosticsRoute.click()
+
+        let advanced = app.descendants(matching: .any)["systemStatus.advanced"]
+        XCTAssertTrue(advanced.waitForExistence(timeout: 10))
+        advanced.click()
 
         func assertVersion(_ expected: String, timeout: TimeInterval = 20) {
             let version = app.staticTexts["diagnostics.chunker.version"]
@@ -64,16 +67,19 @@ final class DocumentChunkerRolloutUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments += [
             "-ApplePersistenceIgnoreState", "YES",
-            "-uiTestMode",
-            "-uiTestEnsureFreshWindow",
+            "-uiTestMode", "YES",
+            "-uiTestEnsureFreshWindow", "YES",
         ]
         app.launch()
-        app.activate()
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 10))
 
-        let diagnosticsRoute = app.staticTexts["Diagnostics"].firstMatch
+        let diagnosticsRoute = app.descendants(matching: .any)["sidebar.route.diagnostics"]
         XCTAssertTrue(diagnosticsRoute.waitForExistence(timeout: 20))
         diagnosticsRoute.click()
+
+        let advanced = app.descendants(matching: .any)["systemStatus.advanced"]
+        XCTAssertTrue(advanced.waitForExistence(timeout: 10))
+        advanced.click()
 
         let availability = app.descendants(matching: .any)[
             "diagnostics.routing.classifierAvailability"
@@ -160,14 +166,13 @@ final class GuidedDocumentQAUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments += [
             "-ApplePersistenceIgnoreState", "YES",
-            "-uiTestMode",
-            "-uiTestEnsureFreshWindow",
-            "-uiTestSelectFirstMatter",
-            "-uiTestGuidedQA",
+            "-uiTestMode", "YES",
+            "-uiTestSelectFirstMatter", "YES",
+            "-uiTestGuidedQA", "YES",
             "-uiTestInitialMatterTab", "Documents",
+            "-uiTestEnsureFreshWindow", "YES",
         ]
         app.launch()
-        app.activate()
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 10))
 
         let ask = app.buttons["documents.ask"]
@@ -215,7 +220,11 @@ final class GuidedDocumentQAUITests: XCTestCase {
         generate.click()
 
         let result = app.descendants(matching: .any)["documentQA.result"]
-        XCTAssertTrue(result.waitForExistence(timeout: 30))
+        if !result.waitForExistence(timeout: 30) {
+            let message = app.descendants(matching: .any)["documentQA.message"]
+            let renderedMessage = message.label + " " + ((message.value as? String) ?? "")
+            XCTFail("Guided Q&A did not publish a result: \(renderedMessage)")
+        }
         let resultText = result.label + " " + ((result.value as? String) ?? "")
         XCTAssertTrue(resultText.localizedCaseInsensitiveContains("first business day"))
 
@@ -615,6 +624,39 @@ final class ResearchAuthoritiesUITests: XCTestCase {
             app.windows.firstMatch.frame,
             equals: windowFrameBeforeNavigation,
             context: "opening a legacy output"
+        )
+    }
+
+    func testStaleOutputNamesChangedDependencyAndOpensDocuments() throws {
+        let app = try launchApp(extraArguments: [
+            "-uiTestRemediationWarnings",
+            "-uiTestInitialMatterTab", "Outputs",
+        ])
+
+        let output = app.buttons["output.row.Stale Dependency Fixture"]
+        XCTAssertTrue(output.waitForExistence(timeout: 20), "Stale output fixture did not appear")
+        sendDebugNavigationCommand("output Stale Dependency Fixture")
+
+        let detail = app.descendants(matching: .any)["output.detail.Stale Dependency Fixture"]
+        XCTAssertTrue(detail.waitForExistence(timeout: 10))
+        let warning = app.descendants(matching: .any)["output.staleWarning"]
+        XCTAssertTrue(warning.waitForExistence(timeout: 10))
+        XCTAssertTrue(
+            warning.label.contains("source_revision_changed")
+                && warning.label.contains("stale-source-document-751")
+                && warning.label.contains("revision-23")
+                && warning.label.contains("revision-24"),
+            "Stale output must name the exact changed dependency: \(warning.debugDescription)"
+        )
+        XCTAssertFalse(app.descendants(matching: .any)["output.export"].isEnabled)
+
+        let repair = app.buttons["output.stale.openDocuments"]
+        XCTAssertTrue(repair.exists)
+        XCTAssertTrue(repair.isHittable)
+        repair.click()
+        XCTAssertTrue(
+            app.descendants(matching: .any)["documents.ask"].waitForExistence(timeout: 10),
+            "Stale-source correction did not open this matter's Documents surface"
         )
     }
 
@@ -1069,7 +1111,7 @@ final class MotionToDismissWorkspaceUITests: XCTestCase {
         let app = launchMotionApp(
             flag: "-uiTestMotionDraftSuccess",
             storageRoot: storageRoot,
-            additionalArguments: ["-uiTestMotionDraftDelayed"]
+            additionalArguments: ["-uiTestMotionDraftDelayed", "YES"]
         )
 
         openMotionDraftThroughProductionNavigation(in: app)
@@ -1281,6 +1323,7 @@ final class MotionToDismissWorkspaceUITests: XCTestCase {
         draft.click()
 
         let motion = app.buttons["drafting.kind.motionToDismiss"]
+        scrollToHittable(motion, in: app)
         XCTAssertTrue(motion.waitForExistence(timeout: 10))
         XCTAssertTrue(motion.isEnabled)
         motion.click()
@@ -1303,7 +1346,12 @@ final class MotionToDismissWorkspaceUITests: XCTestCase {
 
         XCTAssertTrue(app.descendants(matching: .any)["drafting.motion.factSources"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.descendants(matching: .any)["drafting.motion.authoritySources"].waitForExistence(timeout: 5))
-        let fact = app.buttons["drafting.motion.fact.ui-motion-fact-chunk"]
+        let fact = app.buttons.matching(
+            NSPredicate(
+                format: "identifier BEGINSWITH %@",
+                "drafting.motion.fact.chunk-v2-"
+            )
+        ).firstMatch
         XCTAssertTrue(fact.waitForExistence(timeout: 5), "The seeded fact was not exposed as a selectable production row")
         XCTAssertTrue(fact.isEnabled)
         XCTAssertTrue(
@@ -1366,14 +1414,13 @@ final class MotionToDismissWorkspaceUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments += [
             "-ApplePersistenceIgnoreState", "YES",
-            "-uiTestMode",
-            "-uiTestEnsureFreshWindow",
-            flag,
+            "-uiTestMode", "YES",
+            flag, "YES",
         ]
         app.launchArguments += additionalArguments
+        app.launchArguments += ["-uiTestEnsureFreshWindow", "YES"]
         app.launchEnvironment["SUPRA_UI_TEST_DRAFT_STORAGE_ROOT"] = storageRoot.path
         app.launch()
-        app.activate()
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 10))
         return app
     }
@@ -1449,13 +1496,14 @@ final class ChatCitationsAndExportUITests: XCTestCase {
 
     private func launchApp() -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchArguments += ["-ApplePersistenceIgnoreState", "YES", "-uiTestMode"]
+        app.launchArguments += [
+            "-ApplePersistenceIgnoreState", "YES",
+            "-uiTestMode", "YES",
+            "-uiTestWindowWidth", "880",
+            "-uiTestEnsureFreshWindow", "YES",
+        ]
         app.launch()
-        app.activate()
-        if !app.windows.firstMatch.waitForExistence(timeout: 5) {
-            app.typeKey("n", modifierFlags: .command)
-            _ = app.windows.firstMatch.waitForExistence(timeout: 10)
-        }
+        XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 25))
         return app
     }
 
@@ -1512,6 +1560,190 @@ final class ChatCitationsAndExportUITests: XCTestCase {
         XCTAssertTrue(
             app.menuItems["Export Chat"].waitForExistence(timeout: 10),
             "Export Chat action not found in the chat menu"
+        )
+    }
+}
+
+@MainActor
+final class OwnerWalkthroughGroundedPromotionUITests: XCTestCase {
+    override func setUp() {
+        continueAfterFailure = false
+    }
+
+    func testDemoGroundedAnswerPromotesWithItsRetainedSources() {
+        let app = XCUIApplication()
+        app.launchArguments += [
+            "-ApplePersistenceIgnoreState", "YES",
+            "-demoMode",
+        ]
+        app.launch()
+        XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 25))
+
+        let matter = app.descendants(matching: .any)[
+            "matter.row.Meridian Fabrication v. Northgate Logistics"
+        ]
+        XCTAssertTrue(matter.waitForExistence(timeout: 20), "Demo matter did not appear")
+        matter.click()
+
+        let chat = app.buttons["chat.row.Indemnification coverage"]
+        XCTAssertTrue(chat.waitForExistence(timeout: 15), "Grounded demo chat did not appear")
+        chat.click()
+
+        let save = app.buttons.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "chat.message.saveToOutputs.")
+        ).firstMatch
+        XCTAssertTrue(
+            save.waitForExistence(timeout: 10),
+            "Grounded demo answer must expose its evidence-preserving Saved Work action"
+        )
+        XCTAssertTrue(save.isHittable)
+        save.click()
+
+        let outputsTab = app.buttons["matterTab.Outputs"]
+        XCTAssertTrue(outputsTab.waitForExistence(timeout: 10))
+        outputsTab.click()
+
+        let output = app.descendants(matching: .any).matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "output.row.Saved chat answer")
+        ).firstMatch
+        XCTAssertTrue(
+            output.waitForExistence(timeout: 10),
+            "Promoted grounded answer did not appear in Saved Work"
+        )
+        output.click()
+
+        XCTAssertTrue(
+            app.descendants(matching: .any).matching(
+                NSPredicate(format: "identifier BEGINSWITH %@", "output.detail.Saved chat answer")
+            ).firstMatch.waitForExistence(timeout: 10),
+            "Promoted answer detail did not open"
+        )
+        for label in ["S1", "S2", "S3"] {
+            XCTAssertTrue(
+                app.buttons["output.source.\(label)"].waitForExistence(timeout: 5),
+                "Promoted answer did not retain source \(label)"
+            )
+        }
+
+        let relatedWork = app.descendants(matching: .any)["output.relatedWork"]
+        XCTAssertTrue(
+            relatedWork.waitForExistence(timeout: 5),
+            "Saved Work detail must expose the separate Notes & Time handoff"
+        )
+        relatedWork.click()
+        let openNotes = app.descendants(matching: .any)["output.openNotesAndTime"]
+        XCTAssertTrue(openNotes.waitForExistence(timeout: 5))
+        openNotes.click()
+        XCTAssertTrue(
+            app.descendants(matching: .any)["scratchpad.savedWorkHandoff"].waitForExistence(timeout: 10),
+            "Notes & Time must receive the exact pending matter/work reference without saving it"
+        )
+        let insertReference = app.buttons["scratchpad.savedWorkHandoff.insert"]
+        XCTAssertTrue(insertReference.exists)
+        insertReference.click()
+        let composer = app.textViews["scratchpad.composer"]
+        XCTAssertTrue(composer.waitForExistence(timeout: 5))
+        let draft = composer.value as? String ?? ""
+        XCTAssertTrue(draft.contains("[Saved Work: Saved chat answer · v1 ·"))
+        XCTAssertTrue(draft.contains("@MeridianFabrication"))
+        XCTAssertFalse(draft.contains("@matter"))
+        XCTAssertFalse(
+            draft.localizedCaseInsensitiveContains("Under the Master Services Agreement"),
+            "The neutral reference must not copy the answer-derived Saved Work title"
+        )
+        XCTAssertFalse(
+            draft.localizedCaseInsensitiveContains("indemnity applies"),
+            "A handoff may insert an exact reference but must not copy the saved legal analysis"
+        )
+    }
+}
+
+@MainActor
+final class PublicRecordsMatterHandoffUITests: XCTestCase {
+    override func setUp() {
+        continueAfterFailure = false
+    }
+
+    func testExplicitPublicRecordHandoffUsesMatterDocumentsReadiness() {
+        let app = XCUIApplication()
+        app.launchArguments += [
+            "-ApplePersistenceIgnoreState", "YES",
+            "-uiTestMode", "YES",
+            "-uiTestEnsureFreshWindow", "YES",
+            "-uiTestPublicRecordsHandoff", "YES",
+            "-uiTestInitialRoute", "publicRecords",
+        ]
+        app.launch()
+        XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 15))
+
+        let add = app.buttons["publicRecords.addToMatter.cfpb.884211"]
+        XCTAssertTrue(add.waitForExistence(timeout: 15))
+        add.click()
+        let target = app.buttons.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "publicRecords.target.cfpb.884211.")
+        ).firstMatch
+        XCTAssertTrue(target.waitForExistence(timeout: 10))
+        target.click()
+
+        let result = app.descendants(matching: .any)["publicRecords.handoff.cfpb.884211"]
+        XCTAssertTrue(result.waitForExistence(timeout: 20))
+        let message = result.value as? String ?? result.label
+        XCTAssertTrue(message.contains("Added to matter"))
+        XCTAssertTrue(message.contains("Still preparing:"))
+
+        let matter = app.descendants(matching: .any).matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "matter.row.")
+        ).firstMatch
+        XCTAssertTrue(matter.waitForExistence(timeout: 10))
+        matter.click()
+        let documents = app.buttons["matterTab.Documents"]
+        XCTAssertTrue(documents.waitForExistence(timeout: 10))
+        documents.click()
+        XCTAssertTrue(app.staticTexts["CFPB-Complaint-884211.txt"].waitForExistence(timeout: 20))
+    }
+}
+
+/// Owner journey 4: the Matter Draft entry point must reach the authoritative
+/// versioned-work lifecycle before any optional create-only file export.
+///
+/// Expected RED: the Draft sheet only exposes direct artifact generation and
+/// has no explicit route to a new Saved Work product.
+@MainActor
+final class DraftSavedWorkHandoffUITests: XCTestCase {
+    override func setUp() {
+        continueAfterFailure = false
+    }
+
+    func testMatterDraftRoutesToNewVersionedSavedWorkProduct() {
+        let app = XCUIApplication()
+        app.launchArguments += [
+            "-ApplePersistenceIgnoreState", "YES",
+            "-uiTestMode",
+            "-uiTestEnsureFreshWindow",
+            "-uiTestSelectFirstMatter",
+            "-uiTestOpenDraftSheet",
+        ]
+        app.launch()
+        app.activate()
+        XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 15))
+
+        let handoff = app.buttons["drafting.openSavedWork"]
+        XCTAssertTrue(
+            handoff.waitForExistence(timeout: 15),
+            "Matter Draft must expose its versioned Saved Work entry point"
+        )
+        XCTAssertTrue(handoff.isHittable)
+        handoff.click()
+
+        XCTAssertTrue(
+            app.descendants(matching: .any)["savedWork.new.sheet"]
+                .waitForExistence(timeout: 15),
+            "The handoff must open the ordinary New Work Product sheet, not a parallel draft store"
+        )
+        XCTAssertTrue(app.buttons["matterTab.Outputs"].exists)
+        XCTAssertFalse(
+            app.descendants(matching: .any)["drafting.result"].exists,
+            "Routing to versioned work must not fabricate a completed file artifact"
         )
     }
 }

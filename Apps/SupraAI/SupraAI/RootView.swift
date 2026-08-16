@@ -13,7 +13,10 @@ struct RootView: View {
     var body: some View {
 #if DEBUG
         if let scenario = Self.runtimeXPCIntegrationScenario {
-            RuntimeXPCIntegrationView(scenario: scenario)
+            RuntimeXPCIntegrationView(
+                scenario: scenario,
+                qualificationProfile: Self.runtimeXPCIntegrationQualificationProfile
+            )
         } else {
             applicationRoot
         }
@@ -96,6 +99,18 @@ struct RootView: View {
         }
         return arguments[marker + 1]
     }
+
+    private static var runtimeXPCIntegrationQualificationProfile: RuntimeXPCIntegrationQualificationProfile {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let marker = arguments.firstIndex(of: "-runtimeXPCQualificationProfile"),
+              arguments.indices.contains(marker + 1),
+              let profile = RuntimeXPCIntegrationQualificationProfile(
+                rawValue: arguments[marker + 1]
+              ) else {
+            return .productionEnvelope
+        }
+        return profile
+    }
 #endif
 
     private var interruptedDraftsPending: Bool {
@@ -176,6 +191,8 @@ private struct RestoreFinishingView: View {
 
 private struct DatabaseRecoveryView: View {
     let state: DatabaseRecoveryState
+    @State private var supportDetailsExpanded = false
+    @State private var recoveryActionStatus: String?
 
     var body: some View {
         VStack(spacing: 18) {
@@ -193,13 +210,27 @@ private struct DatabaseRecoveryView: View {
                 .accessibilityLabel(state.message)
 
             HStack(spacing: 12) {
-                if let recoveryItemURL = state.recoveryItemURL {
+                if let recoveryFolderURL = state.recoveryFolderURL {
                     Button(state.recoveryActionTitle) {
-                        NSWorkspace.shared.activateFileViewerSelecting([recoveryItemURL])
+                        recoveryActionStatus = NSWorkspace.shared.open(recoveryFolderURL)
+                            ? "Recovery folder opened."
+                            : "The recovery folder could not be opened. Expand Support Details to copy its exact path."
                     }
                     .accessibilityHint(state.recoveryActionHint)
                     .accessibilityIdentifier("restore.recovery.snapshot")
                 }
+                Button("Copy Diagnostic Report") {
+                    let pasteboard = NSPasteboard.general
+                    pasteboard.clearContents()
+                    recoveryActionStatus = pasteboard.setString(
+                        state.diagnosticReport,
+                        forType: .string
+                    )
+                        ? "Diagnostic report copied."
+                        : "The diagnostic report could not be copied. Expand Support Details to copy the recovery paths manually."
+                }
+                .accessibilityHint("Copies a content-free recovery diagnostic to the clipboard.")
+                .accessibilityIdentifier("restore.recovery.copyDiagnostic")
                 Button("Quit Without Changes") {
                     NSApplication.shared.terminate(nil)
                 }
@@ -207,6 +238,23 @@ private struct DatabaseRecoveryView: View {
                 .accessibilityHint("Quits without allowing new work to be saved to temporary storage.")
                 .accessibilityIdentifier("restore.recovery.quit")
             }
+
+            if let recoveryActionStatus {
+                Text(recoveryActionStatus)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("restore.recovery.actionStatus")
+            }
+
+            DisclosureGroup("Support Details", isExpanded: $supportDetailsExpanded) {
+                Text(state.supportDetails)
+                    .font(.caption.monospaced())
+                    .textSelection(.enabled)
+                    .frame(maxWidth: 620, alignment: .leading)
+                    .accessibilityIdentifier("restore.recovery.technicalFacts")
+            }
+            .frame(maxWidth: 620, alignment: .leading)
+            .accessibilityIdentifier("restore.recovery.supportDetails")
         }
         .padding(40)
         .frame(maxWidth: .infinity, maxHeight: .infinity)

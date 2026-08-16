@@ -158,13 +158,19 @@ package_actual="$(bash "${repo_root}/Scripts/list-local-packages.sh" | wc -l | t
 [[ "$package_expected" == "$package_actual" ]] \
   || fail "package inventory claim expected ${package_expected}, executable inventory is ${package_actual}"
 
-migrator="${repo_root}/Packages/SupraStore/Sources/SupraStore/Database/SupraMigrator.swift"
+migration_sources="${repo_root}/Packages/SupraStore/Sources/SupraStore/Database"
 migration_expected="$(claim_expected STORE-MIGRATION-SEQUENCE)"
-migration_actual="$(grep -oE 'registerMigration\("v[0-9]{3}_[A-Za-z0-9_]+' "$migrator" | tail -1 | sed -E 's/registerMigration\("//')"
+migration_actual="$(
+  grep -RhoE --include='SupraMigration*.swift' \
+    'registerMigration\("v[0-9]{3}_[A-Za-z0-9_]+' "$migration_sources" \
+    | sed -E 's/registerMigration\("//' \
+    | LC_ALL=C sort \
+    | tail -1
+)"
 [[ -n "$migration_expected" ]] || fail 'migration sequence claim has no expected value'
 [[ "$migration_expected" == "$migration_actual" ]] \
   || fail "migration claim expected ${migration_expected}, executable latest migration is ${migration_actual}"
-bash "${repo_root}/Scripts/verify-migration-sequence.sh" "$migrator" >/dev/null || status=1
+bash "${repo_root}/Scripts/verify-migration-sequence.sh" "$migration_sources" >/dev/null || status=1
 
 migration_manifest="${repo_root}/Packages/SupraStore/Tests/SupraStoreTests/Fixtures/ShippingMigrations/manifest.json"
 command -v jq >/dev/null 2>&1 || { printf '%s\n' 'ERROR: jq is required' >&2; exit 2; }

@@ -22,6 +22,17 @@ final class WindowChromeLayoutUITests: XCTestCase {
     }
 
     func testBottomChromeStaysWithinWindow() throws {
+        let chatSourceURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("SupraAI/GlobalChatsView.swift")
+        let chatSource = try String(contentsOf: chatSourceURL, encoding: .utf8)
+        XCTAssertTrue(
+            chatSource.contains("Ask a question or describe the work you need."),
+            "Chats should lead with the work, not slash-command mechanics"
+        )
+        XCTAssertFalse(chatSource.contains("Message — type / for commands"))
+
         let app = XCUIApplication()
         app.launchArguments += [
             "-ApplePersistenceIgnoreState", "YES",
@@ -41,11 +52,11 @@ final class WindowChromeLayoutUITests: XCTestCase {
             "Sidebar Recycle Bin button never appeared (shell not mounted?)"
         )
 
-        // Global Chats is the default route; its composer sits at the pane's bottom.
-        let composer = app.textFields["Message — type / for commands"]
+        // Chats is the default route; its composer sits at the pane's bottom.
+        let composer = app.textViews["chat.composer"]
         XCTAssertTrue(
             composer.waitForExistence(timeout: 10),
-            "Global Chats composer field never appeared"
+            "Chats composer field never appeared"
         )
 
         // Let the post-splash layout settle before measuring geometry.

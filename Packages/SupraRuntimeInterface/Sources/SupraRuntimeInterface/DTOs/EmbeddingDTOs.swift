@@ -29,6 +29,10 @@ public struct LoadEmbeddingModelRequest: Codable, Sendable {
     /// Device/inode pin for the authorized directory. Required for managed-root
     /// loads and verified whenever present, independent of the bookmark stale bit.
     public let modelDirectoryIdentity: ModelDirectoryIdentity?
+    /// Exact bytes authorized for this embedding model. A model-bound execution
+    /// permit and the runtime host both fail closed when this is absent or does
+    /// not match the selected repository, revision, and fingerprint.
+    public let contentBinding: RuntimeModelContentBinding?
 
     public init(
         embeddingModelID: DocumentEmbeddingModelID,
@@ -38,7 +42,8 @@ public struct LoadEmbeddingModelRequest: Codable, Sendable {
         expectedDimension: Int? = nil,
         modelBookmark: Data? = nil,
         managedRootPath: String? = nil,
-        modelDirectoryIdentity: ModelDirectoryIdentity? = nil
+        modelDirectoryIdentity: ModelDirectoryIdentity? = nil,
+        contentBinding: RuntimeModelContentBinding? = nil
     ) {
         self.embeddingModelID = embeddingModelID
         self.modelPath = modelPath
@@ -48,6 +53,7 @@ public struct LoadEmbeddingModelRequest: Codable, Sendable {
         self.modelBookmark = modelBookmark
         self.managedRootPath = managedRootPath
         self.modelDirectoryIdentity = modelDirectoryIdentity
+        self.contentBinding = contentBinding
     }
 }
 

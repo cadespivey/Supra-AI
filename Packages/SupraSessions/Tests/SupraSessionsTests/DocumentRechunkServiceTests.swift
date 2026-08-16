@@ -1,4 +1,5 @@
 import Foundation
+import GRDB
 import SupraCore
 import SupraDocuments
 @testable import SupraSessions
@@ -216,15 +217,39 @@ final class DocumentRechunkServiceTests: XCTestCase {
             extractionStatus: DocumentExtractionStatus.extracted.rawValue,
             indexStatus: DocumentIndexStatus.ready.rawValue
         ))
-        try store.documentIndex.replaceParts(documentID: document.id, parts: [
-            DocumentPagePartRecord(
-                documentID: document.id,
-                partIndex: 0,
-                sourceKind: DocumentSourceKind.text.rawValue,
-                normalizedText: " \n\t ",
-                charCount: 4
-            ),
-        ])
+        let part = DocumentPagePartRecord(
+            id: "d06-empty-part",
+            documentID: document.id,
+            partIndex: 0,
+            sourceKind: DocumentSourceKind.text.rawValue,
+            normalizedText: " \n\t ",
+            charCount: 4
+        )
+        let revision = DocumentPartRevisionRecord(
+            id: "d06-empty-revision",
+            documentID: document.id,
+            partIndex: 0,
+            derivationKey: "d06-empty-fixture",
+            origin: "synthetic_test",
+            method: "plain-text",
+            text: " \n\t ",
+            charCount: 4
+        )
+        let selection = DocumentPartSelectionRecord(
+            id: "d06-empty-selection",
+            documentID: document.id,
+            partIndex: 0,
+            selectedRevisionID: revision.id,
+            selectionKey: "d06-empty-fixture",
+            selectedBy: "test",
+            decisionJSON: #"{"rule":"fixture"}"#
+        )
+        _ = try store.documentRevisions.replacePartsAndPersistLineage(
+            documentID: document.id,
+            parts: [part],
+            revisions: [revision],
+            selections: [selection]
+        )
         try store.documentIndex.replaceChunks(documentID: document.id, chunks: [
             DocumentChunkRecord(
                 id: "d06-empty-v1-chunk",
@@ -254,6 +279,117 @@ final class DocumentRechunkServiceTests: XCTestCase {
             DocumentIndexStatus.textIndexed.rawValue
         )
         XCTAssertEqual(try store.documentSettings.loadSettings().chunkerVersion, 2)
+    }
+
+    func testRolloutStagesTargetWhilePriorDefaultRemainsActiveOnFailure() async throws {
+        // Expected RED: the legacy coordinator has no explicit staged command
+        // policy, so this canary never reaches the target-v2 insert while the
+        // fail-safe v1 default remains active.
+        let store = try makeStore()
+        try store.documentSettings.updateSettings { $0.chunkerVersion = 1 }
+        let matter = try store.matters.createMatter(name: "Failing target activation")
+        let text = "Synthetic target activation canary."
+        let blob = try store.documentLibrary.upsertBlob(DocumentBlobRecord(
+            sha256: "rechunk-target-activation",
+            byteSize: text.utf8.count,
+            originalExtension: "txt",
+            managedRelativePath: "blobs/rechunk-target-activation.txt"
+        )).blob
+        let document = try store.documentLibrary.insertDocument(MatterDocumentRecord(
+            matterID: matter.id,
+            blobID: blob.id,
+            displayName: "target-activation.txt",
+            status: MatterDocumentStatus.ready.rawValue,
+            extractionStatus: DocumentExtractionStatus.extracted.rawValue,
+            indexStatus: DocumentIndexStatus.ready.rawValue
+        ))
+        let part = DocumentPagePartRecord(
+            id: "target-activation-part",
+            documentID: document.id,
+            partIndex: 0,
+            sourceKind: DocumentSourceKind.text.rawValue,
+            normalizedText: text,
+            charCount: text.count
+        )
+        let revision = DocumentPartRevisionRecord(
+            id: "target-activation-revision",
+            documentID: document.id,
+            partIndex: 0,
+            derivationKey: "target-activation-fixture",
+            origin: "synthetic_test",
+            method: "plain-text",
+            text: text,
+            charCount: text.count
+        )
+        let selection = DocumentPartSelectionRecord(
+            id: "target-activation-selection",
+            documentID: document.id,
+            partIndex: 0,
+            selectedRevisionID: revision.id,
+            selectionKey: "target-activation-fixture",
+            selectedBy: "test",
+            decisionJSON: #"{"rule":"fixture"}"#
+        )
+        _ = try store.documentRevisions.replacePartsAndPersistLineage(
+            documentID: document.id,
+            parts: [part],
+            revisions: [revision],
+            selections: [selection]
+        )
+        let legacyChunk = DocumentChunkRecord(
+            id: "target-activation-v1-chunk",
+            documentID: document.id,
+            pagePartID: part.id,
+            revisionID: revision.id,
+            chunkerVersion: 1,
+            chunkIndex: 0,
+            sourceKind: DocumentSourceKind.text.rawValue,
+            charStart: 0,
+            charEnd: text.count,
+            normalizedText: text
+        )
+        try store.documentIndex.replaceChunks(
+            documentID: document.id,
+            chunks: [legacyChunk]
+        )
+        try await store.database.writer.write { database in
+            try database.execute(sql: """
+                CREATE TRIGGER rechunk_target_active_failure
+                BEFORE INSERT ON document_chunks
+                WHEN NEW.document_id = '\(document.id)'
+                  AND NEW.chunker_version = 2
+                  AND (SELECT chunker_version
+                       FROM document_intelligence_settings
+                       WHERE id = 'default') = 1
+                BEGIN
+                    SELECT RAISE(ABORT, 'T-RECHUNK-STAGED-WITH-V1-ACTIVE');
+                END;
+                """)
+        }
+
+        do {
+            _ = try await DocumentChunkerRolloutService(store: store).switchAllMatters(
+                to: 2,
+                actor: "test"
+            )
+            XCTFail("the synthetic target-active write must abort the rollout")
+        } catch {
+            XCTAssertTrue(
+                error.localizedDescription.contains("T-RECHUNK-STAGED-WITH-V1-ACTIVE"),
+                "the target projection must stage while the prior default remains active: \(error)"
+            )
+        }
+
+        XCTAssertEqual(
+            try store.documentSettings.loadSettings().chunkerVersion,
+            1,
+            "a failed staged rebuild must never replace the prior active default"
+        )
+        XCTAssertEqual(
+            try store.documentIndex.fetchChunks(documentID: document.id).map(\.id),
+            [legacyChunk.id],
+            "the failed transactional replacement must retain the prior chunk set"
+        )
     }
 
     private func makeStore() throws -> SupraStore {

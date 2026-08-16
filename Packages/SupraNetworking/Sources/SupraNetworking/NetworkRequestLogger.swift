@@ -1,11 +1,25 @@
 import Foundation
-import SupraStore
+import SupraCore
 
 public actor NetworkRequestLogger {
-    private let repository: NetworkRequestRepository
+    private let writer: any NetworkRequestAuditWriting
+    private let requestID: @Sendable () -> String
+    private let now: @Sendable () -> Date
 
-    public init(repository: NetworkRequestRepository) {
-        self.repository = repository
+    public init(writer: any NetworkRequestAuditWriting) {
+        self.writer = writer
+        self.requestID = { UUID().uuidString }
+        self.now = Date.init
+    }
+
+    init(
+        writer: any NetworkRequestAuditWriting,
+        requestID: @escaping @Sendable () -> String,
+        now: @escaping @Sendable () -> Date
+    ) {
+        self.writer = writer
+        self.requestID = requestID
+        self.now = now
     }
 
     @discardableResult
@@ -15,7 +29,9 @@ public actor NetworkRequestLogger {
         relatedResearchSessionID: String? = nil,
         requestMetadataJSON: String? = nil
     ) throws -> String {
-        let record = try repository.createRequest(
+        let entry = NetworkRequestAuditEntry(
+            id: requestID(),
+            timestamp: now(),
             domain: Self.domain(for: url),
             method: method,
             endpoint: Self.endpoint(for: url),
@@ -23,7 +39,7 @@ public actor NetworkRequestLogger {
             relatedResearchSessionID: relatedResearchSessionID,
             requestMetadataJSON: requestMetadataJSON
         )
-        return record.id
+        return try writer.recordRequest(entry)
     }
 
     @discardableResult
@@ -34,7 +50,9 @@ public actor NetworkRequestLogger {
         relatedResearchSessionID: String? = nil,
         requestMetadataJSON: String? = nil
     ) throws -> String {
-        let record = try repository.createRequest(
+        let entry = NetworkRequestAuditEntry(
+            id: requestID(),
+            timestamp: now(),
             domain: Self.domain(for: url),
             method: method,
             endpoint: Self.endpoint(for: url),
@@ -43,7 +61,7 @@ public actor NetworkRequestLogger {
             blockedReason: blockedReason,
             requestMetadataJSON: requestMetadataJSON
         )
-        return record.id
+        return try writer.recordRequest(entry)
     }
 
     public func finishRequest(
@@ -52,11 +70,13 @@ public actor NetworkRequestLogger {
         errorMessage: String? = nil,
         responseMetadataJSON: String? = nil
     ) throws {
-        try repository.finishRequest(
-            id: id,
-            statusCode: statusCode,
-            errorMessage: errorMessage,
-            responseMetadataJSON: responseMetadataJSON
+        try writer.finishRequest(
+            NetworkRequestAuditCompletion(
+                requestID: id,
+                statusCode: statusCode,
+                errorMessage: errorMessage,
+                responseMetadataJSON: responseMetadataJSON
+            )
         )
     }
 

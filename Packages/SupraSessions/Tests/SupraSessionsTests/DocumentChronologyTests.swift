@@ -9,6 +9,15 @@ import XCTest
 
 @MainActor
 final class DocumentChronologyTests: XCTestCase {
+    private enum CanonicalReadinessFixture {
+        static let modelID = "chronology-canonical-model-827"
+        static let modelRepoID = "synthetic/chronology-canonical-model-827"
+        static let modelDisplayName = "Chronology Canonical Model 827"
+        static let modelRevision = "chronology-canonical-revision-17"
+        static let modelDimension = 8
+        static let timestamp = Date(timeIntervalSince1970: 1_946_248_827)
+    }
+
     private static let syntheticModelLineage = DocumentGenerationModelLineage(
         modelRepository: "synthetic/chronology-runtime",
         modelRevision: "chronology-revision-nondefault"
@@ -224,7 +233,10 @@ final class DocumentChronologyTests: XCTestCase {
             displayName: documentName,
             status: MatterDocumentStatus.indexing.rawValue,
             extractionStatus: DocumentExtractionStatus.extracted.rawValue,
-            extractionMethod: "synthetic@toolchain:ocr"
+            sourceKind: DocumentSourceKind.pdfPage.rawValue,
+            extractionMethod: "synthetic@toolchain:ocr-97",
+            extractedTextChecksum: "chronology-ocr-checksum-827",
+            pagePartCount: 1
         ))
         let part = DocumentPagePartRecord(
             documentID: document.id,
@@ -263,8 +275,12 @@ final class DocumentChronologyTests: XCTestCase {
             revisions: [revision],
             selections: [selection]
         )
-        _ = try await DocumentIndexingService(store: store, embedder: nil)
+        _ = try await DocumentIndexingService(
+            store: store,
+            embedder: CanonicalChronologyTestEmbedder()
+        )
             .indexDocument(documentID: document.id)
+        XCTAssertTrue(try store.documentReadiness.fetchReceipt(documentID: document.id).isBaseReady)
         let chunk = try XCTUnwrap(store.documentIndex.fetchChunks(documentID: document.id).first)
         XCTAssertEqual(chunk.revisionID, revision.id)
         XCTAssertEqual(chunk.boundingBoxesJSON, expectedBoundingBoxesJSON)
@@ -1400,14 +1416,63 @@ final class DocumentChronologyTests: XCTestCase {
         let doc = try store.documentLibrary.insertDocument(MatterDocumentRecord(
             matterID: matterID, blobID: blob.id, folderID: folderID, displayName: name,
             status: MatterDocumentStatus.indexing.rawValue, extractionStatus: DocumentExtractionStatus.extracted.rawValue,
+            sourceKind: DocumentSourceKind.text.rawValue,
+            extractionMethod: "synthetic@toolchain:chronology-fixture-17",
+            extractedTextChecksum: "chronology-checksum-\(canonicalName(name))-827",
+            pagePartCount: 1,
             metadataCreatedAt: metadataCreatedAt,
             createdAt: createdAt,
             updatedAt: createdAt
         ))
-        try store.documentIndex.replaceParts(documentID: doc.id, parts: [
-            DocumentPagePartRecord(documentID: doc.id, partIndex: 0, sourceKind: DocumentSourceKind.text.rawValue, normalizedText: text, charCount: text.count)
-        ])
-        _ = try await DocumentIndexingService(store: store, embedder: nil).indexDocument(documentID: doc.id)
+        let part = DocumentPagePartRecord(
+            id: "chronology-part-\(doc.id)",
+            documentID: doc.id,
+            partIndex: 0,
+            sourceKind: DocumentSourceKind.text.rawValue,
+            normalizedText: text,
+            charCount: text.count,
+            createdAt: createdAt,
+            updatedAt: createdAt
+        )
+        let revision = DocumentPartRevisionRecord(
+            id: "chronology-revision-\(doc.id)",
+            documentID: doc.id,
+            partIndex: 0,
+            derivationKey: "chronology-derivation-\(doc.id)-17",
+            origin: "parser",
+            method: "synthetic_exact_text",
+            text: text,
+            charCount: text.count,
+            toolchainVersion: "chronology-toolchain-17",
+            createdAt: createdAt
+        )
+        let selection = DocumentPartSelectionRecord(
+            id: "chronology-selection-\(doc.id)",
+            documentID: doc.id,
+            partIndex: 0,
+            selectedRevisionID: revision.id,
+            selectionKey: "chronology-selection-key-\(doc.id)-17",
+            selectedBy: "synthetic_policy",
+            policyVersion: 17,
+            decisionJSON: #"{"wire":"CHRONOLOGY_CANONICAL_LINEAGE_827"}"#,
+            createdAt: createdAt
+        )
+        _ = try store.documentRevisions.replacePartsAndPersistLineage(
+            documentID: doc.id,
+            parts: [part],
+            revisions: [revision],
+            selections: [selection]
+        )
+        _ = try await DocumentIndexingService(
+            store: store,
+            embedder: CanonicalChronologyTestEmbedder()
+        ).indexDocument(documentID: doc.id)
+        XCTAssertTrue(try store.documentReadiness.fetchReceipt(documentID: doc.id).isBaseReady)
+    }
+
+    private func canonicalName(_ name: String) -> String {
+        name.unicodeScalars.map { CharacterSet.alphanumerics.contains($0) ? Character(String($0)) : "-" }
+            .reduce(into: "") { $0.append($1) }
     }
 
     private func XCTUnwrapAsync<T>(_ value: T?, file: StaticString = #filePath, line: UInt = #line) throws -> T {
@@ -1418,7 +1483,43 @@ final class DocumentChronologyTests: XCTestCase {
         let directoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("ChronStore-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
-        return try SupraStore(url: directoryURL.appendingPathComponent("test.sqlite"))
+        let store = try SupraStore(url: directoryURL.appendingPathComponent("test.sqlite"))
+        _ = try store.documentSettings.loadSettings()
+        try store.documentSettings.upsertEmbeddingModel(
+            DocumentEmbeddingModelRecord(
+                id: CanonicalReadinessFixture.modelID,
+                repoID: CanonicalReadinessFixture.modelRepoID,
+                localPath: "/synthetic/chronology-canonical-model-827",
+                displayName: CanonicalReadinessFixture.modelDisplayName,
+                dimension: CanonicalReadinessFixture.modelDimension,
+                runtimeFamily: "chronology-readiness-fixture-17",
+                revision: CanonicalReadinessFixture.modelRevision,
+                isDefault: false,
+                isSelected: false,
+                lastTestLoadAt: CanonicalReadinessFixture.timestamp,
+                lastTestLoadResult: "passed",
+                createdAt: CanonicalReadinessFixture.timestamp,
+                updatedAt: CanonicalReadinessFixture.timestamp
+            )
+        )
+        try store.documentSettings.selectEmbeddingModel(id: CanonicalReadinessFixture.modelID)
+        try store.documentSettings.updateSettings {
+            $0.embeddingModelLastTestedAt = CanonicalReadinessFixture.timestamp
+            $0.chunkerVersion = 2
+        }
+        return store
+    }
+}
+
+private struct CanonicalChronologyTestEmbedder: TextEmbedder {
+    let modelID = "chronology-canonical-model-827"
+    let modelRepoID = "synthetic/chronology-canonical-model-827"
+    let modelDisplayName = "Chronology Canonical Model 827"
+    let modelRevision: String? = "chronology-canonical-revision-17"
+    let dimension = 8
+
+    func embed(_ texts: [String]) async throws -> [[Float]] {
+        texts.map { _ in [1, 0, 0, 0, 0, 0, 0, 0] }
     }
 }
 

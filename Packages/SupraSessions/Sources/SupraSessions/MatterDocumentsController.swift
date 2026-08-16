@@ -49,10 +49,10 @@ public struct PermanentDeletionNotice: Identifiable, Sendable, Equatable {
 /// setup and routed through the app-wide processing queue.
 @MainActor
 public final class MatterDocumentsController: ObservableObject {
-    @Published public private(set) var folders: [DocumentFolderRecord] = []
-    @Published public private(set) var documents: [MatterDocumentRecord] = []
-    @Published public private(set) var trashedDocuments: [MatterDocumentRecord] = []
-    @Published public private(set) var trashedFolders: [DocumentFolderRecord] = []
+    @Published public private(set) var folders: [DocumentFolderSummary] = []
+    @Published public private(set) var documents: [MatterDocumentSummary] = []
+    @Published public private(set) var trashedDocuments: [MatterDocumentSummary] = []
+    @Published public private(set) var trashedFolders: [DocumentFolderSummary] = []
     @Published public private(set) var tags: [DocumentTagRecord] = []
     /// Sidebar selection. A non-optional value so the List can always select the
     /// "All Documents" row — a nil-tagged row in an Optional-bound single-selection
@@ -71,6 +71,7 @@ public final class MatterDocumentsController: ObservableObject {
     }
     @Published public private(set) var searchHits: [DocumentSearchHit] = []
     @Published public var message: String?
+    @Published public private(set) var lastMutationFailure: UserMutationFailure?
     @Published public private(set) var permanentDeletionNotice: PermanentDeletionNotice?
     /// Documents whose saved correction is waiting for its replacement index to
     /// become visible. Keep the transition on screen briefly even when a tiny
@@ -94,6 +95,11 @@ public final class MatterDocumentsController: ObservableObject {
     /// `reload()`. Backs the classification-floor gate in `unclassifiedCount` so the
     /// property stays cheap for the view to read.
     private var documentCharCounts: [String: Int] = [:]
+    private var documentRecords: [MatterDocumentRecord] = []
+    /// Documents-tab projections from one Store-owned readiness batch. A failed
+    /// refresh replaces the cache with an empty dictionary so an earlier green
+    /// receipt can never survive a Store error or an N+1 selection.
+    private var readinessByDocumentID: [String: DocumentReadinessConsumerProjection] = [:]
 
     public init(
         matterID: String,
@@ -234,10 +240,10 @@ public final class MatterDocumentsController: ObservableObject {
     /// being re-indexed. The durable store state wins for genuinely pending work;
     /// the controller-owned set prevents an instant small-file completion from
     /// erasing the only visible acknowledgement of the save.
-    public func isCorrectionReindexing(_ document: MatterDocumentRecord) -> Bool {
+    public func isCorrectionReindexing(_ document: MatterDocumentSummary) -> Bool {
         correctionReindexingDocumentIDs.contains(document.id)
             || (document.hasUserEditedText
-                && document.indexStatus == DocumentIndexStatus.stale.rawValue)
+                && document.indexStatus == .stale)
     }
 
     /// The managed file URL of a document's original blob, for opening in the user's
@@ -250,6 +256,12 @@ public final class MatterDocumentsController: ObservableObject {
     }
 
     public var setupReady: Bool { isImportReady() }
+
+    /// Canonical readiness for one visible document. Consumers can add task
+    /// policy elsewhere, but the Documents tab exposes the unchanged base receipt.
+    public func readiness(documentID: String) -> DocumentReadinessConsumerProjection? {
+        readinessByDocumentID[documentID]
+    }
 
     /// File-importer content types: every supported document type plus folders.
     public var allowedContentTypes: [UTType] {
@@ -270,7 +282,7 @@ public final class MatterDocumentsController: ObservableObject {
     /// them permanently, so counting them would pin the caption to a Classify
     /// button that visibly no-ops.
     public var unclassifiedCount: Int {
-        documents.filter {
+        documentRecords.filter {
             DocumentClassificationService.needsClassification($0)
                 && (documentCharCounts[$0.id] ?? 0) >= OCRPolicy.minimumUsableTextLength
         }.count
@@ -289,12 +301,26 @@ public final class MatterDocumentsController: ObservableObject {
     }
 
     public func reload() {
-        folders = (try? store.documentLibrary.fetchFolders(matterID: matterID)) ?? []
-        documents = (try? store.documentLibrary.fetchDocuments(matterID: matterID)) ?? []
+        let folderRecords = (try? store.documentLibrary.fetchFolders(matterID: matterID)) ?? []
+        folders = folderRecords.map(DocumentFolderSummary.init)
+        documentRecords = (try? store.documentLibrary.fetchDocuments(matterID: matterID)) ?? []
+        documents = documentRecords.map(MatterDocumentSummary.init)
+        let documentIDs = documents.map(\.id)
+        let documentProjections = try? CanonicalDocumentReadinessLedger(store: store)
+            .consumerProjections(matterID: matterID, documentIDs: documentIDs)
+            .filter { $0.consumer == .documents }
+        readinessByDocumentID = Dictionary(
+            uniqueKeysWithValues: (documentProjections ?? []).map {
+                ($0.documentID, $0)
+            }
+        )
         reconcileCorrectionBadgeVisibility()
         documentCharCounts = (try? store.documentIndex.fetchTotalCharCounts(matterID: matterID)) ?? [:]
-        trashedDocuments = (try? store.documentLibrary.fetchSoftDeletedDocuments(matterID: matterID)) ?? []
-        trashedFolders = ((try? store.documentLibrary.fetchFolders(matterID: matterID, includeDeleted: true)) ?? []).filter { $0.deletedAt != nil }
+        trashedDocuments = ((try? store.documentLibrary.fetchSoftDeletedDocuments(matterID: matterID)) ?? [])
+            .map(MatterDocumentSummary.init)
+        trashedFolders = ((try? store.documentLibrary.fetchFolders(matterID: matterID, includeDeleted: true)) ?? [])
+            .filter { $0.deletedAt != nil }
+            .map(DocumentFolderSummary.init)
         tags = (try? store.documentLibrary.fetchTags(matterID: matterID)) ?? []
         relationReviewController.reload()
         // The selected folder can vanish out from under the selection (deleting
@@ -316,7 +342,7 @@ public final class MatterDocumentsController: ObservableObject {
                 continue
             }
             let minimumEnd = correctionBadgeMinimumEnd[documentID] ?? .distantPast
-            let indexIsCurrent = document.indexStatus != DocumentIndexStatus.stale.rawValue
+            let indexIsCurrent = document.indexStatus != .stale
             if now >= minimumEnd, indexIsCurrent {
                 correctionReindexingDocumentIDs.remove(documentID)
                 correctionBadgeMinimumEnd[documentID] = nil
@@ -326,17 +352,17 @@ public final class MatterDocumentsController: ObservableObject {
 
     /// Documents for the current sidebar selection: every document for
     /// "All Documents", otherwise just the selected folder's documents.
-    public var visibleDocuments: [MatterDocumentRecord] {
+    public var visibleDocuments: [MatterDocumentSummary] {
         let roots = documents.filter { $0.parentDocumentID == nil }
         guard selectedSidebarID != Self.allDocumentsTag else { return roots }
         return roots.filter { $0.folderID == selectedSidebarID }
     }
 
-    public func childAttachments(of documentID: String) -> [MatterDocumentRecord] {
+    public func childAttachments(of documentID: String) -> [MatterDocumentSummary] {
         documents.filter { $0.parentDocumentID == documentID }
     }
 
-    public func subfolders(of parentID: String?) -> [DocumentFolderRecord] {
+    public func subfolders(of parentID: String?) -> [DocumentFolderSummary] {
         folders.filter { $0.parentFolderID == parentID }
     }
 
@@ -355,20 +381,58 @@ public final class MatterDocumentsController: ObservableObject {
     /// Imports into a specific folder (nil = root) regardless of the sidebar
     /// selection, if setup is complete.
     public func importItems(_ urls: [URL], targetFolderID: String?) {
+        _ = attemptImportItems(urls, targetFolderID: targetFolderID)
+    }
+
+    /// Attempts to persist all durable import-initiation rows. The selected
+    /// destination and source URLs remain owned by the caller on rejection.
+    @discardableResult
+    public func attemptImportItems(
+        _ urls: [URL],
+        targetFolderID: String?
+    ) -> UserMutationOutcome<String> {
         guard isImportReady() else {
-            message = "Finish Document Intelligence setup in Settings before importing."
-            return
+            return rejectImport(
+                "Finish Document Intelligence setup in Settings before importing.",
+                recoveryActions: [.correctInput]
+            )
         }
-        guard !urls.isEmpty else { return }
+        guard !urls.isEmpty else {
+            return rejectImport(
+                "Choose at least one file or folder to import.",
+                recoveryActions: [.correctInput]
+            )
+        }
         let display = urls.first?.deletingLastPathComponent().lastPathComponent
-        if queue.enqueueImport(matterID: matterID, sources: urls, sourceRootDisplay: display, targetFolderID: targetFolderID) == nil {
+        guard let jobID = queue.enqueueImport(
+            matterID: matterID,
+            sources: urls,
+            sourceRootDisplay: display,
+            targetFolderID: targetFolderID
+        ) else {
             // Enqueue failed (e.g. the batch/job could not be written) — surface it
             // instead of silently dropping the user's import.
-            message = queue.lastError.map { "Couldn't start the import: \($0)" }
+            let failureMessage = queue.lastError.map { "Couldn't start the import: \($0)" }
                 ?? "Couldn't start the document import. Please try again."
-        } else {
-            message = nil
+            return rejectImport(failureMessage)
         }
+        message = nil
+        lastMutationFailure = nil
+        return .committed(jobID)
+    }
+
+    private func rejectImport(
+        _ userMessage: String,
+        recoveryActions: Set<UserMutationRecoveryAction> = [.retry]
+    ) -> UserMutationOutcome<String> {
+        message = userMessage
+        let failure = UserMutationFailure(
+            operation: .importStart,
+            userMessage: userMessage,
+            recoveryActions: recoveryActions
+        )
+        lastMutationFailure = failure
+        return .failed(failure)
     }
 
     /// Imports research uploaded from the Authorities tab into a dedicated
@@ -415,7 +479,7 @@ public final class MatterDocumentsController: ObservableObject {
         try? store.documentLibrary.softDeleteFolder(id: id)
         _ = try? store.auditEvents.recordEvent(
             matterID: matterID, eventType: "folder_soft_deleted", actor: "user",
-            summary: "Moved a folder and its documents to trash",
+            summary: "Moved a folder and its documents to the Recycle Bin",
             relatedTable: "document_folders", relatedID: id
         )
         if selectedSidebarID == id { selectedSidebarID = Self.allDocumentsTag }
@@ -476,7 +540,7 @@ public final class MatterDocumentsController: ObservableObject {
         try? store.documentLibrary.softDeleteDocument(id: documentID)
         _ = try? store.auditEvents.recordEvent(
             matterID: matterID, eventType: "document_soft_deleted", actor: "user",
-            summary: "Moved a document to trash", relatedTable: "matter_documents", relatedID: documentID
+            summary: "Moved a document to the Recycle Bin", relatedTable: "matter_documents", relatedID: documentID
         )
         reload()
     }

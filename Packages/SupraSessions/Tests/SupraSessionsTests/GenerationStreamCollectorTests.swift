@@ -9,7 +9,14 @@ import XCTest
 /// used to treat a failed generation as an empty success.
 final class GenerationStreamCollectorTests: XCTestCase {
     private func request() -> GenerateRequest {
-        GenerateRequest(generationID: GenerationID(), modelID: ModelID(), prompt: "p", systemPrompt: nil, options: GenerationOptions())
+        GenerateRequest(
+            generationID: GenerationID(),
+            modelID: ModelID(),
+            prompt: "p",
+            systemPrompt: nil,
+            contextWorkload: .ordinaryConversation,
+            options: GenerationOptions()
+        )
     }
 
     func testReturnsAccumulatedTextOnCompletion() async throws {

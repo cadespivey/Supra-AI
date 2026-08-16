@@ -61,14 +61,14 @@ Packages/
 ├─ SupraSessions           App-facing controllers (chat, research, documents, Q&A, outputs, models, jobs, ScratchPad/billing, drafting)
 ├─ SupraDraftingCore       Shared drafting types (kinds, slots, house style sheet, document model, gates)
 ├─ SupraDrafting           Drafting pipeline: slot resolution, generation/authority firewall, verification, pre-file gate
-├─ SupraExports            Drafting OOXML: court (courtFL) + letterhead shells → .docx (no Office dependency)
+├─ SupraExports            Package root: neutral SupraOOXML primitives + drafting-specific court/letterhead → .docx
 ├─ SupraResearch           Named legal-data clients + authority normalization, ranking, verification
 ├─ SupraDocuments          Extraction, OCR, chunking, retrieval, grounding, rich output export
 ├─ SupraNetworking         Authorized HTTP client, default-deny network policy, rate limiting, Keychain
 ├─ SupraRuntimeInterface   XPC DTOs / protocols shared by app and runtime service
 ├─ SupraRuntimeClient      Typed client for the runtime XPC service
 ├─ SupraDiagnostics        Validation suites & diagnostic reports
-├─ SupraDesignSystem       Shared UI primitives (badges, empty states, inspectors)
+├─ SupraDesignSystem       Shared UI primitives plus explicit-mode, citation-aware Markdown presentation
 └─ SupraTestKit            Test fixtures / seed corpus
 ```
 
@@ -76,6 +76,23 @@ Dependency rules that are enforced by package boundaries:
 
 - `SupraCore` depends on nothing internal; everything depends on it for IDs and domain enums.
 - `SupraStore` owns the database connection. No other package opens the SQLite database.
+- The `SupraExports` package root exposes a neutral `SupraOOXML` target for typed
+  WordprocessingML models, serialization, package parts, relationships, and renderer-neutral
+  styles. `SupraDocuments` consumes that product directly. Court/letterhead shells, house-style
+  floors, and drafting policy remain in the separate `SupraExports` target.
+- `SupraDesignSystem.SupraMarkdownView` centralizes parsing, streaming refresh, citation-link
+  routing, tables, and inline presentation. Its explicit assistant-response and saved-output
+  modes preserve the two established visual contracts; chat containers continue to own reading
+  width, one-leaf accessibility grouping, and source-list actions.
+- Store persistence records stop at the Store/Sessions boundary. High-change app surfaces receive
+  stable `SupraSessions` projections for document and folder summaries, billing lines, ScratchPad
+  search hits, and diagnostic events; their controllers map once while preserving persisted
+  identity, ordering, and update/delete semantics.
+- Cross-package transport auditing uses `SupraCore.NetworkRequestAuditWriting`; `SupraStore`
+  vends the narrow `networkRequestAudits` implementation, which can only create and finish
+  network-request rows. `SupraNetworking` receives only that capability and has no Store package
+  edge. Backup, restore, and benchmark tooling retain explicit privileged access to the
+  Store-owned database rather than widening that transport capability.
 - `SupraNetworking` owns the Keychain and all `URLSession` policy. `SupraResearch` builds
   CourtListener requests but never touches the Keychain or raw network policy directly.
 - `SupraDocuments` owns document-intelligence domain logic but **not** the database, views,
@@ -83,6 +100,17 @@ Dependency rules that are enforced by package boundaries:
   document pipeline performs no network I/O.
 - The runtime service depends only on `SupraRuntimeInterface` (the shared contract) and the
   MLX packages — not on the store, networking, or UI.
+
+`SupraTestKit.RepositoryArchitecturePolicy` version 8 reads the fourteen local manifests and
+pins the exact acyclic 36-edge graph. `SupraTestKit` is isolated from the app product; its seven
+higher-layer package dependencies are reviewed test-harness exceptions beyond `SupraCore`, and
+an eighth exception fails closed. The same policy rejects inventory drift, undeclared or missing
+edges, cycles, and direct Store/network capability edges from packages that must remain isolated.
+
+`SupraCore.CanonicalJSON` owns the explicit version-one compact and pretty-printed JSON byte
+contracts, and `SHA256Digest` owns lowercase SHA-256 formatting. Only the three TestKit report
+encoders proven byte-identical use that shared contract today; different date strategies,
+streaming file hashes, presentation JSON, and unordered values remain with their domain owners.
 
 ## The runtime boundary
 
@@ -108,9 +136,6 @@ citations when the complete packet cannot fit. The deterministic benchmark compa
 B-CTX utilization, estimate-error, omission, recovery, and silent-overflow measurements;
 protected model runs replace its frozen count matrix with the loaded tokenizer's counts.
 
-Review runtime admission uses a cooperative app-process `ExclusiveRuntimeClient` lease: the shipping app routes normal model/data-plane calls through one wrapper, waits for admitted ordinary work, blocks later ordinary calls across Review partition gaps, and keeps cancellation/status control-plane calls available. This lease is not XPC-enforced and does not govern a client that bypasses the app-process wrapper.
-An XPC-enforced, connection-owned Review lease remains a later architecture checkpoint.
-
 Model weights may live outside the app sandbox. The app mints a transferable security-scoped
 bookmark while holding its own scope; the sandboxed service resolves it and holds the scope
 across the full load. Nil/stale/invalid bookmarks and canonical managed-root escapes fail
@@ -124,8 +149,9 @@ Supra's local-AI policy conservatively maps detected unified memory to 16, 32, 6
 ## Persistence
 
 `SupraStore` uses [GRDB](https://github.com/groue/GRDB.swift) over SQLite with an ordered
-migration list. The shipping database schema registers a contiguous migration sequence from v001 through v073. Each feature area adds migrations and a
-repository:
+migration list. The shipping database schema registers a contiguous migration sequence from v001 through v078; v073 remains immutable, dormant compatibility history for databases that may already have applied it and does not represent an available product capability.
+`SupraMigrator.makeMigrator()` remains the single public registry, while immutable migration closures live in versioned or cohesive source files and are invoked in exact version order. A frozen registration and schema snapshot pins all 78 names plus the resulting 82 tables, 101 indexes, 89 triggers, integrity check, and foreign-key check; the source split adds no migration and changes no schema behavior.
+Each feature area adds migrations and a repository:
 
 - Milestone 1 established chats, messages, models, and validation runs.
 - Milestone 2 added matters, research sessions/queries/results, authorities, structured
@@ -149,7 +175,12 @@ repository:
   chunker version; retrieval prefers same-revision parent context and explicitly discloses
   hidden-derived spreadsheet evidence. Legacy v1 text, locators, packed source JSON, immutable
   revisions, and denormalized citation display data remain available for rollback and history.
-- Exhaustive corpus work uses a separate v064 coverage ledger rather than ranked retrieval.
+- `SupraSessions` and `SupraStore` retain a tested exhaustive-corpus substrate for persisted-data
+  compatibility and synthetic benchmarking. The shipping app does not compose a
+  `CorpusAnalysisQueueRunner`; its `DocumentProcessingQueue` has no corpus runner, so a newly
+  encountered `corpus_analysis` job fails unavailable before model work. The following describes
+  the retained package contract, not an available product workflow.
+  Exhaustive corpus work uses a separate v064 coverage ledger rather than ranked retrieval.
   Each run freezes the exact selected revision IDs plus failed/review-required/import-source
   exclusions, plans deterministic part-range partitions with the shared chronology batching
   seam, and checkpoints a terminal disposition and evidence-bound findings per partition.
@@ -161,26 +192,15 @@ repository:
   retains successful checkpoints, marks every unfinished partition cancelled, and saves a
   balanced ledger. Relaunch reuses the frozen snapshot, treats completed partitions as cache
   hits, closes an orphaned running attempt as interrupted, and schedules only cancelled,
-  pending, or still-retryable work. The app-wide FIFO recognizes `corpus_analysis` jobs;
-  the first task-specific consumer is a strict-schema exhaustive list mapper. It reconciles
+  pending, or still-retryable work. The retained FIFO substrate recognizes `corpus_analysis`
+  jobs, and its strict-schema exhaustive list mapper reconciles
   duplicate keys, conflicting values, contrary evidence, named omissions, and deterministic
   precision/recall metrics without exposing raw invalid model responses. Validated evidence is
   written as a version-scoped source set, and the run/source-set/version link commits atomically.
   The v2 exhaustive-list preparation boundary hashes normalized execution fields (task and prompt versions, matter, normalized query, scope, clamped character budget and retry count), frozen membership, exact ordered slices, and a declared pinned-model identity (repository, revision, binding contract, and artifact fingerprint) into one request digest; the presentation title and run_key queue identity are intentionally excluded.
-  Queued v2 exhaustive-list work independently recomputes its frozen request before model resolution, resumes only unfinished partitions from the persisted ledger, and balances cancellation before the FIFO advances.
-  Production exhaustive review accepts only the exact app-managed manifest-backed model repository, revision, and artifact fingerprint; role routing and fallback are disabled, the XPC load must return the matching verified fingerprint, and every generation admission must match that same fingerprint.
-  Production exhaustive review records the exact system prompt and runtime generation options used by its versioned prompt builder in the published version's generation lineage.
   The v2 exhaustive-list mapper boundary accepts primary or contrary evidence only when the host resolves it to exactly one presented frozen slice, normalizes it to a nonempty quote and slice-relative Character range, and derives the retained excerpt and absolute output locator from the frozen revision; a value absent from every retained primary excerpt fails proposition verification.
   Store v072 requires a complete exact-slice ledger relative to the frozen snapshot before an exhaustive-list run may retain either export-eligible assurance state, preserves legacy content without fabricating lineage while marking prior export-eligible assurance stale, and leaves chronology on its v1 revision ledger without imposing the exhaustive-list exact-slice contract; universal corpus-complete prerequisites are enforced on insert and update.
   Store v072 admits an export-eligible v2 exact-slice proof only when every succeeded checkpoint has coherent terminal attempt history, valid ordered row timestamps, and a typed findings array whose findings each cite at least one primary or contrary reference anchored to that checkpoint's own exact partition slice; optional quote and slice-relative range fields fail closed when malformed or outside that slice. Exact publication also requires the attached source set's independent frozen-corpus hash to equal the Store recomputation over the run's canonical membership and slices. While its matter exists, Store prevents drift of the exact source-set attachment/mode/hash, linked version identity/content/verification, parent matter/type, single-run ownership, and proof-linked export-eligible active selection.
-  Guided New Review displays the current eligible and excluded source receipt plus detected unified memory and an advisory text-model fit derived only from the selected app-managed manifest's curated repository metadata; caution or unknown fit remains non-blocking. Start freshly pins the selected app-managed local model, rejects receipt drift for explicit reconfirmation, atomically persists the frozen v2 run, partitions, exact slices, and one FIFO job through the Store repository, and reconstructs queue status plus pause, resume, and cancel actions across app relaunch.
-  Before a Guided New Review becomes runnable, Store atomically requires the proposed frozen snapshot and a fresh live reconstruction of the selected scope to equal the exact receipt approved by the user; any membership, eligibility, or revision drift leaves no run, partition, slice, or queue-job rows.
-  The first Review workbench creates a durable Review Project only from a uniquely linked exact v2 exhaustive output that is either export-eligible or fully covered with retained contrary evidence as its sole failed verification dimension; it then persists its four-column Finding / Generated value / Sources / Review Matrix, exact generated values, supporting and contrary source edges, append-only frozen evidence, and Mark Reviewed metadata across Store reopen.
-  The Review Matrix persists a local-user-authored whole-cell value overlay per finding across Store reopen and lets the user replace or restore the displayed value without mutating the frozen generation or evidence; each effective-value transition is audited atomically, preserves independent support and project-staleness state, and clears any prior Mark Reviewed attestation.
-  The Review workbench derives project progress and All / Needs review / Edited / Evidence attention filters from the selected project's current durable rows without changing stored review, value, support, or evidence state; selecting or opening another Review Project while a value edit is dirty requires the user to keep editing or explicitly discard that draft. If a requested switch or open fails after the user confirms discard, the same in-memory draft remains available to resume in the unchanged project. At the supported minimum window width, the Sources panel leaves project progress visible and the compact filter visible and usable. Presentation filters never narrow a Review snapshot, and any dirty value draft blocks export.
-  The Review workbench exports a deterministic managed CSV snapshot of every saved finding, generated and local-user-authored value, review and support state, project staleness, and ordered frozen supporting and contrary sources from a single Store read transaction. When every dynamic cell fits spreadsheet limits after formula neutralization, it also exports a deterministic XLSX representation of that same immutable snapshot, separated into Matrix, Sources, and Project sheets; an XLSX limit violation fails closed before file publication or Store completion. Only after the validated file installs atomically does Store record a nil-Structured-Output Review export plus a project audit, so contrary-only Review work remains exportable without weakening Structured Output export eligibility.
-  Completed-output admission and Review Project freezing share their own Store transaction, separate from Guided New Review's frozen-run and FIFO-job submission transaction. The corpus-incomplete source proof is not protected by a database terminal-stale trigger; database-enforced terminal staleness remains a later architecture checkpoint.
-  Permanent document deletion precision-degrades only affected Review evidence and projects: live proof pointers become unavailable and dependent support and project state become stale, while frozen source identity, citation label, locator, excerpt, generated value, review state, and reviewer metadata remain retained; unrelated Review work remains unchanged.
   Failed or schema-invalid partitions force an attached `needs_review` output with
   `corpus_incomplete`; negative conclusions are blocked unless coverage is complete and the run
   found no positive item. Chronology also adopts this ledger without changing its established
@@ -300,6 +320,14 @@ repository:
 - Draft publication first persists a Store-owned prepared intent before public installation. Finalization binds the exact installed bytes and allow-listed output format—and, for the supported motion, a fresh source snapshot—to the audit and terminal intent state in one transaction; relaunch finalizes only authenticated exact files and preserves uncertain public files for explicit recovery.
 - Document semantic readiness is derived from complete chunk-vector coverage for
   the active embedding model, not the document's generic `ready` string alone.
+  SupraStore owns that base readiness receipt. SupraSessions'
+  `CanonicalDocumentReadinessLedger` projects the same exact receipt into
+  Documents, Ask, Chronology, and Drafting; consumer-specific task exclusions
+  are additive and cannot rewrite base readiness. DEBUG demo qualification uses
+  the same complete revision, FTS, embedding-model, and vector graph as the
+  shipping projection, with an exact three-document denominator. An active
+  model switch without vectors for the new model therefore fails closed in
+  every consumer rather than preserving a stale green state.
   Model switches enqueue semantic-only work that reuses current chunks and keeps
   prior-model vectors; saved text edits enqueue a full re-chunk/reindex pass.
   Extraction methods carry a toolchain-version suffix so launch-time capability

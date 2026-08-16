@@ -3,7 +3,7 @@ import { Section } from "./Section";
 const capabilities = [
   {
     title: "Case-law research",
-    body: "Legal answers are constrained to retained authority packets. A matter uses its saved authorities first; a wider CourtListener search is one click away. Party and docket questions can retrieve PACER/RECAP filing data.",
+    body: "Legal answers are constrained to retained authority packets. A matter uses its saved authorities first; broader provider research moves to Research so you can review the exact query before it runs. Global party and docket questions can retrieve PACER/RECAP filing data.",
   },
   {
     title: "Public records search",

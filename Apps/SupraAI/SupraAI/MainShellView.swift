@@ -6,8 +6,15 @@ import SwiftUI
 struct MainShellView: View {
     @EnvironmentObject private var environment: AppEnvironment
     @State private var selection: SidebarSelection? = .route(.globalChats)
+    @State private var setupNavigationRequest: SetupNavigationRequest?
+    @State private var pendingMatterReturnContext: WorkContext?
+    @State private var pendingSavedWorkNotesHandoff: SavedWorkNotesHandoff?
     @State private var showNewMatter = false
     @State private var windowContentHeight: CGFloat = 720
+#if DEBUG
+    @State private var setupNavigationFixture: SetupNavigationUITestFixture?
+    @State private var isShowingSetupNavigationFixture = false
+#endif
 
     var body: some View {
         // Top alignment matters: while the measured height lags the live
@@ -81,11 +88,31 @@ struct MainShellView: View {
             // the region (which SwiftUI resolves by centering, i.e. clipping).
             .frame(minHeight: 420, idealHeight: windowContentHeight, maxHeight: windowContentHeight, alignment: .top)
         }
+#if DEBUG
+        .overlay(alignment: .topLeading) {
+            windowSessionLedgerView
+        }
+#endif
         .onReceive(NotificationCenter.default.publisher(for: .supraNavigateToRoute)) { note in
-            if let route = note.object as? AppRoute { selection = .route(route) }
+            if let route = note.object as? AppRoute { selectRoute(route) }
+        }
+        .onChange(of: environment.mattersController.selectedMatterID) { _, matterID in
+            // SidebarView refreshes its matter list on appearance. The controller
+            // historically auto-selected the first matter during that refresh,
+            // even while this window visibly showed a global route. In the one-
+            // window model, a non-matter destination owns no hidden matter scope.
+            guard matterID != nil else { return }
+            if case .matter = selection { return }
+            environment.mattersController.select(matterID: nil)
+        }
+        .onAppear {
+            synchronizeControllerScopeWithVisibleSelection()
         }
         #if DEBUG
-        .onAppear { applyUITestInitialSelection() }
+        .onAppear {
+            applyUITestInitialSelection()
+            applyUITestWindowWidth()
+        }
         // Sandboxes (the app's and any automation harness's) exclude each
         // other's filesystems, so the DEBUG automation channel rides
         // distributed notifications instead of a command file.
@@ -96,16 +123,47 @@ struct MainShellView: View {
         .sheet(isPresented: $showNewMatter) {
             MatterEditorSheet(
                 mode: .create,
-                draft: MatterDraft(),
-                clientDirectory: environment.mattersController.clientDirectory(),
+                submission: newMatterIdentityEditorSubmission(),
                 practiceAreaDirectory: environment.mattersController.practiceAreaDirectory()
-            ) { draft in
-                if let created = try? environment.mattersController.createMatter(draft) {
-                    environment.mattersController.select(matterID: created.id)
-                    selection = .matter(created.id)
+            ) { submission in
+                let outcome = environment.mattersController.attemptCreateMatter(
+                    identity: submission
+                )
+                if outcome.allowsDependentNavigation,
+                   let createdID = outcome.committedValue {
+                    selectMatter(createdID)
                 }
+                return outcome
             }
         }
+    }
+
+    /// Builds the ordinary canonical create payload. The DEBUG mutation wire
+    /// changes only its stable request ID, name, and explicit not-applicable
+    /// court state so the real editor can exercise a Store rejection without
+    /// embedding test-owned names or error markers in the app.
+    private func newMatterIdentityEditorSubmission() -> MatterIdentityEditorSubmission {
+        let ordinary = environment.mattersController.newMatterIdentityEditorSubmission()
+#if DEBUG
+        guard let wire = MutationFailureUITestWire(
+            arguments: ProcessInfo.processInfo.arguments
+        ), wire.operation == .matterCreate else { return ordinary }
+        var draft = ordinary.draft
+        draft.name = wire.draftName
+        draft.jurisdiction = "Not applicable"
+        return MatterIdentityEditorSubmission(
+            matterID: wire.targetMatterID,
+            expectedIdentityRevision: nil,
+            draft: draft,
+            courtResolutionState: .notApplicable,
+            canonicalJurisdictionID: nil,
+            canonicalCourtID: nil,
+            parties: [],
+            representations: []
+        )
+#else
+        return ordinary
+#endif
     }
 
     /// Pins the shell to the proposed layout height, so the panes end exactly at
@@ -127,6 +185,7 @@ struct MainShellView: View {
                     selectMatter(id)
                 } else {
                     selection = newValue
+                    clearMatterScopeAfterSidebarUpdate()
                 }
             }
         )
@@ -140,12 +199,79 @@ struct MainShellView: View {
         // survives the transition, the first click in a matter workspace merely
         // ends that session instead of activating the intended control.
         NSApp.keyWindow?.makeFirstResponder(nil)
-        environment.mattersController.select(matterID: id)
         selection = .matter(id)
+        environment.mattersController.select(matterID: id)
+    }
+
+    /// A global route and a matter-scoped controller are mutually exclusive in
+    /// the supported single window. Go-menu and setup navigation use this same
+    /// targeted path as the sidebar.
+    private func selectRoute(_ route: AppRoute) {
+        selection = .route(route)
+        clearMatterScopeIfNeeded()
+    }
+
+    /// A native `List(selection:)` writes its binding while SwiftUI is updating
+    /// the sidebar. Re-clearing an already-empty `MattersController` at that
+    /// moment needlessly publishes every scoped controller as `nil`, which
+    /// produces the framework runtime warning about publishing during a view
+    /// update. Preserve the real transition (matter -> global route) while
+    /// making route -> route navigation publication-free.
+    private func clearMatterScopeIfNeeded() {
+        guard environment.mattersController.selectedMatterID != nil else { return }
+        environment.mattersController.select(matterID: nil)
+    }
+
+    private func clearMatterScopeAfterSidebarUpdate() {
+        Task { @MainActor in
+            await Task.yield()
+            if case .matter = selection { return }
+            clearMatterScopeIfNeeded()
+        }
+    }
+
+    /// AppEnvironment loads matter data before the shell appears and legacy
+    /// callers may select the first row while doing so. Reconcile that model
+    /// state with the destination the window actually presents before the user
+    /// can interact with either surface.
+    private func synchronizeControllerScopeWithVisibleSelection() {
+        switch selection ?? .route(.globalChats) {
+        case let .matter(id):
+            environment.mattersController.select(matterID: id)
+        case .route, .recycleBin:
+            clearMatterScopeIfNeeded()
+        }
     }
 
     @ViewBuilder
     private var detailView: some View {
+#if DEBUG
+        if let fixture = setupNavigationFixture,
+           isShowingSetupNavigationFixture {
+            SetupBlockerFixtureView(
+                fixture: fixture,
+                library: environment.modelLibrary,
+                documentSetup: environment.documentSetupController,
+                settings: environment.settingsController,
+                backup: environment.backupController,
+                onOpenSetup: beginSetupNavigation
+            )
+            // The setup screen and the blocked-work fixture expose different
+            // accessibility roots. Give each navigation state a distinct
+            // identity so SwiftUI retires the departing tree before XCUITest
+            // or VoiceOver asks the restored task for its labels.
+            .id("setup-blocker-fixture-\(fixture.request.id)")
+        } else {
+            standardDetailView
+                .id("standard-detail")
+        }
+#else
+        standardDetailView
+#endif
+    }
+
+    @ViewBuilder
+    private var standardDetailView: some View {
         switch selection ?? .route(.globalChats) {
         case let .route(route):
             routeView(route)
@@ -155,7 +281,17 @@ struct MainShellView: View {
                 library: environment.modelLibrary,
                 queue: environment.documentQueue,
                 settings: environment.settingsController,
-                matterID: id
+                matterID: id,
+                onOpenImportSetup: { beginDocumentImportSetup(matterID: id) },
+                returnContext: pendingMatterReturnContext,
+                onReturnContextConsumed: { context in
+                    guard pendingMatterReturnContext == context else { return }
+                    pendingMatterReturnContext = nil
+                },
+                onOpenNotesAndTime: { handoff in
+                    pendingSavedWorkNotesHandoff = handoff
+                    selectRoute(.scratchpad)
+                }
             )
         case .recycleBin:
             RecycleBinView(
@@ -177,7 +313,7 @@ struct MainShellView: View {
         switch pieces.first {
         case "route":
             if pieces.count > 1, let route = AppRoute(rawValue: pieces[1]) {
-                selection = .route(route)
+                selectRoute(route)
             }
         case "matter-first":
             if let id = environment.mattersController.matters.first?.id {
@@ -199,14 +335,89 @@ struct MainShellView: View {
     private func applyUITestInitialSelection() {
         guard AppEnvironment.isUITestMode else { return }
         let arguments = ProcessInfo.processInfo.arguments
-        if let routeFlag = arguments.firstIndex(of: "-uiTestInitialRoute"),
+        if let wire = MutationFailureUITestWire(arguments: arguments) {
+            switch wire.operation {
+            case .matterCreate:
+                selectRoute(.globalChats)
+                showNewMatter = true
+            case .matterEdit:
+                guard environment.mattersController.matters.contains(where: {
+                    $0.id == wire.targetMatterID
+                }) else { return }
+                selectMatter(wire.targetMatterID)
+            }
+        } else if let fixture = SetupNavigationUITestFixture(arguments: arguments) {
+            setupNavigationFixture = fixture
+            isShowingSetupNavigationFixture = true
+            setupNavigationRequest = nil
+            environment.mattersController.select(matterID: nil)
+        } else if let routeFlag = arguments.firstIndex(of: "-uiTestInitialRoute"),
            arguments.indices.contains(routeFlag + 1),
            let route = AppRoute(rawValue: arguments[routeFlag + 1]) {
-            selection = .route(route)
+            selectRoute(route)
+        } else if let wire = CanonicalMatterIdentityUITestWire(arguments: arguments),
+                  environment.mattersController.matters.contains(where: {
+                      $0.id == wire.matterID
+                  }) {
+            selectMatter(wire.matterID)
         } else if arguments.contains("-uiTestSelectFirstMatter"),
                   let id = environment.mattersController.matters.first?.id {
             selectMatter(id)
         }
+    }
+
+    /// Applies width fixtures only after the shell is mounted in SwiftUI's
+    /// already-presented singleton window. Reading `NSApplication.windows` from
+    /// an app-delegate launch callback can race scene creation on macOS 27 and
+    /// strand the process with menus but no window.
+    private func applyUITestWindowWidth() {
+        guard AppEnvironment.isUITestMode else { return }
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let marker = arguments.firstIndex(of: "-uiTestWindowWidth"),
+              arguments.indices.contains(marker + 1),
+              let parsed = Double(arguments[marker + 1]),
+              parsed.isFinite,
+              parsed > 0 else { return }
+        let requestedWidth = CGFloat(parsed)
+        Task { @MainActor in
+            await Task.yield()
+            guard let window = NSApp.keyWindow
+                    ?? NSApp.windows.first(where: \.canBecomeMain) else { return }
+            AppEnvironment.placeUITestWindow(width: requestedWidth, window: window)
+        }
+    }
+
+    @ViewBuilder
+    private var windowSessionLedgerView: some View {
+        if let wire = WindowSessionLedgerWire(
+            arguments: ProcessInfo.processInfo.arguments
+        ) {
+            Text("Window session ledger")
+                .font(.system(size: 1))
+                .frame(width: 1, height: 1)
+                .clipped()
+                .accessibilityLabel("Window session ledger")
+                .accessibilityValue(windowSessionLedgerValue(wire: wire))
+                .accessibilityIdentifier("window.session.ledger")
+        }
+    }
+
+    private func windowSessionLedgerValue(wire: WindowSessionLedgerWire) -> String {
+        let route: String
+        let visibleMatter: String
+        switch selection ?? .route(.globalChats) {
+        case let .route(selectedRoute):
+            route = selectedRoute.rawValue
+            visibleMatter = "none"
+        case let .matter(matterID):
+            route = "matter"
+            visibleMatter = matterID
+        case .recycleBin:
+            route = "recycleBin"
+            visibleMatter = "none"
+        }
+        let controllerMatter = environment.mattersController.selectedMatterID ?? "none"
+        return "ledger=\(wire.ledgerID)|route=\(route)|visibleMatter=\(visibleMatter)|controllerMatter=\(controllerMatter)"
     }
     #endif
 
@@ -218,24 +429,37 @@ struct MainShellView: View {
                 controller: environment.chatController,
                 library: environment.modelLibrary,
                 settings: environment.settingsController,
-                matters: environment.mattersController
+                matters: environment.mattersController,
+                quickAttachmentHandoff: environment.quickAttachmentMatterHandoff,
+                quickAttachmentTargets: environment.mattersController.matters,
+                initialQuickAttachments: environment.quickAttachmentUITestComposerAttachments
             )
         case .scratchpad:
             ScratchPadView(
                 controller: environment.scratchPadController,
                 billing: environment.billingDraftController,
                 billingSettings: environment.billingSettingsController,
-                library: environment.modelLibrary
+                library: environment.modelLibrary,
+                savedWorkHandoff: pendingSavedWorkNotesHandoff,
+                onSavedWorkHandoffConsumed: {
+                    pendingSavedWorkNotesHandoff = nil
+                }
             )
         case .models:
             ModelsView(
                 library: environment.modelLibrary,
                 downloader: environment.modelDownloadController,
                 documentSetup: environment.documentSetupController,
-                embeddingDownloader: environment.embeddingDownloadController
+                embeddingDownloader: environment.embeddingDownloadController,
+                setupNavigationRequest: setupNavigationRequest,
+                onReturnFromSetup: returnFromSetup
             )
         case .publicRecords:
-            PublicRecordsView(controller: environment.publicRecordsController)
+            PublicRecordsView(
+                controller: environment.publicRecordsController,
+                matters: environment.mattersController,
+                matterHandoff: environment.publicRecordsMatterHandoff
+            )
         case .diagnostics:
             DiagnosticsView()
         case .settings:
@@ -246,12 +470,398 @@ struct MainShellView: View {
                 billing: environment.billingSettingsController,
                 backup: environment.backupController,
                 firmStyle: environment.firmStyleProfileController,
-                parseExemplar: environment.parseFirmStyleExemplar
+                parseExemplar: environment.parseFirmStyleExemplar,
+                setupNavigationRequest: setupNavigationRequest,
+                onReturnFromSetup: returnFromSetup
             )
         }
     }
 
+    /// Opens the precise setup destination carried by the typed request. The
+    /// originating matter and work inputs remain on the request until the user
+    /// explicitly returns; no current-matter or default-route substitution is
+    /// permitted here.
+    private func beginSetupNavigation(_ request: SetupNavigationRequest) {
+        setupNavigationRequest = request
+#if DEBUG
+        isShowingSetupNavigationFixture = false
+#endif
+        switch request.navigationTarget {
+        case .aiSetup:
+            selectRoute(.models)
+        case .settings:
+            selectRoute(.settings)
+        }
+    }
+
+    /// Opens the first exact AI Setup row that currently blocks document import.
+    /// The request carries an import-specific intent and matter identity so the
+    /// return action cannot substitute a drafting task or whichever matter later
+    /// happens to be selected.
+    private func beginDocumentImportSetup(matterID: String) {
+        let setup = environment.documentSetupController
+        let requirement: SetupRequirement
+        if !setup.chatModelReady {
+            requirement = .localAssistant(role: .drafting)
+        } else if setup.selectedEmbeddingModel == nil || !setup.embeddingTestPassed {
+            requirement = .documentSearch(step: .embeddingModel)
+        } else if !(setup.toolchain?.meetsMinimumForSetup ?? false) {
+            requirement = .documentSearch(step: .extractionToolchain)
+        } else if !setup.storageInitialized {
+            requirement = .documentSearch(step: .storage)
+        } else {
+            // `isReadyForImport` automatically completes once all required
+            // checks pass. A stale view should refresh rather than fabricate a
+            // fallback setup row.
+            environment.mattersController.documentsController?.reload()
+            return
+        }
+
+        let intent = WorkIntent.importDocuments
+        let context = WorkContext(
+            matterID: matterID,
+            intent: intent,
+            sourceSet: nil,
+            authorityPacket: nil,
+            workProduct: nil,
+            returnDestination: .matterTask(matterID: matterID, intent: intent),
+            checkpointID: "document-import"
+        )
+        beginSetupNavigation(
+            SetupNavigationRequest(
+                id: "document-import-setup-\(UUID().uuidString.lowercased())",
+                requirement: requirement,
+                returnContext: context
+            )
+        )
+    }
+
+    /// Restores only the work context that opened the active setup request.
+    /// A stale return control cannot redirect a newer request.
+    private func returnFromSetup(_ request: SetupNavigationRequest) {
+        guard setupNavigationRequest == request else { return }
+        setupNavigationRequest = nil
+#if DEBUG
+        if setupNavigationFixture?.request == request {
+            isShowingSetupNavigationFixture = true
+            return
+        }
+#endif
+        switch request.returnContext.returnDestination {
+        case let .matterTask(matterID, _):
+            pendingMatterReturnContext = request.returnContext
+            selectMatter(matterID)
+        }
+    }
+
 }
+
+/// Keeps return navigation consistent across AI Setup and Settings. The action
+/// carries the complete typed request back to the shell rather than rebuilding
+/// a matter or task from global state.
+struct SetupNavigationReturnBar: View {
+    let request: SetupNavigationRequest
+    let onReturn: (SetupNavigationRequest) -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "arrow.uturn.backward.circle.fill")
+                .foregroundStyle(.tint)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Setup for blocked work")
+                    .font(.supraHeadline)
+                Text("Your matter, selected sources, and task checkpoint are preserved.")
+                    .font(.supraCaption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button(returnTitle) {
+                // Let the accessibility action finish before replacing the
+                // focused setup tree. Rebuilding it synchronously can make
+                // SwiftUI ask the departing row and its parent for each
+                // other's labels while VoiceOver/XCUITest is snapshotting.
+                Task { @MainActor in
+                    await Task.yield()
+                    onReturn(request)
+                }
+            }
+            .accessibilityIdentifier("setup.navigation.return")
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(.bar)
+        .overlay(alignment: .bottom) { Divider() }
+    }
+
+    private var returnTitle: String {
+        switch request.returnContext.intent {
+        case .draftMotion:
+            "Return to Draft Motion"
+        case .importDocuments:
+            "Return to Documents"
+        }
+    }
+}
+
+/// Stable focus surface for a setup requirement row. Applying the identifier
+/// and keyboard focus to the same element lets assistive technology confirm
+/// that navigation reached the requested correction, not merely its screen.
+struct SetupRequirementFocusModifier: ViewModifier {
+    let identifier: String
+    let focusedIdentifier: FocusState<String?>.Binding
+
+    func body(content: Content) -> some View {
+        content
+            .id(identifier)
+            .accessibilityIdentifier(identifier)
+    }
+}
+
+extension View {
+    func setupRequirementFocus(
+        _ identifier: String,
+        focusedIdentifier: FocusState<String?>.Binding
+    ) -> some View {
+        modifier(
+            SetupRequirementFocusModifier(
+                identifier: identifier,
+                focusedIdentifier: focusedIdentifier
+            )
+        )
+    }
+}
+
+#if DEBUG
+/// Exact launch-only identity for T-WINDOW-01. Every field is parsed once from
+/// a unique nonempty argument; the app never substitutes a current matter or a
+/// default ledger identity when the wire is malformed.
+@MainActor
+struct WindowSessionLedgerWire: Equatable {
+    let ledgerID: String
+    let matterID: String
+    let matterName: String
+
+    init?(arguments: [String]) {
+        func exactValue(after flag: String) -> String? {
+            let matches = arguments.indices.filter { arguments[$0] == flag }
+            guard matches.count == 1,
+                  let index = matches.first,
+                  arguments.indices.contains(index + 1) else { return nil }
+            let value = arguments[index + 1]
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return value.isEmpty ? nil : value
+        }
+
+        guard AppEnvironment.isUITestMode,
+              let ledgerID = exactValue(after: "-uiTestWindowLedgerID"),
+              let matterID = exactValue(after: "-uiTestWindowMatterID"),
+              let matterName = exactValue(after: "-uiTestWindowMatterName") else {
+            return nil
+        }
+        self.ledgerID = ledgerID
+        self.matterID = matterID
+        self.matterName = matterName
+    }
+}
+
+private struct SetupNavigationUITestFixture: Equatable {
+    let request: SetupNavigationRequest
+    let input: String
+
+    init?(arguments: [String]) {
+        func exactValue(after flag: String) -> String? {
+            let matches = arguments.indices.filter { arguments[$0] == flag }
+            guard matches.count == 1,
+                  let index = matches.first,
+                  arguments.indices.contains(index + 1) else { return nil }
+            let value = arguments[index + 1]
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return value.isEmpty ? nil : value
+        }
+
+        guard let requirementID = exactValue(after: "-uiTestSetupRequirement"),
+              let requirement = SetupRequirement(id: requirementID),
+              let requestID = exactValue(after: "-uiTestSetupRequestID"),
+              let matterID = exactValue(after: "-uiTestSetupMatterID"),
+              let intentRaw = exactValue(after: "-uiTestSetupIntent"),
+              let intent = WorkIntent(rawValue: intentRaw),
+              let sourceSetID = exactValue(after: "-uiTestSetupSourceSetID"),
+              let sourceSetVersionRaw = exactValue(after: "-uiTestSetupSourceSetVersion"),
+              let sourceSetVersion = Int(sourceSetVersionRaw),
+              sourceSetVersion > 0,
+              let authorityPacketID = exactValue(after: "-uiTestSetupAuthorityPacketID"),
+              let authorityPacketVersionRaw = exactValue(after: "-uiTestSetupAuthorityPacketVersion"),
+              let authorityPacketVersion = Int(authorityPacketVersionRaw),
+              authorityPacketVersion > 0,
+              let checkpointID = exactValue(after: "-uiTestSetupCheckpointID"),
+              let input = exactValue(after: "-uiTestSetupInput") else { return nil }
+
+        let context = WorkContext(
+            matterID: matterID,
+            intent: intent,
+            sourceSet: VersionedWorkReference(id: sourceSetID, version: sourceSetVersion),
+            authorityPacket: VersionedWorkReference(
+                id: authorityPacketID,
+                version: authorityPacketVersion
+            ),
+            workProduct: nil,
+            returnDestination: .matterTask(matterID: matterID, intent: intent),
+            checkpointID: checkpointID
+        )
+        self.request = SetupNavigationRequest(
+            id: requestID,
+            requirement: requirement,
+            returnContext: context
+        )
+        self.input = input
+    }
+}
+
+private struct SetupBlockerFixtureView: View {
+    let fixture: SetupNavigationUITestFixture
+    @ObservedObject var library: ModelLibrary
+    @ObservedObject var documentSetup: DocumentIntelligenceSetupController
+    @ObservedObject var settings: SettingsController
+    @ObservedObject var backup: BackupController
+    let onOpenSetup: (SetupNavigationRequest) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Text("Draft Motion")
+                .font(.title2.weight(.semibold))
+            Text("This synthetic task verifies that a setup detour preserves the exact work in progress.")
+                .foregroundStyle(.secondary)
+
+            Text(contextSummary)
+                .font(.supraCaption.monospaced())
+                .textSelection(.enabled)
+                .accessibilityIdentifier("setup.fixture.context")
+
+            Text(fixture.input)
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+                .accessibilityLabel("Preserved input")
+                .accessibilityValue(fixture.input)
+                .accessibilityIdentifier("setup.fixture.input")
+
+            VStack(alignment: .leading, spacing: 10) {
+                Label(blockerTitle, systemImage: "exclamationmark.triangle.fill")
+                    .font(.supraHeadline)
+                    .foregroundStyle(.orange)
+                Text(blockerDetail)
+                    .foregroundStyle(.secondary)
+                HStack {
+                    Button(actionTitle) {
+                        onOpenSetup(fixture.request)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .accessibilityValue(blockerAccessibilityValue)
+                    .accessibilityIdentifier(
+                        "setup.blocker.action.\(fixture.request.requirement.id)"
+                    )
+                    Spacer()
+                    Button("Draft Motion") {}
+                        .disabled(!isRequirementSatisfied)
+                        .accessibilityIdentifier("setup.fixture.blockedAction")
+                }
+            }
+            .padding(16)
+            .background(.background, in: RoundedRectangle(cornerRadius: 12))
+            .overlay {
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(.orange.opacity(0.35), lineWidth: 1)
+            }
+            Spacer()
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var contextSummary: String {
+        let context = fixture.request.returnContext
+        var parts = [
+            "request=\(fixture.request.id)",
+            "matter=\(context.matterID)",
+            "intent=\(context.intent.rawValue)",
+        ]
+        if let sourceSet = context.sourceSet {
+            parts.append("sourceSet=\(sourceSet.id)@\(sourceSet.version)")
+        }
+        if let authorityPacket = context.authorityPacket {
+            parts.append("authorityPacket=\(authorityPacket.id)@\(authorityPacket.version)")
+        }
+        if let workProduct = context.workProduct {
+            parts.append("workProduct=\(workProduct.id)@\(workProduct.version)")
+        }
+        if let checkpointID = context.checkpointID {
+            parts.append("checkpoint=\(checkpointID)")
+        }
+        return parts.joined(separator: " | ")
+    }
+
+    private var actionTitle: String {
+        switch fixture.request.requirement {
+        case .localAssistant:
+            "Set Up Local Assistant"
+        case .documentSearch:
+            "Set Up Document Search"
+        case .providerConnection:
+            "Connect CourtListener"
+        case .backupDestination:
+            "Set Up Backup"
+        }
+    }
+
+    private var blockerTitle: String {
+        switch fixture.request.requirement {
+        case .localAssistant:
+            "Local assistant required"
+        case .documentSearch:
+            "Document search setup required"
+        case .providerConnection:
+            "CourtListener connection required"
+        case .backupDestination:
+            "Backup destination required"
+        }
+    }
+
+    private var blockerDetail: String {
+        "Draft Motion is unavailable until this requirement is satisfied. Open the exact setup row, complete it, then return to this preserved task."
+    }
+
+    private var blockerAccessibilityValue: String {
+        "\(blockerTitle). Draft Motion is unavailable. Opens the required setup row."
+    }
+
+    private var isRequirementSatisfied: Bool {
+        switch fixture.request.requirement {
+        case let .localAssistant(role):
+            switch role {
+            case .drafting:
+                library.resolvedModel(for: .drafting) != nil
+            }
+        case let .documentSearch(step):
+            switch step {
+            case .embeddingModel:
+                documentSetup.selectedEmbeddingModel != nil
+                    && documentSetup.embeddingTestPassed
+            case .extractionToolchain:
+                documentSetup.toolchain?.meetsMinimumForSetup == true
+            case .storage:
+                documentSetup.storageInitialized
+            }
+        case let .providerConnection(provider):
+            switch provider {
+            case .courtListener:
+                settings.hasCourtListenerToken
+            }
+        case .backupDestination:
+            backup.hasDestination
+        }
+    }
+}
+#endif
 
 /// Hosts a matter's workspace, resolving the matter from the (observed) controller
 /// so it re-renders once the matter's scoped sub-controllers are wired.
@@ -261,10 +871,24 @@ private struct MatterDetailView: View {
     let queue: DocumentProcessingQueue
     @ObservedObject var settings: SettingsController
     let matterID: String
+    let onOpenImportSetup: () -> Void
+    let returnContext: WorkContext?
+    let onReturnContextConsumed: (WorkContext) -> Void
+    let onOpenNotesAndTime: (SavedWorkNotesHandoff) -> Void
 
     var body: some View {
         if let matter = controller.matters.first(where: { $0.id == matterID }) {
-            MatterWorkspaceView(controller: controller, library: library, queue: queue, settings: settings, matter: matter)
+            MatterWorkspaceView(
+                controller: controller,
+                library: library,
+                queue: queue,
+                settings: settings,
+                matter: matter,
+                onOpenImportSetup: onOpenImportSetup,
+                returnContext: returnContext,
+                onReturnContextConsumed: onReturnContextConsumed,
+                onOpenNotesAndTime: onOpenNotesAndTime
+            )
         } else {
             ContentUnavailableView(
                 "Select a Matter",

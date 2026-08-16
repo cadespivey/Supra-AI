@@ -6,8 +6,8 @@ import SupraCore
 import XCTest
 
 final class CorpusAnalysisSubmissionTests: XCTestCase {
-    func testTRPCREATESTORE01PreparedLedgerAndQueueJobCommitAtomicallyAndRetryExactlyOnce() throws {
-        // T-RP-CREATE-STORE-01 expected RED: Store has no single transaction
+    func testCorpusStore01PreparedLedgerAndQueueJobCommitAtomicallyAndRetryExactlyOnce() throws {
+        // T-CORPUS-STORE-01 standing guard: Store owns the single transaction
         // that commits a v2 frozen corpus ledger and its runnable queue job.
         // The current Sessions producer must prepare first and enqueue second,
         // leaving a crash window with an orphan planning run.
@@ -53,7 +53,7 @@ final class CorpusAnalysisSubmissionTests: XCTestCase {
         )
 
         var retryJob = fixture.job
-        retryJob.id = "guided-review-job-retry-4107"
+        retryJob.id = "corpus-analysis-job-retry-4107"
         try fixture.store.corpusAnalysis.submitPreparedCorpusAnalysis(
             run: fixture.run,
             partitions: [fixture.partition],
@@ -94,7 +94,7 @@ final class CorpusAnalysisSubmissionTests: XCTestCase {
         )
 
         var duplicateJob = retryJob
-        duplicateJob.id = "guided-review-duplicate-job-4107"
+        duplicateJob.id = "corpus-analysis-duplicate-job-4107"
         XCTAssertThrowsError(
             try fixture.store.corpusAnalysis.submitPreparedCorpusAnalysis(
                 run: fixture.run,
@@ -115,8 +115,8 @@ final class CorpusAnalysisSubmissionTests: XCTestCase {
         )
     }
 
-    func testTRPCREATESTORE02SubmissionRejectsMatterAndPayloadIdentityMismatchWithoutPartialRows() throws {
-        // T-RP-CREATE-STORE-02 expected RED: no Store-owned submission boundary
+    func testCorpusStore02SubmissionRejectsMatterAndPayloadIdentityMismatchWithoutPartialRows() throws {
+        // T-CORPUS-STORE-02 standing guard: the Store-owned submission boundary
         // validates the layer-owned queue identity: pristine corpus job state,
         // matching matter, and a v2 envelope naming the frozen run and digest.
         let fixture = try makeFixture(marker: "scope-4199")
@@ -125,7 +125,7 @@ final class CorpusAnalysisSubmissionTests: XCTestCase {
         )
 
         var wrongMatterJob = fixture.job
-        wrongMatterJob.id = "guided-review-wrong-matter-job-4199"
+        wrongMatterJob.id = "corpus-analysis-wrong-matter-job-4199"
         wrongMatterJob.matterID = foreignMatter.id
         XCTAssertThrowsError(
             try fixture.store.corpusAnalysis.submitPreparedCorpusAnalysis(
@@ -137,7 +137,7 @@ final class CorpusAnalysisSubmissionTests: XCTestCase {
         )
 
         var wrongRunJob = fixture.job
-        wrongRunJob.id = "guided-review-wrong-run-job-4199"
+        wrongRunJob.id = "corpus-analysis-wrong-run-job-4199"
         wrongRunJob.payloadJSON = payloadJSON(
             matterID: fixture.matterID,
             runID: "FOREIGN-RUN-4199",
@@ -155,7 +155,7 @@ final class CorpusAnalysisSubmissionTests: XCTestCase {
         )
 
         var wrongDigestJob = fixture.job
-        wrongDigestJob.id = "guided-review-wrong-digest-job-4199"
+        wrongDigestJob.id = "corpus-analysis-wrong-digest-job-4199"
         wrongDigestJob.payloadJSON = payloadJSON(
             matterID: fixture.matterID,
             runID: fixture.run.id,
@@ -173,7 +173,7 @@ final class CorpusAnalysisSubmissionTests: XCTestCase {
         )
 
         var wrongKindJob = fixture.job
-        wrongKindJob.id = "guided-review-wrong-kind-job-4199"
+        wrongKindJob.id = "corpus-analysis-wrong-kind-job-4199"
         wrongKindJob.kind = DocumentProcessingJobKind.process.rawValue
         XCTAssertThrowsError(
             try fixture.store.corpusAnalysis.submitPreparedCorpusAnalysis(
@@ -186,7 +186,7 @@ final class CorpusAnalysisSubmissionTests: XCTestCase {
         )
 
         var dirtyLifecycleJob = fixture.job
-        dirtyLifecycleJob.id = "guided-review-dirty-lifecycle-job-4199"
+        dirtyLifecycleJob.id = "corpus-analysis-dirty-lifecycle-job-4199"
         dirtyLifecycleJob.status = DocumentProcessingJobStatus.active.rawValue
         dirtyLifecycleJob.phase = DocumentProcessingPhase.analyzingCorpus.rawValue
         dirtyLifecycleJob.queuePosition = 99
@@ -201,7 +201,7 @@ final class CorpusAnalysisSubmissionTests: XCTestCase {
         )
 
         var malformedJob = fixture.job
-        malformedJob.id = "guided-review-malformed-job-4199"
+        malformedJob.id = "corpus-analysis-malformed-job-4199"
         malformedJob.payloadJSON = #"{"schema_version":2,"run_id":"MALFORMED-4199"}"#
         XCTAssertThrowsError(
             try fixture.store.corpusAnalysis.submitPreparedCorpusAnalysis(
@@ -227,10 +227,9 @@ final class CorpusAnalysisSubmissionTests: XCTestCase {
         )
     }
 
-    func testTRPCREATESTORE03LegacySameRunEnvelopeCannotAcquireSecondQueueIdentity() throws {
-        // T-RP-CREATE-STORE-03 expected RED: duplicate detection currently
-        // requires a complete v2 envelope, so a durable legacy corpus job that
-        // exposes the same run_id is invisible and permits a second job identity.
+    func testCorpusStore03LegacySameRunEnvelopeCannotAcquireSecondQueueIdentity() throws {
+        // T-CORPUS-STORE-03 standing guard: duplicate detection must also see a
+        // durable legacy corpus job whose minimal envelope exposes the same run_id.
         let fixture = try makeFixture(marker: "legacy-duplicate-4273")
         _ = try fixture.store.corpusAnalysis.createOrFetchPreparedRun(
             run: fixture.run,
@@ -265,17 +264,16 @@ final class CorpusAnalysisSubmissionTests: XCTestCase {
         }
     }
 
-    func testTRPCREATESTORE04ApprovedWholeMatterReceiptIsRecheckedAgainstLiveScopeAtomically() throws {
-        // T-RP-CREATE-STORE-04 expected RED: atomic prepared submission has no
-        // user-approved receipt input and does not reconstruct the live scope
-        // inside its writer transaction. A prepared whole-matter ledger can be
-        // committed after its approved denominator has changed.
+    func testCorpusStore04ApprovedWholeMatterReceiptIsRecheckedAgainstLiveScopeAtomically() throws {
+        // T-CORPUS-STORE-04 standing guard: atomic prepared submission must bind
+        // the user-approved receipt and reconstruct live scope inside its writer
+        // transaction, rejecting a changed whole-matter denominator.
         let fixture = try makeFixture(
             marker: "approved-receipt-drift-4314",
             wholeMatter: true
         )
-        let lateDocumentID = "guided-review-late-document-4314"
-        let lateRevisionID = "guided-review-late-revision-4314"
+        let lateDocumentID = "corpus-analysis-late-document-4314"
+        let lateRevisionID = "corpus-analysis-late-revision-4314"
         let lateDocument = try insertEligibleDocument(
             store: fixture.store,
             matterID: fixture.matterID,
@@ -313,7 +311,7 @@ final class CorpusAnalysisSubmissionTests: XCTestCase {
         )
         XCTAssertEqual(
             try fixture.store.documentLibrary.fetchDocument(id: lateDocumentID)?.displayName,
-            "Guided Review late source LATE-LIVE-SCOPE-CANARY-4314.txt",
+            "Corpus analysis late source LATE-LIVE-SCOPE-CANARY-4314.txt",
             "receipt rejection must not erase the independently committed late document"
         )
         XCTAssertEqual(
@@ -343,24 +341,24 @@ final class CorpusAnalysisSubmissionTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
         let store = try SupraStore(url: directory.appendingPathComponent("test.sqlite"))
-        let matter = try store.matters.createMatter(name: "Guided Review matter \(marker)")
+        let matter = try store.matters.createMatter(name: "Corpus analysis matter \(marker)")
         let text = "GUIDED-REVIEW-EXACT-TEXT-\(marker)-NONDEFAULT"
         let blob = try store.documentLibrary.upsertBlob(DocumentBlobRecord(
-            sha256: "guided-review-blob-\(marker)",
+            sha256: "corpus-analysis-blob-\(marker)",
             byteSize: text.utf8.count,
             originalExtension: "txt",
-            managedRelativePath: "blobs/guided-review-\(marker).txt"
+            managedRelativePath: "blobs/corpus-analysis-\(marker).txt"
         )).blob
         let document = try store.documentLibrary.insertDocument(MatterDocumentRecord(
             matterID: matter.id,
             blobID: blob.id,
-            displayName: "Guided Review source \(marker).txt",
+            displayName: "Corpus analysis source \(marker).txt",
             status: MatterDocumentStatus.ready.rawValue,
             extractionStatus: DocumentExtractionStatus.extracted.rawValue,
             indexStatus: DocumentIndexStatus.textIndexed.rawValue
         ))
         let part = DocumentPagePartRecord(
-            id: "guided-review-part-\(marker)",
+            id: "corpus-analysis-part-\(marker)",
             documentID: document.id,
             partIndex: 0,
             sourceKind: DocumentSourceKind.text.rawValue,
@@ -368,23 +366,23 @@ final class CorpusAnalysisSubmissionTests: XCTestCase {
             charCount: text.count
         )
         let revision = DocumentPartRevisionRecord(
-            id: "guided-review-revision-\(marker)",
+            id: "corpus-analysis-revision-\(marker)",
             documentID: document.id,
             partIndex: 0,
-            derivationKey: "guided-review-derivation-\(marker)",
+            derivationKey: "corpus-analysis-derivation-\(marker)",
             origin: "synthetic_test",
             method: "plain-text",
             text: text,
             charCount: text.count
         )
         let selection = DocumentPartSelectionRecord(
-            id: "guided-review-selection-\(marker)",
+            id: "corpus-analysis-selection-\(marker)",
             documentID: document.id,
             partIndex: 0,
             selectedRevisionID: revision.id,
-            selectionKey: "guided-review-selection-key-\(marker)",
+            selectionKey: "corpus-analysis-selection-key-\(marker)",
             selectedBy: "test",
-            decisionJSON: #"{"rule":"guided-review-atomic-submission"}"#
+            decisionJSON: #"{"rule":"corpus-analysis-atomic-submission"}"#
         )
         let persistedParts = try store.documentRevisions.replacePartsAndPersistLineage(
             documentID: document.id,
@@ -397,8 +395,8 @@ final class CorpusAnalysisSubmissionTests: XCTestCase {
             "a newly inserted synthetic part has no pre-existing user edit to preserve"
         )
 
-        let runID = "guided-review-run-\(marker)"
-        let partitionID = "guided-review-partition-\(marker)"
+        let runID = "corpus-analysis-run-\(marker)"
+        let partitionID = "corpus-analysis-partition-\(marker)"
         let memberKey = "document:\(document.id)"
         let requestDigest = SHA256.hash(data: Data("digest-\(marker)".utf8))
             .map { String(format: "%02x", $0) }
@@ -416,7 +414,7 @@ final class CorpusAnalysisSubmissionTests: XCTestCase {
         )
         let run = CorpusAnalysisRunRecord(
             id: runID,
-            runKey: "guided-review-key-\(marker)",
+            runKey: "corpus-analysis-key-\(marker)",
             matterID: matter.id,
             taskKind: CorpusAnalysisTaskKind.exhaustiveList.rawValue,
             scopeJSON: wholeMatter
@@ -425,7 +423,7 @@ final class CorpusAnalysisSubmissionTests: XCTestCase {
             corpusSnapshotJSON: try canonicalJSON(snapshot),
             partitionStrategy: "exact_revision_slice:characters=8192",
             partitionStrategyVersion: 2,
-            modelLineageJSON: #"{"artifact_fingerprint_sha256":"7777777777777777777777777777777777777777777777777777777777777777","content_binding_algorithm":"supra-release-model-sha256-v1","content_binding_schema_version":1,"model_repository":"synthetic/guided-review","model_revision":"0123456789abcdef0123456789abcdef01234567"}"#,
+            modelLineageJSON: #"{"artifact_fingerprint_sha256":"7777777777777777777777777777777777777777777777777777777777777777","content_binding_algorithm":"supra-release-model-sha256-v1","content_binding_schema_version":1,"model_repository":"synthetic/corpus-analysis","model_revision":"0123456789abcdef0123456789abcdef01234567"}"#,
             status: CorpusAnalysisRunStatus.planning.rawValue,
             requestSchemaVersion: 2,
             requestDigest: requestDigest
@@ -437,7 +435,7 @@ final class CorpusAnalysisSubmissionTests: XCTestCase {
             inputRevisionIDsJSON: try canonicalJSON([revision.id])
         )
         let slice = CorpusAnalysisPartitionSliceRecord(
-            id: "guided-review-slice-\(marker)",
+            id: "corpus-analysis-slice-\(marker)",
             runID: runID,
             partitionID: partitionID,
             ordinal: 0,
@@ -462,7 +460,7 @@ final class CorpusAnalysisSubmissionTests: XCTestCase {
             wholeMatter: wholeMatter
         )
         let job = DocumentProcessingJobRecord(
-            id: "guided-review-job-\(marker)",
+            id: "corpus-analysis-job-\(marker)",
             matterID: matter.id,
             kind: DocumentProcessingJobKind.corpusAnalysis.rawValue,
             payloadJSON: payload
@@ -489,23 +487,23 @@ final class CorpusAnalysisSubmissionTests: XCTestCase {
     ) throws -> MatterDocumentRecord {
         let text = "\(marker)-NONDEFAULT-TEXT"
         let blob = try store.documentLibrary.upsertBlob(DocumentBlobRecord(
-            id: "guided-review-late-blob-\(marker)",
-            sha256: "guided-review-late-sha-\(marker)",
+            id: "corpus-analysis-late-blob-\(marker)",
+            sha256: "corpus-analysis-late-sha-\(marker)",
             byteSize: text.utf8.count,
             originalExtension: "txt",
-            managedRelativePath: "blobs/guided-review-late-\(marker).txt"
+            managedRelativePath: "blobs/corpus-analysis-late-\(marker).txt"
         )).blob
         let document = try store.documentLibrary.insertDocument(MatterDocumentRecord(
             id: documentID,
             matterID: matterID,
             blobID: blob.id,
-            displayName: "Guided Review late source \(marker).txt",
+            displayName: "Corpus analysis late source \(marker).txt",
             status: MatterDocumentStatus.ready.rawValue,
             extractionStatus: DocumentExtractionStatus.extracted.rawValue,
             indexStatus: DocumentIndexStatus.textIndexed.rawValue
         ))
         let part = DocumentPagePartRecord(
-            id: "guided-review-late-part-\(marker)",
+            id: "corpus-analysis-late-part-\(marker)",
             documentID: document.id,
             partIndex: 0,
             sourceKind: DocumentSourceKind.text.rawValue,
@@ -516,20 +514,20 @@ final class CorpusAnalysisSubmissionTests: XCTestCase {
             id: revisionID,
             documentID: document.id,
             partIndex: 0,
-            derivationKey: "guided-review-late-derivation-\(marker)",
+            derivationKey: "corpus-analysis-late-derivation-\(marker)",
             origin: "synthetic_test",
             method: "plain-text",
             text: text,
             charCount: text.count
         )
         let selection = DocumentPartSelectionRecord(
-            id: "guided-review-late-selection-\(marker)",
+            id: "corpus-analysis-late-selection-\(marker)",
             documentID: document.id,
             partIndex: 0,
             selectedRevisionID: revision.id,
-            selectionKey: "guided-review-late-selection-key-\(marker)",
+            selectionKey: "corpus-analysis-late-selection-key-\(marker)",
             selectedBy: "test",
-            decisionJSON: #"{"rule":"guided-review-live-scope-counterexample"}"#
+            decisionJSON: #"{"rule":"corpus-analysis-live-scope-counterexample"}"#
         )
         let persistedParts = try store.documentRevisions.replacePartsAndPersistLineage(
             documentID: document.id,
@@ -556,7 +554,7 @@ final class CorpusAnalysisSubmissionTests: XCTestCase {
             ? #"{"schema_version":1}"#
             : "{\"document_ids\":[\"\(documentID)\"],\"schema_version\":2}"
         return """
-        {"pinned_model":{"artifact_fingerprint_sha256":"7777777777777777777777777777777777777777777777777777777777777777","content_binding_algorithm":"supra-release-model-sha256-v1","content_binding_schema_version":1,"model_repository":"synthetic/guided-review","model_revision":"0123456789abcdef0123456789abcdef01234567"},"request_digest":"\(requestDigest)","run_id":"\(runID)","schema_version":2,"task":{"kind":"exhaustive_list","request":{"character_budget":8192,"matter_id":"\(matterID)","maximum_retry_count":2,"prompt_builder_version":"exhaustive-list-v1","query":"Extract NONDEFAULT-RENEWAL-4199","run_key":"\(runKey)","scope":\(scopeJSON),"task_schema_version":1,"title":"Guided Review 4199"}}}
+        {"pinned_model":{"artifact_fingerprint_sha256":"7777777777777777777777777777777777777777777777777777777777777777","content_binding_algorithm":"supra-release-model-sha256-v1","content_binding_schema_version":1,"model_repository":"synthetic/corpus-analysis","model_revision":"0123456789abcdef0123456789abcdef01234567"},"request_digest":"\(requestDigest)","run_id":"\(runID)","schema_version":2,"task":{"kind":"exhaustive_list","request":{"character_budget":8192,"matter_id":"\(matterID)","maximum_retry_count":2,"prompt_builder_version":"exhaustive-list-v1","query":"Extract NONDEFAULT-RENEWAL-4199","run_key":"\(runKey)","scope":\(scopeJSON),"task_schema_version":1,"title":"Corpus Analysis 4199"}}}
         """
     }
 

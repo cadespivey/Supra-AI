@@ -5,6 +5,7 @@ repo_root="$(git rev-parse --show-toplevel)"
 backup_source="${repo_root}/Packages/SupraSessions/Sources/SupraSessions/BackupController.swift"
 backup_tests="${repo_root}/Packages/SupraSessions/Tests/SupraSessionsTests/BackupControllerTests.swift"
 billing_source="${repo_root}/Packages/SupraSessions/Sources/SupraSessions/BillingDraftController.swift"
+runtime_client_source="${repo_root}/Packages/SupraRuntimeClient/Sources/SupraRuntimeClient/RuntimeClient.swift"
 failures=0
 
 record_failure() {
@@ -35,6 +36,20 @@ if ! grep -Fq -- 'let profile: MatterBillingProfileRecord?' "$billing_source"; t
 fi
 if grep -nF -- 'record.matterID.map { profile(for:' "$billing_source" >&2; then
   record_failure 'billing profile lookup still uses the ambiguous Optional.map expression'
+fi
+
+# Expected RED on protected CI: a sending Task closure cannot safely capture the
+# mutable weak-self box owned by the event-sink reply callback. Snapshot the
+# Sendable client reference and generation identity before spawning cancellation.
+stream_failure_body="$(sed -n '/case let \.failure(error):/,/continuation\.finish(throwing: error)/p' "$runtime_client_source")"
+if grep -Fq -- 'self?.cancelGeneration(request.generationID)' <<<"$stream_failure_body"; then
+  record_failure 'runtime stream failure cancellation captures weak self and request inside a sending Task'
+fi
+if ! grep -Fq -- 'let cancellationClient = self' <<<"$stream_failure_body" \
+    || ! grep -Fq -- 'let generationID = request.generationID' <<<"$stream_failure_body" \
+    || ! grep -Fq -- 'Task { [cancellationClient, generationID] in' <<<"$stream_failure_body" \
+    || ! grep -Fq -- 'cancellationClient?.cancelGeneration(generationID)' <<<"$stream_failure_body"; then
+  record_failure 'runtime stream failure cancellation does not snapshot its Sendable Task captures'
 fi
 
 if (( failures != 0 )); then

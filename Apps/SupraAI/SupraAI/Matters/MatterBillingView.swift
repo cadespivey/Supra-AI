@@ -180,7 +180,7 @@ struct MatterBillingView: View {
         }
     }
 
-    private func guidelineRow(_ document: MatterDocumentRecord) -> some View {
+    private func guidelineRow(_ document: MatterDocumentSummary) -> some View {
         HStack(spacing: 10) {
             Image(systemName: "doc.text").foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 1) {

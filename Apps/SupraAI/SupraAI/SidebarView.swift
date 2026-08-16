@@ -8,21 +8,13 @@ struct SidebarView: View {
     /// The row under the cursor, so its background can match the selection pill.
     @State private var hoveredRow: SidebarSelection?
     @State private var recycleBinHovering = false
+    @State private var retryMutation: (() -> Void)?
+    @State private var correctMutation: (() -> Void)?
 
     var body: some View {
         List(selection: $selection) {
-            ForEach(AppRoute.allCases) { route in
-                Label(route.title, systemImage: route.systemImage)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
-                    .accessibilityIdentifier("sidebar.route.\(route.rawValue)")
-                    .onHover { setRowHover($0, .route(route)) }
-                    .listRowBackground(rowHoverBackground(.route(route)))
-                    .tag(SidebarSelection.route(route))
-            }
-
             // All matters live directly in the primary sidebar (no inner column).
-            // List selection drives the highlight; the "+" creates a new matter.
+            // Keep them first because they are the main unit of legal work.
             Section {
                 if isGroupedSortMode {
                     // Grouped modes (client / practice area): a non-selectable
@@ -82,8 +74,33 @@ struct SidebarView: View {
                 }
                 .font(.supraBody)
             }
+
+            Section("Work") {
+                ForEach(AppRoute.workRoutes) { route in
+                    routeRow(route)
+                }
+            }
+
+            Section("Utilities") {
+                ForEach(AppRoute.utilityRoutes) { route in
+                    routeRow(route)
+                }
+            }
         }
         .navigationTitle("Supra AI")
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if let failure = matters.lastMutationFailure,
+               let retryMutation {
+                UserMutationFailureBanner(
+                    failure: failure,
+                    retry: retryMutation,
+                    correct: correctMutation
+                )
+                .padding(.horizontal, 8)
+                .padding(.top, 6)
+                .accessibilityIdentifier("mutation.failure.sidebar")
+            }
+        }
         // Pinned to the very bottom of the sidebar (below the Matters list, which can
         // grow), so deleted items always have a clear, fixed home.
         .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -92,11 +109,8 @@ struct SidebarView: View {
                 Button {
                     selection = .recycleBin
                 } label: {
-                    // Centered and destructive-tinted, mirroring the matter view's Delete
-                    // button (red with a red hover wash) — sized as an inset pill for the bar.
-                    Label("Recycle Bin", systemImage: "trash")
+                    Label(RecycleBinNavigationPresentation.standard.title, systemImage: "trash")
                         .frame(maxWidth: .infinity, alignment: .center)
-                        .foregroundStyle(.red)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 6)
                         .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
@@ -110,13 +124,29 @@ struct SidebarView: View {
                 .animation(.easeOut(duration: 0.12), value: recycleBinHovering)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 6)
+                .help(RecycleBinNavigationPresentation.standard.accessibilityDescription)
+                .accessibilityValue(
+                    RecycleBinNavigationPresentation.standard.accessibilityDescription
+                )
                 .accessibilityIdentifier("sidebar.recycleBin")
             }
             .background(.bar)
         }
         .onAppear {
-            Task { @MainActor in matters.loadMatters() }
+            Task { @MainActor in
+                matters.loadMatters(selectFirstMatterIfNeeded: false)
+            }
         }
+    }
+
+    private func routeRow(_ route: AppRoute) -> some View {
+        Label(route.title, systemImage: route.systemImage)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .accessibilityIdentifier("sidebar.route.\(route.rawValue)")
+            .onHover { setRowHover($0, .route(route)) }
+            .listRowBackground(rowHoverBackground(.route(route)))
+            .tag(SidebarSelection.route(route))
     }
 
     private func matterRow(_ matter: MatterSummary) -> some View {
@@ -136,14 +166,14 @@ struct SidebarView: View {
         .tag(SidebarSelection.matter(matter.id))
         .contextMenu {
             Button(matter.isPinned ? "Unpin" : "Pin") {
-                matters.setPinned(matterID: matter.id, pinned: !matter.isPinned)
+                performPin(matterID: matter.id, pinned: !matter.isPinned)
             }
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(matter.name)
         .accessibilityValue(matter.isPinned ? "Pinned" : "Not pinned")
         .accessibilityAction(named: matter.isPinned ? "Unpin" : "Pin") {
-            matters.setPinned(matterID: matter.id, pinned: !matter.isPinned)
+            performPin(matterID: matter.id, pinned: !matter.isPinned)
         }
         .accessibilityIdentifier("matter.row.\(matter.name)")
     }
@@ -151,13 +181,54 @@ struct SidebarView: View {
     private var sortModeBinding: Binding<MatterSortMode> {
         Binding(
             get: { matters.sortMode },
-            set: { matters.setSortMode($0) }
+            set: { performSortMode($0) }
         )
     }
 
     private var moveHandler: ((IndexSet, Int) -> Void)? {
         guard matters.sortMode == .manual else { return nil }
-        return { matters.moveMatters(fromOffsets: $0, toOffset: $1) }
+        return { performMove(fromOffsets: $0, toOffset: $1) }
+    }
+
+    private func performPin(matterID: String, pinned: Bool) {
+        let outcome = matters.attemptSetPinned(matterID: matterID, pinned: pinned)
+        captureFailure(
+            outcome,
+            retry: { performPin(matterID: matterID, pinned: pinned) }
+        )
+    }
+
+    private func performMove(fromOffsets: IndexSet, toOffset: Int) {
+        let outcome = matters.attemptMoveMatters(
+            fromOffsets: fromOffsets,
+            toOffset: toOffset
+        )
+        captureFailure(
+            outcome,
+            retry: { performMove(fromOffsets: fromOffsets, toOffset: toOffset) }
+        )
+    }
+
+    private func performSortMode(_ mode: MatterSortMode) {
+        let outcome = matters.attemptSetSortMode(mode)
+        captureFailure(
+            outcome,
+            retry: { performSortMode(mode) }
+        )
+    }
+
+    private func captureFailure<Success>(
+        _ outcome: UserMutationOutcome<Success>,
+        retry: @escaping () -> Void,
+        correct: (() -> Void)? = nil
+    ) {
+        guard outcome.failure != nil else {
+            retryMutation = nil
+            correctMutation = nil
+            return
+        }
+        retryMutation = retry
+        correctMutation = correct
     }
 
     private var isGroupedSortMode: Bool {
@@ -223,10 +294,10 @@ struct SidebarView: View {
         (hoveredRow == row && selection != row) ? Color.primary.opacity(0.09) : .clear
     }
 
-    /// Recycle Bin fill: a stronger red when it's the active view, a lighter red on
-    /// hover (matching the matter Delete button's danger wash), clear otherwise.
+    /// Recycle Bin is a restorable destination, so its selection and hover treatment
+    /// matches ordinary navigation rather than a destructive action.
     private var recycleBinFill: Color {
-        if selection == .recycleBin { return Color.red.opacity(0.18) }
-        return recycleBinHovering ? Color.red.opacity(0.14) : .clear
+        if selection == .recycleBin { return Color.accentColor.opacity(0.16) }
+        return recycleBinHovering ? Color.primary.opacity(0.09) : .clear
     }
 }

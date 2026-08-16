@@ -10,12 +10,37 @@ struct ModelsView: View {
     @ObservedObject var downloader: ModelDownloadController
     @ObservedObject var documentSetup: DocumentIntelligenceSetupController
     @ObservedObject var embeddingDownloader: EmbeddingModelDownloadController
+    var setupNavigationRequest: SetupNavigationRequest?
+    var onReturnFromSetup: (SetupNavigationRequest) -> Void
     @State private var showDownloadSheet = false
     @State private var pendingDelete: ModelSummary?
     @State private var deleteBlocked: String?
+    @FocusState private var focusedSetupRequirementID: String?
+
+    init(
+        library: ModelLibrary,
+        downloader: ModelDownloadController,
+        documentSetup: DocumentIntelligenceSetupController,
+        embeddingDownloader: EmbeddingModelDownloadController,
+        setupNavigationRequest: SetupNavigationRequest? = nil,
+        onReturnFromSetup: @escaping (SetupNavigationRequest) -> Void = { _ in }
+    ) {
+        self.library = library
+        self.downloader = downloader
+        self.documentSetup = documentSetup
+        self.embeddingDownloader = embeddingDownloader
+        self.setupNavigationRequest = setupNavigationRequest
+        self.onReturnFromSetup = onReturnFromSetup
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            if let request = aiSetupRequest {
+                SetupNavigationReturnBar(
+                    request: request,
+                    onReturn: onReturnFromSetup
+                )
+            }
             modelList
             Divider()
             footer
@@ -42,6 +67,26 @@ struct ModelsView: View {
             Button("OK", role: .cancel) { deleteBlocked = nil }
         } message: {
             Text(deleteBlocked ?? "")
+        }
+        .onAppear { focusRequestedSetupRow() }
+        .onChange(of: setupNavigationRequest?.id) { _, _ in
+            focusRequestedSetupRow()
+        }
+        .onDisappear { focusedSetupRequirementID = nil }
+    }
+
+    private var aiSetupRequest: SetupNavigationRequest? {
+        guard let setupNavigationRequest,
+              setupNavigationRequest.navigationTarget.isAISetup else { return nil }
+        return setupNavigationRequest
+    }
+
+    private func focusRequestedSetupRow() {
+        guard let request = aiSetupRequest else { return }
+        let identifier = request.navigationTarget.rowAccessibilityIdentifier
+        Task { @MainActor in
+            await Task.yield()
+            focusedSetupRequirementID = identifier
         }
     }
 
@@ -77,8 +122,9 @@ struct ModelsView: View {
     // Laid out as a plain ScrollView (not a List) so sections are separated by
     // whitespace alone — macOS List separators can't be reliably hidden.
     private var modelList: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 44) {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 44) {
                 modelSection("Registered Models") {
                     if library.models.isEmpty {
                         noModelsRow
@@ -106,7 +152,11 @@ struct ModelsView: View {
                     "Task Models",
                     footer: "The runtime holds one model at a time."
                 ) {
-                    RuntimeModelSetupView(library: library, downloader: downloader)
+                    RuntimeModelSetupView(
+                        library: library,
+                        downloader: downloader,
+                        focusedSetupRequirementID: $focusedSetupRequirementID
+                    )
                 }
 
                 modelSection(
@@ -116,10 +166,20 @@ struct ModelsView: View {
                     EmbeddingModelSetupView(setup: documentSetup, downloader: embeddingDownloader)
                 }
 
-                DocumentIntelligenceSection(setup: documentSetup)
+                DocumentIntelligenceSection(
+                    setup: documentSetup,
+                    focusedSetupRequirementID: $focusedSetupRequirementID
+                )
+                }
+                .padding(20)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(20)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .onChange(of: focusedSetupRequirementID) { _, identifier in
+                guard let identifier else { return }
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    proxy.scrollTo(identifier, anchor: .center)
+                }
+            }
         }
     }
 
@@ -374,6 +434,7 @@ private struct ModelRoleAssignmentRow: View {
 private struct RuntimeModelSetupView: View {
     @ObservedObject var library: ModelLibrary
     @ObservedObject var downloader: ModelDownloadController
+    let focusedSetupRequirementID: FocusState<String?>.Binding
     @State private var downloadSelection = ""
     @State private var customRepoID = ""
 
@@ -407,17 +468,21 @@ private struct RuntimeModelSetupView: View {
 
             step(number: 2, title: "Assign to tasks", enabled: !library.models.isEmpty) {
                 if library.models.isEmpty {
-                    Text("Download a model first.").font(.supraCaption).foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Drafting assistant")
+                            .font(.supraHeadline)
+                        Text("Download a model first, then assign it to drafting.")
+                            .font(.supraCaption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .setupRequirementFocus(
+                        "aiSetup.requirement.localAssistant.drafting",
+                        focusedIdentifier: focusedSetupRequirementID
+                    )
                 } else {
                     VStack(spacing: 10) {
                         ForEach(ModelRole.allCases, id: \.self) { role in
-                            ModelRoleAssignmentRow(
-                                role: role,
-                                models: library.models,
-                                assignedModelID: assignmentBinding(for: role),
-                                resolvedModel: library.resolvedModel(for: role),
-                                recommendedModel: library.recommendedModel(for: role)
-                            )
+                            assignmentRow(for: role)
                         }
                     }
                     Text("Assigned models load automatically when a task runs; loading below verifies the files now.")
@@ -471,6 +536,25 @@ private struct RuntimeModelSetupView: View {
             get: { library.effectiveAssignedModelID(for: role) ?? "" },
             set: { newValue in library.assignModel(newValue.isEmpty ? nil : newValue, to: role) }
         )
+    }
+
+    @ViewBuilder
+    private func assignmentRow(for role: ModelRole) -> some View {
+        let row = ModelRoleAssignmentRow(
+            role: role,
+            models: library.models,
+            assignedModelID: assignmentBinding(for: role),
+            resolvedModel: library.resolvedModel(for: role),
+            recommendedModel: library.recommendedModel(for: role)
+        )
+        if role == .drafting {
+            row.setupRequirementFocus(
+                "aiSetup.requirement.localAssistant.drafting",
+                focusedIdentifier: focusedSetupRequirementID
+            )
+        } else {
+            row
+        }
     }
 
     @ViewBuilder private var runtimeStatus: some View {
@@ -631,10 +715,11 @@ private struct ModelDownloadSheet: View {
 
 /// Document Intelligence setup (Milestone 3 §2): chat-model readiness, embedding
 /// model selection/auto-verify, toolchain/OCR checks, storage init, and
-/// notifications. Import is blocked until this is complete. Lives in the Models tab
+/// notifications. Import is blocked until this is complete. Lives in AI Setup
 /// (the models it depends on are configured in the sections above).
 private struct DocumentIntelligenceSection: View {
     @ObservedObject var setup: DocumentIntelligenceSetupController
+    let focusedSetupRequirementID: FocusState<String?>.Binding
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -664,16 +749,34 @@ private struct DocumentIntelligenceSection: View {
             stepRow(
                 "Embedding model",
                 done: setup.selectedEmbeddingModel != nil && setup.embeddingTestPassed,
-                detail: setup.selectedEmbeddingModel.map { "\($0.displayName) — manage it above." } ?? "Download and select one above."
+                detail: setup.selectedEmbeddingModel.map { "\($0.displayName) — manage it above." } ?? "Download and select one above.",
+                requirementID: "aiSetup.requirement.documentSearch.embeddingModel"
             )
             stepRow(
                 "Extraction / OCR toolchain",
                 done: setup.toolchain?.meetsMinimumForSetup ?? false,
-                detail: setup.toolchain.map { "OCR languages: \($0.ocrLanguages.count)" } ?? "Not checked yet."
+                detail: setup.toolchain.map { "OCR languages: \($0.ocrLanguages.count)" } ?? "Not checked yet.",
+                requirementID: "aiSetup.requirement.documentSearch.extractionToolchain"
             )
-            stepRow("Document storage initialized", done: setup.storageInitialized, detail: "Creates app-managed storage.") {
-                if !setup.storageInitialized {
-                    Button("Initialize") { setup.initializeStorage() }
+            stepRow(
+                "Document storage initialized",
+                done: setup.storageInitialized,
+                detail: "Creates app-managed storage.",
+                requirementID: "aiSetup.requirement.documentSearch.storage"
+            ) {
+                if setup.storageInitialized {
+                    Label("Ready", systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                        .accessibilityIdentifier(
+                            "aiSetup.requirement.documentSearch.storage.satisfied"
+                        )
+                } else {
+                    Button("Initialize Document Storage") {
+                        setup.initializeStorage()
+                    }
+                    .accessibilityIdentifier(
+                        "aiSetup.requirement.documentSearch.storage.action"
+                    )
                 }
             }
             stepRow(
@@ -725,13 +828,15 @@ private struct DocumentIntelligenceSection: View {
         }
     }
 
+    @ViewBuilder
     private func stepRow(
         _ title: String,
         done: Bool,
         detail: String,
+        requirementID: String? = nil,
         @ViewBuilder trailing: () -> some View = { EmptyView() }
     ) -> some View {
-        HStack(alignment: .firstTextBaseline) {
+        let row = HStack(alignment: .firstTextBaseline) {
             Image(systemName: done ? "checkmark.circle.fill" : "circle")
                 .foregroundStyle(done ? .green : .secondary)
             VStack(alignment: .leading, spacing: 2) {
@@ -740,6 +845,14 @@ private struct DocumentIntelligenceSection: View {
             }
             Spacer()
             trailing()
+        }
+        if let requirementID {
+            row.setupRequirementFocus(
+                requirementID,
+                focusedIdentifier: focusedSetupRequirementID
+            )
+        } else {
+            row
         }
     }
 }

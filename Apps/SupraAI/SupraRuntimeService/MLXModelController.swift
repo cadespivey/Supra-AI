@@ -19,13 +19,17 @@ protocol ChatModelController: Sendable {
         path: String,
         managedRootPath: String?,
         expectedIdentity: ModelDirectoryIdentity?,
-        contentBinding: RuntimeModelContentBinding?
+        contentBinding: RuntimeModelContentBinding?,
+        resourceProfile: ModelResourceProfile,
+        contextAdmissionPlanner: RuntimeContextAdmissionPlanner
     ) async throws -> ChatModelLoadResult
 
     func generate(
         prompt: String,
         systemPrompt: String?,
         history: [GenerateRequest.Turn],
+        contextWorkload: RuntimeContextWorkload,
+        allowsExactSourceRepacking: Bool,
         options: GenerationOptions,
         onToken: @escaping @Sendable (String) async -> Void
     ) async throws -> RuntimeMetrics
@@ -39,6 +43,7 @@ protocol ChatModelController: Sendable {
 enum MLXModelControllerError: LocalizedError {
     case modelDirectoryMissing(String)
     case modelNotLoaded
+    case contextAdmissionRequired(RuntimeContextCorrectiveAction)
 
     var errorDescription: String? {
         switch self {
@@ -46,6 +51,8 @@ enum MLXModelControllerError: LocalizedError {
             "The model directory does not exist: \(path)"
         case .modelNotLoaded:
             "No MLX model is loaded."
+        case let .contextAdmissionRequired(action):
+            "The prepared prompt exceeds the bounded runtime context; corrective action is required: \(action)."
         }
     }
 }
@@ -64,6 +71,8 @@ actor MLXModelController: ChatModelController {
     /// orphaned silently. A later load fails closed until these retries pass.
     private var snapshotsPendingRemoval: [RuntimeModelSnapshot] = []
     private var loadedPath: String?
+    private var loadedResourceProfile: ModelResourceProfile?
+    private var contextAdmissionPlanner: RuntimeContextAdmissionPlanner?
     private var cancellationRequested = false
     /// True when the loaded model's chat template honors an `enable_thinking`
     /// flag (Qwen3-style reasoning models). For those we suppress the reasoning
@@ -81,7 +90,9 @@ actor MLXModelController: ChatModelController {
         path: String,
         managedRootPath: String?,
         expectedIdentity: ModelDirectoryIdentity?,
-        contentBinding: RuntimeModelContentBinding?
+        contentBinding: RuntimeModelContentBinding?,
+        resourceProfile: ModelResourceProfile,
+        contextAdmissionPlanner: RuntimeContextAdmissionPlanner
     ) async throws -> ChatModelLoadResult {
         let startedAt = Date()
         try cleanupRetiredSnapshots()
@@ -117,6 +128,8 @@ actor MLXModelController: ChatModelController {
                 container = nil
                 modelSnapshot = pendingSnapshot
                 loadedPath = loadURL.path
+                loadedResourceProfile = resourceProfile
+                self.contextAdmissionPlanner = contextAdmissionPlanner
                 cancellationRequested = false
                 templateSupportsThinkingToggle = false
                 isLifecycleTestModel = true
@@ -140,6 +153,8 @@ actor MLXModelController: ChatModelController {
             container = loadedContainer
             modelSnapshot = pendingSnapshot
             loadedPath = loadURL.path
+            loadedResourceProfile = resourceProfile
+            self.contextAdmissionPlanner = contextAdmissionPlanner
             cancellationRequested = false
             templateSupportsThinkingToggle = supportsThinkingToggle
 #if DEBUG
@@ -163,6 +178,8 @@ actor MLXModelController: ChatModelController {
         prompt: String,
         systemPrompt: String?,
         history: [GenerateRequest.Turn],
+        contextWorkload: RuntimeContextWorkload,
+        allowsExactSourceRepacking: Bool,
         options rawOptions: GenerationOptions,
         onToken: @escaping @Sendable (String) async -> Void
     ) async throws -> RuntimeMetrics {
@@ -197,6 +214,9 @@ actor MLXModelController: ChatModelController {
         guard let container else {
             throw MLXModelControllerError.modelNotLoaded
         }
+        guard let loadedResourceProfile, let contextAdmissionPlanner else {
+            throw MLXModelControllerError.modelNotLoaded
+        }
         // Defense-in-depth: clamp parameters that crossed the XPC boundary so a
         // malformed/hostile request can't pass NaN/negative/absurd values to MLX.
         let options = rawOptions.clampedForRuntime()
@@ -209,6 +229,10 @@ actor MLXModelController: ChatModelController {
             systemPrompt: systemPrompt,
             history: history,
             options: options,
+            resourceProfile: loadedResourceProfile,
+            contextAdmissionPlanner: contextAdmissionPlanner,
+            contextWorkload: contextWorkload,
+            allowsExactSourceRepacking: allowsExactSourceRepacking,
             templateSupportsThinkingToggle: templateSupportsThinkingToggle
         )
 
@@ -283,6 +307,8 @@ actor MLXModelController: ChatModelController {
         cancellationRequested = true
         container = nil
         loadedPath = nil
+        loadedResourceProfile = nil
+        contextAdmissionPlanner = nil
         let snapshot = modelSnapshot
         modelSnapshot = nil
 #if DEBUG
@@ -354,6 +380,10 @@ private func generationStream(
     systemPrompt: String?,
     history: [GenerateRequest.Turn],
     options: GenerationOptions,
+    resourceProfile: ModelResourceProfile,
+    contextAdmissionPlanner: RuntimeContextAdmissionPlanner,
+    contextWorkload: RuntimeContextWorkload,
+    allowsExactSourceRepacking: Bool,
     templateSupportsThinkingToggle: Bool
 ) async throws -> (stream: AsyncStream<Generation>, contextTrimmed: Bool, contextOverflowed: Bool) {
     // `enable_thinking` is read by Qwen3-style chat templates. Drafting and
@@ -370,27 +400,62 @@ private func generationStream(
         return try await container.prepare(input: userInput)
     }
 
-    // Token budget so prompt + output fit the KV window. Beyond it the
-    // RotatingKVCache silently evicts the FRONT of the prompt (the system grounding
-    // and top sources) during generation. Protect those + the live question by
-    // dropping the oldest conversation turns (the lowest-priority context) until the
-    // prompt fits; flag when we had to.
+    // Count the fully prepared prompt before any history change. Admission joins
+    // that exact tokenizer result to the loaded model profile and current memory
+    // envelope, so rotating-KV eviction cannot silently discard front-loaded
+    // grounding or instructions after generation has started.
     let budget = PromptBudget.promptTokenBudget(
         maxContextTokens: options.maxContextTokens,
         maxOutputTokens: options.maxOutputTokens
     )
     var keptHistory = history
     var input = try await prepared(keptHistory)
+    let actualPromptTokenCount = input.text.tokens.size
+    let admission = try contextAdmissionPlanner.evaluate(
+        RuntimeContextAdmissionRequest(
+            wireID: "runtime-context-\(resourceProfile.profileID)",
+            modelID: resourceProfile.modelID,
+            modelArtifactID: resourceProfile.modelArtifactID,
+            modelRevision: resourceProfile.modelRevision,
+            expectedModelSHA256: resourceProfile.contentFingerprintSHA256,
+            requestedContextTokens: budget,
+            actualPromptTokens: actualPromptTokenCount,
+            reservedOutputTokens: options.maxOutputTokens,
+            workload: contextWorkload,
+            allowsExactSourceRepacking: allowsExactSourceRepacking
+        ),
+        profile: resourceProfile
+    )
+    try enforceContextAdmissionInvariant(
+        admission,
+        didSilentlyTruncateExactEvidence: false
+    )
+
     var contextTrimmed = false
-    while input.text.tokens.size > budget, !keptHistory.isEmpty {
-        keptHistory.removeFirst()
-        contextTrimmed = true
-        input = try await prepared(keptHistory)
+    switch admission.disposition {
+    case .admit:
+        break
+
+    case .trimHistoryWithDisclosure:
+        while input.text.tokens.size > admission.maximumAdmittedPromptTokens,
+              !keptHistory.isEmpty {
+            keptHistory.removeFirst()
+            contextTrimmed = true
+            input = try await prepared(keptHistory)
+        }
+        guard input.text.tokens.size <= admission.maximumAdmittedPromptTokens else {
+            throw MLXModelControllerError.contextAdmissionRequired(
+                admission.correctiveAction
+            )
+        }
+
+    case .repackExactSources, .defer:
+        throw MLXModelControllerError.contextAdmissionRequired(
+            admission.correctiveAction
+        )
     }
-    // If the system prompt + current prompt STILL overflow with no history left, the
-    // front of the prompt (grounding contract + top evidence) is evicted mid-
-    // generation and cannot be recovered — distinct from the benign history-drop case.
-    let contextOverflowed = input.text.tokens.size > budget
+
+    let contextOverflowed = false
 
     let stream = try await container.generate(
         input: input,
@@ -405,6 +470,18 @@ private func generationStream(
         )
     )
     return (stream, contextTrimmed, contextOverflowed)
+}
+
+private func enforceContextAdmissionInvariant(
+    _ decision: RuntimeContextAdmissionDecision,
+    didSilentlyTruncateExactEvidence: Bool
+) throws {
+    guard !didSilentlyTruncateExactEvidence,
+          !decision.didSilentlyTruncateExactEvidence else {
+        throw MLXModelControllerError.contextAdmissionRequired(
+            decision.correctiveAction
+        )
+    }
 }
 
 private func chatMessages(

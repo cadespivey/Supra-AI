@@ -1,8 +1,9 @@
 # Backup and Restore
 
-> **Status:** Implemented on `main` for the next release after v2.3.4. The synthetic success,
-> rollback, and unsupported-schema release qualification drill below remains required and is not
-> recorded as complete.
+> **Status:** Implemented on `main` for the next release after v2.3.4. Synthetic success,
+> rollback, and unsupported-schema execution evidence is recorded in
+> [Synthetic-Restore-Drill-Receipt.md](Architecture/Remediation/Synthetic-Restore-Drill-Receipt.md);
+> owner signature remains required before release qualification is complete.
 
 Supra AI can keep completed database snapshots and the managed documents they reference in a
 folder you choose. Configure that folder in **Settings → Backup**, then use **Back Up Now** whenever

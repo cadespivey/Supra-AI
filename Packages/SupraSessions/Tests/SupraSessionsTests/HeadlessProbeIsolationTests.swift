@@ -50,6 +50,12 @@ final class HeadlessProbeIsolationTests: XCTestCase {
             HeadlessProbeMode.resolve(arguments: ["SupraAI", "-runCoverageShadowProbe"]),
             .single(.coverageShadow)
         )
+        XCTAssertEqual(
+            HeadlessProbeMode.resolve(arguments: [
+                "SupraAI", "-runNativeRAGControl", "-nativeRAGCorpusRoot", "/synthetic/corpus",
+            ]),
+            .single(.nativeRAGControl)
+        )
     }
 
     /// T-PROBE-03. Probe modes are mutually exclusive: several probe flags resolve to
@@ -62,8 +68,9 @@ final class HeadlessProbeIsolationTests: XCTestCase {
         XCTAssertEqual(
             HeadlessProbeMode.resolve(arguments: [
                 "SupraAI", "-runCoverageShadowProbe", "-runCapabilityProbe", "-runTypedProseABProbe",
+                "-runNativeRAGControl",
             ]),
-            .conflict([.coverageShadow, .capability, .typedProseAB])
+            .conflict([.coverageShadow, .capability, .typedProseAB, .nativeRAGControl])
         )
     }
 
@@ -73,6 +80,7 @@ final class HeadlessProbeIsolationTests: XCTestCase {
     func testIsolationRequirementIsExplicitPerMode() {
         XCTAssertTrue(HeadlessProbeMode.capability.requiresIsolatedStore)
         XCTAssertTrue(HeadlessProbeMode.typedProseAB.requiresIsolatedStore)
+        XCTAssertTrue(HeadlessProbeMode.nativeRAGControl.requiresIsolatedStore)
         XCTAssertFalse(HeadlessProbeMode.coverageShadow.requiresIsolatedStore)
     }
 
@@ -88,6 +96,7 @@ final class HeadlessProbeIsolationTests: XCTestCase {
         )
         XCTAssertFalse(HeadlessProbeMode.Resolution.single(.capability).permitsNormalBootstrap)
         XCTAssertFalse(HeadlessProbeMode.Resolution.single(.typedProseAB).permitsNormalBootstrap)
+        XCTAssertFalse(HeadlessProbeMode.Resolution.single(.nativeRAGControl).permitsNormalBootstrap)
         XCTAssertFalse(
             HeadlessProbeMode.Resolution.conflict([.coverageShadow, .capability]).permitsNormalBootstrap
         )
@@ -101,6 +110,7 @@ final class HeadlessProbeIsolationTests: XCTestCase {
         XCTAssertTrue(HeadlessProbeMode.Resolution.single(.coverageShadow).permitsUserStoreOpen)
         XCTAssertFalse(HeadlessProbeMode.Resolution.single(.capability).permitsUserStoreOpen)
         XCTAssertFalse(HeadlessProbeMode.Resolution.single(.typedProseAB).permitsUserStoreOpen)
+        XCTAssertFalse(HeadlessProbeMode.Resolution.single(.nativeRAGControl).permitsUserStoreOpen)
         XCTAssertFalse(
             HeadlessProbeMode.Resolution.conflict([.coverageShadow, .typedProseAB]).permitsUserStoreOpen
         )
@@ -209,6 +219,73 @@ final class HeadlessProbeIsolationTests: XCTestCase {
         XCTAssertEqual(library.models.count, 2)
     }
 
+    /// T-PROBE-11. The native RAG control reconstructs an embedding-model row from
+    /// the exact manifest-verified disk artifact without reading the user's Store.
+    /// Registration itself must not claim a successful runtime load or select the
+    /// model; the control runner may do those only after a real embed succeeds.
+    func testManifestVerifiedEmbeddingFolderRegistersUnverifiedInIsolatedStore() throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try writeVerifiedModelFolder(
+            named: "embedding-control",
+            under: root,
+            repositoryID: "synthetic/embedding-control",
+            hiddenSize: 384
+        )
+        let store = try SupraStore.inMemory()
+
+        let record = try DiskEmbeddingModelRegistrar.registerVerifiedModel(
+            into: store,
+            root: root,
+            repositoryID: "synthetic/embedding-control"
+        )
+
+        XCTAssertEqual(record.repoID, "synthetic/embedding-control")
+        XCTAssertEqual(record.dimension, 384)
+        XCTAssertEqual(record.runtimeFamily, "synthetic")
+        XCTAssertEqual(record.revision, String(repeating: "a", count: 40))
+        XCTAssertNil(record.lastTestLoadAt)
+        XCTAssertNil(record.lastTestLoadResult)
+        XCTAssertFalse(record.isSelected)
+        let persisted = try XCTUnwrap(store.documentSettings.fetchEmbeddingModels().only)
+        XCTAssertEqual(persisted.id, record.id)
+        XCTAssertEqual(persisted.repoID, record.repoID)
+        XCTAssertEqual(persisted.dimension, record.dimension)
+        XCTAssertNil(try store.documentSettings.fetchSelectedEmbeddingModel())
+    }
+
+    /// T-PROBE-12. A preferred repository cannot fall through to another valid
+    /// downloaded artifact, and unverified/malformed folders never create rows.
+    func testEmbeddingRegistrationFailsClosedForWrongOrMalformedArtifact() throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try writeVerifiedModelFolder(
+            named: "other-embedding",
+            under: root,
+            repositoryID: "synthetic/other-embedding",
+            hiddenSize: 256
+        )
+        let malformed = root.appendingPathComponent("preferred-malformed", isDirectory: true)
+        try FileManager.default.createDirectory(at: malformed, withIntermediateDirectories: true)
+        try Data(#"{"model_type":"synthetic","hidden_size":768}"#.utf8)
+            .write(to: malformed.appendingPathComponent("config.json"))
+        let store = try SupraStore.inMemory()
+
+        XCTAssertThrowsError(
+            try DiskEmbeddingModelRegistrar.registerVerifiedModel(
+                into: store,
+                root: root,
+                repositoryID: "synthetic/preferred-embedding"
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? DiskEmbeddingModelRegistrationError,
+                .verifiedArtifactNotFound("synthetic/preferred-embedding")
+            )
+        }
+        XCTAssertTrue(try store.documentSettings.fetchEmbeddingModels().isEmpty)
+    }
+
     // MARK: - Fixtures
 
     private func makeTemporaryDirectory() throws -> URL {
@@ -233,11 +310,15 @@ final class HeadlessProbeIsolationTests: XCTestCase {
         named name: String,
         under root: URL,
         repositoryID: String = "synthetic/qual-model",
-        corruptWeightsSize: Bool = false
+        corruptWeightsSize: Bool = false,
+        hiddenSize: Int? = nil
     ) throws {
         let directory = root.appendingPathComponent(name, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let config = Data(#"{"model_type": "synthetic"}"#.utf8)
+        let config = Data(
+            (hiddenSize.map { #"{"model_type":"synthetic","hidden_size":\#($0)}"# }
+                ?? #"{"model_type": "synthetic"}"#).utf8
+        )
         try config.write(to: directory.appendingPathComponent("config.json"))
         let weights = Data("synthetic-weights".utf8)
         try weights.write(to: directory.appendingPathComponent("weights.safetensors"))
@@ -261,4 +342,8 @@ final class HeadlessProbeIsolationTests: XCTestCase {
         )
         try ManagedModelStorage.writeManifest(manifest, to: ManagedModelStorage.manifestURL(in: directory))
     }
+}
+
+private extension Collection {
+    var only: Element? { count == 1 ? first : nil }
 }

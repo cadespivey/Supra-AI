@@ -153,6 +153,20 @@ final class SignedReleaseModelAuthorizationTests: XCTestCase {
         XCTAssertThrowsError(try authorization.reverify())
     }
 
+    func testStreamingDigestCoversMultipleBoundedReadChunks() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "SignedReleaseModelAuthorization-stream-\(UUID().uuidString).bin"
+        )
+        let payload = Data((0..<(3 * 1_048_576 + 731)).lazy.map { UInt8($0 % 251) })
+        try payload.write(to: url)
+        addTeardownBlock { try? FileManager.default.removeItem(at: url) }
+
+        XCTAssertEqual(
+            try SignedReleaseModelAuthorization.sha256(of: url),
+            ModelArtifactIntegrity.sha256Hex(payload)
+        )
+    }
+
     private func authorize(_ fixture: Fixture) throws -> SignedReleaseModelAuthorization {
         try SignedReleaseModelAuthorization.authorize(
             modelDirectory: fixture.modelDirectory,

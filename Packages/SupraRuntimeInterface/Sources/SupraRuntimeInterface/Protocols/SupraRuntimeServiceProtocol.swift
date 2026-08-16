@@ -41,6 +41,20 @@ public protocol SupraRuntimeServiceProtocol {
         reply: @escaping (RuntimeStatus) -> Void
     )
 
+    func runtimeResidencySnapshot(
+        reply: @escaping (RuntimeServiceResidencySnapshot) -> Void
+    )
+
+    func evictRuntimeArtifact(
+        _ request: RuntimeServiceArtifactEvictionRequest,
+        reply: @escaping (RuntimeServiceArtifactEvictionResponse) -> Void
+    )
+
+    func resetRuntime(
+        _ request: RuntimeServiceResetRequest,
+        reply: @escaping (RuntimeServiceResetResponse) -> Void
+    )
+
     // MARK: - Milestone 3: embeddings
 
     func loadEmbeddingModel(

@@ -13,7 +13,7 @@ struct BillingDraftView: View {
     let dayID: String?
     let isLocked: Bool
 
-    @State private var editing: BillingLineItemRecord?
+    @State private var editing: BillingLineView?
     @State private var exportBlockers: [BillingExportIssue] = []
     @State private var showingExportBlock = false
 
@@ -227,7 +227,7 @@ struct BillingDraftView: View {
         .padding(.top, 4)
     }
 
-    private func lineRow(_ line: BillingLineItemRecord) -> some View {
+    private func lineRow(_ line: BillingLineView) -> some View {
         HStack(alignment: .top, spacing: 10) {
             VStack(alignment: .leading, spacing: 3) {
                 Text(line.narrative).font(.supraBody)
@@ -251,7 +251,7 @@ struct BillingDraftView: View {
 
     /// Per-line actions that let the user resolve every validator blocker: edit
     /// (narrative/hours/codes), reassign the matter, or delete the line.
-    private func rowMenu(_ line: BillingLineItemRecord) -> some View {
+    private func rowMenu(_ line: BillingLineView) -> some View {
         Menu {
             Button { editing = line } label: { Label("Edit…", systemImage: "pencil") }
             Menu {
@@ -299,13 +299,13 @@ struct BillingDraftView: View {
     private struct MatterGroup {
         let key: String
         let name: String
-        let lines: [BillingLineItemRecord]
+        let lines: [BillingLineView]
         var hours: Double { lines.reduce(0) { $0 + $1.hours } }
     }
 
     private var groups: [MatterGroup] {
         var order: [String] = []
-        var byKey: [String: [BillingLineItemRecord]] = [:]
+        var byKey: [String: [BillingLineView]] = [:]
         var names: [String: String] = [:]
         for line in billing.lines {
             let key = line.matterID ?? "unassigned"
@@ -359,7 +359,7 @@ struct BillingDraftView: View {
 /// invalid code can't be entered; firm-specific (transactional/advisory) task codes
 /// fall back to free text since they aren't a built-in list.
 private struct EditLineSheet: View {
-    let line: BillingLineItemRecord
+    let line: BillingLineView
     let codeSet: BillingCodeSet
     let onSave: (_ narrative: String, _ hours: Double, _ taskCode: String?, _ activityCode: String?) -> Void
 
@@ -369,7 +369,7 @@ private struct EditLineSheet: View {
     @State private var taskCode: String
     @State private var activityCode: String
 
-    init(line: BillingLineItemRecord, codeSet: BillingCodeSet, onSave: @escaping (String, Double, String?, String?) -> Void) {
+    init(line: BillingLineView, codeSet: BillingCodeSet, onSave: @escaping (String, Double, String?, String?) -> Void) {
         self.line = line
         self.codeSet = codeSet
         self.onSave = onSave

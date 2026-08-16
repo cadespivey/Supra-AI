@@ -7,11 +7,12 @@ enum RuntimeTokenBudgeting {
         serializedPackets: [String],
         modelID: ModelID?,
         options rawOptions: GenerationOptions,
-        runtimeClient: any RuntimeClientProtocol
+        runtimeClient: any ModelExecutionGateway
     ) async -> TokenPackingReport {
         let options = rawOptions.clampedForRuntime()
+        let modelExecutionGateway = runtimeClient
         let exactCounts: [Int]? = if let modelID,
-                                     let response = try? await runtimeClient.countTokens(
+                                     let response = try? await modelExecutionGateway.countTokens(
                                          CountTokensRequest(modelID: modelID, texts: serializedPackets)
                                      ) {
             response.counts

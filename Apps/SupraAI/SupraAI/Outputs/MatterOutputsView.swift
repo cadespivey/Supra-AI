@@ -2,29 +2,50 @@ import SupraCore
 import SupraSessions
 import SwiftUI
 
-/// The matter's Outputs tab: lists structured outputs and creates new ones
-/// (spec §13).
+/// The matter's Saved Work tab: lists structured work products and creates new
+/// ones (spec §13). Store and controller names retain `Output` for compatibility.
 struct MatterOutputsView: View {
     @ObservedObject var controller: StructuredOutputController
     @ObservedObject var library: ModelLibrary
     let matter: MatterSummary
+    @Binding var showNew: Bool
+    let onOpenDocuments: () -> Void
+    let onOpenNotesAndTime: (SavedWorkNotesHandoff) -> Void
+    let onOpenBilling: () -> Void
 
-    @State private var showNew = false
     @State private var navigationPath: [String] = []
 
     var body: some View {
         NavigationStack(path: $navigationPath) {
-            MatterTabScaffold("Structured Outputs") {
-                Button { showNew = true } label: { Label("New Output", systemImage: "plus") }
+            MatterTabScaffold("Saved Work") {
+                Button { showNew = true } label: { Label("New Work Product", systemImage: "plus") }
             } content: {
                 content
             }
             .navigationDestination(for: String.self) { id in
-                OutputDetailView(controller: controller, library: library, outputID: id)
+                OutputDetailView(
+                    controller: controller,
+                    library: library,
+                    outputID: id,
+                    matterID: matter.id,
+                    matterName: matter.name,
+                    onOpenDocuments: {
+                        navigationPath.removeAll()
+                        onOpenDocuments()
+                    },
+                    onOpenNotesAndTime: { handoff in
+                        navigationPath.removeAll()
+                        onOpenNotesAndTime(handoff)
+                    },
+                    onOpenBilling: {
+                        navigationPath.removeAll()
+                        onOpenBilling()
+                    }
+                )
             }
         }
         .sheet(isPresented: $showNew) {
-            NewOutputSheet(controller: controller, library: library, matter: matter)
+            NewOutputSheet(controller: controller, library: library)
         }
         .onAppear { controller.loadOutputs() }
         #if DEBUG
@@ -41,11 +62,11 @@ struct MatterOutputsView: View {
     private var content: some View {
         if controller.outputs.isEmpty {
             ContentUnavailableView {
-                Label("No Outputs", systemImage: "doc.text")
+                Label("No Saved Work", systemImage: "doc.text")
             } description: {
-                Text("Generate reusable legal outputs — issue spotting, rule synthesis, or drafting skeletons — that the local model drafts from the context you provide. (Chronologies are created from the Documents tab.)")
+                Text("Create reusable legal work — issue spotting, rule synthesis, or drafting skeletons — from the context you provide. Chronologies are created from Documents.")
             } actions: {
-                Button("New Output") { showNew = true }
+                Button("New Work Product") { showNew = true }
             }
         } else {
             List(controller.outputs) { output in
@@ -54,11 +75,13 @@ struct MatterOutputsView: View {
                         HStack {
                             Text(output.title).font(.supraHeadline)
                             Spacer()
-                            Text(output.status).font(.supraCaption).foregroundStyle(.secondary)
+                            Text("Lifecycle: \(output.status.replacingOccurrences(of: "_", with: " ").capitalized)")
+                                .font(.supraCaption)
+                                .foregroundStyle(.secondary)
                         }
                         HStack(spacing: 8) {
                             Text(StructuredOutputLabels.label(output.outputType))
-                            Text(output.updatedAt, format: .dateTime.month().day())
+                            Text("Updated \(output.updatedAt.formatted(.relative(presentation: .named)))")
                             if output.missingCount > 0 {
                                 Text("\(output.missingCount) missing").foregroundStyle(.orange)
                             }
@@ -66,6 +89,12 @@ struct MatterOutputsView: View {
                         .font(.supraCaption)
                         .foregroundStyle(.secondary)
                         AssuranceBadge(state: output.assuranceState)
+                        Text("Review: \(output.assuranceText)")
+                            .font(.supraCaption)
+                            .foregroundStyle(.secondary)
+                        Text("Author: Not recorded · Reviewer: Not recorded · Last reviewed: Not recorded")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
                     }
                 }
                 .accessibilityIdentifier("output.row.\(output.title)")
@@ -83,7 +112,6 @@ enum StructuredOutputLabels {
 private struct NewOutputSheet: View {
     @ObservedObject var controller: StructuredOutputController
     @ObservedObject var library: ModelLibrary
-    let matter: MatterSummary
 
     @Environment(\.dismiss) private var dismiss
     @State private var type: StructuredOutputType = .legalIssueSpotting
@@ -92,6 +120,8 @@ private struct NewOutputSheet: View {
     @State private var selectedDocIDs: Set<String> = []
     @State private var documents: [StructuredOutputController.DocumentChoice] = []
     @State private var routingMessage: String?
+    @State private var identityProjection: MatterLegalIdentityReadProjection?
+    @State private var identityMessage: String?
     /// The model the user picks to generate this output. Defaults to the routed
     /// model for the output type, but any registered (non-embedding) model can be
     /// chosen. Empty only when no models are registered.
@@ -111,14 +141,48 @@ private struct NewOutputSheet: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Text("New Structured Output").font(.supraTitle).padding([.horizontal, .top])
-            Text("Pick a deliverable type and give the model the issue, facts, or notes to work from. It produces a structured, reviewable draft saved to this matter's Outputs.")
+            Text("New Work Product").font(.supraTitle).padding([.horizontal, .top])
+            Text("Pick a deliverable type and provide the issue, facts, or notes. Supra creates a structured, reviewable draft and saves it with this matter's work.")
                 .font(.supraSubheadline)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.horizontal)
                 .padding(.top, 2)
             Form {
+                Section("Matter identity") {
+                    if let courtPresentation {
+                        if let resolvedJurisdictionName = courtPresentation.resolvedJurisdictionName,
+                           let resolvedCourtName = courtPresentation.resolvedCourtName {
+                            LabeledContent("Jurisdiction", value: resolvedJurisdictionName)
+                            LabeledContent("Court", value: resolvedCourtName)
+                        } else {
+                            Label("Choose a court in Matter Edit", systemImage: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange)
+                            if let savedCourtText = courtPresentation.savedCourtText,
+                               !savedCourtText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                Text("Imported court text “\(savedCourtText)” is retained as evidence, but is not a resolved court.")
+                                    .font(.supraCaption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    if let draftPartyDefaults {
+                        LabeledContent(
+                            "Represented client",
+                            value: "\(draftPartyDefaults.representedClientName) (\(draftPartyDefaults.representedDesignation))"
+                        )
+                        LabeledContent(
+                            "Opposing party",
+                            value: "\(draftPartyDefaults.opposingPartyName) (\(draftPartyDefaults.opposingDesignation))"
+                        )
+                    } else if identityProjection != nil {
+                        Label("Resolve the represented client, opposing party, and service contact in Matter Edit", systemImage: "person.crop.circle.badge.exclamationmark")
+                            .foregroundStyle(.orange)
+                    }
+                    if let identityMessage {
+                        Text(identityMessage).font(.supraCaption).foregroundStyle(.orange)
+                    }
+                }
                 Picker("Type", selection: $type) {
                     // Document Q&A / chronology outputs are generated from the
                     // Documents tab, so they are excluded from this research sheet.
@@ -175,7 +239,7 @@ private struct NewOutputSheet: View {
                 }
                 Section {
                     if library.models.isEmpty {
-                        Text("No models registered — add one in the Models tab to generate.")
+                        Text("No local assistant is configured — finish AI Setup to generate.")
                             .font(.supraCaption).foregroundStyle(.orange)
                     } else {
                         Picker("Model", selection: $selectedModelID) {
@@ -202,14 +266,17 @@ private struct NewOutputSheet: View {
                 if controller.isGenerating { ProgressView().controlSize(.small) }
                 Button("Generate") { Task { await generate() } }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(selectedModelID.isEmpty || controller.isGenerating)
+                    .disabled(selectedModelID.isEmpty || controller.isGenerating || !identitySnapshotAvailable)
             }
             .padding()
         }
         .frame(minWidth: 460, idealWidth: 540, maxWidth: .infinity, minHeight: 460, idealHeight: 600, maxHeight: .infinity)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("savedWork.new.sheet")
         .onAppear {
             library.refresh()
             documents = controller.documentChoices()
+            refreshIdentity()
             // Default the picker to the model routed for this output type, falling
             // back to any registered model.
             if selectedModelID.isEmpty || !library.models.contains(where: { $0.id == selectedModelID }) {
@@ -217,7 +284,9 @@ private struct NewOutputSheet: View {
             }
             // Warm the routed model (structured outputs often use the high-quality
             // reasoning role) while the user fills the form.
-            if !AppEnvironment.isUITestMode, let role = route?.role { library.prewarm(role: role) }
+            if identitySnapshotAvailable, !AppEnvironment.isUITestMode, let role = route?.role {
+                library.prewarm(role: role)
+            }
         }
         // Re-default when the output type changes the routed model (only if the user
         // hasn't picked something still valid).
@@ -228,6 +297,12 @@ private struct NewOutputSheet: View {
 
     private func generate() async {
         routingMessage = nil
+        refreshIdentity()
+        guard identitySnapshotAvailable else {
+            routingMessage = identityMessage
+                ?? "The matter identity snapshot is unavailable. Your context has been kept."
+            return
+        }
         guard let route else { return }
         guard !selectedModelID.isEmpty else {
             routingMessage = "Select a model to generate this output."
@@ -247,10 +322,9 @@ private struct NewOutputSheet: View {
         }
         let modelID = ModelID(chosenUUID)
 
-        let prefix = matterContextPrefix
         let ok = await controller.createOutput(
             type: type,
-            context: prefix + context,
+            context: context,
             scope: scope,
             modelID: modelID,
             route: route
@@ -258,31 +332,29 @@ private struct NewOutputSheet: View {
         if ok { dismiss() }
     }
 
-    private var matterContextPrefix: String {
-        var lines = [
-            "Matter: \(matter.name)",
-            "Jurisdiction: \(matter.jurisdiction)",
-            "Party perspective: \(matter.partyPerspective.rawValue)"
-        ]
-        if let court = nonEmpty(matter.court) {
-            lines.append("Court: \(court)")
-        }
-        if let clientNames = nonEmpty(matter.clientNames) {
-            lines.append("Client name(s): \(clientNames)")
-        }
-        if let internalMatterID = nonEmpty(matter.internalMatterID) {
-            lines.append("Internal matter ID: \(internalMatterID)")
-        }
-        if let matterDescription = nonEmpty(matter.matterDescription) {
-            lines.append("Matter description: \(matterDescription)")
-        }
-        return lines.joined(separator: "\n") + "\n\n"
+    private var courtPresentation: MatterCourtPresentation? {
+        identityProjection?.courtPresentation
     }
 
-    private func nonEmpty(_ value: String?) -> String? {
-        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else {
+    private var draftPartyDefaults: DraftPartyDefaults? {
+        guard let identityProjection,
+              case let .available(defaults) = identityProjection.draftParties else {
             return nil
         }
-        return trimmed
+        return defaults
+    }
+
+    private var identitySnapshotAvailable: Bool {
+        identityProjection != nil
+    }
+
+    private func refreshIdentity() {
+        do {
+            identityProjection = try controller.legalIdentityReadProjection()
+            identityMessage = nil
+        } catch {
+            identityProjection = nil
+            identityMessage = "This matter's legal identity is unavailable. Reopen the matter and try again."
+        }
     }
 }

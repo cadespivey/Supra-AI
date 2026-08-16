@@ -32,6 +32,7 @@ public final class SettingsController: ObservableObject {
     /// Verification state for the free, key-less sources (eCFR, Federal Register, Open
     /// Legal Codes), keyed by source id — a reachability check, not a key check.
     @Published public private(set) var keylessVerification: [String: KeyVerificationState] = [:]
+    @Published public private(set) var lastMutationFailure: UserMutationFailure?
     private let tokenStore: any APIKeyStoreProtocol
 
     public enum KeyVerificationState: Sendable, Equatable {
@@ -49,17 +50,30 @@ public final class SettingsController: ObservableObject {
     @Published public var preset: GenerationPreset {
         didSet {
             guard preset != oldValue else { return }
+            isApplyingPreset = true
             let defaults = preset.defaultOptions
             topP = defaults.topP
             topK = defaults.topK
             maxContextTokens = defaults.maxContextTokens
             thinkingBudget = defaults.thinkingBudget
             maxOutputTokens = defaults.maxOutputTokens
-            temperature = defaults.temperature // persists via temperature's didSet
+            temperature = defaults.temperature
+            isApplyingPreset = false
+            persist()
         }
     }
-    @Published public var temperature: Double { didSet { persist() } }
-    @Published public var maxOutputTokens: Int { didSet { persist() } }
+    @Published public var temperature: Double {
+        didSet {
+            guard !isApplyingPreset else { return }
+            persist()
+        }
+    }
+    @Published public var maxOutputTokens: Int {
+        didSet {
+            guard !isApplyingPreset else { return }
+            persist()
+        }
+    }
 
     public let modelsDirectoryPath: String
     public let appVersion: AppVersion
@@ -69,6 +83,10 @@ public final class SettingsController: ObservableObject {
     private var topK: Int?
     private var maxContextTokens: Int
     private var thinkingBudget: ThinkingBudget
+    /// A preset is one user mutation even though it updates several in-memory
+    /// generation fields. Suppress property-observer writes and persist the
+    /// final candidate once so a failure cannot expose an intermediate preset.
+    private var isApplyingPreset = false
 
     public init(
         store: SupraStore,
@@ -95,17 +113,50 @@ public final class SettingsController: ObservableObject {
 
     /// Saves an API key for `service` in the Keychain. Empty input is rejected.
     public func saveAPIKey(_ key: String, for service: APIKeyService) {
+        _ = attemptSaveAPIKey(key, for: service)
+    }
+
+    /// Credential values remain with the caller. Failure copy names only the
+    /// service and the store error; it never echoes the submitted secret.
+    public func attemptSaveAPIKey(
+        _ key: String,
+        for service: APIKeyService
+    ) -> UserMutationOutcome<APIKeyService> {
         let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        try? tokenStore.saveAPIKey(trimmed, for: service)
-        keyVerification[service] = .idle   // a new key must be re-verified
-        refreshAPIKeyState()
+        guard !trimmed.isEmpty else {
+            return rejectMutation(
+                .credentialSave,
+                message: "Enter an API key before saving.",
+                recoveryActions: [.correctInput]
+            )
+        }
+        do {
+            try tokenStore.saveAPIKey(trimmed, for: service)
+            keyVerification[service] = .idle   // a new key must be re-verified
+            refreshAPIKeyState()
+            lastMutationFailure = nil
+            return .committed(service)
+        } catch {
+            return rejectMutation(
+                .credentialSave,
+                message: "Couldn’t save the API key for \(service.rawValue). \(error.localizedDescription)",
+                recoveryActions: [.retry, .correctInput]
+            )
+        }
     }
 
     public func clearAPIKey(for service: APIKeyService) {
-        try? tokenStore.deleteAPIKey(for: service)
-        keyVerification[service] = .idle
-        refreshAPIKeyState()
+        do {
+            try tokenStore.deleteAPIKey(for: service)
+            keyVerification[service] = .idle
+            refreshAPIKeyState()
+            lastMutationFailure = nil
+        } catch {
+            _ = rejectMutation(
+                .credentialSave,
+                message: "Couldn’t remove the API key for \(service.rawValue). \(error.localizedDescription)"
+            ) as UserMutationOutcome<APIKeyService>
+        }
     }
 
     public func hasAPIKey(_ service: APIKeyService) -> Bool { configuredAPIKeys.contains(service) }
@@ -140,7 +191,7 @@ public final class SettingsController: ObservableObject {
         let http = AuthorizedHTTPClient(
             keyStore: tokenStore,
             policy: NetworkPolicyService(),
-            logger: NetworkRequestLogger(repository: store.networkRequests)
+            logger: NetworkRequestLogger(writer: store.networkRequestAudits)
         )
         return LegalDataKeyVerifier(httpClient: http, tokenStore: tokenStore)
     }
@@ -157,17 +208,47 @@ public final class SettingsController: ObservableObject {
     /// Stores a CourtListener API token in the Keychain (spec §2.4). Empty
     /// input is rejected.
     public func saveCourtListenerToken(_ token: String) {
+        _ = attemptSaveCourtListenerToken(token)
+    }
+
+    public func attemptSaveCourtListenerToken(
+        _ token: String
+    ) -> UserMutationOutcome<String> {
         let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        try? tokenStore.saveCourtListenerToken(trimmed)
-        courtListenerVerification = .idle
-        refreshCourtListenerTokenState()
+        guard !trimmed.isEmpty else {
+            return rejectMutation(
+                .credentialSave,
+                message: "Enter a CourtListener token before saving.",
+                recoveryActions: [.correctInput]
+            )
+        }
+        do {
+            try tokenStore.saveCourtListenerToken(trimmed)
+            courtListenerVerification = .idle
+            refreshCourtListenerTokenState()
+            lastMutationFailure = nil
+            return .committed("courtListener")
+        } catch {
+            return rejectMutation(
+                .credentialSave,
+                message: "Couldn’t save the CourtListener token. \(error.localizedDescription)",
+                recoveryActions: [.retry, .correctInput]
+            )
+        }
     }
 
     public func clearCourtListenerToken() {
-        try? tokenStore.deleteCourtListenerToken()
-        courtListenerVerification = .idle
-        refreshCourtListenerTokenState()
+        do {
+            try tokenStore.deleteCourtListenerToken()
+            courtListenerVerification = .idle
+            refreshCourtListenerTokenState()
+            lastMutationFailure = nil
+        } catch {
+            _ = rejectMutation(
+                .credentialSave,
+                message: "Couldn’t remove the CourtListener token. \(error.localizedDescription)"
+            ) as UserMutationOutcome<String>
+        }
     }
 
     public var currentOptions: GenerationOptions {
@@ -182,8 +263,73 @@ public final class SettingsController: ObservableObject {
         )
     }
 
+    /// Keeps the non-default candidate in the editor even when persistence
+    /// fails; the typed result controls success presentation and retry.
+    public func attemptSetPreset(
+        _ value: GenerationPreset
+    ) -> UserMutationOutcome<GenerationPreset> {
+        if preset == value {
+            // An exact Retry addresses the retained candidate even though the
+            // published value no longer changes and its observer will not fire.
+            persist()
+        } else {
+            preset = value
+        }
+        if let lastMutationFailure,
+           lastMutationFailure.operation == .settingsPersist {
+            return .failed(lastMutationFailure)
+        }
+        return .committed(value)
+    }
+
+    public func attemptSetTemperature(
+        _ value: Double
+    ) -> UserMutationOutcome<Double> {
+        temperature = value
+        if let lastMutationFailure,
+           lastMutationFailure.operation == .settingsPersist {
+            return .failed(lastMutationFailure)
+        }
+        return .committed(value)
+    }
+
+    public func attemptSetMaxOutputTokens(
+        _ value: Int
+    ) -> UserMutationOutcome<Int> {
+        maxOutputTokens = value
+        if let lastMutationFailure,
+           lastMutationFailure.operation == .settingsPersist {
+            return .failed(lastMutationFailure)
+        }
+        return .committed(value)
+    }
+
     private func persist() {
-        try? store.appSettings.setSetting(Self.generationDefaultsKey, value: currentOptions)
+        do {
+            try store.appSettings.setSetting(Self.generationDefaultsKey, value: currentOptions)
+            lastMutationFailure = nil
+        } catch {
+            let failure = UserMutationFailure(
+                operation: .settingsPersist,
+                userMessage: "Couldn’t save the generation settings. \(error.localizedDescription)",
+                recoveryActions: [.retry, .correctInput]
+            )
+            lastMutationFailure = failure
+        }
+    }
+
+    private func rejectMutation<Success>(
+        _ operation: UserMutationOperation,
+        message: String,
+        recoveryActions: Set<UserMutationRecoveryAction> = [.retry]
+    ) -> UserMutationOutcome<Success> {
+        let failure = UserMutationFailure(
+            operation: operation,
+            userMessage: message,
+            recoveryActions: recoveryActions
+        )
+        lastMutationFailure = failure
+        return .failed(failure)
     }
 
     private func refreshAPIKeyState() {

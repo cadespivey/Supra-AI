@@ -98,8 +98,31 @@ final class ChunkerV2IndexingTests: XCTestCase {
             repoID: embedder.modelRepoID,
             displayName: embedder.modelDisplayName,
             dimension: embedder.dimension,
-            runtimeFamily: "test"
+            runtimeFamily: "test",
+            revision: embedder.modelRevision
         ))
+        _ = try store.documentSettings.loadSettings()
+        try store.documentSettings.recordTestLoad(
+            modelID: embedder.modelID,
+            at: Date(timeIntervalSinceReferenceDate: 51),
+            result: "passed"
+        )
+        let persistedModel = try XCTUnwrap(
+            store.documentSettings.fetchEmbeddingModel(id: embedder.modelID)
+        )
+        let verifiedAt = try XCTUnwrap(persistedModel.lastTestLoadAt)
+        _ = try store.documentSettings.activateVerifiedEmbeddingModel(
+            DocumentVerifiedEmbeddingModelSelectionCommand(
+                expectedModel: DocumentReadinessEmbeddingModelIdentity(
+                    id: persistedModel.id,
+                    repoID: persistedModel.repoID,
+                    revision: persistedModel.revision,
+                    dimension: persistedModel.dimension
+                ),
+                verifiedAt: verifiedAt,
+                setupInvalidationReason: "synthetic fixture activation"
+            )
+        )
         let legacy = DocumentChunkRecord(
             id: "legacy-random-chunk",
             documentID: document.id,

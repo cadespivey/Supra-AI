@@ -1,20 +1,38 @@
-import AppKit
+import Foundation
 import SwiftUI
 
 struct SupraAIApp: App {
-    @NSApplicationDelegateAdaptor(SupraApplicationDelegate.self) private var applicationDelegate
     @StateObject private var environment = AppEnvironment()
 
     var body: some Scene {
-        WindowGroup {
+        Window("Supra AI", id: "main") {
             RootView()
                 .environmentObject(environment)
+                .preferredColorScheme(Self.uiTestColorScheme)
+#if DEBUG
+                .overlay(alignment: .topLeading) {
+                    if ProcessInfo.processInfo.arguments.contains("-uiTestMode") {
+                        UITestAppearanceProbe()
+                    }
+                }
+#endif
         }
         // The splash is shown alone (the shell is swapped in afterward), and a bare
         // splash has no intrinsic size — pin the first-launch window so it opens at
         // full size instead of collapsing to the splash content.
         .defaultSize(width: 1100, height: 720)
+        // This is the app's one primary workspace, not an optional utility
+        // scene. Present it when no saved scene is restored and when the user
+        // reopens a running, windowless app from the Dock.
+        .defaultLaunchBehavior(.presented)
+        .restorationBehavior(.disabled)
         .commands {
+            // Supra AI owns one process-wide workspace session. Replacing the
+            // standard new-item group removes File > New Window and Command-N,
+            // so visual selection can never diverge from the shared controller
+            // bundle through a second main scene.
+            CommandGroup(replacing: .newItem) {}
+
             // Go menu: keyboard navigation to every sidebar destination
             // (Mail/Finder convention). MainShellView owns the selection, so
             // the menu posts and the shell observes.
@@ -28,89 +46,37 @@ struct SupraAIApp: App {
             }
         }
     }
-}
 
-@MainActor
-private final class SupraApplicationDelegate: NSObject, NSApplicationDelegate {
-    private var freshWindowOpenScheduled = false
-#if DEBUG
-    private var uiTestWindowWidthScheduled = false
-    private var uiTestWindowWidthApplied = false
-#endif
-
-    func applicationDidFinishLaunching(_ notification: Notification) {
-        let app = notification.object as? NSApplication
-        scheduleFreshUITestWindowIfNeeded(app)
-        scheduleUITestWindowWidthIfNeeded(app)
-    }
-
-    func applicationDidBecomeActive(_ notification: Notification) {
-        let app = notification.object as? NSApplication
-        scheduleFreshUITestWindowIfNeeded(app)
-        scheduleUITestWindowWidthIfNeeded(app)
-    }
-
-    private func scheduleFreshUITestWindowIfNeeded(_ app: NSApplication?) {
-        guard shouldEnsureFreshUITestWindow,
-              let app,
-              app.windows.isEmpty,
-              !freshWindowOpenScheduled else { return }
-        freshWindowOpenScheduled = true
-        DispatchQueue.main.async { [weak self, weak app] in
-            guard let self, let app else { return }
-            self.freshWindowOpenScheduled = false
-            guard app.windows.isEmpty,
-                  let item = app.mainMenu?
-                    .item(withTitle: "File")?
-                    .submenu?
-                    .item(withTitle: "New Window"),
-                  let action = item.action else { return }
-            app.sendAction(action, to: item.target, from: item)
-            self.scheduleUITestWindowWidthIfNeeded(app)
-        }
-    }
-
-    private func scheduleUITestWindowWidthIfNeeded(_ app: NSApplication?) {
-#if DEBUG
-        guard let requestedWidth = requestedUITestWindowWidth,
-              let app,
-              !uiTestWindowWidthApplied,
-              !uiTestWindowWidthScheduled else { return }
-        uiTestWindowWidthScheduled = true
-        DispatchQueue.main.async { [weak self, weak app] in
-            guard let self, let app else { return }
-            self.uiTestWindowWidthScheduled = false
-            guard !self.uiTestWindowWidthApplied,
-                  let window = app.windows.first(where: \.canBecomeMain) else { return }
-            var frame = window.frame
-            frame.origin.x += (frame.width - requestedWidth) / 2
-            frame.size.width = requestedWidth
-            window.setFrame(frame, display: true)
-            self.uiTestWindowWidthApplied = true
-        }
-#endif
-    }
-
-    private var requestedUITestWindowWidth: CGFloat? {
+    /// `AppleInterfaceStyle=Light` does not override a dark macOS host reliably;
+    /// an explicit DEBUG-only root preference makes the visual qualification
+    /// matrix exercise both appearances instead of producing mislabeled copies.
+    private static var uiTestColorScheme: ColorScheme? {
 #if DEBUG
         let arguments = ProcessInfo.processInfo.arguments
-        guard AppEnvironment.isUITestMode,
-              let marker = arguments.firstIndex(of: "-uiTestWindowWidth"),
-              arguments.indices.contains(marker + 1),
-              let width = Double(arguments[marker + 1]),
-              width.isFinite,
-              width > 0 else { return nil }
-        return CGFloat(width)
+        guard let marker = arguments.firstIndex(of: "-uiTestAppearance"),
+              arguments.indices.contains(marker + 1) else { return nil }
+        switch arguments[marker + 1].lowercased() {
+        case "light": return .light
+        case "dark": return .dark
+        default: return nil
+        }
 #else
         nil
 #endif
     }
+}
 
-    private var shouldEnsureFreshUITestWindow: Bool {
 #if DEBUG
-        ProcessInfo.processInfo.arguments.contains("-uiTestEnsureFreshWindow")
-#else
-        false
-#endif
+private struct UITestAppearanceProbe: View {
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        Color.clear
+            .frame(width: 1, height: 1)
+            .allowsHitTesting(false)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(colorScheme == .dark ? "Dark" : "Light")
+            .accessibilityIdentifier("uiTest.appearance")
     }
 }
+#endif

@@ -44,7 +44,7 @@ final class DocumentExportTests: XCTestCase {
         XCTAssertTrue(md.contains("Payment was due March 3, 2024 [S1]."))
         XCTAssertTrue(md.contains("agreement.pdf"))
         XCTAssertTrue(md.contains("p. 3"))
-        XCTAssertTrue(md.contains("Assurance: Propositions supported — completeness not assessed"))
+        XCTAssertTrue(md.contains("Assurance: Supported by selected sources — not exhaustive"))
 
         // Export records persisted, and a single matter export audit exists.
         let exports = try store.documentSources.fetchExports(structuredOutputID: output.id)
@@ -52,6 +52,86 @@ final class DocumentExportTests: XCTestCase {
         let exportAudits = try store.auditEvents.fetchEvents(matterID: matter.id)
             .filter { $0.eventType == "export_completed" }
         XCTAssertGreaterThanOrEqual(exportAudits.count, DocumentExportFormat.allCases.count)
+    }
+
+    func testSelectedSupportedHistoryExportsWhenActiveSuccessorNeedsReview() throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Selected Version Export")
+        let output = try store.structuredOutputs.createOutput(
+            matterID: matter.id,
+            title: "Selected payment answer",
+            outputType: .documentQA,
+            status: .complete
+        )
+        let supported = try createExportableVersion(
+            store: store,
+            structuredOutputID: output.id,
+            versionIndex: 1,
+            contentMarkdown: "Payment was due March 3, 2024 [S1]."
+        )
+        let blob = try store.documentLibrary.upsertBlob(DocumentBlobRecord(
+            sha256: "selected-version-export",
+            byteSize: 31,
+            originalExtension: "txt",
+            managedRelativePath: "blobs/selected-version-export.txt"
+        )).blob
+        let document = try store.documentLibrary.insertDocument(MatterDocumentRecord(
+            matterID: matter.id,
+            blobID: blob.id,
+            displayName: "selected-payment.txt"
+        ))
+        let sourceSet = try store.documentSources.createSourceSet(
+            matterID: matter.id,
+            mode: .autoSource
+        )
+        try store.documentSources.addOutputSource(DocumentOutputSourceRecord(
+            sourceSetID: sourceSet.id,
+            documentID: document.id,
+            citationLabel: "S1",
+            locatorJSON: DocumentSourceLocator(
+                sourceKind: .text,
+                charStart: 0,
+                charEnd: 31
+            ).encodedJSON(),
+            excerpt: "Payment was due March 3, 2024.",
+            rank: 0
+        ))
+        try store.documentSources.attachSourceSet(
+            id: sourceSet.id,
+            structuredOutputVersionID: supported.id
+        )
+        let blockedActive = try store.structuredOutputs.createVersion(
+            structuredOutputID: output.id,
+            versionIndex: 2,
+            contentMarkdown: "Unsupported successor.",
+            requiredSections: [],
+            presentSections: [],
+            missingSections: [],
+            parentVersionID: supported.id,
+            verificationStatus: .legacyUnverified,
+            assuranceState: .supportNeedsReview,
+            outputStatus: .needsReview
+        )
+        XCTAssertEqual(
+            try store.structuredOutputs.fetchOutputs(matterID: matter.id).first?.activeVersionID,
+            blockedActive.id
+        )
+
+        let storage = DocumentStorage(
+            root: FileManager.default.temporaryDirectory
+                .appendingPathComponent("SelectedVersionExport-\(UUID().uuidString)")
+        )
+        let url = try DocumentExportService(store: store, storage: storage).export(
+            matterID: matter.id,
+            structuredOutputID: output.id,
+            structuredOutputVersionID: supported.id,
+            format: .markdown
+        )
+        let markdown = try String(contentsOf: url, encoding: .utf8)
+
+        XCTAssertTrue(url.lastPathComponent.contains("-v1-"))
+        XCTAssertTrue(markdown.contains("Payment was due March 3, 2024 [S1]."))
+        XCTAssertFalse(markdown.contains("Unsupported successor."))
     }
 
     func testExportDoesNotDuplicateEmbeddedAppendix() throws {

@@ -15,6 +15,27 @@ enum DocumentSourceIntegrityValidator {
             throw DocumentSourceRepositoryError.sourceSetNotFound(source.sourceSetID)
         }
 
+        return try prepare(
+            source,
+            sourceSet: sourceSet,
+            preserveUnknownRevision: preserveUnknownRevision,
+            db: db
+        )
+    }
+
+    /// Validates a source against a proposed source set before either row is
+    /// inserted. Atomic publishers use this overload so every identity and
+    /// immutable-revision check completes before their first mutation.
+    static func prepare(
+        _ source: DocumentOutputSourceRecord,
+        sourceSet: DocumentSourceSetRecord,
+        preserveUnknownRevision: Bool,
+        db: Database
+    ) throws -> DocumentOutputSourceRecord {
+        guard source.sourceSetID == sourceSet.id else {
+            throw DocumentSourceRepositoryError.sourceSetNotFound(source.sourceSetID)
+        }
+
         var prepared = source
         var citedDocument: MatterDocumentRecord?
         if let documentID = source.documentID {

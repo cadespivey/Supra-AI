@@ -48,9 +48,10 @@ public enum TypedGroundedGenerator {
         modelID: ModelID,
         options: GenerationOptions,
         systemPrompt: String?,
-        runtimeClient: any RuntimeClientProtocol,
+        runtimeClient: any ModelExecutionGateway,
         maxRepairs: Int = 2
     ) async -> Outcome {
+        let modelExecutionGateway = runtimeClient
         let evidence = GroundedAttributionAdapter.evidenceSet(from: spans)
         let labelToSpanID = Dictionary(
             spans.map { ($0.label, SpanID($0.sourceID)) }, uniquingKeysWith: { first, _ in first }
@@ -66,9 +67,10 @@ public enum TypedGroundedGenerator {
         for attempt in 1...totalAttempts {
             let request = GenerateRequest(
                 generationID: GenerationID(), modelID: modelID,
-                prompt: prompt, systemPrompt: systemPrompt, options: options
+                prompt: prompt, systemPrompt: systemPrompt,
+                contextWorkload: .groundedExactEvidence, options: options
             )
-            guard let raw = try? await runtimeClient.collectGeneratedText(request) else {
+            guard let raw = try? await modelExecutionGateway.collectGeneratedText(request) else {
                 return .fallback(.modelError, attempts: attempt)
             }
             let answer = ReasoningContent.answer(from: raw)

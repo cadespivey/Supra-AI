@@ -29,8 +29,10 @@ struct ResearchPlannerView: View {
     /// True while a Generate + Save / Generate + Run action runs end to end.
     @State private var actionInFlight = false
     @State private var selectedCourtID: String
+    @State private var identityProjection: MatterLegalIdentityReadProjection?
     @State private var focusChain = SupraFocusChain()
     @State private var focusedPlannerControlID = "none"
+    @State private var pendingSaveAndRun = false
 
     /// Called after Save & Run persists the session and kicks off the run,
     /// so the parent can navigate straight into the session detail.
@@ -46,17 +48,66 @@ struct ResearchPlannerView: View {
         self.library = library
         self.matter = matter
         self.onSaveAndRun = onSaveAndRun
-        let selected = JurisdictionCatalog.shared.bestMatch(jurisdiction: matter.jurisdiction, court: matter.court)
+        let identity = try? controller.legalIdentityReadProjection()
+        let courtPresentation: MatterCourtPresentation? = identity?.courtPresentation
+        let draftPartyDefaults: DraftPartyDefaults?
+        if case let .available(defaults)? = identity?.draftParties {
+            draftPartyDefaults = defaults
+        } else {
+            draftPartyDefaults = nil
+        }
         _draft = State(initialValue: ResearchPlanDraft(
-            jurisdiction: matter.jurisdiction,
-            partyPerspective: matter.partyPerspective.rawValue
+            jurisdiction: courtPresentation?.resolvedJurisdictionName ?? "",
+            partyPerspective: Self.partyPerspective(from: draftPartyDefaults),
+            jurisdictionContext: courtPresentation?.authorityScope?.modelContext ?? ""
         ))
-        _selectedCourtID = State(initialValue: selected?.id ?? "")
+        _selectedCourtID = State(
+            initialValue: identity?.snapshot.canonicalCourtID?.rawValue ?? ""
+        )
+        _identityProjection = State(initialValue: identity)
     }
 
     var body: some View {
         SupraSheetScaffold("New Research Session", doneLabel: "Cancel", onClose: { controller.resetPlan(); dismiss() }) {
             Form {
+                Section("Matter identity") {
+                    if let identityBlocker {
+                        Label(identityBlocker, systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                        Text("Your title, issue, filters, and query text remain in this sheet. Resolve the matter identity in Matter Edit, then try again.")
+                            .font(.supraCaption)
+                            .foregroundStyle(.secondary)
+                    } else if let courtPresentation, let draftPartyDefaults {
+                        LabeledContent(
+                            "Jurisdiction",
+                            value: courtPresentation.resolvedJurisdictionName ?? ""
+                        )
+                        LabeledContent(
+                            "Court",
+                            value: courtPresentation.resolvedCourtName ?? ""
+                        )
+                        LabeledContent(
+                            "Represented client",
+                            value: "\(draftPartyDefaults.representedClientName) (\(draftPartyDefaults.representedDesignation))"
+                        )
+                        LabeledContent(
+                            "Opposing party",
+                            value: "\(draftPartyDefaults.opposingPartyName) (\(draftPartyDefaults.opposingDesignation))"
+                        )
+                    }
+                }
+                if let failure = controller.lastMutationFailure {
+                    Section {
+                        UserMutationFailureBanner(
+                            failure: failure,
+                            retry: retryPlanCommit,
+                            correct: {
+                                _ = focusChain.focus(identifier: "planner.title")
+                            }
+                        )
+                        .accessibilityIdentifier("planner.mutationFailure")
+                    }
+                }
                 Section("Issue") {
                     BoxedLeadingTextField(
                         placeholder: "Title",
@@ -78,10 +129,9 @@ struct ResearchPlannerView: View {
                         )
                         .accessibilityIdentifier("planner.issue")
                     }
-                    JurisdictionScopeField(
-                        jurisdiction: $draft.jurisdiction,
-                        selectedCourtID: $selectedCourtID
-                    )
+                    Text("The matter's exact canonical court fixes this research scope. Change it in Matter Edit if the court is wrong.")
+                        .font(.supraCaption)
+                        .foregroundStyle(.secondary)
                     Toggle("Restrict search to the jurisdiction's courts", isOn: $restrictToJurisdictionCourts)
                         .accessibilityIdentifier("planner.restrictCourts")
                     Text("Off (recommended) searches every court, so persuasive authority — like out-of-state UCC cases — isn't missed. On limits the search to the courts above.")
@@ -141,7 +191,7 @@ struct ResearchPlannerView: View {
                 } footer: {
                     Text(hasModel
                         ? "Generate + Save queries the assigned model proposes and returns you to Research to run later. Generate + Run runs them immediately and opens the results, where you can edit and re-run any query. No network request is made until a plan runs."
-                        : "No legal-research model is assigned — add queries manually below, or assign one in Models to have them generated for you.")
+                        : "No legal-research model is assigned — add queries manually below, or assign one in AI Setup to have them generated for you.")
                 }
 
                 if showsQuerySection {
@@ -244,11 +294,12 @@ struct ResearchPlannerView: View {
             // window is attached on slower presentations. Idempotent + guarded.
             DispatchQueue.main.async { focusChain.installInitialFocusIfPossible() }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { focusChain.installInitialFocusIfPossible() }
+            refreshIdentity()
             library.refresh()
             Task { @MainActor in seedManualQueryIfNeeded() }
             // Warm the legal-research model as soon as the planner opens so neither the
             // speculative pre-run nor the explicit Generate pays the multi-second load.
-            if hasModel {
+            if identityIsReady, hasModel {
                 Task { _ = await library.ensureLoadedRoutedModelID(for: route.role, configuration: router.configuration) }
             }
         }
@@ -260,6 +311,68 @@ struct ResearchPlannerView: View {
             focusChain.onFocusChange = nil
             #endif
         }
+    }
+
+    private var courtPresentation: MatterCourtPresentation? {
+        identityProjection?.courtPresentation
+    }
+
+    private var draftPartyDefaults: DraftPartyDefaults? {
+        guard let identityProjection,
+              case let .available(defaults) = identityProjection.draftParties else {
+            return nil
+        }
+        return defaults
+    }
+
+    private var identityIsReady: Bool {
+        courtPresentation?.canRunCourtScopedResearch == true && draftPartyDefaults != nil
+    }
+
+    private var identityBlocker: String? {
+        guard let identityProjection else {
+            return "This matter's legal identity is unavailable."
+        }
+        guard identityProjection.courtPresentation.canRunCourtScopedResearch else {
+            return "Choose a court in Matter Edit before planning or running matter-scoped research."
+        }
+        guard case .available = identityProjection.draftParties else {
+            return "Resolve the represented client, opposing party, and service contact in Matter Edit before planning matter-scoped research."
+        }
+        return nil
+    }
+
+    private static func partyPerspective(from defaults: DraftPartyDefaults?) -> String {
+        guard let defaults else { return "" }
+        return "Representing \(defaults.representedClientName) as \(defaults.representedDesignation) against \(defaults.opposingPartyName) as \(defaults.opposingDesignation)"
+    }
+
+    private func refreshIdentity() {
+        do {
+            let projection = try controller.legalIdentityReadProjection()
+            identityProjection = projection
+            draft.jurisdiction = projection.courtPresentation.resolvedJurisdictionName ?? ""
+            draft.jurisdictionContext = projection.courtPresentation.authorityScope?.modelContext ?? ""
+            selectedCourtID = projection.snapshot.canonicalCourtID?.rawValue ?? ""
+            if case let .available(defaults) = projection.draftParties {
+                draft.partyPerspective = Self.partyPerspective(from: defaults)
+            } else {
+                draft.partyPerspective = ""
+            }
+        } catch {
+            identityProjection = nil
+            draft.partyPerspective = ""
+        }
+    }
+
+    @discardableResult
+    private func refreshIdentityForAction() -> Bool {
+        refreshIdentity()
+        guard identityIsReady else {
+            routingMessage = identityBlocker
+            return false
+        }
+        return true
     }
 
     private var router: ModelRouter { ModelRouter(configuration: .fromEnvironment()) }
@@ -293,13 +406,14 @@ struct ResearchPlannerView: View {
                 .font(.supraCaption)
                 .foregroundStyle(.secondary)
         } else {
-            Text("Assign a \(route.role.displayName) model in Models to generate a search plan, or add queries manually.")
+            Text("Assign a \(route.role.displayName) model in AI Setup to generate a search plan, or add queries manually.")
                 .font(.supraCaption)
                 .foregroundStyle(.orange)
         }
     }
 
     private func generate() async {
+        guard refreshIdentityForAction() else { return }
         syncFilters()
         routingMessage = nil
         let modelID: ModelID?
@@ -333,7 +447,7 @@ struct ResearchPlannerView: View {
 
     /// Only speculate once there's a real issue to work from and a model to run it.
     private var shouldSpeculate: Bool {
-        hasModel && draft.isValid
+        identityIsReady && hasModel && draft.isValid
             && draft.issueText.trimmingCharacters(in: .whitespacesAndNewlines).count >= 20
     }
 
@@ -350,9 +464,8 @@ struct ResearchPlannerView: View {
         guard shouldSpeculate, !actionInFlight else { return }
         try? await Task.sleep(nanoseconds: 1_800_000_000)
         guard !Task.isCancelled, !actionInFlight, controller.plannedQueries.isEmpty else { return }
+        guard refreshIdentityForAction() else { return }
         if case .generating = controller.planState { return }
-        // Don't evict a model out from under a generation running elsewhere.
-        if library.isRuntimeGenerating() { return }
         // Only proceed with a real (loaded) model — a failed load stays silent and
         // leaves no half-built manual query behind for the commit to trip over.
         guard case let .success(modelID) = await library.ensureLoadedRoutedModelID(
@@ -366,7 +479,7 @@ struct ResearchPlannerView: View {
     /// Both footer actions enable once the issue/jurisdiction are valid and there is
     /// something to commit — a model to generate from, or manually entered queries.
     private var canAct: Bool {
-        guard !actionInFlight, draft.isValid else { return false }
+        guard identityIsReady, !actionInFlight, draft.isValid else { return false }
         return hasModel || controller.canSavePlan
     }
 
@@ -376,6 +489,7 @@ struct ResearchPlannerView: View {
     /// results. Failed generation leaves the sheet open with its routing/plan message
     /// so the user can fix it or fall back to manual queries.
     private func act(run: Bool) async {
+        guard refreshIdentityForAction() else { return }
         actionInFlight = true
         defer { actionInFlight = false }
         // If a speculative generation is mid-flight, wait it out and reuse its queries
@@ -390,28 +504,47 @@ struct ResearchPlannerView: View {
         if run {
             saveAndRun()
         } else {
-            syncFilters()
-            if (try? controller.savePlan(draft: draft)) != nil {
-                controller.loadSessions()
-                dismiss()
-            }
+            saveWithoutRun()
         }
+    }
+
+    private func saveWithoutRun() {
+        guard refreshIdentityForAction() else { return }
+        syncFilters()
+        pendingSaveAndRun = false
+        let outcome = controller.attemptSavePlan(draft: draft)
+        guard outcome.allowsDependentNavigation,
+              outcome.committedValue != nil else { return }
+        controller.loadSessions()
+        dismiss()
     }
 
     /// Saves the plan and immediately starts the run — no reopening the saved
     /// session just to press Run. The parent navigates into the session so the
     /// user watches results (or the token/run message) arrive.
     private func saveAndRun() {
+        guard refreshIdentityForAction() else { return }
         syncFilters()
-        guard let sessionID = try? controller.savePlan(draft: draft) else { return }
+        pendingSaveAndRun = true
+        let outcome = controller.attemptSavePlan(draft: draft)
+        guard outcome.allowsDependentNavigation,
+              let sessionID = outcome.committedValue else { return }
         controller.openSession(sessionID)
         dismiss()
         onSaveAndRun?(sessionID)
         Task { await controller.runApprovedSearches() }
     }
 
+    private func retryPlanCommit() {
+        if pendingSaveAndRun {
+            saveAndRun()
+        } else {
+            saveWithoutRun()
+        }
+    }
+
     private func seedManualQueryIfNeeded() {
-        guard routeModel == nil, controller.plannedQueries.isEmpty else { return }
+        guard identityIsReady, routeModel == nil, controller.plannedQueries.isEmpty else { return }
         controller.addQuery()
     }
 
@@ -454,10 +587,8 @@ struct ResearchPlannerView: View {
     }
 
     private var selectedScope: JurisdictionAuthorityScope? {
-        if let option = JurisdictionCatalog.shared.option(id: selectedCourtID) {
-            return JurisdictionCatalog.shared.authorityScope(for: option)
-        }
-        return JurisdictionCatalog.shared.authorityScope(jurisdiction: draft.jurisdiction)
+        JurisdictionCatalog.shared.option(id: selectedCourtID)
+            .map(JurisdictionCatalog.shared.authorityScope(for:))
     }
 
     private func splitList(_ text: String) -> [String] {

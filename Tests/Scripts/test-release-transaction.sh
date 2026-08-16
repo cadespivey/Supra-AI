@@ -19,7 +19,7 @@ temporary_dir="$(mktemp -d)"
 trap 'rm -rf "$temporary_dir"' EXIT
 mock_bin="${temporary_dir}/bin"
 mkdir -p "$mock_bin"
-for command in credential-gate font-gate release-gate website-gate signed-smoke gh sign_update codesign xcrun spctl hdiutil security appcast-publish appcast-rollback curl; do
+for command in credential-gate font-gate release-gate scope-gate website-gate signed-smoke gh sign_update codesign xcrun spctl hdiutil security appcast-publish appcast-rollback curl; do
   ln -s "$fixture_command" "${mock_bin}/${command}"
 done
 mock_log="${temporary_dir}/release-commands.log"
@@ -98,6 +98,7 @@ preflight() {
     SUPRA_CREDENTIAL_GATE_COMMAND="${mock_bin}/credential-gate" \
     SUPRA_FONT_GUARD_COMMAND="${mock_bin}/font-gate" \
     SUPRA_RELEASE_GATE_COMMAND="${mock_bin}/release-gate" \
+    SUPRA_SCOPE_GATE_COMMAND="${mock_bin}/scope-gate" \
     bash "${scripts}/release-preflight.sh" \
       --repo-root "$source_repo" \
       --repository example/supra \
@@ -160,6 +161,7 @@ preflight_released_candidate() {
     SUPRA_CREDENTIAL_GATE_COMMAND="${mock_bin}/credential-gate" \
     SUPRA_FONT_GUARD_COMMAND="${mock_bin}/font-gate" \
     SUPRA_RELEASE_GATE_COMMAND="${mock_bin}/release-gate" \
+    SUPRA_SCOPE_GATE_COMMAND="${mock_bin}/scope-gate" \
     bash "${scripts}/release-preflight.sh" \
       --repo-root "$SOURCE_REPO" \
       --repository example/supra \
@@ -200,6 +202,7 @@ preflight_default_gh() {
     SUPRA_CREDENTIAL_GATE_COMMAND="${mock_bin}/credential-gate" \
     SUPRA_FONT_GUARD_COMMAND="${mock_bin}/font-gate" \
     SUPRA_RELEASE_GATE_COMMAND="${mock_bin}/release-gate" \
+    SUPRA_SCOPE_GATE_COMMAND="${mock_bin}/scope-gate" \
     bash "${scripts}/release-preflight.sh" \
       --repo-root "$source_repo" \
       --repository example/supra \
@@ -443,6 +446,16 @@ if [[ "$release_gate_status" -ne 1 ]] || ! grep -Fq 'release integration gate fa
   fail 'failed package/integration release gate did not block release'
 else
   printf '%s\n' 'PASS: failed package/integration release gate blocks release'
+fi
+
+make_source_repo scope-gate-fail
+scope_gate_output="${temporary_dir}/scope-gate-failure.log"
+scope_gate_status=0
+MOCK_SCOPE_GATE_FAIL=1 preflight "$SOURCE_REPO" "$SOURCE_SHA" "${temporary_dir}/scope-gate.json" >"$scope_gate_output" 2>&1 || scope_gate_status=$?
+if [[ "$scope_gate_status" -ne 1 ]] || ! grep -Fq 'owner-approved release scope gate failed' "$scope_gate_output"; then
+  fail 'missing owner-approved release scope gate did not block release'
+else
+  printf '%s\n' 'PASS: missing owner-approved release scope gate blocks release'
 fi
 
 make_source_repo credential-fail

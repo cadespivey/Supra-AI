@@ -28,7 +28,8 @@ public final class GlobalChatController: ObservableObject {
     @Published public private(set) var errorMessage: String?
 
     private let store: SupraStore
-    private let runtimeClient: any RuntimeClientProtocol
+    private let runtimeClient: any ModelExecutionGateway
+    private var modelExecutionGateway: any ModelExecutionGateway { runtimeClient }
     private let defaultSystemPrompt: String?
     private let scope: ChatScope
     /// Grounds matter chats in the matter's own documents (folder inventories +
@@ -49,6 +50,7 @@ public final class GlobalChatController: ObservableObject {
     private let router: ModelRouter
     private let legalConfiguration: LegalModelConfiguration
     private let courtListenerClient: any CourtListenerClientProtocol
+    private let legalQueryEgressGate: LegalQueryEgressGate
     /// Pluggable statutory-source orchestration (Open Legal Codes today; govinfo / Openlaws /
     /// MCP-backed sources later). Best-effort and lowest-weight — it supplements case law for
     /// statutory questions and never blocks the answer if a source is unavailable.
@@ -64,7 +66,20 @@ public final class GlobalChatController: ObservableObject {
     /// citation lookup) — lets follow-ups the anaphor list misses ("Did Peacock
     /// address laches?") still resolve to the case under discussion.
     private var activeNamedCaseByChatID: [String: String] = [:]
+    /// Content-free disclosure metadata for quick attachments used during this
+    /// controller's lifetime. Nothing here is persisted or reconstructed after
+    /// relaunch; durable matter grounding remains owned by source packets.
+    private var quickAttachmentsByMessageID: [String: [QuickAttachmentPresentation]] = [:]
+    /// The corresponding source-bearing contexts remain process-local and are
+    /// addressable only through a visible message's disclosure. This permits an
+    /// explicit Add-to-Matter action without making quick attachments durable or
+    /// letting an attachment ID become a hidden source capability.
+    private var quickAttachmentSessionContextsByID: [String: ChatAttachmentContext] = [:]
+    private var quickAttachmentContextsByMessageID: [String: [String: ChatAttachmentContext]] = [:]
     private var activeGenerationID: GenerationID?
+    /// A lock-backed cancellation signal that the synchronous Store transaction
+    /// may inspect without crossing the controller's MainActor isolation.
+    private let groundedPublicationCancellation = GroundedPublicationCancellationSignal()
     /// Set by `cancel()`, checked cooperatively where in-flight work runs under its own
     /// untracked generation ID that `cancelGeneration(activeGenerationID)` can't reach: the
     /// fast→deep escalation boundary (a deep-retrieval LLM rerank) and the typed-generation
@@ -121,7 +136,7 @@ public final class GlobalChatController: ObservableObject {
 
     public init(
         store: SupraStore,
-        runtimeClient: any RuntimeClientProtocol,
+        runtimeClient: any ModelExecutionGateway,
         defaultSystemPrompt: String? = nil,
         scope: ChatScope = .global,
         embedder: (any TextEmbedder)? = nil,
@@ -146,14 +161,19 @@ public final class GlobalChatController: ObservableObject {
         self.legalConfiguration = legalConfiguration
         self.router = ModelRouter(configuration: legalConfiguration)
         let resolvedTokenStore = tokenStore ?? APIKeyStoreComposition.live()
-        self.courtListenerClient = courtListenerClient ?? CourtListenerClient(
+        let resolvedCourtListenerClient = courtListenerClient ?? CourtListenerClient(
             httpClient: AuthorizedHTTPClient(
                 keyStore: resolvedTokenStore,
                 policy: NetworkPolicyService(),
-                logger: NetworkRequestLogger(repository: store.networkRequests),
+                logger: NetworkRequestLogger(writer: store.networkRequestAudits),
                 redactsQueryValues: !legalConfiguration.logPrivilegedQueryTerms
             ),
             baseURLOverride: legalConfiguration.courtListenerBaseURL
+        )
+        self.courtListenerClient = resolvedCourtListenerClient
+        self.legalQueryEgressGate = LegalQueryEgressGate(
+            providerID: .courtListener,
+            courtListenerClient: resolvedCourtListenerClient
         )
         // Default statutory tier: eCFR (official federal regs, currency-verifiable) + Open Legal
         // Codes (free state/USC convenience). Each legal-data provider gets its OWN
@@ -165,7 +185,7 @@ public final class GlobalChatController: ObservableObject {
             AuthorizedHTTPClient(
                 keyStore: resolvedTokenStore,
                 policy: NetworkPolicyService(),
-                logger: NetworkRequestLogger(repository: store.networkRequests),
+                logger: NetworkRequestLogger(writer: store.networkRequestAudits),
                 redactsQueryValues: !legalConfiguration.logPrivilegedQueryTerms
             )
         }
@@ -200,6 +220,30 @@ public final class GlobalChatController: ObservableObject {
         } else {
             select(chatID: chats.first?.id)
         }
+    }
+
+    /// Returns the session-only quick-attachment disclosures associated with a
+    /// visible user or assistant turn. A newly constructed controller returns no
+    /// disclosures for persisted messages because attachment context is not durable.
+    public func quickAttachmentPresentations(
+        messageID: String
+    ) -> [QuickAttachmentPresentation] {
+        quickAttachmentsByMessageID[messageID] ?? []
+    }
+
+    /// Returns source-bearing context only when that exact attachment is disclosed
+    /// on the requested visible message. Reconstructed controllers intentionally
+    /// return nil because quick attachments are session-only.
+    public func quickAttachmentContext(
+        messageID: String,
+        attachmentID: String
+    ) -> ChatAttachmentContext? {
+        guard quickAttachmentsByMessageID[messageID]?.contains(where: {
+            $0.attachmentID == attachmentID
+        }) == true else {
+            return nil
+        }
+        return quickAttachmentContextsByMessageID[messageID]?[attachmentID]
     }
 
     /// The per-message artifact policy intentionally has no export case. A chat
@@ -507,9 +551,11 @@ public final class GlobalChatController: ObservableObject {
         message: String,
         modelPrompt: String,
         systemPrompt: String?,
-        options: GenerationOptions
+        options: GenerationOptions,
+        quickAttachments: [QuickAttachmentPresentation]
     ) throws {
         let assistant = try store.chats.createAssistantMessageShell(chatID: chatID)
+        recordQuickAttachments(quickAttachments, forMessageID: assistant.id)
         let session = try store.generation.createGenerationSession(
             chatID: chatID,
             messageID: assistant.id,
@@ -592,7 +638,7 @@ public final class GlobalChatController: ObservableObject {
     ) {
         let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         let allowsEmptyPrompt = route?.mode == .legalCritique && latestAssistantDraft() != nil
-        guard (!trimmed.isEmpty || allowsEmptyPrompt), !isGenerating else { return }
+        guard (!trimmed.isEmpty || !attachments.isEmpty || allowsEmptyPrompt), !isGenerating else { return }
         // Claim the generating flag synchronously on the main actor. The actual
         // work runs in a Task (a later hop), so without claiming it now a second
         // synchronous send() could pass the guard before performSend sets it,
@@ -860,9 +906,10 @@ public final class GlobalChatController: ObservableObject {
         // retrieval/escalation await or typed generation), so the escalation and
         // typed-generation boundaries can honor it.
         cancelRequested = true
+        groundedPublicationCancellation.requestCancellation()
         guard let activeGenerationID else { return }
-        let runtimeClient = runtimeClient
-        Task { _ = try? await runtimeClient.cancelGeneration(activeGenerationID) }
+        let modelExecutionGateway = modelExecutionGateway
+        Task { _ = try? await modelExecutionGateway.cancelGeneration(activeGenerationID) }
     }
 
     /// Phase 1 gate switch (P1-T4): generate a typed AnswerDraft for a matter-document CONTENT
@@ -897,10 +944,14 @@ public final class GlobalChatController: ObservableObject {
         // A Cancel pressed during the (bounded) typed generation can't reach its untracked
         // generations; honor it here by discarding the result and marking the turn cancelled
         // rather than committing a completed answer.
-        if cancelRequested {
-            try? store.chats.markVariantCancelled(variant.id)
-            try? store.generation.cancelGeneration(generationID: session.id)
-            updateMessage(id: assistant.id, content: "", status: .cancelled)
+        if cancelRequested || groundedPublicationCancellation.isCancellationRequested {
+            resolveGroundedPublicationFailure(
+                GroundedChatTerminalPublicationError.cancelled,
+                assistant: assistant,
+                variant: variant,
+                session: session,
+                metrics: StoredRuntimeMetrics()
+            )
             reloadMessages()
             return true
         }
@@ -919,61 +970,62 @@ public final class GlobalChatController: ObservableObject {
         }
         var content = answerText
 
-        do {
-            try store.chats.appendToken(to: variant.id, token: answerText)
-            // Source-key trailer, entity-grounding banner, and support-verification banner are
-            // appended out-of-band exactly as on the streamed path.
-            if let groundingTrailer, !groundingTrailer.isEmpty {
-                try? store.chats.appendToken(to: variant.id, token: groundingTrailer)
-                content += groundingTrailer
-            }
-            if !groundingSourceTexts.isEmpty {
-                let entityIssues = LegalCitationVerifier.verifyGroundedEntities(
-                    answer: answerText, sourceTexts: groundingSourceTexts
-                )
-                if let banner = Self.entityGroundingBanner(entityIssues) {
-                    try? store.chats.appendToken(to: variant.id, token: banner)
-                    content += banner
-                }
-            }
-            let verification = try? DocumentSupportVerifier.verify(
-                answer: answerText,
-                sources: groundingSources.map {
-                    DocumentSupportSource(
-                        sourceID: $0.sourceID, label: $0.label, locator: $0.locator.encodedJSON(),
-                        text: $0.supportText, lowConfidence: $0.lowConfidence
-                    )
-                },
-                scopeFullyIndexed: groundingScopeFullyIndexed
+        // Source-key trailer, entity-grounding banner, and support-verification banner are
+        // assembled in memory. None may reach the pending owner before the atomic Store command.
+        if let groundingTrailer, !groundingTrailer.isEmpty {
+            content += groundingTrailer
+        }
+        if !groundingSourceTexts.isEmpty {
+            let entityIssues = LegalCitationVerifier.verifyGroundedEntities(
+                answer: answerText, sourceTexts: groundingSourceTexts
             )
-            let banner = verification.flatMap(Self.documentSupportBanner)
-                ?? Self.verificationUnavailableBanner
-            if verification == nil || verification?.requiresReview == true {
-                try? store.chats.appendToken(to: variant.id, token: banner)
+            if let banner = Self.entityGroundingBanner(entityIssues) {
                 content += banner
             }
-            try store.chats.completeVariant(variant.id)
-            try store.generation.completeGeneration(generationID: session.id)
-            try persistGroundedDocumentPacket(
-                messageID: assistant.id, question: question, context: grounded, verification: verification
+        }
+        let verification = try? DocumentSupportVerifier.verify(
+            answer: answerText,
+            sources: groundingSources.map {
+                DocumentSupportSource(
+                    sourceID: $0.sourceID, label: $0.label, locator: $0.locator.encodedJSON(),
+                    text: $0.supportText, lowConfidence: $0.lowConfidence
+                )
+            },
+            scopeFullyIndexed: groundingScopeFullyIndexed
+        )
+        let banner = verification.flatMap(Self.documentSupportBanner)
+            ?? Self.verificationUnavailableBanner
+        if verification == nil || verification?.requiresReview == true {
+            content += banner
+        }
+
+        do {
+            let publication = try publishGroundedTerminalAnswer(
+                question: question,
+                answerText: answerText,
+                terminalContent: content,
+                context: grounded,
+                verification: verification,
+                chatID: chatID,
+                assistant: assistant,
+                variant: variant,
+                session: session,
+                metrics: StoredRuntimeMetrics()
             )
-            updateMessageAssurance(
-                id: assistant.id,
-                state: Self.groundedAssurance(depth: grounded.depth, verificationStatus: verification?.verificationStatus)
-            )
-            let citations = persistSourceCitations(messageID: assistant.id, answer: answerText, sources: groundingSources)
             updateMessage(id: assistant.id, content: content, status: .completed)
-            attachCitations(citations, toMessage: assistant.id)
+            updateMessageAssurance(id: assistant.id, state: publication.receipt.assuranceState)
+            attachCitations(publication.citations, toMessage: assistant.id)
             if grounded.depth == .fast, !groundingSources.isEmpty {
                 deeperSearchOffer = DeeperSearchOffer(kind: .documents, chatID: chatID, question: question)
             }
         } catch {
-            try? store.chats.markVariantFailed(variant.id, reason: error.localizedDescription)
-            try? store.generation.failGeneration(
-                generationID: session.id, errorSummary: error.localizedDescription, diagnosticEventID: nil
+            resolveGroundedPublicationFailure(
+                error,
+                assistant: assistant,
+                variant: variant,
+                session: session,
+                metrics: StoredRuntimeMetrics()
             )
-            errorMessage = error.localizedDescription
-            updateMessage(id: assistant.id, content: content, status: .failed)
         }
         reloadMessages()
         return true
@@ -996,6 +1048,7 @@ public final class GlobalChatController: ObservableObject {
         errorMessage = nil
         deeperSearchOffer = nil
         cancelRequested = false
+        groundedPublicationCancellation.reset()
         defer {
             isGenerating = false
             activeGenerationID = nil
@@ -1003,14 +1056,24 @@ public final class GlobalChatController: ObservableObject {
 
         var variantID: String?
         var sessionID: String?
+        let quickAttachments = attachments.map(\.presentation)
+        for attachment in attachments {
+            quickAttachmentSessionContextsByID[attachment.id] = attachment
+        }
 
         // Keep the chat bubble clean (the question + a list of attached files);
         // give the model the attachment contents as grounding.
         let modelPrompt = attachments.isEmpty ? prompt : Self.attachmentsBlock(attachments) + "\n\n" + prompt
         let displayBase = displayPrompt ?? prompt
-        let displayContent = attachments.isEmpty
-            ? displayBase
-            : displayBase + "\n\nAttached: " + attachments.map(\.name).joined(separator: ", ")
+        let attachmentNames = "Attached: " + attachments.map(\.name).joined(separator: ", ")
+        let displayContent: String
+        if attachments.isEmpty {
+            displayContent = displayBase
+        } else if displayBase.isEmpty {
+            displayContent = attachmentNames
+        } else {
+            displayContent = displayBase + "\n\n" + attachmentNames
+        }
 
         do {
             // ECHO FIRST (user report: a submitted prompt sat invisible during a
@@ -1028,7 +1091,11 @@ public final class GlobalChatController: ObservableObject {
             // contract; prior, possibly ungrounded turns must not dilute it).
             let fullHistory = replayHistory(chatID: chatID)
 
-            _ = try store.chats.appendUserMessage(chatID: chatID, content: displayContent)
+            let userMessage = try store.chats.appendUserMessage(
+                chatID: chatID,
+                content: displayContent
+            )
+            recordQuickAttachments(quickAttachments, forMessageID: userMessage.id)
             reloadMessages()
 
             // Resolve the model AFTER the echo. Direct callers (tests) that pass
@@ -1045,7 +1112,8 @@ public final class GlobalChatController: ObservableObject {
                         message: message,
                         modelPrompt: modelPrompt,
                         systemPrompt: systemPrompt,
-                        options: options
+                        options: options,
+                        quickAttachments: quickAttachments
                     )
                     return
                 }
@@ -1085,19 +1153,21 @@ public final class GlobalChatController: ObservableObject {
                     options: options,
                     researchDepth: researchDepth,
                     chatID: chatID,
-                    history: fullHistory
+                    history: fullHistory,
+                    quickAttachments: quickAttachments
                 )
                 return
             }
 
             guard let modelID = resolvedModelID else {
-                errorMessage = "Load or register a local MLX model in the Models tab."
+                errorMessage = "Load or register a local MLX model in AI Setup."
                 return
             }
 
             let history = grounded == nil ? fullHistory : []
 
             let assistant = try store.chats.createAssistantMessageShell(chatID: chatID)
+            recordQuickAttachments(quickAttachments, forMessageID: assistant.id)
 
             // A fast-tier grounded answer whose small packet doesn't cover the question
             // is the canonical refusal. Rather than surface it, re-run the SAME question
@@ -1189,6 +1259,9 @@ public final class GlobalChatController: ObservableObject {
                     prompt: effectiveModelPrompt,
                     systemPrompt: effectiveSystemPrompt,
                     history: history,
+                    contextWorkload: context == nil
+                        ? .ordinaryConversation
+                        : .groundedExactEvidence,
                     options: effectiveOptions
                 )
 
@@ -1198,7 +1271,7 @@ public final class GlobalChatController: ObservableObject {
                 var finalMetrics: RuntimeMetrics?
                 var groundingVerification: DocumentSupportReport?
 
-                generationEvents: for try await event in try runtimeClient.generate(request) {
+                generationEvents: for try await event in try modelExecutionGateway.generate(request) {
                     switch event.type {
                     case .token:
                         guard let token = event.tokenText else { break }
@@ -1222,16 +1295,64 @@ public final class GlobalChatController: ObservableObject {
                     case .generationCompleted:
                         sawTerminal = true
                         finalMetrics = event.metrics ?? finalMetrics
-                        if context != nil, finalMetrics?.contextOverflowed == true {
+                        if let context, finalMetrics?.contextOverflowed == true {
                             streamedContent = Self.groundedContextOverflowRefusal
-                            try store.chats.appendToken(to: activeVariant.id, token: streamedContent)
-                            try store.chats.completeVariant(activeVariant.id)
-                            try store.generation.completeGeneration(
-                                generationID: session.id,
-                                metrics: storedMetrics(from: finalMetrics)
-                            )
+                            if context.sources.isEmpty {
+                                // Inventory/no-source grounding owns no provenance packet, so it
+                                // retains the ordinary terminal path.
+                                try store.chats.appendToken(to: activeVariant.id, token: streamedContent)
+                                try store.chats.completeVariant(activeVariant.id)
+                                try store.generation.completeGeneration(
+                                    generationID: session.id,
+                                    metrics: storedMetrics(from: finalMetrics)
+                                )
+                                updateMessage(id: assistant.id, content: streamedContent, status: .completed)
+                            } else {
+                                // Even the bounded overflow refusal is an answer about an exact
+                                // retrieved packet. Publish it through the same atomic boundary.
+                                let verification = try? DocumentSupportVerifier.verify(
+                                    answer: streamedContent,
+                                    sources: context.sources.map {
+                                        DocumentSupportSource(
+                                            sourceID: $0.sourceID,
+                                            label: $0.label,
+                                            locator: $0.locator.encodedJSON(),
+                                            text: $0.supportText,
+                                            lowConfidence: $0.lowConfidence
+                                        )
+                                    },
+                                    scopeFullyIndexed: context.scopeFullyIndexed
+                                )
+                                do {
+                                    let publication = try publishGroundedTerminalAnswer(
+                                        question: prompt,
+                                        answerText: streamedContent,
+                                        terminalContent: streamedContent,
+                                        context: context,
+                                        verification: verification,
+                                        chatID: chatID,
+                                        assistant: assistant,
+                                        variant: activeVariant,
+                                        session: session,
+                                        metrics: storedMetrics(from: finalMetrics)
+                                    )
+                                    updateMessage(id: assistant.id, content: streamedContent, status: .completed)
+                                    updateMessageAssurance(
+                                        id: assistant.id,
+                                        state: publication.receipt.assuranceState
+                                    )
+                                    attachCitations(publication.citations, toMessage: assistant.id)
+                                } catch {
+                                    resolveGroundedPublicationFailure(
+                                        error,
+                                        assistant: assistant,
+                                        variant: activeVariant,
+                                        session: session,
+                                        metrics: storedMetrics(from: finalMetrics)
+                                    )
+                                }
+                            }
                             logGenerationTiming(finalMetrics, generationID: session.id)
-                            updateMessage(id: assistant.id, content: streamedContent, status: .completed)
                             break generationEvents
                         }
                         // Normalize the model's citation-marker variants ([CITE: S1, S8], [S1, S8],
@@ -1286,19 +1407,12 @@ public final class GlobalChatController: ObservableObject {
                             // No genuinely deeper packet — fall through and finalize the
                             // fast refusal as the answer.
                         }
-                        if context != nil, !streamedContent.isEmpty {
-                            try store.chats.appendToken(to: activeVariant.id, token: streamedContent)
-                        }
-                        // The runtime dropped oldest turns to fit the window — tell the
-                        // user (persist it too) rather than silently losing context.
+                        // Assemble the terminal value in memory. For source-bearing grounding,
+                        // none of it may reach the message owner before the atomic Store command.
                         if finalMetrics?.contextTrimmed == true {
-                            try? store.chats.appendToken(to: activeVariant.id, token: Self.contextTrimmedNotice)
                             streamedContent += Self.contextTrimmedNotice
                         }
-                        // Append the grounded answer's source key so inline [S#] citations
-                        // resolve to document names for the reader. Only on success.
                         if let groundingTrailer, !groundingTrailer.isEmpty {
-                            try? store.chats.appendToken(to: activeVariant.id, token: groundingTrailer)
                             streamedContent += groundingTrailer
                         }
                         // Post-generation grounding check: flag any name / email / phone the
@@ -1311,7 +1425,6 @@ public final class GlobalChatController: ObservableObject {
                                 sourceTexts: groundingSourceTexts
                             )
                             if let banner = Self.entityGroundingBanner(entityIssues) {
-                                try? store.chats.appendToken(to: activeVariant.id, token: banner)
                                 streamedContent += banner
                             }
                         }
@@ -1354,44 +1467,67 @@ public final class GlobalChatController: ObservableObject {
                             let banner = report.flatMap(Self.documentSupportBanner)
                                 ?? Self.verificationUnavailableBanner
                             if report == nil || report?.requiresReview == true {
-                                try? store.chats.appendToken(to: activeVariant.id, token: banner)
                                 streamedContent += banner
                             }
                         }
-                        try store.chats.completeVariant(activeVariant.id)
-                        try store.generation.completeGeneration(
-                            generationID: session.id,
-                            metrics: storedMetrics(from: finalMetrics)
-                        )
-                        logGenerationTiming(finalMetrics, generationID: session.id)
-                        if let context {
-                            try persistGroundedDocumentPacket(
-                                messageID: assistant.id,
-                                question: prompt,
-                                context: context,
-                                verification: groundingVerification
-                            )
-                            updateMessageAssurance(
-                                id: assistant.id,
-                                state: Self.groundedAssurance(
-                                    depth: context.depth,
-                                    verificationStatus: groundingVerification?.verificationStatus
+                        if let context, !groundingSources.isEmpty {
+                            do {
+                                let publication = try publishGroundedTerminalAnswer(
+                                    question: prompt,
+                                    answerText: answerText,
+                                    terminalContent: streamedContent,
+                                    context: context,
+                                    verification: groundingVerification,
+                                    chatID: chatID,
+                                    assistant: assistant,
+                                    variant: activeVariant,
+                                    session: session,
+                                    metrics: storedMetrics(from: finalMetrics)
                                 )
+                                updateMessage(id: assistant.id, content: streamedContent, status: .completed)
+                                updateMessageAssurance(
+                                    id: assistant.id,
+                                    state: publication.receipt.assuranceState
+                                )
+                                attachCitations(publication.citations, toMessage: assistant.id)
+                                if context.depth == .fast {
+                                    deeperSearchOffer = DeeperSearchOffer(
+                                        kind: .documents,
+                                        chatID: chatID,
+                                        question: prompt
+                                    )
+                                }
+                            } catch {
+                                resolveGroundedPublicationFailure(
+                                    error,
+                                    assistant: assistant,
+                                    variant: activeVariant,
+                                    session: session,
+                                    metrics: storedMetrics(from: finalMetrics)
+                                )
+                            }
+                        } else {
+                            // Ordinary chat and deterministic inventory/no-match grounding own
+                            // no document packet and retain the existing terminal writes.
+                            if context != nil, !streamedContent.isEmpty {
+                                try store.chats.appendToken(to: activeVariant.id, token: streamedContent)
+                            } else if finalMetrics?.contextTrimmed == true {
+                                // Ordinary chat tokens were already persisted as they streamed;
+                                // only the terminal truncation notice remains to append.
+                                try store.chats.appendToken(
+                                    to: activeVariant.id,
+                                    token: Self.contextTrimmedNotice
+                                )
+                            }
+                            try store.chats.completeVariant(activeVariant.id)
+                            try store.generation.completeGeneration(
+                                generationID: session.id,
+                                metrics: storedMetrics(from: finalMetrics)
                             )
+                            updateMessage(id: assistant.id, content: streamedContent, status: .completed)
                         }
-                        let citations = persistSourceCitations(
-                            messageID: assistant.id,
-                            answer: answerText,
-                            sources: groundingSources
-                        )
-                        updateMessage(id: assistant.id, content: streamedContent, status: .completed)
-                        attachCitations(citations, toMessage: assistant.id)
-                        // A fast-tier grounded answer is preliminary: offer the deep pass
-                        // for the same question (spec §3.2). Auto-escalated or deep passes
-                        // carry .deep and offer nothing.
-                        if context?.depth == .fast, !groundingSources.isEmpty {
-                            deeperSearchOffer = DeeperSearchOffer(kind: .documents, chatID: chatID, question: prompt)
-                        }
+                        logGenerationTiming(finalMetrics, generationID: session.id)
+                        break generationEvents
 
                     case .generationCancelled:
                         sawTerminal = true
@@ -1458,13 +1594,15 @@ public final class GlobalChatController: ObservableObject {
         options: GenerationOptions,
         researchDepth: RetrievalDepth = .fast,
         chatID: String,
-        history: [GenerateRequest.Turn]
+        history: [GenerateRequest.Turn],
+        quickAttachments: [QuickAttachmentPresentation]
     ) async throws {
         // The caller (performSend) has already created/selected the chat, captured
         // `history` before the user turn was appended, and ECHOED the user message —
         // the echo must precede this workflow's retrieval, not follow it.
         let priorAssistantDraft = latestAssistantDraft()
         let assistant = try store.chats.createAssistantMessageShell(chatID: chatID)
+        recordQuickAttachments(quickAttachments, forMessageID: assistant.id)
         let generationID = GenerationID()
         activeGenerationID = generationID
 
@@ -1537,6 +1675,34 @@ public final class GlobalChatController: ObservableObject {
         var authorities: [LegalAuthority]
         var verification: LegalVerificationReport?
         var researchSessionID: String?
+    }
+
+    /// Matter-chat containment at the automatic boundary. Global chat retains its
+    /// existing behavior because it has no matter scope; a matter chat may either
+    /// stay entirely local or send one deterministic public reporter-citation
+    /// lookup. Everything else moves through Research, whose visible saved query
+    /// and explicit Run/Rerun/Load More action mint the exact short-lived grant.
+    private enum AutomaticLegalEgressDisposition: Equatable {
+        case unrestricted
+        case deterministicPublicCaseLookup(citation: String)
+        case blockedMatterQuery
+    }
+
+    private static let matterResearchReviewRequiredMessage = """
+    No legal-data query was sent. Automatic research from a matter chat is limited to a deterministic public case citation lookup. Use Research to review the exact provider query before running a broader search.
+    """
+
+    private func automaticLegalEgressDisposition(
+        for classification: LegalQueryClassification
+    ) -> AutomaticLegalEgressDisposition {
+        guard scopedMatterID != nil else { return .unrestricted }
+        guard classification.desiredAuthorityType == .case,
+              let lookup = classification.citationLookup?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !lookup.isEmpty,
+              let publicCitation = Self.deterministicPublicCaseCitation(from: lookup) else {
+            return .blockedMatterQuery
+        }
+        return .deterministicPublicCaseLookup(citation: publicCitation)
     }
 
     private func legalWorkflowOutput(
@@ -1640,7 +1806,7 @@ public final class GlobalChatController: ObservableObject {
             }
             guard let modelID else {
                 return LegalWorkflowResult(
-                    output: "Load or register a local MLX model in the Models tab before running `/critique`.",
+                    output: "Load or register a local MLX model in AI Setup before running `/critique`.",
                     queryTerms: [],
                     authorities: [],
                     verification: nil,
@@ -1658,9 +1824,10 @@ public final class GlobalChatController: ObservableObject {
                 prompt: critiquePrompt,
                 systemPrompt: systemPrompt,
                 history: history,
+                contextWorkload: .groundedExactEvidence,
                 options: options
             )
-            let output = ReasoningContent.answer(from: try await runtimeClient.collectGeneratedText(request))
+            let output = ReasoningContent.answer(from: try await modelExecutionGateway.collectGeneratedText(request))
             return LegalWorkflowResult(
                 output: output,
                 queryTerms: packet.queryTerms,
@@ -1672,7 +1839,7 @@ public final class GlobalChatController: ObservableObject {
         case .drafting, .generalQA:
             guard let modelID else {
                 return LegalWorkflowResult(
-                    output: "Load or register a local MLX model in the Models tab.",
+                    output: "Load or register a local MLX model in AI Setup.",
                     queryTerms: [],
                     authorities: [],
                     verification: nil,
@@ -1684,9 +1851,10 @@ public final class GlobalChatController: ObservableObject {
                 modelID: modelID,
                 prompt: prompt,
                 systemPrompt: systemPrompt,
+                contextWorkload: .ordinaryConversation,
                 options: options
             )
-            let output = ReasoningContent.answer(from: try await runtimeClient.collectGeneratedText(request))
+            let output = ReasoningContent.answer(from: try await modelExecutionGateway.collectGeneratedText(request))
             return LegalWorkflowResult(output: output, queryTerms: [], authorities: [], verification: nil, researchSessionID: nil)
         }
     }
@@ -1755,7 +1923,16 @@ public final class GlobalChatController: ObservableObject {
         // legal-authority question — answer it from RECAP dockets, with no jurisdiction gate
         // and no citation verifier (dockets are filings, not authority).
         if scopedClassification.desiredAuthorityType == .docket {
-            return await caseFinderOutput(for: scopedClassification)
+            if automaticLegalEgressDisposition(for: scopedClassification) == .blockedMatterQuery {
+                return LegalWorkflowResult(
+                    output: Self.matterResearchReviewRequiredMessage,
+                    queryTerms: [],
+                    authorities: [],
+                    verification: nil,
+                    researchSessionID: nil
+                )
+            }
+            return await caseFinderOutput(for: scopedClassification, chatID: chatID)
         }
 
         let sourcePlan = LegalResearchSourcePlanner.plan(
@@ -1763,6 +1940,7 @@ public final class GlobalChatController: ObservableObject {
             target: legalSourceTarget(for: scopedClassification)
         )
         let classification = sourcePlan.effectiveClassification
+        let egressDisposition = automaticLegalEgressDisposition(for: classification)
         if route.requiresJurisdiction, !sourcePlan.satisfiesJurisdictionRequirement {
             let message = """
             I need the jurisdiction before I can give source-grounded legal authority. Please specify the state, federal circuit, court, or other governing jurisdiction. If you didn't mean to ask a legal question — or want a general, non-authoritative answer — resend it starting with `/ask` to skip legal grounding, or use `/draft` for attorney-editable drafting.
@@ -1777,12 +1955,33 @@ public final class GlobalChatController: ObservableObject {
             return LegalWorkflowResult(output: message, queryTerms: [], authorities: [], verification: nil, researchSessionID: nil)
         }
 
+        // Resolve the local tier before deciding whether provider egress is needed.
+        // A matter's saved opinion text remains usable without approval because it
+        // stays on the Mac; metadata-only or missing local coverage cannot trigger
+        // an automatic topical provider fallback.
+        let localRetrieval = researchDepth == .fast || egressDisposition == .blockedMatterQuery
+            ? localAuthorityRetrieval(for: classification)
+            : nil
+        if egressDisposition == .blockedMatterQuery, localRetrieval == nil {
+            return LegalWorkflowResult(
+                output: Self.matterResearchReviewRequiredMessage,
+                queryTerms: [],
+                authorities: [],
+                verification: nil,
+                researchSessionID: nil
+            )
+        }
+
         guard let modelID else {
-            let message = "Load or register a local MLX model in the Models tab before running source-grounded legal research."
+            let message = "Load or register a local MLX model in AI Setup before running source-grounded legal research."
             return LegalWorkflowResult(output: message, queryTerms: [], authorities: [], verification: nil, researchSessionID: nil)
         }
 
+        // Statutory/developments providers do not yet expose the exact deterministic
+        // request proof required for a matter-chat exception, so R0 keeps them on
+        // the reviewed Research side of the boundary.
         let statutoryLookup: (provisions: [StatutoryProvision], notes: [String]) = sourcePlan.shouldRetrievePrimaryLaw
+            && egressDisposition == .unrestricted
             ? await statutoryProvisions(for: sourcePlan)
             : ([], [])
         let citableStatutoryProvisions = statutoryLookup.provisions.filter(\.isCitableAuthority)
@@ -1822,12 +2021,19 @@ public final class GlobalChatController: ObservableObject {
         // skips this branch and searches the network.
         let retrieval: (queryTerms: [String], authorities: [LegalAuthority], researchSessionID: String?)
         var answeredFromSavedAuthorities = false
-        if researchDepth == .fast, let local = localAuthorityRetrieval(for: classification) {
+        if let local = localRetrieval {
             retrieval = local
             answeredFromSavedAuthorities = true
         } else {
             do {
-                retrieval = try await retrieveAuthorities(for: classification, route: route, modelID: modelID, matterID: scopedMatterID)
+                retrieval = try await retrieveAuthorities(
+                    for: classification,
+                    route: route,
+                    modelID: modelID,
+                    chatID: chatID,
+                    matterID: scopedMatterID,
+                    egressDisposition: egressDisposition
+                )
             } catch {
                 // Network down or rate-limited: the matter's own library is still
                 // a grounded source — better a local answer than a dead send,
@@ -1913,9 +2119,10 @@ public final class GlobalChatController: ObservableObject {
             prompt: answerPrompt,
             systemPrompt: systemPrompt,
             history: history,
+            contextWorkload: .groundedExactEvidence,
             options: options
         )
-        var output = ReasoningContent.answer(from: try await runtimeClient.collectGeneratedText(request))
+        var output = ReasoningContent.answer(from: try await modelExecutionGateway.collectGeneratedText(request))
         var verificationPacket = packet
         var hydration = await rehydratedForVerification(verificationPacket, answer: output)
         verificationPacket = hydration.packet
@@ -1950,9 +2157,10 @@ public final class GlobalChatController: ObservableObject {
             )
             let revisionRequest = GenerateRequest(
                 generationID: generationID, modelID: modelID, prompt: revisionPrompt,
-                systemPrompt: systemPrompt, history: history, options: options
+                systemPrompt: systemPrompt, history: history,
+                contextWorkload: .groundedExactEvidence, options: options
             )
-            if let revisedRaw = try? await runtimeClient.collectGeneratedText(revisionRequest) {
+            if let revisedRaw = try? await modelExecutionGateway.collectGeneratedText(revisionRequest) {
                 let revised = ReasoningContent.answer(from: revisedRaw)
                 hydration = await rehydratedForVerification(verificationPacket, answer: revised)
                 verificationPacket = hydration.packet
@@ -2004,7 +2212,9 @@ public final class GlobalChatController: ObservableObject {
 
         // Append a NON-citable "Legal developments" section (pending bills / rulemaking) when there
         // is relevant tracking context. Never enters the citable packet — best-effort, never blocks.
-        if sourcePlan.shouldRetrieveDevelopments, let developments = await legalDevelopmentsSection(for: classification) {
+        if sourcePlan.shouldRetrieveDevelopments,
+           egressDisposition == .unrestricted,
+           let developments = await legalDevelopmentsSection(for: classification) {
             output += "\n\n---\n\n" + developments
         }
 
@@ -2012,8 +2222,13 @@ public final class GlobalChatController: ObservableObject {
         // the network search — never silently pass saved-library coverage off as a
         // full CourtListener pass.
         if answeredFromSavedAuthorities {
-            output += "\n\n_Preliminary — answered from this matter's saved authorities. Use “Search CourtListener” below for a wider search._"
-            deeperSearchOffer = DeeperSearchOffer(kind: .research, chatID: chatID, question: prompt)
+            if egressDisposition == .blockedMatterQuery {
+                output += "\n\n_Preliminary — answered from this matter's saved authorities. Use Research to review the exact provider query before a wider search._"
+                deeperSearchOffer = nil
+            } else {
+                output += "\n\n_Preliminary — answered from this matter's saved authorities. Use “Search CourtListener” below for a wider search._"
+                deeperSearchOffer = DeeperSearchOffer(kind: .research, chatID: chatID, question: prompt)
+            }
         }
 
         // The caveat leads the answer — the reader must see "no primary law was
@@ -2273,30 +2488,57 @@ public final class GlobalChatController: ObservableObject {
         for classification: LegalQueryClassification,
         route: ModelRoute,
         modelID: ModelID,
-        matterID: String?
+        chatID: String,
+        matterID: String?,
+        egressDisposition: AutomaticLegalEgressDisposition
     ) async throws -> (queryTerms: [String], authorities: [LegalAuthority], researchSessionID: String?) {
-        // Prefer planner-generated queries (same planner the Research tab uses); fall back
-        // to the single deterministic query when the model is unavailable or returns none.
-        let plannedQueries = await planCourtListenerQueries(for: classification, route: route, modelID: modelID)
-        var primaryRequests: [CourtListenerSearchRequest] = []
-        // Citation-first: when the prompt cites a specific authority, look it up directly
-        // (via CourtListener's citation filter) so the cited case is retrieved even if the
-        // planner's keyword queries wouldn't surface it.
-        if let citation = classification.citationLookup?.trimmingCharacters(in: .whitespacesAndNewlines), !citation.isEmpty {
-            primaryRequests.append(courtListenerRequest(for: classification, adverse: false))
-        }
-        if plannedQueries.isEmpty {
-            if primaryRequests.isEmpty {
+        let requests: [(request: CourtListenerSearchRequest, adverse: Bool)]
+        switch egressDisposition {
+        case .blockedMatterQuery:
+            // Defense in depth: the caller returns the user-facing containment
+            // result before this boundary. If that routing changes, remain closed.
+            return ([], [], nil)
+        case .deterministicPublicCaseLookup(let citation):
+            // Exactly one request built from the public reporter citation. Never ask
+            // the model to invent additional provider query terms for a matter.
+            requests = [(
+                CourtListenerSearchRequest(
+                    query: citation,
+                    orderBy: "score desc",
+                    citation: citation
+                ),
+                false
+            )]
+        case .unrestricted:
+            // Global quick research retains its current planner behavior. Formal
+            // matter Research separately runs only queries the user approved.
+            let plannedQueries = await planCourtListenerQueries(
+                for: classification,
+                route: route,
+                modelID: modelID
+            )
+            var primaryRequests: [CourtListenerSearchRequest] = []
+            // Citation-first: when the prompt cites a specific authority, look it up directly
+            // (via CourtListener's citation filter) so the cited case is retrieved even if the
+            // planner's keyword queries wouldn't surface it.
+            if let citation = classification.citationLookup?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !citation.isEmpty {
                 primaryRequests.append(courtListenerRequest(for: classification, adverse: false))
             }
-        } else {
-            primaryRequests.append(contentsOf: plannedQueries.prefix(Self.maxChatPlannerQueries).map {
-                plannerRequest(query: $0, classification: classification)
-            })
-        }
-        var requests = primaryRequests.map { (request: $0, adverse: false) }
-        if classification.adverseAuthorityRequested {
-            requests.append((courtListenerRequest(for: classification, adverse: true), true))
+            if plannedQueries.isEmpty {
+                if primaryRequests.isEmpty {
+                    primaryRequests.append(courtListenerRequest(for: classification, adverse: false))
+                }
+            } else {
+                primaryRequests.append(contentsOf: plannedQueries.prefix(Self.maxChatPlannerQueries).map {
+                    plannerRequest(query: $0, classification: classification)
+                })
+            }
+            var expanded = primaryRequests.map { (request: $0, adverse: false) }
+            if classification.adverseAuthorityRequested {
+                expanded.append((courtListenerRequest(for: classification, adverse: true), true))
+            }
+            requests = expanded
         }
 
         let researchSession = try matterID.map {
@@ -2326,8 +2568,17 @@ public final class GlobalChatController: ObservableObject {
             }
 
             do {
-                let response = try await courtListenerClient.searchOpinions(
+                let egress = try await quickResearchEgress(
+                    request: item.request,
+                    disposition: egressDisposition,
+                    matterID: matterID,
+                    researchSessionID: researchSession?.id,
+                    purpose: "quick-research:\(chatID):\(index)"
+                )
+                let response = try await legalQueryEgressGate.searchOpinions(
                     item.request,
+                    intent: egress.intent,
+                    authorization: egress.authorization,
                     relatedResearchSessionID: researchSession?.id
                 )
                 authorities += LegalAuthorityNormalizer.normalize(response)
@@ -2406,7 +2657,10 @@ public final class GlobalChatController: ObservableObject {
     /// Answers a party/litigation-lookup question ("who has sued X") from CourtListener's
     /// RECAP dockets — a factual case list, not legal authority, so it skips the source
     /// packet and the citation verifier entirely.
-    private func caseFinderOutput(for classification: LegalQueryClassification) async -> LegalWorkflowResult {
+    private func caseFinderOutput(
+        for classification: LegalQueryClassification,
+        chatID: String
+    ) async -> LegalWorkflowResult {
         let party = classification.partyName?.trimmingCharacters(in: .whitespacesAndNewlines)
         let hasParty = (party?.isEmpty == false)
         let request = CourtListenerSearchRequest(
@@ -2420,7 +2674,19 @@ public final class GlobalChatController: ObservableObject {
         )
         let terms = [request.query]
         do {
-            let response = try await courtListenerClient.searchDockets(request)
+            let egress = try await quickResearchEgress(
+                request: request,
+                disposition: .unrestricted,
+                matterID: nil,
+                researchSessionID: nil,
+                purpose: "quick-docket-search:\(chatID)"
+            )
+            let response = try await legalQueryEgressGate.searchDockets(
+                request,
+                intent: egress.intent,
+                authorization: egress.authorization,
+                relatedResearchSessionID: nil
+            )
             let dockets = Array(response.results.prefix(Self.maxCaseFinderResults))
             let output = dockets.isEmpty
                 ? Self.caseFinderEmptyMessage(party: hasParty ? party : nil)
@@ -2433,6 +2699,54 @@ public final class GlobalChatController: ObservableObject {
 
     private static let maxCaseFinderResults = 15
 
+    /// Maps the already-contained quick-research decision onto the provider gate.
+    /// Matter-derived topical/docket work is stopped before reaching this helper.
+    /// The public-citation exception uses only its parsed reporter bytes. Global
+    /// chat has no matter/source body and runs only from an explicit Send action;
+    /// its exact provider query therefore receives a one-shot user-query grant.
+    private func quickResearchEgress(
+        request: CourtListenerSearchRequest,
+        disposition: AutomaticLegalEgressDisposition,
+        matterID: String?,
+        researchSessionID: String?,
+        purpose: String
+    ) async throws -> (
+        intent: LegalQueryEgressIntent,
+        authorization: LegalQueryEgressAuthorization
+    ) {
+        let classification: LegalQueryEgressClassification
+        switch disposition {
+        case .deterministicPublicCaseLookup:
+            classification = .publicCitation
+        case .unrestricted:
+            classification = .userApprovedQuery
+        case .blockedMatterQuery:
+            throw LegalQueryEgressError.approvalRequired
+        }
+        let intent = LegalQueryEgressIntent(
+            providerID: .courtListener,
+            origin: .quickResearch,
+            queryBytes: Data(request.query.utf8),
+            purpose: purpose,
+            matterID: matterID,
+            researchSessionID: researchSessionID,
+            sourceSetDigest: nil,
+            classification: classification
+        )
+        if classification == .publicCitation {
+            return (intent, .automaticPublicCitation)
+        }
+
+        let preview = try await legalQueryEgressGate.preview(for: intent)
+        let approvedAt = Date()
+        let grant = try await legalQueryEgressGate.approve(
+            preview: preview,
+            approvedAt: approvedAt,
+            expiresAt: approvedAt.addingTimeInterval(60)
+        )
+        return (intent, .grant(grant))
+    }
+
     /// ADDITIVE live-resolution check for `/verify`: extracts citation strings locally
     /// and asks CourtListener whether each resolves to a real, published opinion.
     /// PRIVACY: only the extracted cite strings leave the device — never the answer or
@@ -2443,7 +2757,21 @@ public final class GlobalChatController: ObservableObject {
         guard !citations.isEmpty else { return "" }
         let capped = Array(citations.prefix(Self.maxCitationResolutionLookups))
         do {
-            let results = try await courtListenerClient.resolveCitations(capped)
+            let intent = LegalQueryEgressIntent(
+                providerID: .courtListener,
+                origin: .quickResearch,
+                queryBytes: LegalQueryEgressGate.citationLookupQueryBytes(capped),
+                purpose: "quick-citation-resolution",
+                matterID: scopedMatterID,
+                researchSessionID: nil,
+                sourceSetDigest: nil,
+                classification: .publicCitation
+            )
+            let results = try await legalQueryEgressGate.resolveCitations(
+                capped,
+                intent: intent,
+                authorization: .automaticPublicCitation
+            )
             guard !results.isEmpty else { return "" }
             var lines = [
                 "",
@@ -2615,9 +2943,10 @@ public final class GlobalChatController: ObservableObject {
             modelID: modelID,
             prompt: prompt,
             systemPrompt: defaultSystemPrompt,
+            contextWorkload: .ordinaryConversation,
             options: options
         )
-        guard let raw = try? await runtimeClient.collectGeneratedText(request),
+        guard let raw = try? await modelExecutionGateway.collectGeneratedText(request),
               case let .answer(answer) = ReasoningContent.resolve(rawOutput: raw, thinkingEnabled: false) else {
             return []
         }
@@ -2692,6 +3021,19 @@ public final class GlobalChatController: ObservableObject {
         guard let citation else { return nil }
         let lower = citation.lowercased()
         if lower.contains("§") || lower.contains(" v. ") || lower.contains(" v ") {
+            return nil
+        }
+        return citation
+    }
+
+    /// Extract the only R0 automatic matter-chat exception: a public reporter
+    /// citation. A caption may accompany the citation in the user's text, but
+    /// only the citation bytes are allowed into the provider request.
+    private static func deterministicPublicCaseCitation(from lookup: String) -> String? {
+        guard let citation = LegalQueryClassifier.firstCitation(in: lookup),
+              !LegalCitationMatch.isCaseNameLookup(citation),
+              courtListenerCitationParameter(citation) != nil,
+              isCaseShapedLookup(citation) else {
             return nil
         }
         return citation
@@ -3021,14 +3363,13 @@ public final class GlobalChatController: ObservableObject {
 
     private func matterJurisdictionScope() -> JurisdictionAuthorityScope? {
         guard let matterID = scopedMatterID,
-              let matter = try? store.matters.fetchMatter(id: matterID)
+              let snapshot = try? store.matterIdentity.fetchSnapshot(matterID: matterID)
         else {
             return nil
         }
-        return JurisdictionCatalog.shared.authorityScope(
-            jurisdiction: matter.jurisdiction,
-            court: matter.court
-        )
+        return MatterCourtPresentationBuilder(catalog: .shared)
+            .makePresentation(for: snapshot)
+            .authorityScope
     }
 
     /// Applies the global chat's jurisdiction selection — or, when set to
@@ -3168,7 +3509,7 @@ public final class GlobalChatController: ObservableObject {
             || lower.contains("stat") || lower.contains("code") {
             return false
         }
-        return cite.range(of: #"^\d{1,4}\s+[A-Za-z. ]{1,30}\s+\d{1,5}$"#, options: .regularExpression) != nil
+        return cite.range(of: #"^\d{1,4}\s+[A-Za-z0-9. ]{1,30}\s+\d{1,5}$"#, options: .regularExpression) != nil
     }
 
     /// Anaphors that only make sense about a specific, already-named decision.
@@ -3228,9 +3569,10 @@ public final class GlobalChatController: ObservableObject {
             modelID: modelID,
             prompt: prompt,
             systemPrompt: defaultSystemPrompt,
+            contextWorkload: .ordinaryConversation,
             options: options
         )
-        guard let raw = try? await runtimeClient.collectGeneratedText(request),
+        guard let raw = try? await modelExecutionGateway.collectGeneratedText(request),
               case let .answer(answer) = ReasoningContent.resolve(rawOutput: raw, thinkingEnabled: false) else {
             return nil
         }
@@ -3673,14 +4015,72 @@ public final class GlobalChatController: ObservableObject {
     /// that rely on a file to its label, extending the cite-your-source discipline to
     /// the drag-a-file-into-chat workflow.
     nonisolated static func attachmentsBlock(_ attachments: [ChatAttachmentContext]) -> String {
-        var lines = ["The user attached the following file(s) as sources. Use their contents as context, and when a statement relies on an attachment, cite it inline with its label, e.g. [S1]."]
+        var lines = ["The user supplied the following session-only, unverified quick attachment(s). They are not durable matter sources. Use the included content as context, and when a statement relies on an attachment, cite it inline with its label, e.g. [S1]."]
         for (index, attachment) in attachments.enumerated() {
             lines.append("")
-            lines.append("[S\(index + 1)] \(attachment.name)")
+            let presentation = attachment.presentation
+            lines.append(
+                "[S\(index + 1)] \(attachment.name) — \(presentation.contentStatus); "
+                    + "included \(presentation.includedCharacterCount) of "
+                    + "\(presentation.originalCharacterCount) characters; "
+                    + "\(presentation.durabilityStatus); \(presentation.verificationStatus)"
+            )
             lines.append(attachment.text)
         }
         return lines.joined(separator: "\n")
     }
+
+    private func recordQuickAttachments(
+        _ presentations: [QuickAttachmentPresentation],
+        forMessageID messageID: String
+    ) {
+        guard !presentations.isEmpty else { return }
+        quickAttachmentsByMessageID[messageID] = presentations
+        let contexts = presentations.reduce(into: [String: ChatAttachmentContext]()) {
+            if let context = quickAttachmentSessionContextsByID[$1.attachmentID] {
+                $0[$1.attachmentID] = context
+            }
+        }
+        if !contexts.isEmpty {
+            quickAttachmentContextsByMessageID[messageID] = contexts
+        }
+    }
+
+#if DEBUG
+    /// Installs a hermetic, session-only disclosure fixture without invoking a
+    /// model. Shipping callers cannot use this seam, and the Store receives only
+    /// ordinary chat/message rows—not attachment bodies or durable source packets.
+    public func installQuickAttachmentUITestFixture(
+        chatTitle: String,
+        attachment: ChatAttachmentContext,
+        answer: String
+    ) throws {
+        quickAttachmentSessionContextsByID[attachment.id] = attachment
+
+        if let existing = chats.first(where: { $0.title == chatTitle }) {
+            select(chatID: existing.id)
+            if let assistant = messages.last(where: { $0.role == .assistant }) {
+                recordQuickAttachments([attachment.presentation], forMessageID: assistant.id)
+            }
+            return
+        }
+
+        let chat = try createChat(title: chatTitle)
+        _ = try store.chats.appendUserMessage(
+            chatID: chat.id,
+            content: "Summarize the attached quick file."
+        )
+        let assistant = try store.chats.createAssistantMessageShell(chatID: chat.id)
+        let variant = try store.chats.createVariant(
+            messageID: assistant.id,
+            generationSessionID: nil
+        )
+        try store.chats.appendToken(to: variant.id, token: answer)
+        try store.chats.completeVariant(variant.id)
+        recordQuickAttachments([attachment.presentation], forMessageID: assistant.id)
+        reloadMessages()
+    }
+#endif
 
     /// Returns the selected chat, creating one lazily if none is selected. When a
     /// chat is created here, `titleHint` (the first user message) becomes its title
@@ -3841,94 +4241,87 @@ public final class GlobalChatController: ObservableObject {
         return records.map(MessageCitation.init)
     }
 
-    /// Persists `[S#]` matter-document sources for a finalized message, so a tapped
-    /// marker opens the in-app preview at the cited page. Only labels present in the
-    /// answer are stored. Returns the domain citations. Chat-attachment `[S#]` (which
-    /// carry no document reference) pass an empty `sources` and so persist nothing.
-    @discardableResult
-    private func persistSourceCitations(
-        messageID: String,
-        answer: String,
-        sources: [GroundedSourceRef]
-    ) -> [MessageCitation] {
-        guard !sources.isEmpty else { return [] }
-        let present = Self.citationLabels(in: answer)
-        var records: [MessageCitationRecord] = []
-        for (index, source) in sources.enumerated() {
-            guard present.contains(source.label) else { continue }
-            records.append(
-                MessageCitationRecord(
-                    messageID: messageID,
-                    label: source.label,
-                    kind: MessageCitation.Kind.source.rawValue,
-                    documentID: source.documentID,
-                    locatorJSON: source.locator.encodedJSON(),
-                    displayName: source.documentName,
-                    matchText: source.excerpt,
-                    rank: index
-                )
+    /// Delegates the controller-domain request to the extracted publication use
+    /// case. Streaming/UI recovery stays here; source and Store semantics do not.
+    private func publishGroundedTerminalAnswer(
+        question: String,
+        answerText: String,
+        terminalContent: String,
+        context: GroundedChatContext,
+        verification: DocumentSupportReport?,
+        chatID: String,
+        assistant: MessageRecord,
+        variant: MessageVariantRecord,
+        session: GenerationSessionRecord,
+        metrics: StoredRuntimeMetrics
+    ) throws -> GroundedChatTerminalPublicationResult {
+        guard let matterID = scopedMatterID else {
+            throw GroundedChatTerminalPublicationError.invalidCommand(
+                "matter identity"
             )
         }
-        guard !records.isEmpty else { return [] }
-        try? store.chats.replaceCitations(messageID: messageID, records)
-        return records.map(MessageCitation.init)
+        let cancellationSignal = groundedPublicationCancellation
+        return try GroundedChatTerminalPublicationUseCase(store: store).publish(
+            GroundedChatTerminalPublicationRequest(
+                matterID: matterID,
+                question: question,
+                answerText: answerText,
+                terminalContent: terminalContent,
+                context: context,
+                verification: verification,
+                chatID: chatID,
+                assistant: assistant,
+                variant: variant,
+                session: session,
+                metrics: metrics
+            ),
+            cancellationCheck: { cancellationSignal.isCancellationRequested }
+        )
     }
 
-    /// Persists the complete grounded packet, including candidates omitted from
-    /// the prompt, under the exact assistant message. Inline citations remain a
-    /// reader convenience; this pending source set is the durable promotion and
-    /// verification record.
-    private func persistGroundedDocumentPacket(
-        messageID: String,
-        question: String,
-        context: GroundedChatContext,
-        verification: DocumentSupportReport?
-    ) throws {
-        guard let matterID = scopedMatterID,
-              !context.sources.isEmpty,
-              let packingReport = context.sourceSetPackingReport,
-              let scope = context.sourceScope,
-              let configuration = context.retrievalConfiguration else { return }
-        let lineage = try DocumentSourceLineageBuilder.make(
-            store: store,
-            matterID: matterID,
-            scope: scope,
-            configuration: configuration,
-            packingReport: packingReport
-        )
-        let sourceSet = try store.documentSources.createSourceSet(
-            matterID: matterID,
-            mode: .autoSource,
-            scopeJSON: try Self.canonicalJSON(scope),
-            retrievalQuery: question,
-            retrievalDepth: context.depth.rawValue,
-            packingReportJSON: lineage.packingReportJSON,
-            embeddingModelID: lineage.embeddingModelID,
-            embeddingModelRevision: lineage.embeddingModelRevision,
-            chunkerVersion: lineage.chunkerVersion,
-            retrievalConfigJSON: lineage.retrievalConfigJSON,
-            corpusSnapshotHash: lineage.corpusSnapshotHash,
-            messageID: messageID
-        )
-        let verificationJSON = try Self.canonicalJSON(verification?.results ?? [])
-        let rows = context.sources.enumerated().map { index, source in
-            DocumentOutputSourceRecord(
-                sourceSetID: sourceSet.id,
-                documentID: source.documentID,
-                chunkID: source.chunkID,
-                revisionID: source.revisionID,
-                citationLabel: source.label,
-                locatorJSON: source.locator.encodedJSON(),
-                excerpt: source.excerpt,
-                rank: index,
-                warningsJSON: verificationJSON
+    /// Converts terminal publication faults into a content-safe, recoverable owner
+    /// state. The answer and source material remain absent because the Store command
+    /// rolled back before these ordinary status-only writes run.
+    private func resolveGroundedPublicationFailure(
+        _ error: Error,
+        assistant: MessageRecord,
+        variant: MessageVariantRecord,
+        session: GenerationSessionRecord,
+        metrics: StoredRuntimeMetrics
+    ) {
+        let publicationCancelled = (error as? GroundedChatTerminalPublicationError) == .cancelled
+            || cancelRequested
+            || groundedPublicationCancellation.isCancellationRequested
+        if publicationCancelled {
+            try? store.chats.markVariantCancelled(variant.id)
+            try? store.generation.cancelGeneration(
+                generationID: session.id,
+                metrics: metrics
             )
+            errorMessage = nil
+            updateMessage(id: assistant.id, content: "", status: .cancelled)
+            return
         }
-        try store.documentSources.addOutputSources(rows)
+
+        let recovery = "Grounded answer could not be finalized. Retry this message."
+        try? store.chats.markVariantFailed(variant.id, reason: recovery)
+        try? store.generation.failGeneration(
+            generationID: session.id,
+            errorSummary: recovery,
+            diagnosticEventID: nil
+        )
+        errorMessage = recovery
+        updateMessage(id: assistant.id, content: "", status: .failed)
     }
 
     private static func canonicalJSON<T: Encodable>(_ value: T) throws -> String {
         let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        return String(decoding: try encoder.encode(value), as: UTF8.self)
+    }
+
+    private static func canonicalDateJSON<T: Encodable>(_ value: T) throws -> String {
+        let encoder = DateCoding.encoder
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         return String(decoding: try encoder.encode(value), as: UTF8.self)
     }
@@ -4019,4 +4412,30 @@ private struct LegalSourcePacket {
     var queryTerms: [String]
     var authorities: [LegalAuthority]
     var researchSessionID: String?
+}
+
+/// Store finalization is synchronous and accepts a `@Sendable` cancellation
+/// check. This tiny signal lets the MainActor controller publish cancellation
+/// without capturing actor-isolated mutable state in that transaction closure.
+private final class GroundedPublicationCancellationSignal: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancellationRequested = false
+
+    var isCancellationRequested: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return cancellationRequested
+    }
+
+    func requestCancellation() {
+        lock.lock()
+        cancellationRequested = true
+        lock.unlock()
+    }
+
+    func reset() {
+        lock.lock()
+        cancellationRequested = false
+        lock.unlock()
+    }
 }

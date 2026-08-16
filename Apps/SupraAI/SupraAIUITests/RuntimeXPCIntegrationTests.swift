@@ -5,12 +5,32 @@ import XCTest
 /// compact, accessibility-readable result to this out-of-process UI test.
 @MainActor
 final class RuntimeXPCIntegrationTests: XCTestCase {
+    private enum QualificationProfile: String {
+        case productionEnvelope = "production-envelope"
+        case sanitizerInstrumentation = "sanitizer-instrumentation"
+
+        var checksProductionResourceEnvelope: Bool {
+            self == .productionEnvelope
+        }
+    }
+
     override func setUp() {
         continueAfterFailure = false
     }
 
     func testHostedBoundaryLifecycle() {
-        let app = launchIntegrationApp(scenario: "lifecycle")
+        assertHostedBoundaryLifecycle(profile: .productionEnvelope)
+    }
+
+    func testSanitizedHostedBoundaryLifecycle() {
+        assertHostedBoundaryLifecycle(profile: .sanitizerInstrumentation)
+    }
+
+    private func assertHostedBoundaryLifecycle(profile: QualificationProfile) {
+        let app = launchIntegrationApp(
+            scenario: "lifecycle",
+            qualificationProfile: profile
+        )
 
         let result = app.staticTexts["runtimeXPCIntegration.result"]
         XCTAssertTrue(
@@ -24,7 +44,7 @@ final class RuntimeXPCIntegrationTests: XCTestCase {
         )
         XCTAssertEqual(app.staticTexts["runtimeXPCIntegration.iterations"].value as? String, "20/20")
 
-        for checkID in [
+        var checkIDs = [
             "statusRoundTrip",
             "nilBookmarkRejected",
             "invalidBookmarkRejected",
@@ -48,11 +68,30 @@ final class RuntimeXPCIntegrationTests: XCTestCase {
             "clientTermination",
             "concurrentLoadUnload",
             "reconnect",
-            "resourceBound",
-        ] {
+        ]
+        if profile.checksProductionResourceEnvelope {
+            checkIDs.append("resourceBound")
+        }
+
+        for checkID in checkIDs {
             let check = app.staticTexts["runtimeXPCIntegration.check.\(checkID)"]
             XCTAssertTrue(check.exists, "Missing lifecycle assertion \(checkID).")
             XCTAssertEqual(check.value as? String, "PASS", "Lifecycle assertion failed: \(checkID).")
+        }
+
+        let detail = app.staticTexts["runtimeXPCIntegration.detail"].value as? String ?? ""
+        if profile.checksProductionResourceEnvelope {
+            XCTAssertTrue(detail.contains("production 256 MiB envelope evaluated"))
+        } else {
+            XCTAssertTrue(
+                detail.contains(
+                    "production 256 MiB envelope not evaluated under sanitizer instrumentation"
+                )
+            )
+            XCTAssertFalse(
+                app.staticTexts["runtimeXPCIntegration.check.resourceBound"].exists,
+                "instrumented RSS must not be presented as production-envelope evidence"
+            )
         }
     }
 
@@ -80,25 +119,69 @@ final class RuntimeXPCIntegrationTests: XCTestCase {
         )
     }
 
-    private func launchIntegrationApp(scenario: String) -> XCUIApplication {
+    func testBoundedLargeCorpusRAGResourceEnvelope() {
+        let app = launchIntegrationApp(scenario: "rag-scan")
+
+        let result = app.staticTexts["runtimeXPCIntegration.ragScan.result"]
+        XCTAssertTrue(
+            result.waitForExistence(timeout: 90),
+            "The hosted T-RAG-SCAN-02 probe did not publish a result."
+        )
+        XCTAssertEqual(
+            result.value as? String,
+            "PASS",
+            app.staticTexts["runtimeXPCIntegration.ragScan.detail"].value as? String
+                ?? "No hosted RAG resource detail."
+        )
+
+        XCTAssertEqual(intValue(app, "scannedRows"), 31)
+        XCTAssertLessThanOrEqual(intValue(app, "maximumLivePageRows"), 3)
+        XCTAssertLessThanOrEqual(intValue(app, "maximumHeapEntries"), 2)
+        XCTAssertLessThanOrEqual(intValue(app, "maximumLiveVectorBytes"), 36)
+        XCTAssertEqual(intValue(app, "publishedCandidateCount"), 2)
+        XCTAssertEqual(intValue(app, "cacheCeilingBytes"), 17)
+
+        XCTAssertLessThanOrEqual(intValue(app, "appCurrentDeltaMiB"), 64)
+        XCTAssertLessThanOrEqual(intValue(app, "appPeakDeltaMiB"), 64)
+        XCTAssertLessThanOrEqual(intValue(app, "xpcCurrentDeltaMiB"), 32)
+        XCTAssertLessThanOrEqual(intValue(app, "xpcPeakDeltaMiB"), 32)
+        XCTAssertLessThanOrEqual(intValue(app, "combinedCurrentDeltaMiB"), 96)
+        XCTAssertLessThanOrEqual(intValue(app, "combinedPeakDeltaMiB"), 96)
+
+        let detail = app.staticTexts["runtimeXPCIntegration.ragScan.detail"].value as? String
+            ?? ""
+        XCTAssertTrue(detail.contains("T_RAG_SCAN_02_WIRE_731"))
+        XCTAssertTrue(detail.contains("QUERY_713"))
+        XCTAssertFalse(detail.contains("T_RAG_SCAN_02_DEFAULT-000"))
+    }
+
+    private func intValue(_ app: XCUIApplication, _ name: String) -> Int {
+        let element = app.staticTexts["runtimeXPCIntegration.ragScan.\(name)"]
+        XCTAssertTrue(element.exists, "Missing hosted RAG metric \(name).")
+        let value = element.value as? String
+        XCTAssertNotNil(value, "Hosted RAG metric \(name) has no accessibility value.")
+        let parsed = value.flatMap(Int.init)
+        XCTAssertNotNil(parsed, "Hosted RAG metric \(name) is not an integer: \(value ?? "nil")")
+        return parsed ?? Int.max
+    }
+
+    private func launchIntegrationApp(
+        scenario: String,
+        qualificationProfile: QualificationProfile = .productionEnvelope
+    ) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments += [
             "-ApplePersistenceIgnoreState", "YES",
-            "-runtimeXPCIntegrationMode",
+            "-runtimeXPCIntegrationMode", "YES",
             "-runtimeXPCScenario", scenario,
+            "-runtimeXPCQualificationProfile", qualificationProfile.rawValue,
+            "-uiTestEnsureFreshWindow", "YES",
         ]
         app.launch()
-        app.activate()
-        // macOS can preserve the user's last "all windows closed" state even
-        // when application state restoration is disabled. Open the WindowGroup
-        // explicitly so the hosted harness is mounted and its task can run.
-        if !app.windows.firstMatch.waitForExistence(timeout: 5) {
-            app.typeKey("n", modifierFlags: .command)
-            XCTAssertTrue(
-                app.windows.firstMatch.waitForExistence(timeout: 10),
-                "SupraAI did not publish a window for the hosted integration surface."
-            )
-        }
+        XCTAssertTrue(
+            app.windows.firstMatch.waitForExistence(timeout: 15),
+            "SupraAI did not publish a window for the hosted integration surface."
+        )
         return app
     }
 }

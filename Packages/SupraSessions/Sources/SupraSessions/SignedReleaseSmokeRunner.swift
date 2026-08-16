@@ -354,6 +354,7 @@ public struct SignedReleaseSmokeRunner: Sendable {
             prompt: Self.prompt,
             systemPrompt: Self.systemPrompt,
             history: [],
+            contextWorkload: .ordinaryConversation,
             options: GenerationOptions(
                 preset: .precise,
                 temperature: 0,

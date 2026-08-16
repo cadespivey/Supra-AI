@@ -81,6 +81,48 @@ public struct BenchmarkRankedItem: Equatable, Sendable {
     }
 }
 
+public struct BenchmarkRAGRankingScore: Equatable, Sendable {
+    public var recallAtK: BenchmarkResult
+    public var fullEvidenceSetRecallAtK: BenchmarkResult
+    public var discountedCumulativeGainAtK: BenchmarkResult
+    public var idealDiscountedCumulativeGainAtK: BenchmarkResult
+    public var normalizedDiscountedCumulativeGainAtK: BenchmarkResult
+    public var reciprocalRankAtK: BenchmarkResult
+}
+
+public struct BenchmarkCitationEdge: Hashable, Sendable {
+    public var claimID: String
+    public var evidenceID: String
+
+    public init(claimID: String, evidenceID: String) {
+        self.claimID = claimID
+        self.evidenceID = evidenceID
+    }
+}
+
+public struct BenchmarkRAGCitationScore: Equatable, Sendable {
+    public var precision: BenchmarkResult
+    public var recall: BenchmarkResult
+    public var coverage: BenchmarkResult
+}
+
+public struct BenchmarkZeroResultObservation: Equatable, Sendable {
+    public var expectedAnswerable: Bool
+    public var returnedEvidenceCount: Int
+    public var producedSupportedAnswer: Bool
+
+    public init(
+        expectedAnswerable: Bool,
+        returnedEvidenceCount: Int,
+        producedSupportedAnswer: Bool
+    ) {
+        precondition(returnedEvidenceCount >= 0, "returned evidence count must be nonnegative")
+        self.expectedAnswerable = expectedAnswerable
+        self.returnedEvidenceCount = returnedEvidenceCount
+        self.producedSupportedAnswer = producedSupportedAnswer
+    }
+}
+
 public enum BenchmarkPartitionState: String, Codable, Sendable {
     case succeeded
     case failed
@@ -209,6 +251,139 @@ public enum BenchmarkMetrics {
         )
     }
 
+    public static func ragRankingScore(
+        relevanceGrades: [String: Int],
+        ranked: [BenchmarkRankedItem],
+        k: Int
+    ) -> BenchmarkRAGRankingScore {
+        guard k > 0 else {
+            return ragRankingNotApplicable("K must be positive")
+        }
+        precondition(
+            relevanceGrades.values.allSatisfy { $0 >= 0 },
+            "relevance grades must be nonnegative"
+        )
+        precondition(ranked.allSatisfy { $0.score.isFinite }, "ranking scores must be finite")
+
+        let positiveGrades = relevanceGrades.filter { $0.value > 0 }
+        guard !positiveGrades.isEmpty else {
+            return ragRankingNotApplicable("no relevant evidence judgments")
+        }
+
+        let stable = ranked.sorted {
+            if $0.score != $1.score { return $0.score > $1.score }
+            return $0.id < $1.id
+        }
+        var seenIDs = Set<String>()
+        let unique = stable.filter { seenIDs.insert($0.id).inserted }
+        let topK = Array(unique.prefix(k))
+        let retrievedRelevantCount = topK.reduce(into: 0) { count, item in
+            if positiveGrades[item.id] != nil { count += 1 }
+        }
+
+        let recall = rate(
+            numerator: retrievedRelevantCount,
+            denominator: positiveGrades.count,
+            interval: .none
+        )
+        let fullEvidenceSetRecall = rate(
+            numerator: retrievedRelevantCount == positiveGrades.count ? 1 : 0,
+            denominator: 1,
+            interval: .none
+        )
+
+        let discountedCumulativeGain = topK.enumerated().reduce(0.0) { partial, observation in
+            let grade = positiveGrades[observation.element.id] ?? 0
+            return partial + discountedGain(grade: grade, zeroBasedRank: observation.offset)
+        }
+        let idealGrades = positiveGrades.sorted {
+            if $0.value != $1.value { return $0.value > $1.value }
+            return $0.key < $1.key
+        }
+        let idealDiscountedCumulativeGain = idealGrades.prefix(k).enumerated().reduce(0.0) {
+            partial, observation in
+            partial + discountedGain(grade: observation.element.value, zeroBasedRank: observation.offset)
+        }
+        let normalizedDiscountedCumulativeGain =
+            discountedCumulativeGain / idealDiscountedCumulativeGain
+
+        let reciprocalRank: Double
+        if let firstRelevantIndex = topK.firstIndex(where: { positiveGrades[$0.id] != nil }) {
+            reciprocalRank = 1 / Double(firstRelevantIndex + 1)
+        } else {
+            reciprocalRank = 0
+        }
+
+        return BenchmarkRAGRankingScore(
+            recallAtK: recall,
+            fullEvidenceSetRecallAtK: fullEvidenceSetRecall,
+            discountedCumulativeGainAtK: .measured(value: discountedCumulativeGain),
+            idealDiscountedCumulativeGainAtK: .measured(value: idealDiscountedCumulativeGain),
+            normalizedDiscountedCumulativeGainAtK: .measured(
+                value: normalizedDiscountedCumulativeGain
+            ),
+            reciprocalRankAtK: .measured(value: reciprocalRank)
+        )
+    }
+
+    public static func ragContextScore(
+        relevantEvidenceIDs: Set<String>,
+        packedEvidenceIDs: [String]
+    ) -> BenchmarkPRFScore {
+        let score = setScore(expected: relevantEvidenceIDs, predicted: packedEvidenceIDs)
+        return BenchmarkPRFScore(
+            precision: score.precision,
+            recall: score.recall,
+            f1: score.f1
+        )
+    }
+
+    public static func ragCitationScore(
+        expectedEdges: Set<BenchmarkCitationEdge>,
+        predictedEdges: [BenchmarkCitationEdge],
+        claimIDsRequiringCitation: Set<String>
+    ) -> BenchmarkRAGCitationScore {
+        let predictedSet = Set(predictedEdges)
+        let exactMatches = expectedEdges.intersection(predictedSet).count
+        let citedRequiredClaims = Set(predictedSet.map(\.claimID))
+            .intersection(claimIDsRequiringCitation)
+
+        return BenchmarkRAGCitationScore(
+            precision: rate(
+                numerator: exactMatches,
+                denominator: predictedSet.count,
+                interval: .none
+            ),
+            recall: rate(
+                numerator: exactMatches,
+                denominator: expectedEdges.count,
+                interval: .none
+            ),
+            coverage: rate(
+                numerator: citedRequiredClaims.count,
+                denominator: claimIDsRequiringCitation.count,
+                interval: .none
+            )
+        )
+    }
+
+    public static func zeroResultAccuracy(
+        _ observations: [BenchmarkZeroResultObservation]
+    ) -> BenchmarkResult {
+        let correct = observations.reduce(into: 0) { count, observation in
+            let isCorrect: Bool
+            if observation.expectedAnswerable {
+                isCorrect = observation.returnedEvidenceCount > 0
+                    && observation.producedSupportedAnswer
+            } else {
+                isCorrect = observation.returnedEvidenceCount == 0
+                    && !observation.producedSupportedAnswer
+            }
+            if isCorrect { count += 1 }
+        }
+        return rate(numerator: correct, denominator: observations.count, interval: .none)
+    }
+
     /// Correct pairwise order among golden items that appear in the prediction.
     public static func orderingAccuracy(
         expectedOrder: [String],
@@ -295,6 +470,24 @@ public enum BenchmarkMetrics {
             lower: max(0, center - margin),
             upper: min(1, center + margin),
             method: "wilson_95"
+        )
+    }
+
+    private static func discountedGain(grade: Int, zeroBasedRank: Int) -> Double {
+        guard grade > 0 else { return 0 }
+        let gain = pow(2, Double(grade)) - 1
+        return gain / log2(Double(zeroBasedRank + 2))
+    }
+
+    private static func ragRankingNotApplicable(_ reason: String) -> BenchmarkRAGRankingScore {
+        let result = BenchmarkResult.notApplicable(reason)
+        return BenchmarkRAGRankingScore(
+            recallAtK: result,
+            fullEvidenceSetRecallAtK: result,
+            discountedCumulativeGainAtK: result,
+            idealDiscountedCumulativeGainAtK: result,
+            normalizedDiscountedCumulativeGainAtK: result,
+            reciprocalRankAtK: result
         )
     }
 

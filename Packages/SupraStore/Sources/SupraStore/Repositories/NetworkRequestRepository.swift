@@ -44,6 +44,20 @@ public final class NetworkRequestRepository: @unchecked Sendable {
         errorMessage: String? = nil,
         responseMetadataJSON: String? = nil
     ) throws {
+        _ = try finishRequestIfPresent(
+            id: id,
+            statusCode: statusCode,
+            errorMessage: errorMessage,
+            responseMetadataJSON: responseMetadataJSON
+        )
+    }
+
+    func finishRequestIfPresent(
+        id: String,
+        statusCode: Int?,
+        errorMessage: String? = nil,
+        responseMetadataJSON: String? = nil
+    ) throws -> Bool {
         try writer.write { db in
             try db.execute(
                 sql: """
@@ -55,6 +69,7 @@ public final class NetworkRequestRepository: @unchecked Sendable {
                 """,
                 arguments: [statusCode, errorMessage, responseMetadataJSON, id]
             )
+            return db.changesCount == 1
         }
     }
 

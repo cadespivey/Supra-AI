@@ -47,6 +47,17 @@ final class SupraFocusChain {
         onFocusChange?(orderedEntries().first?.identifier)
     }
 
+    /// Moves correction focus back to one exact retained input. Recovery
+    /// banners call this by identifier instead of guessing from view geometry.
+    @discardableResult
+    func focus(identifier: String) -> Bool {
+        guard let entry = orderedEntries().first(where: { $0.identifier == identifier }),
+              let window = entry.view.window else { return false }
+        let didFocus = window.makeFirstResponder(entry.view)
+        if didFocus { onFocusChange?(entry.identifier) }
+        return didFocus
+    }
+
     private func focus(from view: NSView, offset: Int) -> Bool {
         let ordered = orderedEntries()
         guard let current = ordered.firstIndex(where: { $0.view === view }) else { return false }
@@ -424,11 +435,20 @@ struct LabeledTextField: View {
     let label: String
     @Binding var text: String
     var prompt: String? = nil
+    var focusChain: SupraFocusChain? = nil
+    var focusOrder: Int = 0
+    var accessibilityID: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(label).font(.subheadline).foregroundStyle(.secondary)
-            LeadingTextField(text: $text, placeholder: prompt ?? "")
+            LeadingTextField(
+                text: $text,
+                placeholder: prompt ?? "",
+                focusChain: focusChain,
+                focusOrder: focusOrder,
+                accessibilityID: accessibilityID
+            )
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 7)
                 .padding(.vertical, 5)

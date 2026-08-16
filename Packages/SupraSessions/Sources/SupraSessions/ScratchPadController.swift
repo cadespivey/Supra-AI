@@ -77,7 +77,7 @@ public final class ScratchPadController: ObservableObject {
     /// Distinct `#tags` seen so far, for the `#` autocomplete.
     @Published public private(set) var knownTags: [String] = []
     /// Cross-day note search results (text/tag match); empty when not searching.
-    @Published public private(set) var searchResults: [ScratchPadRepository.EntryHit] = []
+    @Published public private(set) var searchResults: [ScratchPadSearchHit] = []
     /// The `#` autocomplete vocabulary: used tags merged with the curated litigation
     /// starter set, so `#` is useful before the user has built up their own tags.
     @Published public private(set) var tagVocabulary: [String] = ScratchPadTagResolver.mergedTagVocabulary(used: [])
@@ -216,7 +216,8 @@ public final class ScratchPadController: ObservableObject {
     public func search(_ term: String) {
         let trimmed = term.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.count >= 2 else { searchResults = []; return }
-        searchResults = (try? store.scratchPad.searchEntries(term: trimmed)) ?? []
+        searchResults = ((try? store.scratchPad.searchEntries(term: trimmed)) ?? [])
+            .map(ScratchPadSearchHit.init)
     }
 
     public func clearSearch() { searchResults = [] }

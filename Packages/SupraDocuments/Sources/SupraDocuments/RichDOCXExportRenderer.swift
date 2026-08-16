@@ -1,5 +1,5 @@
 import Foundation
-import SupraExports
+import SupraOOXML
 
 enum RichDOCXExportRenderer {
     private struct SourceAnchor {
@@ -93,8 +93,8 @@ enum RichDOCXExportRenderer {
         let documentXML = OoxmlWriter.documentXML(OoxmlDocument(body: body, section: section))
         let package = DocxPackage.richExport(
             documentXML: documentXML,
-            stylesXML: StyleSheetCompiler.richExportStylesXML(),
-            settingsXML: StyleSheetCompiler.settingsXML(),
+            stylesXML: OoxmlStyleSheet.richExportStylesXML(),
+            settingsXML: OoxmlStyleSheet.settingsXML(),
             numberingXML: numberingXML(orderedStarts: orderedStarts),
             headerXML: headerXML(title: payload.title),
             footerXML: footerXML,

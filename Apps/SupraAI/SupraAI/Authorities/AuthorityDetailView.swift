@@ -210,7 +210,10 @@ struct AuthorityDetailView: View {
                 }
             }
 
-            Section("Reviewed proposition") {
+            Section("Motion to dismiss support") {
+                Text("Optional: record an exact supporting excerpt only when you intend to use this authority for a failure-to-state-a-claim motion.")
+                    .font(.supraCaption)
+                    .foregroundStyle(.secondary)
                 reviewedPropositionEditor(authority)
             }
 

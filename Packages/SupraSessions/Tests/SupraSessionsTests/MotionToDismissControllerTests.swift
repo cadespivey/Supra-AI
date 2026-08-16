@@ -6,6 +6,7 @@ import SupraCore
 import SupraDrafting
 import SupraDraftingCore
 import SupraExports
+import SupraResearch
 @testable import SupraSessions
 import SupraStore
 import XCTest
@@ -15,6 +16,12 @@ import XCTest
 /// success-audit boundary.
 @MainActor
 final class MotionToDismissControllerTests: XCTestCase {
+    private enum CanonicalFactReadinessFixture {
+        static let modelID = "motion-drafting-readiness-model-827"
+        static let modelRevision = "motion-drafting-readiness-revision-17"
+        static let modelDimension = 7
+        static let timestamp = Date(timeIntervalSince1970: 1_785_513_617)
+    }
     private enum InjectedFailure: Error { case stop }
     private struct DirectorySyncFailure: LocalizedError {
         var errorDescription: String? { "injected directory synchronization failure" }
@@ -140,7 +147,7 @@ final class MotionToDismissControllerTests: XCTestCase {
         let renderedStyle = try XCTUnwrap(renderer.capturedStyle)
         let xml = try CourtFLRenderer().documentXML(model, style: renderedStyle)
         for required in [
-            "IN THE CIRCUIT COURT OF THE FOURTH JUDICIAL CIRCUIT",
+            "Circuit Court of the Fourth Judicial Circuit in and for Duval County",
             "CASE NUMBER: 2026-CA-001847",
             "MOTION TO DISMISS PLAINTIFF'S FIRST AMENDED COMPLAINT",
             "STATEMENT OF FACTS",
@@ -410,12 +417,7 @@ final class MotionToDismissControllerTests: XCTestCase {
     // T-MTD-21 — jurisdiction never substitutes for a missing filing court.
     func testTMTD21MissingExplicitCourtNeverFallsBackToJurisdiction() async throws {
         let fixture = try makeFixture()
-        try await fixture.store.database.writer.write { db in
-            try db.execute(
-                sql: "UPDATE matters SET court = NULL WHERE id = ?",
-                arguments: [fixture.matterID]
-            )
-        }
+        try await setCourt(nil, fixture: fixture)
         let controller = MatterDraftingController(store: fixture.store, storage: fixture.storage)
 
         let result = await controller.draft(
@@ -549,8 +551,8 @@ final class MotionToDismissControllerTests: XCTestCase {
         )
 
         for supportedCourt in [
-            "IN THE CIRCUIT COURT OF THE FOURTH JUDICIAL CIRCUIT, IN AND FOR DUVAL COUNTY, FLORIDA",
-            "IN THE COUNTY COURT IN AND FOR DUVAL COUNTY, FLORIDA",
+            "Circuit Court of the Fourth Judicial Circuit in and for Duval County",
+            "County Court in and for Duval County",
         ] {
             try await setCourt(supportedCourt, fixture: fixture)
             XCTAssertTrue(
@@ -560,9 +562,9 @@ final class MotionToDismissControllerTests: XCTestCase {
         }
 
         for unsupportedCourt in [
-            "UNITED STATES DISTRICT COURT FOR THE MIDDLE DISTRICT OF FLORIDA",
-            "FLORIDA FIRST DISTRICT COURT OF APPEAL",
-            "IN THE CIRCUIT COURT OF FULTON COUNTY, GEORGIA",
+            "United States District Court for the Middle District of Florida",
+            "First District Court of Appeal of Florida",
+            "Superior Court of Fulton County",
         ] {
             try await setCourt(unsupportedCourt, fixture: fixture)
             let readiness = controller.motionReadiness(
@@ -997,6 +999,7 @@ final class MotionToDismissControllerTests: XCTestCase {
                     documentID: documentID,
                     pagePartID: part.id,
                     revisionID: revision.id,
+                    chunkerVersion: 1,
                     chunkIndex: 0,
                     sourceKind: DocumentSourceKind.text.rawValue,
                     charStart: 0,
@@ -1005,6 +1008,11 @@ final class MotionToDismissControllerTests: XCTestCase {
                     displayExcerpt: replacement,
                     tokenCount: 21
                 )]
+            )
+            try self.insertCanonicalFactEmbedding(
+                store: fixture.store,
+                documentID: documentID,
+                chunkID: fixture.selectedFact.chunkID
             )
         }
 
@@ -1599,10 +1607,11 @@ final class MotionToDismissControllerTests: XCTestCase {
             name: "Fictional Harbor Supply, LLC v. Gulf Works, Inc.",
             jurisdiction: "Florida",
             partyPerspective: .defendant,
-            court: "IN THE CIRCUIT COURT OF THE FOURTH JUDICIAL CIRCUIT,\nIN AND FOR DUVAL COUNTY, FLORIDA",
+            court: "Circuit Court of the Fourth Judicial Circuit in and for Duval County",
             judge: "Avery Stone",
             docketNumber: "2026-CA-001847"
         )
+        try setCanonicalMatterIdentity(store: store, matterID: matter.id)
         let selectedFact = try insertFact(
             store: store,
             matterID: matter.id,
@@ -1725,8 +1734,11 @@ final class MotionToDismissControllerTests: XCTestCase {
             displayName: name,
             status: MatterDocumentStatus.ready.rawValue,
             extractionStatus: DocumentExtractionStatus.extracted.rawValue,
-            indexStatus: DocumentIndexStatus.textIndexed.rawValue,
-            extractionMethod: "synthetic@toolchain:motion-tests"
+            indexStatus: DocumentIndexStatus.ready.rawValue,
+            sourceKind: DocumentSourceKind.text.rawValue,
+            extractionMethod: "synthetic@toolchain:motion-tests",
+            extractedTextChecksum: DocumentStorage.sha256Hex(of: Data(text.utf8)),
+            pagePartCount: 1
         ))
         let part = DocumentPagePartRecord(
             documentID: document.id,
@@ -1742,7 +1754,8 @@ final class MotionToDismissControllerTests: XCTestCase {
             origin: "parser",
             method: "synthetic",
             text: text,
-            charCount: text.count
+            charCount: text.count,
+            toolchainVersion: "motion-tests-canonical-toolchain-17"
         )
         let selection = DocumentPartSelectionRecord(
             documentID: document.id,
@@ -1763,6 +1776,7 @@ final class MotionToDismissControllerTests: XCTestCase {
             documentID: document.id,
             pagePartID: part.id,
             revisionID: revision.id,
+            chunkerVersion: 1,
             chunkIndex: 0,
             sourceKind: DocumentSourceKind.text.rawValue,
             charStart: 0,
@@ -1772,7 +1786,48 @@ final class MotionToDismissControllerTests: XCTestCase {
             tokenCount: 30
         )
         try store.documentIndex.replaceChunks(documentID: document.id, chunks: [chunk])
+        try insertCanonicalFactEmbedding(
+            store: store,
+            documentID: document.id,
+            chunkID: chunk.id
+        )
+        XCTAssertTrue(
+            try store.documentReadiness.fetchReceipt(documentID: document.id).isBaseReady,
+            "shared motion facts must model the complete canonical readiness graph"
+        )
         return IndexedFact(documentID: document.id, chunkID: chunk.id, revisionID: revision.id, text: text)
+    }
+
+    private func insertCanonicalFactEmbedding(
+        store: SupraStore,
+        documentID: String,
+        chunkID: String
+    ) throws {
+        try store.documentIndex.upsertEmbedding(
+            DocumentChunkEmbeddingRecord(
+                id: "motion-drafting-embedding-\(chunkID)",
+                chunkID: chunkID,
+                documentID: documentID,
+                embeddingModelID: CanonicalFactReadinessFixture.modelID,
+                modelDisplayName: "Motion Drafting Canonical Model 827",
+                modelRevision: CanonicalFactReadinessFixture.modelRevision,
+                dimension: CanonicalFactReadinessFixture.modelDimension,
+                normalized: true,
+                vector: Self.floatBlob([1, 0, 0, 0, 0, 0, 0]),
+                createdAt: CanonicalFactReadinessFixture.timestamp
+            )
+        )
+    }
+
+    private static func floatBlob(_ values: [Float]) -> Data {
+        var data = Data(capacity: values.count * MemoryLayout<Float>.size)
+        for value in values {
+            var littleEndianBits = value.bitPattern.littleEndian
+            withUnsafeBytes(of: &littleEndianBits) { bytes in
+                data.append(contentsOf: bytes)
+            }
+        }
+        return data
     }
 
     private func factSelection(_ fact: IndexedFact) -> MotionDraftFactSourceSelection {
@@ -1845,7 +1900,33 @@ final class MotionToDismissControllerTests: XCTestCase {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("MotionStore-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        return try SupraStore(url: directory.appendingPathComponent("test.sqlite"))
+        let store = try SupraStore(url: directory.appendingPathComponent("test.sqlite"))
+        _ = try store.documentSettings.loadSettings()
+        try store.documentSettings.upsertEmbeddingModel(
+            DocumentEmbeddingModelRecord(
+                id: CanonicalFactReadinessFixture.modelID,
+                repoID: "synthetic/motion-drafting-readiness-model-827",
+                localPath: "/synthetic/motion-drafting-readiness-model-827",
+                displayName: "Motion Drafting Canonical Model 827",
+                dimension: CanonicalFactReadinessFixture.modelDimension,
+                runtimeFamily: "motion-drafting-readiness-fixture-17",
+                revision: CanonicalFactReadinessFixture.modelRevision,
+                isDefault: false,
+                isSelected: false,
+                lastTestLoadAt: CanonicalFactReadinessFixture.timestamp,
+                lastTestLoadResult: "passed",
+                createdAt: CanonicalFactReadinessFixture.timestamp,
+                updatedAt: CanonicalFactReadinessFixture.timestamp
+            )
+        )
+        try store.documentSettings.selectEmbeddingModel(
+            id: CanonicalFactReadinessFixture.modelID
+        )
+        try store.documentSettings.updateSettings {
+            $0.embeddingModelLastTestedAt = CanonicalFactReadinessFixture.timestamp
+            $0.chunkerVersion = 1
+        }
+        return store
     }
 
     private func completeProfile() -> AssistantProfile {
@@ -1878,7 +1959,7 @@ final class MotionToDismissControllerTests: XCTestCase {
             firm: "Rowan & Finch, P.A.",
             address: OfficeBlock(
                 street: "1 Independent Drive",
-                suite: "Suite 2400",
+                suite: nil,
                 city: "Jacksonville",
                 state: "Florida",
                 zip: "32202",
@@ -1927,13 +2008,128 @@ final class MotionToDismissControllerTests: XCTestCase {
         )
     }
 
-    private func setCourt(_ court: String, fixture: Fixture) async throws {
-        try await fixture.store.database.writer.write { db in
-            try db.execute(
-                sql: "UPDATE matters SET court = ? WHERE id = ?",
-                arguments: [court, fixture.matterID]
-            )
+    private func setCourt(_ court: String?, fixture: Fixture) async throws {
+        let matter = try XCTUnwrap(
+            fixture.store.matters.fetchMatter(id: fixture.matterID)
+        )
+        let perspective = try XCTUnwrap(
+            PartyPerspective(rawValue: matter.partyPerspective)
+        )
+        try fixture.store.matters.updateMatter(
+            id: matter.id,
+            name: matter.name,
+            jurisdiction: matter.jurisdiction,
+            partyPerspective: perspective,
+            court: court,
+            judge: matter.judge,
+            docketNumber: matter.docketNumber,
+            practiceArea: matter.practiceArea,
+            clientNames: matter.clientNames,
+            matterDescription: matter.matterDescription,
+            internalMatterID: matter.internalMatterID,
+            clientID: matter.clientID,
+            clientMatterID: matter.clientMatterID,
+            notes: matter.notes
+        )
+        let snapshot = try XCTUnwrap(
+            fixture.store.matterIdentity.fetchSnapshot(matterID: fixture.matterID)
+        )
+        let catalog = JurisdictionCatalog.shared
+        let resolvedCourt = court.flatMap(catalog.resolvePersistedCourtIdentity)
+        let resolvedJurisdiction = resolvedCourt.flatMap {
+            catalog.canonicalJurisdictionOption(forSelectedOptionID: $0.id)
         }
+        _ = try fixture.store.matterIdentity.updateMatter(
+            command: MatterIdentityUpdateCommand(
+                matterID: fixture.matterID,
+                expectedIdentityRevision: snapshot.identityRevision,
+                legacyJurisdictionText: matter.jurisdiction,
+                legacyCourtText: court,
+                legacyPartyPerspective: perspective,
+                legacyClientNames: matter.clientNames,
+                courtResolutionState: resolvedCourt == nil ? .unresolved : .court,
+                canonicalCatalogVersion: catalog.catalogVersion,
+                canonicalCatalogDigestSHA256: catalog.identityDigestSHA256,
+                canonicalJurisdictionID: resolvedJurisdiction.map {
+                    CanonicalJurisdictionID(rawValue: $0.id)
+                },
+                canonicalCourtID: resolvedCourt.map {
+                    CanonicalCourtID(rawValue: $0.id)
+                },
+                parties: snapshot.parties,
+                representations: snapshot.representations
+            )
+        )
+    }
+
+    private func setCanonicalMatterIdentity(
+        store: SupraStore,
+        matterID: String
+    ) throws {
+        let snapshot = try XCTUnwrap(
+            store.matterIdentity.fetchSnapshot(matterID: matterID)
+        )
+        let catalog = JurisdictionCatalog.shared
+        let courtName = "Circuit Court of the Fourth Judicial Circuit in and for Duval County"
+        let court = try XCTUnwrap(catalog.resolvePersistedCourtIdentity(courtName))
+        let jurisdiction = try XCTUnwrap(
+            catalog.canonicalJurisdictionOption(forSelectedOptionID: court.id)
+        )
+        let representedPartyID = "motion-party-gulf-works"
+        let opposingPartyID = "motion-party-harbor-supply"
+        _ = try store.matterIdentity.updateMatter(
+            command: MatterIdentityUpdateCommand(
+                matterID: matterID,
+                expectedIdentityRevision: snapshot.identityRevision,
+                legacyJurisdictionText: "Florida",
+                legacyCourtText: courtName,
+                legacyPartyPerspective: .defendant,
+                legacyClientNames: "Gulf Works, Inc.",
+                courtResolutionState: .court,
+                canonicalCatalogVersion: catalog.catalogVersion,
+                canonicalCatalogDigestSHA256: catalog.identityDigestSHA256,
+                canonicalJurisdictionID: CanonicalJurisdictionID(rawValue: jurisdiction.id),
+                canonicalCourtID: CanonicalCourtID(rawValue: court.id),
+                parties: [
+                    MatterPartyIdentity(
+                        id: opposingPartyID,
+                        matterID: matterID,
+                        displayName: "Fictional Harbor Supply, LLC",
+                        captionName: "FICTIONAL HARBOR SUPPLY, LLC,",
+                        baseRole: .plaintiff,
+                        captionOrder: 0,
+                        clientStatus: .notRepresented
+                    ),
+                    MatterPartyIdentity(
+                        id: representedPartyID,
+                        matterID: matterID,
+                        displayName: "Gulf Works, Inc.",
+                        captionName: "GULF WORKS, INC.,",
+                        baseRole: .defendant,
+                        captionOrder: 1,
+                        clientStatus: .represented
+                    ),
+                ],
+                representations: [
+                    MatterRepresentationIdentity(
+                        id: "motion-representation-harbor-counsel",
+                        matterID: matterID,
+                        representedPartyID: opposingPartyID,
+                        relationshipKind: .counsel,
+                        representativeName: "Jordan Rowan, Esq.",
+                        firmName: "Rowan & Finch, P.A.",
+                        serviceAddress: MatterServiceAddress(
+                            street: "1 Independent Drive",
+                            city: "Jacksonville",
+                            state: "Florida",
+                            postalCode: "32202"
+                        ),
+                        serviceEmails: ["jrowan@example.test"],
+                        serviceOrder: 0
+                    ),
+                ]
+            )
+        )
     }
 
     private func isSHA256(_ value: String) -> Bool {

@@ -111,9 +111,26 @@ public final class GenerationRepository: @unchecked Sendable {
 
     public func linkVariant(generationID: String, variantID: String) throws {
         try writer.write { db in
+            let now = Date()
             try db.execute(
                 sql: "UPDATE generation_sessions SET variant_id = ?, updated_at = ? WHERE id = ?",
-                arguments: [variantID, Date(), generationID]
+                arguments: [variantID, now, generationID]
+            )
+            // A grounded fast-to-deep escalation intentionally reuses one pending
+            // variant while starting a new generation session. Keep the reciprocal
+            // owner link current so the terminal aggregate names one exact session.
+            try db.execute(
+                sql: """
+                    UPDATE message_variants
+                    SET generation_session_id = ?, updated_at = ?
+                    WHERE id = ? AND status = ? AND deleted_at IS NULL
+                    """,
+                arguments: [
+                    generationID,
+                    now,
+                    variantID,
+                    MessageStatus.pending.rawValue,
+                ]
             )
         }
     }

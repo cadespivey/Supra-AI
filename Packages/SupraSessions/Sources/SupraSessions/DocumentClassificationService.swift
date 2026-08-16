@@ -23,7 +23,8 @@ import SupraStore
 public final class DocumentClassificationService {
     private let store: SupraStore
     private let modelLibrary: ModelLibrary
-    private let runtimeClient: any RuntimeClientProtocol
+    private let runtimeClient: any ModelExecutionGateway
+    private var modelExecutionGateway: any ModelExecutionGateway { runtimeClient }
     private let role: ModelRole
     private let abstentionFloor: Double
     private let modelLineageResolver: ((ModelID) -> DocumentGenerationModelLineage?)?
@@ -34,7 +35,7 @@ public final class DocumentClassificationService {
     public init(
         store: SupraStore,
         modelLibrary: ModelLibrary,
-        runtimeClient: any RuntimeClientProtocol,
+        runtimeClient: any ModelExecutionGateway,
         role: ModelRole = .drafting,
         abstentionFloor: Double = 0.5,
         modelLineageResolver: ((ModelID) -> DocumentGenerationModelLineage?)? = nil
@@ -127,6 +128,7 @@ public final class DocumentClassificationService {
             modelID: modelID,
             prompt: DocumentClassificationPrompt.userContent(fileName: document.displayName, samples: samples),
             systemPrompt: DocumentClassificationPrompt.system(),
+            contextWorkload: .groundedExactEvidence,
             options: GenerationOptions(
                 preset: .extractive,
                 temperature: 0.0,
@@ -137,7 +139,7 @@ public final class DocumentClassificationService {
         )
 
         do {
-            let raw = try await runtimeClient.collectGeneratedText(request)
+            let raw = try await modelExecutionGateway.collectGeneratedText(request)
             let answer = ReasoningContent.answer(from: raw)
             guard let json = Self.extractJSONObject(from: answer),
                   let decoded = try? JSONDecoder().decode(DocumentClassification.self, from: Data(json.utf8))

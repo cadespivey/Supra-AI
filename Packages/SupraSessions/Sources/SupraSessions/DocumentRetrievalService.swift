@@ -1,5 +1,6 @@
 import Foundation
 import SupraCore
+import SupraDiagnostics
 import SupraDocuments
 import SupraStore
 
@@ -74,6 +75,10 @@ public struct ScopeReadiness: Sendable, Equatable {
     public var requiresSemanticIndex: Bool
     public var isFullyReady: Bool
     public var blockingReasons: [String]
+    /// Store-owned readiness receipts projected for Ask. The aggregate counts
+    /// above are derived from this exact batch rather than from document status
+    /// fields or the runtime embedder supplied by a caller.
+    public var documentReadiness: [DocumentReadinessConsumerProjection]
 
     public init(
         totalDocuments: Int,
@@ -83,7 +88,8 @@ public struct ScopeReadiness: Sendable, Equatable {
         needsReviewDocuments: Int = 0,
         requiresSemanticIndex: Bool,
         isFullyReady: Bool,
-        blockingReasons: [String] = []
+        blockingReasons: [String] = [],
+        documentReadiness: [DocumentReadinessConsumerProjection] = []
     ) {
         self.totalDocuments = totalDocuments
         self.readyDocuments = readyDocuments
@@ -93,6 +99,7 @@ public struct ScopeReadiness: Sendable, Equatable {
         self.requiresSemanticIndex = requiresSemanticIndex
         self.isFullyReady = isFullyReady
         self.blockingReasons = blockingReasons
+        self.documentReadiness = documentReadiness
     }
 
     public var summaryText: String {
@@ -107,6 +114,7 @@ public struct RetrievalResult: Sendable {
     public var usedSemantic: Bool
     public var query: String
     public var scopeDocumentIDs: [String]
+    public var executionReceipt: RAGExecutionReceipt?
 }
 
 /// How hard a retrieval pass works (spec §3.1). `.fast` keeps the candidate pool
@@ -124,55 +132,99 @@ public final class DocumentRetrievalService: @unchecked Sendable {
     static let defaultMaxPerDocument = 4
     static let defaultMinSemanticSimilarity = 0.15
     static let fastMinSemanticSimilarity = 0.25
+    private static let semanticCacheAlgorithmVersion = 1
+    private static let defaultSemanticScanPageSize = 256
+    private static let defaultSemanticCandidateLimit = 60
     private let store: SupraStore
+    private let readinessLedger: CanonicalDocumentReadinessLedger
+    private let semanticScanner: BoundedSemanticScanner
+    private let semanticCacheResolver: RAGSemanticCandidateCacheResolver
+    private let semanticScanPageSize: Int
+    private let semanticCandidateLimit: Int
     private let embedder: (any TextEmbedder)?
     private let maxPerDocument: Int
     private let minSemanticSimilarity: Double
 
-    public init(
+    public convenience init(
         store: SupraStore,
         embedder: (any TextEmbedder)? = nil,
         maxPerDocument: Int = 4,
         minSemanticSimilarity: Double = 0.15
     ) {
+        self.init(
+            store: store,
+            embedder: embedder,
+            maxPerDocument: maxPerDocument,
+            minSemanticSimilarity: minSemanticSimilarity,
+            semanticCandidateCache: RAGSemanticCandidateCache(),
+            semanticScanPageSize: Self.defaultSemanticScanPageSize,
+            semanticCandidateLimit: Self.defaultSemanticCandidateLimit
+        )
+    }
+
+    init(
+        store: SupraStore,
+        embedder: (any TextEmbedder)?,
+        maxPerDocument: Int,
+        minSemanticSimilarity: Double,
+        semanticCandidateCache: any RAGSemanticCandidateCacheBackend,
+        semanticScanPageSize: Int,
+        semanticCandidateLimit: Int
+    ) {
         self.store = store
+        self.readinessLedger = CanonicalDocumentReadinessLedger(store: store)
+        self.semanticScanner = BoundedSemanticScanner(store: store)
+        self.semanticCacheResolver = RAGSemanticCandidateCacheResolver(
+            cache: semanticCandidateCache
+        )
+        self.semanticScanPageSize = semanticScanPageSize
+        self.semanticCandidateLimit = semanticCandidateLimit
         self.embedder = embedder
         self.maxPerDocument = maxPerDocument
         self.minSemanticSimilarity = minSemanticSimilarity
     }
 
-    /// Whether the selected scope is fully indexed (text + semantic when an
-    /// embedder is configured). Immediate; no model work (plan §13.3).
+    /// Whether the selected scope is generally ready for grounded semantic work.
+    /// The Store-selected active model and its persisted vectors define base
+    /// truth. The injected runtime embedder is used only to execute retrieval and
+    /// cannot make a document appear ready (plan §13.3).
     public func scopeReadiness(matterID: String, scope: RetrievalScope) throws -> ScopeReadiness {
-        let docIDs = Set(try resolveScope(matterID: matterID, scope: scope))
+        let resolvedDocumentIDs = try resolveScope(matterID: matterID, scope: scope)
+        let docIDs = Set(resolvedDocumentIDs)
         let documents = try store.documentLibrary.fetchDocuments(matterID: matterID)
             .filter { docIDs.contains($0.id) }
-        let requiresSemantic = embedder != nil
-        var ready = 0
-        var failed = 0
-        var needsReview = 0
-        var blockers: [String] = []
-        for document in documents {
-            if document.extractionStatus == DocumentExtractionStatus.failed.rawValue
-                || document.status == MatterDocumentStatus.failed.rawValue {
-                failed += 1
-                blockers.append("\(document.displayName): \(Self.readinessDetail(for: document, fallback: "failed processing"))")
-                continue
+        let projections = try readinessLedger.consumerProjections(
+            matterID: matterID,
+            documentIDs: resolvedDocumentIDs
+        ).filter { $0.consumer == .ask }
+        let ready = projections.filter(\.isBaseReady).count
+        let failedReasons: Set<DocumentReadinessExclusionReason> = [
+            .extractionFailed,
+            .processingFailed,
+            .textIndexFailed,
+        ]
+        let failed = projections.filter {
+            !Set($0.baseReceipt.exclusions).isDisjoint(with: failedReasons)
+        }.count
+        let needsReview = projections.filter {
+            $0.baseReceipt.exclusions.contains(.reviewRequired)
+        }.count
+        let documentsByID = Dictionary(
+            uniqueKeysWithValues: documents.map { ($0.id, $0) }
+        )
+        let blockers = projections.compactMap { projection -> String? in
+            guard !projection.isBaseReady,
+                  let document = documentsByID[projection.documentID],
+                  let exclusion = projection.primaryBaseExclusion else { return nil }
+            let fallback = Self.readinessDescription(for: exclusion)
+            let detail: String
+            if exclusion == .extractionFailed || exclusion == .processingFailed
+                || exclusion == .reviewRequired {
+                detail = Self.readinessDetail(for: document, fallback: fallback)
+            } else {
+                detail = fallback
             }
-            if document.status == MatterDocumentStatus.needsReview.rawValue {
-                needsReview += 1
-                blockers.append("\(document.displayName): \(Self.readinessDetail(for: document, fallback: "needs review"))")
-                continue
-            }
-            guard Self.isTextReady(document) else { continue }
-            guard document.extractionMethod?.hasPrefix("converted_lossy@toolchain:") != true else { continue }
-            if let embedder {
-                guard try store.documentIndex.hasCompleteEmbeddings(
-                    documentID: document.id,
-                    embeddingModelID: embedder.modelID
-                ) else { continue }
-            }
-            ready += 1
+            return "\(document.displayName): \(detail)"
         }
         return ScopeReadiness(
             totalDocuments: documents.count,
@@ -184,16 +236,19 @@ public final class DocumentRetrievalService: @unchecked Sendable {
             pendingDocuments: max(0, documents.count - ready - failed),
             failedDocuments: failed,
             needsReviewDocuments: needsReview,
-            requiresSemanticIndex: requiresSemantic,
+            requiresSemanticIndex: true,
             isFullyReady: !documents.isEmpty
                 && ready == documents.count
                 && failed == 0
                 && needsReview == 0,
-            blockingReasons: blockers
+            blockingReasons: blockers,
+            documentReadiness: projections
         )
     }
 
     public func retrieve(matterID: String, query: String, scope: RetrievalScope, limit: Int = 12, depth: RetrievalDepth = .deep) async throws -> RetrievalResult {
+        let startedAt = Date()
+        let startedAtUnixMilliseconds = Self.unixMilliseconds(startedAt)
         // The fast tier trades recall for precision: a higher semantic floor keeps
         // marginally-similar chunks out of the small preliminary packet (spec §3.1).
         let semanticFloor = depth == .fast
@@ -232,24 +287,98 @@ public final class DocumentRetrievalService: @unchecked Sendable {
         // Semantic candidates (cosine over normalized vectors == dot product).
         var semanticBucket: [String: String] = [:]
         var usedSemantic = false
-        if let embedder, let queryVector = try await embedQuery(query, embedder: embedder) {
-            usedSemantic = true
-            let scopeSet = Set(scopeIDs)
-            let embeddings = try store.documentIndex.fetchEmbeddings(matterID: matterID, embeddingModelID: embedder.modelID)
-                .filter { scopeSet.contains($0.documentID) }
-            var ranked: [(chunkID: String, score: Double)] = []
-            for embedding in embeddings {
-                let similarity = Double(VectorMath.dot(queryVector, VectorMath.decode(embedding.vector)))
-                // Only relevant chunks count; this keeps off-topic documents out of
-                // scope-restricted answers.
-                if similarity >= semanticFloor {
-                    ranked.append((embedding.chunkID, similarity))
-                }
+        var semanticScanMetrics: BoundedSemanticScanMetrics?
+        var cacheDisposition = RAGExecutionCacheDisposition.bypassed
+        let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        var receiptQuerySHA256 = DocumentStorage.sha256Hex(of: Data(trimmedQuery.utf8))
+        var embeddingArtifactIdentitySHA256: String?
+        if let embedder,
+           !scopeIDs.isEmpty,
+           !trimmedQuery.isEmpty {
+            let activeModel = DocumentReadinessEmbeddingModelIdentity(
+                id: embedder.modelID,
+                repoID: embedder.modelRepoID,
+                revision: embedder.modelRevision,
+                dimension: embedder.dimension
+            )
+            let receiptIDs = readiness.documentReadiness.map(\.baseReceiptID).sorted()
+            let scopedReceiptDocumentIDs = Set(
+                readiness.documentReadiness.map(\.documentID)
+            )
+            let allDocumentsBaseReady = !readiness.documentReadiness.isEmpty
+                && scopedReceiptDocumentIDs == Set(scopeIDs)
+                && readiness.documentReadiness.allSatisfy(\.isBaseReady)
+            let runtimeMatchesPersistedModel = readiness.documentReadiness.allSatisfy {
+                $0.baseReceipt.activeEmbeddingModel == activeModel
             }
-            ranked.sort { $0.score > $1.score }
-            for (position, entry) in ranked.prefix(60).enumerated() {
-                scores[entry.chunkID, default: 0] += Self.rrfContribution(rank: position + 1)
-                semanticBucket[entry.chunkID] = entry.score > 0.7 ? "high" : (entry.score > 0.45 ? "medium" : "low")
+            let preparedQuery = EmbeddingModelCatalog.queryText(
+                trimmedQuery,
+                forModelID: embedder.modelRepoID
+            )
+            receiptQuerySHA256 = DocumentStorage.sha256Hex(of: Data(preparedQuery.utf8))
+            if Self.isLowercaseSHA256(embedder.artifactIdentitySHA256) {
+                embeddingArtifactIdentitySHA256 = embedder.artifactIdentitySHA256
+            }
+            let key = RAGDerivedCacheKey(
+                querySHA256: DocumentStorage.sha256Hex(of: Data(preparedQuery.utf8)),
+                matterID: matterID,
+                documentIDs: scopeIDs,
+                readinessReceiptIDs: receiptIDs,
+                embeddingModel: activeModel,
+                artifactIdentitySHA256: embedder.artifactIdentitySHA256 ?? "",
+                pageSize: semanticScanPageSize,
+                candidateLimit: semanticCandidateLimit,
+                minimumSimilarity: semanticFloor,
+                retrievalDepth: depth.rawValue,
+                algorithmVersion: Self.semanticCacheAlgorithmVersion
+            )
+            let access = RAGDerivedCacheAccess(
+                readinessReceiptIDs: receiptIDs,
+                allDocumentsBaseReady: allDocumentsBaseReady,
+                policyAllowsUse: runtimeMatchesPersistedModel
+                    && Self.isLowercaseSHA256(embedder.artifactIdentitySHA256)
+            )
+            if let resolution = try await semanticCacheResolver.resolveIfAvailable(
+                key: key,
+                access: access,
+                compute: {
+                    guard let queryVector = try await self.embedQuery(
+                        query,
+                        embedder: embedder
+                    ) else { return nil }
+                    let scan = try self.semanticScanner.scan(
+                        matterID: matterID,
+                        documentIDs: scopeIDs,
+                        queryVector: queryVector,
+                        activeModel: activeModel,
+                        configuration: BoundedSemanticScanConfiguration(
+                            pageSize: self.semanticScanPageSize,
+                            candidateLimit: self.semanticCandidateLimit,
+                            minimumSimilarity: semanticFloor
+                        )
+                    )
+                    semanticScanMetrics = scan.metrics
+                    return RAGSemanticCandidateCacheValue(
+                        candidates: scan.candidates.map {
+                            RAGCachedSemanticCandidate(
+                                chunkID: $0.chunkID,
+                                documentID: $0.documentID,
+                                similarity: $0.similarity
+                            )
+                        }
+                    )
+                }
+            ) {
+                usedSemantic = true
+                cacheDisposition = resolution.source == .cache ? .hit : .computed
+                for (position, entry) in resolution.value.candidates.enumerated() {
+                    scores[entry.chunkID, default: 0] += Self.rrfContribution(
+                        rank: position + 1
+                    )
+                    semanticBucket[entry.chunkID] = entry.similarity > 0.7
+                        ? "high"
+                        : (entry.similarity > 0.45 ? "medium" : "low")
+                }
             }
         }
 
@@ -262,13 +391,13 @@ public final class DocumentRetrievalService: @unchecked Sendable {
         let requestedStructureKinds = Self.requestedStructureKinds(query: query)
         if !requestedStructureKinds.isEmpty {
             let structureIntentScore = 2 * Self.rrfContribution(rank: 1)
-            for documentID in scopeIDs {
-                for chunk in try store.documentIndex.fetchChunks(documentID: documentID)
-                    where chunk.chunkerVersion == 2
-                        && chunk.unitKind.map(requestedStructureKinds.contains) == true {
-                    chunkByID[chunk.id] = chunk
-                    scores[chunk.id, default: 0] += structureIntentScore
-                }
+            for chunk in try store.documentIndex.fetchStructureCandidateChunks(
+                documentIDs: scopeIDs,
+                unitKinds: Array(requestedStructureKinds),
+                limit: 60
+            ) {
+                chunkByID[chunk.id] = chunk
+                scores[chunk.id, default: 0] += structureIntentScore
             }
         }
 
@@ -280,7 +409,10 @@ public final class DocumentRetrievalService: @unchecked Sendable {
 
         // Rank, then collapse duplicates by normalized text, then apply source
         // diversity (cap per document).
-        let rawOrdered = scores.sorted { $0.value > $1.value }
+        let rawOrdered = scores.sorted { lhs, rhs in
+            if lhs.value != rhs.value { return lhs.value > rhs.value }
+            return lhs.key < rhs.key
+        }
         let ordered = Self.v2DocumentDiverseOrder(
             rawOrdered,
             chunksByID: chunkByID,
@@ -348,16 +480,13 @@ public final class DocumentRetrievalService: @unchecked Sendable {
         // [S#] cite to content that lives in a neighbor still resolves to a verifiable
         // range, not just the original chunk's narrower span.
         let selectedChunkIDs = Set(sources.map(\.chunkID))
-        var chunksByDocument: [String: [DocumentChunkRecord]] = [:]
+        let neighborhoods = try store.documentIndex.fetchChunkNeighborhoods(
+            ids: Array(selectedChunkIDs)
+        )
+        let neighborhoodsByDocument = Dictionary(grouping: neighborhoods, by: \.documentID)
         for index in sources.indices {
             guard let current = chunkByID[sources[index].chunkID] else { continue }
-            let docChunks: [DocumentChunkRecord]
-            if let cached = chunksByDocument[current.documentID] {
-                docChunks = cached
-            } else {
-                docChunks = (try? store.documentIndex.fetchChunks(documentID: current.documentID)) ?? []
-                chunksByDocument[current.documentID] = docChunks
-            }
+            let docChunks = neighborhoodsByDocument[current.documentID] ?? [current]
             let expanded: (text: String, charStart: Int?, charEnd: Int?)
             if current.chunkerVersion == 2,
                let parent = structureContextByChunkID[current.id]?.parent {
@@ -394,9 +523,27 @@ public final class DocumentRetrievalService: @unchecked Sendable {
         }
         let warning = warnings.isEmpty ? nil : warnings.joined(separator: " ")
 
+        let receipt = try Self.executionReceipt(
+            startedAt: startedAt,
+            startedAtUnixMilliseconds: startedAtUnixMilliseconds,
+            depth: depth,
+            querySHA256: receiptQuerySHA256,
+            matterID: matterID,
+            scopeDocumentIDs: scopeIDs,
+            readiness: readiness,
+            embeddingArtifactIdentitySHA256: embeddingArtifactIdentitySHA256,
+            lexicalCandidateCount: ftsHits.count,
+            semanticScanMetrics: semanticScanMetrics,
+            semanticScanPageSize: semanticScanPageSize,
+            semanticCandidateLimit: semanticCandidateLimit,
+            cacheDisposition: cacheDisposition,
+            sources: sources
+        )
+
         return RetrievalResult(
             sources: sources, readiness: readiness, incompleteScopeWarning: warning,
-            usedSemantic: usedSemantic, query: query, scopeDocumentIDs: scopeIDs
+            usedSemantic: usedSemantic, query: query, scopeDocumentIDs: scopeIDs,
+            executionReceipt: receipt
         )
     }
 
@@ -563,6 +710,131 @@ public final class DocumentRetrievalService: @unchecked Sendable {
         return VectorMath.normalize(vector)
     }
 
+    private static func isLowercaseSHA256(_ value: String?) -> Bool {
+        guard let value, value.utf8.count == 64 else { return false }
+        return value.utf8.allSatisfy { byte in
+            (byte >= Character("0").asciiValue! && byte <= Character("9").asciiValue!)
+                || (byte >= Character("a").asciiValue!
+                    && byte <= Character("f").asciiValue!)
+        }
+    }
+
+    private static func executionReceipt(
+        startedAt: Date,
+        startedAtUnixMilliseconds: Int64,
+        depth: RetrievalDepth,
+        querySHA256: String,
+        matterID: String,
+        scopeDocumentIDs: [String],
+        readiness: ScopeReadiness,
+        embeddingArtifactIdentitySHA256: String?,
+        lexicalCandidateCount: Int,
+        semanticScanMetrics: BoundedSemanticScanMetrics?,
+        semanticScanPageSize: Int,
+        semanticCandidateLimit: Int,
+        cacheDisposition: RAGExecutionCacheDisposition,
+        sources: [RetrievedSource]
+    ) throws -> RAGExecutionReceipt? {
+        let chunkerVersions = Set(
+            readiness.documentReadiness.map(\.baseReceipt.chunkerVersion)
+        )
+        guard chunkerVersions.count == 1,
+              let chunkerVersion = chunkerVersions.first,
+              chunkerVersion > 0 else { return nil }
+
+        let semantic: RAGExecutionSemanticFacts
+        if cacheDisposition == .computed, let metrics = semanticScanMetrics {
+            semantic = RAGExecutionSemanticFacts(
+                pageSize: metrics.pageSize,
+                candidateLimit: metrics.candidateLimit,
+                pageCount: metrics.pageCount,
+                scannedRows: metrics.scannedRows,
+                rejectedRows: metrics.rejectedRows,
+                maximumLivePageRows: metrics.maximumLivePageRows,
+                maximumHeapEntries: metrics.maximumHeapEntries,
+                maximumLiveVectorBytes: metrics.maximumLiveVectorBytes,
+                cacheDisposition: .computed
+            )
+        } else {
+            semantic = RAGExecutionSemanticFacts(
+                pageSize: semanticScanPageSize,
+                candidateLimit: semanticCandidateLimit,
+                pageCount: 0,
+                scannedRows: 0,
+                rejectedRows: 0,
+                maximumLivePageRows: 0,
+                maximumHeapEntries: 0,
+                maximumLiveVectorBytes: 0,
+                cacheDisposition: cacheDisposition
+            )
+        }
+
+        let ranks = sources.enumerated().map { offset, source in
+            let bucket: RAGExecutionScoreBucket
+            switch source.semanticBucket {
+            case "high": bucket = .high
+            case "medium": bucket = .medium
+            default: bucket = .low
+            }
+            return RAGExecutionRankFact(
+                candidateIdentitySHA256: DocumentStorage.sha256Hex(
+                    of: Data(source.chunkID.utf8)
+                ),
+                rank: offset + 1,
+                scoreBucket: bucket,
+                selected: true
+            )
+        }
+        let readinessReceiptIDs = readiness.documentReadiness
+            .map(\.baseReceiptID)
+            .sorted()
+        return try RAGExecutionReceipt(
+            executionID: "rag-\(UUID().uuidString.lowercased())",
+            retrievalAlgorithmVersion: Self.semanticCacheAlgorithmVersion,
+            querySHA256: querySHA256,
+            scopeSHA256: Self.contentFreeSetDigest(
+                domain: "rag-scope-v1",
+                values: [matterID] + scopeDocumentIDs
+            ),
+            readinessReceiptSetSHA256: Self.contentFreeSetDigest(
+                domain: "rag-readiness-v1",
+                values: readinessReceiptIDs
+            ),
+            embeddingArtifactIdentitySHA256: embeddingArtifactIdentitySHA256,
+            chunkerVersion: chunkerVersion,
+            retrievalDepth: depth.rawValue,
+            startedAtUnixMilliseconds: startedAtUnixMilliseconds,
+            elapsedMilliseconds: Self.elapsedMilliseconds(since: startedAt),
+            lexicalCandidateCount: lexicalCandidateCount,
+            semantic: semantic,
+            ranks: ranks
+        )
+    }
+
+    private static func contentFreeSetDigest(
+        domain: String,
+        values: [String]
+    ) -> String {
+        var data = Data()
+        for value in [domain] + Array(Set(values)).sorted() {
+            let bytes = Data(value.utf8)
+            var count = UInt64(bytes.count).bigEndian
+            withUnsafeBytes(of: &count) { data.append(contentsOf: $0) }
+            data.append(bytes)
+        }
+        return DocumentStorage.sha256Hex(of: data)
+    }
+
+    private static func unixMilliseconds(_ date: Date) -> Int64 {
+        let value = max(0, date.timeIntervalSince1970 * 1_000)
+        return Int64(min(value.rounded(.down), Double(Int64.max)))
+    }
+
+    private static func elapsedMilliseconds(since start: Date) -> Int {
+        let value = max(0, Date().timeIntervalSince(start) * 1_000)
+        return Int(min(value.rounded(.up), Double(Int.max)))
+    }
+
     private func resolveScope(matterID: String, scope: RetrievalScope) throws -> [String] {
         try store.documentLibrary.resolveScopeDocumentIDs(
             matterID: matterID,
@@ -572,17 +844,6 @@ public final class DocumentRetrievalService: @unchecked Sendable {
             dateStart: scope.dateStart,
             dateEnd: scope.dateEnd
         )
-    }
-
-    private static func isTextReady(_ document: MatterDocumentRecord) -> Bool {
-        switch DocumentIndexStatus(rawValue: document.indexStatus) {
-        case .ready:
-            return true
-        case .textIndexed:
-            return true
-        default:
-            return false
-        }
     }
 
     private static func readinessDetail(
@@ -602,6 +863,37 @@ public final class DocumentRetrievalService: @unchecked Sendable {
             return first
         }
         return fallback
+    }
+
+    private static func readinessDescription(
+        for exclusion: DocumentReadinessExclusionReason
+    ) -> String {
+        switch exclusion {
+        case .deleted:
+            "is in the Recycle Bin"
+        case .extractionFailed, .processingFailed:
+            "failed processing"
+        case .reviewRequired:
+            "needs review"
+        case .extractionIncomplete:
+            "is still extracting"
+        case .selectedRevisionIncoherent:
+            "has an inconsistent selected revision"
+        case .textIndexFailed:
+            "text indexing failed"
+        case .staleRevision:
+            "has changed since it was indexed"
+        case .textIndexIncomplete:
+            "is still text indexing"
+        case .activeEmbeddingModelMissing:
+            "needs an active embedding model"
+        case .selectionInconsistent:
+            "has an inconsistent embedding-model selection"
+        case .unverified:
+            "uses an embedding model that has not passed its local test"
+        case .semanticIndexIncomplete:
+            "is still semantic indexing"
+        }
     }
 }
 

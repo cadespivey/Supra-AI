@@ -22,7 +22,7 @@ public final class DocumentIntelligenceSetupController: ObservableObject {
     @Published public private(set) var notificationStatus: DocumentNotificationAuthorizationStatus = .unknown
     @Published public private(set) var embeddingTestPassed = false
     /// True only while an embedding model is being auto-verified (loaded into the
-    /// runtime to confirm it works). Distinct from `isBusy` so the Models-tab verify
+    /// runtime to confirm it works). Distinct from `isBusy` so the AI Setup verify
     /// spinner doesn't couple to the broader Settings refresh state.
     @Published public private(set) var embeddingVerifyInFlight = false
     @Published public private(set) var isBusy = false
@@ -31,7 +31,8 @@ public final class DocumentIntelligenceSetupController: ObservableObject {
     @Published public private(set) var autoPurgeDays: Int = DocumentMaintenance.defaultAutoPurgeDays
 
     private let store: SupraStore
-    private let runtimeClient: any RuntimeClientProtocol
+    private let runtimeClient: any ModelExecutionGateway
+    private var modelExecutionGateway: any ModelExecutionGateway { runtimeClient }
     private let notifier: any DocumentNotifying
     private let storage: DocumentStorage
     private let capabilitiesProvider: @Sendable () -> DocumentToolchainCapabilities
@@ -39,7 +40,7 @@ public final class DocumentIntelligenceSetupController: ObservableObject {
 
     public init(
         store: SupraStore,
-        runtimeClient: any RuntimeClientProtocol,
+        runtimeClient: any ModelExecutionGateway,
         notifier: any DocumentNotifying = SystemDocumentNotifier(),
         storage: DocumentStorage = .makeDefault(),
         capabilitiesProvider: @escaping @Sendable () -> DocumentToolchainCapabilities = { DocumentToolchain.detectCapabilities() }
@@ -97,7 +98,7 @@ public final class DocumentIntelligenceSetupController: ObservableObject {
     /// Human-readable list of required steps still outstanding, for the setup UI.
     public var requiredOutstandingSteps: [String] {
         var steps: [String] = []
-        if !chatModelReady { steps.append("Load a runtime text model in the Models tab.") }
+        if !chatModelReady { steps.append("Load a runtime text model in AI Setup.") }
         if selectedEmbeddingModel == nil { steps.append("Download and select an embedding model.") }
         else if !embeddingTestPassed {
             steps.append(embeddingVerifyInFlight
@@ -135,7 +136,7 @@ public final class DocumentIntelligenceSetupController: ObservableObject {
     }
 
     public func refreshChatModelStatus() async {
-        guard let status = try? await runtimeClient.runtimeStatus() else {
+        guard let status = try? await modelExecutionGateway.runtimeStatus() else {
             chatModelLoaded = false
             syncCompletionStateIfNeeded()
             return
@@ -211,57 +212,88 @@ public final class DocumentIntelligenceSetupController: ObservableObject {
     public func selectEmbeddingModel(id: String) {
         let previousID = settings.selectedEmbeddingModelID
         let previousModel = previousID.flatMap { try? store.documentSettings.fetchEmbeddingModel(id: $0) }
-        let nextModel = try? store.documentSettings.fetchEmbeddingModel(id: id)
-        try? store.documentSettings.selectEmbeddingModel(id: id)
-        try? store.documentSettings.invalidateSetup(reason: "embedding model changed")
-        reloadSettings()
-        reloadLocalState()
-        guard previousID != id else { return }
-        if let previousModel, let nextModel {
-            do {
-                let service = OutputStalenessService(store: store)
-                for matter in try store.matters.fetchMatters() {
-                    _ = try service.embeddingModelChanged(
-                        matterID: matter.id,
-                        fromModelID: previousModel.repoID,
-                        fromRevision: previousModel.revision ?? "unresolved",
-                        toModelID: nextModel.repoID,
-                        toRevision: nextModel.revision ?? "unresolved"
-                    )
-                }
-            } catch {
-                message = "The embedding model changed, but dependent output status could not be refreshed: \(error.localizedDescription)"
+        do {
+            guard let nextModel = try store.documentSettings.fetchEmbeddingModel(id: id) else {
+                throw DocumentReadinessTransitionError.modelNotFound(id)
             }
+            guard nextModel.lastTestLoadResult == "passed",
+                  let verifiedAt = nextModel.lastTestLoadAt else {
+                // An attempted switch to an artifact that has not loaded yet is
+                // not an activation. Keep the current verified identity intact,
+                // but make the incomplete setup state visible until the caller
+                // uses the async verify-and-select action.
+                settings = try store.documentSettings.updateSettings {
+                    $0.setupCompletedAt = nil
+                    $0.setupInvalidatedReason = "embedding model changed"
+                }
+                // Represent the user's pending choice in the setup surface
+                // without publishing it as the Store's active model.
+                selectedEmbeddingModel = nextModel
+                embeddingTestPassed = false
+                message = "Verify this embedding model before selecting it."
+                return
+            }
+            _ = try store.documentSettings.activateVerifiedEmbeddingModel(
+                DocumentVerifiedEmbeddingModelSelectionCommand(
+                    expectedModel: Self.readinessIdentity(for: nextModel),
+                    verifiedAt: verifiedAt,
+                    setupInvalidationReason: "embedding model changed"
+                )
+            )
+            reloadSettings()
+            reloadLocalState()
+            finishEmbeddingModelActivation(
+                previousID: previousID,
+                previousModel: previousModel,
+                nextModel: nextModel
+            )
+        } catch {
+            message = "Could not select the embedding model: \(error.localizedDescription)"
+            reloadSettings()
+            reloadLocalState()
         }
-        enqueueMattersMissingEmbeddings(modelID: id)
     }
 
     /// Selects an embedding model and immediately verifies it loads. Used by the
     /// "Select for use" dropdown so switching the active model re-verifies it
     /// without a separate button.
     public func selectAndVerifyEmbeddingModel(id: String) async {
-        selectEmbeddingModel(id: id)
-        await testLoadEmbeddingModel()
+        await verifyAndActivateEmbeddingModel(id: id)
     }
 
-    /// Called after a download registers + auto-selects a new embedding model:
-    /// refreshes the cached list (so it appears in "Select for use") and verifies
-    /// the freshly-selected model in the background.
-    public func handleEmbeddingModelDownloaded() {
-        let previousID = settings.selectedEmbeddingModelID
+    /// Called after a download registers a new embedding model. Registration is
+    /// deliberately not activation: the exact artifact must load successfully
+    /// before the Store may make it active.
+    public func handleEmbeddingModelDownloaded(
+        modelID: String? = nil,
+        selectAfterDownload: Bool = true
+    ) {
         reloadSettings()
         reloadLocalState()
-        if let selectedID = settings.selectedEmbeddingModelID, selectedID != previousID {
-            enqueueMattersMissingEmbeddings(modelID: selectedID)
+        guard selectAfterDownload else { return }
+        let candidateID = modelID
+            ?? settings.selectedEmbeddingModelID
+            ?? availableEmbeddingModels.max(by: { $0.updatedAt < $1.updatedAt })?.id
+        guard let candidateID else {
+            message = "The downloaded embedding model could not be found."
+            return
         }
-        Task { await testLoadEmbeddingModel() }
+        Task { await verifyAndActivateEmbeddingModel(id: candidateID) }
     }
 
     /// Loads the selected embedding model into the runtime to prove it can be
     /// initialized, checking the produced dimension (plan §2.1).
     public func testLoadEmbeddingModel() async {
-        guard let model = selectedEmbeddingModel else {
+        guard let selectedID = selectedEmbeddingModel?.id else {
             message = "Select an embedding model first."
+            return
+        }
+        await verifyAndActivateEmbeddingModel(id: selectedID)
+    }
+
+    private func verifyAndActivateEmbeddingModel(id: String) async {
+        guard let model = try? store.documentSettings.fetchEmbeddingModel(id: id) else {
+            message = "The selected embedding model could not be found."
             return
         }
         guard let path = model.localPath, !path.isEmpty else {
@@ -283,64 +315,130 @@ public final class DocumentIntelligenceSetupController: ObservableObject {
             embeddingVerifyInFlight = false
         }
 
-        let access = SecurityScopedModelAccess(
-            url: URL(fileURLWithPath: path, isDirectory: true)
-        )
-        defer { access.release() }
-        guard access.hasAccess,
-              let authorization = access.makeTransferableAuthorization() else {
+        let response: LoadEmbeddingModelResponse
+        do {
+            response = try await loadEmbeddingModel(model)
+        } catch {
             embeddingTestPassed = false
-            message = "The embedding model folder could not be authorized for the runtime service."
+            message = error.localizedDescription
+            try? store.documentSettings.recordTestLoad(
+                modelID: model.id,
+                result: "failed: \(error.localizedDescription)"
+            )
+            reloadSettings()
+            reloadLocalState()
             return
         }
-        let request = LoadEmbeddingModelRequest(
-            embeddingModelID: DocumentEmbeddingModelID(UUID(uuidString: model.id) ?? UUID()),
-            modelPath: path,
-            displayName: model.displayName,
-            revision: model.revision,
-            // A non-positive stored dimension means "unknown" (e.g. a custom repo):
-            // skip the post-load assertion and discover the real value from the probe.
-            expectedDimension: model.dimension > 0 ? model.dimension : nil,
-            modelBookmark: authorization.bookmark,
-            managedRootPath: ManagedModelStorage.isManagedEmbedding(path: path)
-                ? ManagedModelStorage.embeddingModelsDirectory().path
-                : nil,
-            modelDirectoryIdentity: authorization.directoryIdentity
-        )
-        do {
-            let response = try await runtimeClient.loadEmbeddingModel(request)
-            switch response.state {
-            case .loaded:
-                embeddingTestPassed = true
-                message = nil
+
+        switch response.state {
+        case .loaded:
+            do {
+                var verifiedModel = model
                 // Capture the dimension the runtime actually produced for a model
                 // registered without one (custom repo), so indexing and the
                 // expected-dimension guard work on subsequent loads.
                 if model.dimension <= 0, let discovered = response.dimension, discovered > 0,
-                   var record = try? store.documentSettings.fetchEmbeddingModel(id: model.id) {
+                   var record = try store.documentSettings.fetchEmbeddingModel(id: model.id) {
                     record.dimension = discovered
                     record.updatedAt = Date()
-                    try? store.documentSettings.upsertEmbeddingModel(record)
+                    try store.documentSettings.upsertEmbeddingModel(record)
+                    verifiedModel = record
                 }
-                try? store.documentSettings.recordTestLoad(modelID: model.id, result: "passed")
-                settings = (try? store.documentSettings.updateSettings { $0.embeddingModelLastTestedAt = Date() }) ?? settings
+                let verifiedAt = Date()
+                try store.documentSettings.recordTestLoad(
+                    modelID: verifiedModel.id,
+                    at: verifiedAt,
+                    result: "passed"
+                )
+                guard let persistedVerifiedModel = try store.documentSettings
+                    .fetchEmbeddingModel(id: verifiedModel.id),
+                    let persistedVerifiedAt = persistedVerifiedModel.lastTestLoadAt else {
+                    throw DocumentReadinessTransitionError.modelNotVerified(
+                        verifiedModel.id
+                    )
+                }
+                verifiedModel = persistedVerifiedModel
+                let previousID = settings.selectedEmbeddingModelID
+                let previousModel = previousID.flatMap {
+                    try? store.documentSettings.fetchEmbeddingModel(id: $0)
+                }
+                _ = try store.documentSettings.activateVerifiedEmbeddingModel(
+                    DocumentVerifiedEmbeddingModelSelectionCommand(
+                        expectedModel: Self.readinessIdentity(for: verifiedModel),
+                        verifiedAt: persistedVerifiedAt,
+                        setupInvalidationReason: previousID == verifiedModel.id
+                            ? "embedding model verification refreshed"
+                            : "embedding model changed"
+                    )
+                )
+                embeddingTestPassed = true
+                message = nil
                 _ = try? store.auditEvents.recordEvent(
                     eventType: "document_intelligence_setup_changed", actor: "user",
-                    summary: "Embedding model \(model.displayName) test-loaded",
-                    relatedTable: "document_embedding_models", relatedID: model.id
+                    summary: "Embedding model \(verifiedModel.displayName) test-loaded",
+                    relatedTable: "document_embedding_models", relatedID: verifiedModel.id
                 )
-            default:
+                reloadSettings()
+                reloadLocalState()
+                finishEmbeddingModelActivation(
+                    previousID: previousID,
+                    previousModel: previousModel,
+                    nextModel: verifiedModel
+                )
+            } catch {
+                // The runtime verification remains truthful evidence even when
+                // the atomic activation rejects. Do not relabel a model that
+                // actually loaded as failed.
                 embeddingTestPassed = false
-                let detail = response.error?.message ?? "The embedding model failed to load."
-                message = detail
-                try? store.documentSettings.recordTestLoad(modelID: model.id, result: "failed: \(detail)")
+                message = "The embedding model verified, but could not be selected: \(error.localizedDescription)"
             }
-        } catch {
+        default:
             embeddingTestPassed = false
-            message = error.localizedDescription
-            try? store.documentSettings.recordTestLoad(modelID: model.id, result: "failed: \(error.localizedDescription)")
+            let detail = response.error?.message ?? "The embedding model failed to load."
+            message = detail
+            try? store.documentSettings.recordTestLoad(
+                modelID: model.id,
+                result: "failed: \(detail)"
+            )
         }
+        reloadSettings()
         reloadLocalState()
+    }
+
+    private static func readinessIdentity(
+        for model: DocumentEmbeddingModelRecord
+    ) -> DocumentReadinessEmbeddingModelIdentity {
+        DocumentReadinessEmbeddingModelIdentity(
+            id: model.id,
+            repoID: model.repoID,
+            revision: model.revision,
+            dimension: model.dimension
+        )
+    }
+
+    private func finishEmbeddingModelActivation(
+        previousID: String?,
+        previousModel: DocumentEmbeddingModelRecord?,
+        nextModel: DocumentEmbeddingModelRecord
+    ) {
+        guard previousID != nextModel.id else { return }
+        if let previousModel {
+            do {
+                let service = OutputStalenessService(store: store)
+                for matter in try store.matters.fetchMatters() {
+                    _ = try service.embeddingModelChanged(
+                        matterID: matter.id,
+                        fromModelID: previousModel.repoID,
+                        fromRevision: previousModel.revision ?? "unresolved",
+                        toModelID: nextModel.repoID,
+                        toRevision: nextModel.revision ?? "unresolved"
+                    )
+                }
+            } catch {
+                message = "The embedding model changed, but dependent output status could not be refreshed: \(error.localizedDescription)"
+            }
+        }
+        enqueueMattersMissingEmbeddings(modelID: nextModel.id)
     }
 
     private var embeddingWarmInFlight = false
@@ -360,38 +458,62 @@ public final class DocumentIntelligenceSetupController: ObservableObject {
               (try? Self.verifyManagedEmbeddingModel(model)) != nil else { return }
         embeddingWarmInFlight = true
         warmedEmbeddingModelID = model.id
-        let access = SecurityScopedModelAccess(
-            url: URL(fileURLWithPath: path, isDirectory: true)
-        )
-        guard access.hasAccess,
-              let authorization = access.makeTransferableAuthorization() else {
-            embeddingWarmInFlight = false
-            warmedEmbeddingModelID = nil
-            return
-        }
-        let request = LoadEmbeddingModelRequest(
-            embeddingModelID: DocumentEmbeddingModelID(UUID(uuidString: model.id) ?? UUID()),
-            modelPath: path,
-            displayName: model.displayName,
-            revision: model.revision,
-            expectedDimension: model.dimension > 0 ? model.dimension : nil,
-            modelBookmark: authorization.bookmark,
-            managedRootPath: ManagedModelStorage.isManagedEmbedding(path: path)
-                ? ManagedModelStorage.embeddingModelsDirectory().path
-                : nil,
-            modelDirectoryIdentity: authorization.directoryIdentity
-        )
         Task {
-            defer {
-                access.release()
-                embeddingWarmInFlight = false
-            }
+            defer { embeddingWarmInFlight = false }
             do {
-                _ = try await runtimeClient.loadEmbeddingModel(request)
+                _ = try await loadEmbeddingModel(model)
             } catch {
                 warmedEmbeddingModelID = nil // allow a retry on the next trigger
             }
         }
+    }
+
+    private func loadEmbeddingModel(
+        _ model: DocumentEmbeddingModelRecord
+    ) async throws -> LoadEmbeddingModelResponse {
+        guard let path = model.localPath, !path.isEmpty else {
+            throw TextEmbedderError.modelNotDownloaded
+        }
+        let embeddingModelID = DocumentEmbeddingModelID(
+            UUID(uuidString: model.id) ?? UUID()
+        )
+        let expectedDimension = model.dimension > 0 ? model.dimension : nil
+        let modelDirectory = URL(fileURLWithPath: path, isDirectory: true)
+
+        if ManagedModelStorage.isManagedEmbedding(path: path) {
+            let prepared = try await ContentBoundEmbeddingAuthorizationExecutor.live.prepare(
+                modelDirectory: modelDirectory,
+                managedRoot: ManagedModelStorage.embeddingModelsDirectory(),
+                embeddingModelID: embeddingModelID,
+                displayName: model.displayName,
+                revision: model.revision,
+                expectedDimension: expectedDimension
+            )
+            let response = try await modelExecutionGateway.loadEmbeddingModel(prepared.request)
+            _ = prepared.authorization
+            return response
+        }
+
+        let access = SecurityScopedModelAccess(url: modelDirectory)
+        defer { access.release() }
+        guard access.hasAccess,
+              let authorization = access.makeTransferableAuthorization() else {
+            throw TextEmbedderError.loadFailed(
+                "the model-folder security scope could not be activated"
+            )
+        }
+        return try await modelExecutionGateway.loadEmbeddingModel(
+            LoadEmbeddingModelRequest(
+                embeddingModelID: embeddingModelID,
+                modelPath: path,
+                displayName: model.displayName,
+                revision: model.revision,
+                expectedDimension: expectedDimension,
+                modelBookmark: authorization.bookmark,
+                managedRootPath: nil,
+                modelDirectoryIdentity: authorization.directoryIdentity
+            )
+        )
     }
 
     private static func verifyManagedEmbeddingModel(_ model: DocumentEmbeddingModelRecord) throws {

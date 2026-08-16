@@ -1,6 +1,5 @@
 import SupraCore
 @testable import SupraNetworking
-import SupraStore
 import XCTest
 
 final class SupraNetworkingTests: XCTestCase {
@@ -60,8 +59,8 @@ final class SupraNetworkingTests: XCTestCase {
     }
 
     func testNetworkRequestLoggerPersistsBlockedRequest() async throws {
-        let store = try makeStore()
-        let logger = NetworkRequestLogger(repository: store.networkRequests)
+        let auditRecorder = NetworkAuditRecorder()
+        let logger = NetworkRequestLogger(writer: auditRecorder)
         let url = try XCTUnwrap(URL(string: "https://example.com/blocked?q=tokenless"))
 
         let id = try await logger.recordBlockedRequest(
@@ -70,7 +69,7 @@ final class SupraNetworkingTests: XCTestCase {
             blockedReason: "hostNotAllowed"
         )
 
-        let record = try XCTUnwrap(try store.networkRequests.fetchRecent(limit: 1).single)
+        let record = try XCTUnwrap(auditRecorder.fetchRecent(limit: 1).single)
         XCTAssertEqual(record.id, id)
         XCTAssertEqual(record.domain, "example.com")
         XCTAssertEqual(record.endpoint, "/blocked")
@@ -79,12 +78,12 @@ final class SupraNetworkingTests: XCTestCase {
     }
 
     func testAuthorizedHTTPClientInjectsHeadersAndRedactsAuthorizationFromLog() async throws {
-        let store = try makeStore()
+        let auditRecorder = NetworkAuditRecorder()
         let spy = TransportSpy()
         let client = AuthorizedHTTPClient(
             keyStore: InMemoryKeyStore(token: "secret-token"),
             policy: NetworkPolicyService(),
-            logger: NetworkRequestLogger(repository: store.networkRequests),
+            logger: NetworkRequestLogger(writer: auditRecorder),
             rateLimitTracker: RateLimitTracker(),
             transport: { request in
                 await spy.respond(to: request, statusCode: 200)
@@ -99,7 +98,7 @@ final class SupraNetworkingTests: XCTestCase {
         XCTAssertEqual(sentRequest?.value(forHTTPHeaderField: "Accept"), "application/json")
         XCTAssertEqual(sentRequest?.value(forHTTPHeaderField: "Authorization"), "Token secret-token")
 
-        let record = try XCTUnwrap(try store.networkRequests.fetchRecent(limit: 1).single)
+        let record = try XCTUnwrap(auditRecorder.fetchRecent(limit: 1).single)
         XCTAssertTrue(record.approved)
         XCTAssertEqual(record.statusCode, 200)
         XCTAssertEqual(record.endpoint, "/api/rest/v4/search")
@@ -107,12 +106,12 @@ final class SupraNetworkingTests: XCTestCase {
     }
 
     func testAuthorizedHTTPClientRedactsAPIKeyHeadersFromLog() async throws {
-        let store = try makeStore()
+        let auditRecorder = NetworkAuditRecorder()
         let spy = TransportSpy()
         let client = AuthorizedHTTPClient(
             keyStore: InMemoryKeyStore(token: nil),
             policy: NetworkPolicyService(),
-            logger: NetworkRequestLogger(repository: store.networkRequests),
+            logger: NetworkRequestLogger(writer: auditRecorder),
             rateLimitTracker: RateLimitTracker(),
             transport: { request in
                 await spy.respond(to: request, statusCode: 200)
@@ -126,7 +125,7 @@ final class SupraNetworkingTests: XCTestCase {
 
         _ = try await client.sendUnauthenticated(request, relatedResearchSessionID: nil)
 
-        let record = try XCTUnwrap(try store.networkRequests.fetchRecent(limit: 1).single)
+        let record = try XCTUnwrap(auditRecorder.fetchRecent(limit: 1).single)
         let metadata = try XCTUnwrap(record.requestMetadataJSON)
         XCTAssertFalse(metadata.contains("govinfo-secret"), "API keys must never be persisted in request metadata")
         XCTAssertTrue(metadata.contains("\"X-Api-Key\":\"#redacted\""))
@@ -134,12 +133,12 @@ final class SupraNetworkingTests: XCTestCase {
     }
 
     func testAuthenticatedSendToStorageCDNRefusesRatherThanLeakToken() async throws {
-        let store = try makeStore()
+        let auditRecorder = NetworkAuditRecorder()
         let spy = TransportSpy()
         let client = AuthorizedHTTPClient(
             keyStore: InMemoryKeyStore(token: "secret-token"),
             policy: NetworkPolicyService(),
-            logger: NetworkRequestLogger(repository: store.networkRequests),
+            logger: NetworkRequestLogger(writer: auditRecorder),
             rateLimitTracker: RateLimitTracker(),
             transport: { request in await spy.respond(to: request, statusCode: 200) }
         )
@@ -157,18 +156,18 @@ final class SupraNetworkingTests: XCTestCase {
     }
 
     func testAuthorizedHTTPClientRedactsPrivilegedQueryTermsFromLogByDefault() async throws {
-        let store = try makeStore()
+        let auditRecorder = NetworkAuditRecorder()
         let spy = TransportSpy()
         let client = AuthorizedHTTPClient(
             keyStore: InMemoryKeyStore(token: "secret-token"),
             policy: NetworkPolicyService(),
-            logger: NetworkRequestLogger(repository: store.networkRequests),
+            logger: NetworkRequestLogger(writer: auditRecorder),
             transport: { request in await spy.respond(to: request, statusCode: 200) }
         )
         let url = try XCTUnwrap(URL(string: "https://www.courtlistener.com/api/rest/v4/search/?q=trade%20secret%20misappropriation&type=o"))
         _ = try await client.send(URLRequest(url: url))
 
-        let record = try XCTUnwrap(try store.networkRequests.fetchRecent(limit: 1).single)
+        let record = try XCTUnwrap(auditRecorder.fetchRecent(limit: 1).single)
         let metadata = record.requestMetadataJSON ?? ""
         XCTAssertFalse(metadata.localizedCaseInsensitiveContains("misappropriation"), "raw privileged query terms must not be persisted")
         XCTAssertFalse(metadata.localizedCaseInsensitiveContains("trade"), "raw privileged query terms must not be persisted")
@@ -179,29 +178,29 @@ final class SupraNetworkingTests: XCTestCase {
     }
 
     func testAuthorizedHTTPClientKeepsQueryTermsWhenLoggingExplicitlyEnabled() async throws {
-        let store = try makeStore()
+        let auditRecorder = NetworkAuditRecorder()
         let spy = TransportSpy()
         let client = AuthorizedHTTPClient(
             keyStore: InMemoryKeyStore(token: "secret-token"),
             policy: NetworkPolicyService(),
-            logger: NetworkRequestLogger(repository: store.networkRequests),
+            logger: NetworkRequestLogger(writer: auditRecorder),
             redactsQueryValues: false,
             transport: { request in await spy.respond(to: request, statusCode: 200) }
         )
         let url = try XCTUnwrap(URL(string: "https://www.courtlistener.com/api/rest/v4/search/?q=noncompete&type=o"))
         _ = try await client.send(URLRequest(url: url))
 
-        let record = try XCTUnwrap(try store.networkRequests.fetchRecent(limit: 1).single)
+        let record = try XCTUnwrap(auditRecorder.fetchRecent(limit: 1).single)
         XCTAssertTrue(record.requestMetadataJSON?.localizedCaseInsensitiveContains("noncompete") ?? false)
     }
 
     func testAuthorizedHTTPClientAlwaysRedactsSensitiveQueryParameters() async throws {
-        let store = try makeStore()
+        let auditRecorder = NetworkAuditRecorder()
         let spy = TransportSpy()
         let client = AuthorizedHTTPClient(
             keyStore: InMemoryKeyStore(token: nil),
             policy: NetworkPolicyService(),
-            logger: NetworkRequestLogger(repository: store.networkRequests),
+            logger: NetworkRequestLogger(writer: auditRecorder),
             redactsQueryValues: false,
             transport: { request in await spy.respond(to: request, statusCode: 200) }
         )
@@ -209,7 +208,7 @@ final class SupraNetworkingTests: XCTestCase {
 
         _ = try await client.sendUnauthenticated(URLRequest(url: url))
 
-        let record = try XCTUnwrap(try store.networkRequests.fetchRecent(limit: 1).single)
+        let record = try XCTUnwrap(auditRecorder.fetchRecent(limit: 1).single)
         let metadata = try XCTUnwrap(record.requestMetadataJSON)
         XCTAssertFalse(metadata.contains("queryparam-secret"), "query-string API keys must never be persisted")
         XCTAssertFalse(metadata.contains("second-secret"), "query-string API keys must never be persisted")
@@ -219,12 +218,12 @@ final class SupraNetworkingTests: XCTestCase {
     }
 
     func testAuthorizedHTTPClientLogsBlockedPolicyRequestWithoutSending() async throws {
-        let store = try makeStore()
+        let auditRecorder = NetworkAuditRecorder()
         let spy = TransportSpy()
         let client = AuthorizedHTTPClient(
             keyStore: InMemoryKeyStore(token: "secret-token"),
             policy: NetworkPolicyService(),
-            logger: NetworkRequestLogger(repository: store.networkRequests),
+            logger: NetworkRequestLogger(writer: auditRecorder),
             rateLimitTracker: RateLimitTracker(),
             transport: { request in
                 await spy.respond(to: request, statusCode: 200)
@@ -241,7 +240,7 @@ final class SupraNetworkingTests: XCTestCase {
 
         let requestCount = await spy.requestCount()
         XCTAssertEqual(requestCount, 0)
-        let record = try XCTUnwrap(try store.networkRequests.fetchRecent(limit: 1).single)
+        let record = try XCTUnwrap(auditRecorder.fetchRecent(limit: 1).single)
         XCTAssertFalse(record.approved)
         XCTAssertEqual(record.domain, "example.com")
     }
@@ -263,12 +262,6 @@ final class SupraNetworkingTests: XCTestCase {
         XCTAssertThrowsError(try policy.validate(try XCTUnwrap(URL(string: "https://catalog.data.gov/dataset"))))
     }
 
-    private func makeStore() throws -> SupraStore {
-        let directoryURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("SupraNetworkingTests-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
-        return try SupraStore(url: directoryURL.appendingPathComponent("test.sqlite"))
-    }
 }
 
 private final class InMemoryKeyStore: APIKeyStoreProtocol, @unchecked Sendable {

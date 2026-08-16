@@ -33,6 +33,8 @@ public final class DocumentRechunkService: @unchecked Sendable {
         guard targetVersion == 1 || targetVersion == 2 else {
             throw DocumentRechunkError.unsupportedChunkerVersion(targetVersion)
         }
+        let activeChunkerVersion = try store.documentSettings.loadSettings().chunkerVersion
+        let isStagedRollout = activeChunkerVersion != targetVersion
         let chunker = DocumentChunker(version: targetVersion)
         let documents = try store.documentLibrary.fetchDocuments(matterID: matterID)
         var scheduledDocumentIDs: [String] = []
@@ -65,7 +67,13 @@ public final class DocumentRechunkService: @unchecked Sendable {
         let reindexed = try await DocumentIndexingService(
             store: store,
             chunker: chunker,
-            embedder: embedder
+            // A staged target is intentionally fail-closed until the coordinator
+            // flips the active default. Semantic indexing runs only after that
+            // activation boundary so it can publish a canonical receipt.
+            embedder: isStagedRollout ? nil : embedder,
+            stagedRolloutActiveChunkerVersion: isStagedRollout
+                ? activeChunkerVersion
+                : nil
         ).indexMatter(matterID: matterID)
 
         var textIndexed = 0

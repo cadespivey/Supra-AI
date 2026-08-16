@@ -2,19 +2,27 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
-migrator="${1:-${repo_root}/Packages/SupraStore/Sources/SupraStore/Database/SupraMigrator.swift}"
-if (( $# > 1 )) || [[ ! -f "$migrator" ]]; then
-  printf 'Usage: %s [SupraMigrator.swift]\n' "$0" >&2
+migration_source="${1:-${repo_root}/Packages/SupraStore/Sources/SupraStore/Database}"
+if (( $# > 1 )) || [[ ! -f "$migration_source" && ! -d "$migration_source" ]]; then
+  printf 'Usage: %s [migration-source-file-or-directory]\n' "$0" >&2
   exit 2
 fi
 
 temporary_file="$(mktemp)"
 trap 'rm -f "$temporary_file"' EXIT
-grep -oE 'registerMigration\("v[0-9]{3}_[A-Za-z0-9_]+"' "$migrator" \
-  | sed -E 's/.*"v([0-9]{3})_.*/\1/' >"$temporary_file" || true
+if [[ -f "$migration_source" ]]; then
+  grep -oE 'registerMigration\("v[0-9]{3}_[A-Za-z0-9_]+"' "$migration_source" \
+    | sed -E 's/.*"v([0-9]{3})_.*/\1/' >"$temporary_file" || true
+else
+  while IFS= read -r -d '' migration_file; do
+    grep -oE 'registerMigration\("v[0-9]{3}_[A-Za-z0-9_]+"' "$migration_file" || true
+  done < <(find "$migration_source" -type f -name 'SupraMigration*.swift' -print0 | LC_ALL=C sort -z) \
+    | sed -E 's/.*"v([0-9]{3})_.*/\1/' \
+    | LC_ALL=C sort >"$temporary_file"
+fi
 
 if [[ ! -s "$temporary_file" ]]; then
-  printf 'ERROR: no shipping migrations found in %s\n' "$(basename "$migrator")" >&2
+  printf 'ERROR: no shipping migrations found in %s\n' "$(basename "$migration_source")" >&2
   exit 1
 fi
 

@@ -6,13 +6,17 @@ public final class SupraStore: @unchecked Sendable {
     public let appSettings: AppSettingsRepository
     public let models: ModelRepository
     public let chats: ChatRepository
+    public let groundedChatPublications: GroundedChatTerminalPublicationRepository
     public let matters: MattersRepository
+    public let matterIdentity: MatterIdentityRepository
     public let generation: GenerationRepository
     public let diagnostics: DiagnosticsRepository
     public let validation: ValidationRepository
     public let exportedReports: ExportedReportsRepository
     public let networkRequests: NetworkRequestRepository
+    public let networkRequestAudits: NetworkRequestAuditStoreCapability
     public let research: ResearchRepository
+    public let researchPackets: ResearchPacketRepository
     public let authorities: AuthorityRepository
     public let structuredOutputs: StructuredOutputRepository
     public let auditEvents: AuditEventRepository
@@ -21,12 +25,12 @@ public final class SupraStore: @unchecked Sendable {
     public let documentSettings: DocumentSettingsRepository
     public let documentLibrary: DocumentLibraryRepository
     public let documentIndex: DocumentIndexRepository
+    public let documentReadiness: DocumentReadinessRepository
     public let documentRevisions: DocumentRevisionRepository
     public let documentStructure: StructureRepository
     public let documentJobs: DocumentJobRepository
     public let documentSources: DocumentSourceRepository
     public let corpusAnalysis: CorpusAnalysisRepository
-    public let caseFileReviews: CaseFileReviewRepository
     public let documentRelations: DocumentRelationRepository
     public let documentClassifications: DocumentClassificationRepository
     public let draftingSources: DraftingSourceRepository
@@ -40,13 +44,20 @@ public final class SupraStore: @unchecked Sendable {
         self.appSettings = AppSettingsRepository(writer: database.writer)
         self.models = ModelRepository(writer: database.writer)
         self.chats = ChatRepository(writer: database.writer)
+        self.groundedChatPublications = GroundedChatTerminalPublicationRepository(
+            writer: database.writer
+        )
         self.matters = MattersRepository(writer: database.writer)
+        self.matterIdentity = MatterIdentityRepository(writer: database.writer)
         self.generation = GenerationRepository(writer: database.writer)
         self.diagnostics = DiagnosticsRepository(writer: database.writer)
         self.validation = ValidationRepository(writer: database.writer)
         self.exportedReports = ExportedReportsRepository(writer: database.writer)
-        self.networkRequests = NetworkRequestRepository(writer: database.writer)
+        let networkRequests = NetworkRequestRepository(writer: database.writer)
+        self.networkRequests = networkRequests
+        self.networkRequestAudits = NetworkRequestAuditStoreCapability(repository: networkRequests)
         self.research = ResearchRepository(writer: database.writer)
+        self.researchPackets = ResearchPacketRepository(writer: database.writer)
         self.authorities = AuthorityRepository(writer: database.writer)
         self.structuredOutputs = StructuredOutputRepository(writer: database.writer)
         self.auditEvents = AuditEventRepository(writer: database.writer)
@@ -54,12 +65,12 @@ public final class SupraStore: @unchecked Sendable {
         self.documentSettings = DocumentSettingsRepository(writer: database.writer)
         self.documentLibrary = DocumentLibraryRepository(writer: database.writer)
         self.documentIndex = DocumentIndexRepository(writer: database.writer)
+        self.documentReadiness = DocumentReadinessRepository(writer: database.writer)
         self.documentRevisions = DocumentRevisionRepository(writer: database.writer)
         self.documentStructure = StructureRepository(writer: database.writer)
         self.documentJobs = DocumentJobRepository(writer: database.writer)
         self.documentSources = DocumentSourceRepository(writer: database.writer)
         self.corpusAnalysis = CorpusAnalysisRepository(writer: database.writer)
-        self.caseFileReviews = CaseFileReviewRepository(writer: database.writer)
         self.documentRelations = DocumentRelationRepository(writer: database.writer)
         self.documentClassifications = DocumentClassificationRepository(writer: database.writer)
         self.draftingSources = DraftingSourceRepository(writer: database.writer)

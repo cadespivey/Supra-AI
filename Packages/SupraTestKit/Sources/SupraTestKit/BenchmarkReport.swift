@@ -1,4 +1,5 @@
 import Foundation
+import SupraCore
 
 public struct BenchmarkMetricDefinition: Codable, Equatable, Sendable {
     public var id: String
@@ -107,9 +108,11 @@ public struct BenchmarkReport: Codable, Equatable, Sendable {
     public func canonicalJSON(strippingRunTimestamp: Bool = false) throws -> Data {
         var report = self
         if strippingRunTimestamp { report.run.generatedAt = nil }
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        return try encoder.encode(report)
+        return try CanonicalJSON.encode(
+            report,
+            version: .v1,
+            presentation: .prettyPrinted
+        )
     }
 }
 

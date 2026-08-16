@@ -56,6 +56,29 @@ final class ModelLibraryContentBoundLoadingTests: XCTestCase {
         )
     }
 
+    func testOrdinaryManagedActivationCannotBypassExactContentBinding() async throws {
+        // Expected RED: the ordinary Models-tab activation path constructs an
+        // unbound LoadModelRequest even for a verified managed installation.
+        let fixture = try makeFixture(location: .managed)
+        let runtime = ContentBoundLoadingRuntimeStub(reply: .echoRequestFingerprint)
+        let library = try makeLibrary(fixture: fixture, runtime: runtime)
+
+        await library.activateAndLoad(modelID: Self.modelIDString)
+
+        let request = try XCTUnwrap(runtime.loadRequests.only)
+        let binding = try XCTUnwrap(
+            request.contentBinding,
+            "ordinary shipping activation must authorize exact model bytes"
+        )
+        XCTAssertEqual(binding.repositoryID, Self.repositoryID)
+        XCTAssertEqual(binding.revision, Self.revision)
+        XCTAssertEqual(binding.files.map(\.path), ["config.json", "model.safetensors"])
+        XCTAssertEqual(binding.fingerprintSHA256, Self.fingerprint)
+        XCTAssertFalse(
+            String(describing: request).contains("DEFAULT-000")
+        )
+    }
+
     func testTQUEUE03LiveExactModelRejectsMissingAndWrongRuntimeFingerprints() async throws {
         // Expected RED: no strict live load API inspects
         // LoadModelResponse.verifiedModelSHA256, so an unbound or forged load

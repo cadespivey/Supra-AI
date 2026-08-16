@@ -54,7 +54,8 @@ gh_command="$(release_resolve_command_override SUPRA_GH_COMMAND gh)"
 credential_gate="$(release_resolve_command_override SUPRA_CREDENTIAL_GATE_COMMAND "${script_root}/Scripts/verify-release-credentials.sh")"
 font_gate="$(release_resolve_command_override SUPRA_FONT_GUARD_COMMAND "${script_root}/Scripts/verify-public-font-license.sh")"
 release_gate="$(release_resolve_command_override SUPRA_RELEASE_GATE_COMMAND "${script_root}/Scripts/run-release-gates.sh")"
-for command_path in "$gh_command" "$credential_gate" "$font_gate" "$release_gate"; do
+scope_gate="$(release_resolve_command_override SUPRA_SCOPE_GATE_COMMAND "${script_root}/Scripts/verify-release-scope-ledger.sh")"
+for command_path in "$gh_command" "$credential_gate" "$font_gate" "$release_gate" "$scope_gate"; do
   release_require_resolvable_command "$command_path" 'release preflight'
 done
 
@@ -132,6 +133,8 @@ ci_url="$(jq -r '.url // empty' <<<"$ci_json")"
 
 "$credential_gate" >/dev/null || release_die 'release credential gate failed'
 "$font_gate" >/dev/null || release_die 'public font gate failed'
+"$scope_gate" --require-owner-approval >/dev/null \
+  || release_die 'owner-approved release scope gate failed'
 SUPRA_RELEASE_REPOSITORY="$repository" "$release_gate" >/dev/null \
   || release_die 'release integration gate failed'
 
@@ -198,7 +201,12 @@ jq -n \
     toolchain: {xcode: $xcode, swift: $swift},
     dependencyLocks: $locks,
     ciRuns: [{id: $ciID, workflow: $ciWorkflow, headSha: $sha, conclusion: "success", url: $ciURL}],
-    gates: {credentials: "passed", publicFont: "passed", releaseIntegration: "passed"}
+    gates: {
+      credentials: "passed",
+      publicFont: "passed",
+      releaseIntegration: "passed",
+      releaseScope: "owner-approved"
+    }
   }' >"$temporary_output"
 
 jq -e '

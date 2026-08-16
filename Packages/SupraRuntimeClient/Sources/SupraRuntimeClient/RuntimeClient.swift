@@ -28,9 +28,12 @@ public enum RuntimeClientError: Error, LocalizedError, Sendable {
     }
 }
 
-public final class RuntimeClient: RuntimeClientProtocol, @unchecked Sendable {
+public final class RuntimeClient: RuntimeClientProtocol, RuntimeRecoveryClientProtocol,
+    @unchecked Sendable {
     private let serviceName: String
     private let injectedRemoteService: SupraRuntimeXPCServiceProtocol?
+    private let budgetPolicy: RuntimeBudgetPolicy
+    private let responseBudgetValidator: RuntimeResponseBudgetValidator
     private let connectionLock = NSLock()
     private var connection: NSXPCConnection?
     // In-flight generate() streams, keyed so the connection's interruption/
@@ -39,17 +42,30 @@ public final class RuntimeClient: RuntimeClientProtocol, @unchecked Sendable {
     private var activeStreamFailures: [UUID: @Sendable (Error) -> Void] = [:]
 
     public convenience init() {
-        self.init(serviceName: RuntimeXPCServiceNames.defaultServiceName)
+        self.init(
+            serviceName: RuntimeXPCServiceNames.defaultServiceName,
+            budgetPolicy: .production
+        )
     }
 
-    public init(serviceName: String) {
+    public init(
+        serviceName: String,
+        budgetPolicy: RuntimeBudgetPolicy = .production
+    ) {
         self.serviceName = serviceName
         self.injectedRemoteService = nil
+        self.budgetPolicy = budgetPolicy
+        self.responseBudgetValidator = RuntimeResponseBudgetValidator(policy: budgetPolicy)
     }
 
-    public init(remoteService: SupraRuntimeXPCServiceProtocol) {
+    public init(
+        remoteService: SupraRuntimeXPCServiceProtocol,
+        budgetPolicy: RuntimeBudgetPolicy = .production
+    ) {
         self.serviceName = RuntimeXPCServiceNames.defaultServiceName
         self.injectedRemoteService = remoteService
+        self.budgetPolicy = budgetPolicy
+        self.responseBudgetValidator = RuntimeResponseBudgetValidator(policy: budgetPolicy)
     }
 
     deinit {
@@ -57,10 +73,12 @@ public final class RuntimeClient: RuntimeClientProtocol, @unchecked Sendable {
     }
 
     public func connect() async throws {
+        try RuntimeMethodPolicy.require(.independentlyAdmitted, for: .connect)
         _ = try remoteService()
     }
 
     public func loadModel(_ request: LoadModelRequest) async throws -> LoadModelResponse {
+        try RuntimeMethodPolicy.require(.ordinaryDataPlane, for: .loadChatModel)
         let requestData = try encode(request)
         return try await sendRequest(LoadModelResponse.self) { service, reply in
             service.loadChatModel(requestData, withReply: reply)
@@ -68,6 +86,7 @@ public final class RuntimeClient: RuntimeClientProtocol, @unchecked Sendable {
     }
 
     public func generate(_ request: GenerateRequest) throws -> AsyncThrowingStream<GenerationEvent, Error> {
+        try RuntimeMethodPolicy.require(.ordinaryDataPlane, for: .generate)
         let requestData = try encode(request)
 
         return AsyncThrowingStream { continuation in
@@ -83,7 +102,23 @@ public final class RuntimeClient: RuntimeClientProtocol, @unchecked Sendable {
                 continuation.finish(throwing: error)
             }
 
-            streamState.eventSink = RuntimeClientEventSink { result in
+            let streamPolicy = RuntimeStreamBufferPolicy(
+                wireID: "runtime-client-\(request.generationID.rawValue.uuidString.lowercased())",
+                modelArtifactID: "model-\(request.modelID.rawValue.uuidString.lowercased())",
+                modelRevision: request.expectedModelSHA256 ?? "content-binding-unavailable",
+                maxReplayEventCount: 256,
+                maxReplayEncodedBytes: min(budgetPolicy.maxEncodedResponseBytes, 2 * 1_024 * 1_024),
+                maxUIChunkUTF8Bytes: 16 * 1_024,
+                maxPersistenceBatchUTF8Bytes: 64 * 1_024,
+                coalescingWindow: .milliseconds(16),
+                coalescingUTF8Bytes: 8 * 1_024
+            )
+            let streamBuffer = RuntimeGenerationStreamBuffer(policy: streamPolicy)
+            streamState.eventSink = RuntimeClientEventSink(
+                expectedGenerationID: request.generationID,
+                budgetPolicy: budgetPolicy,
+                streamBuffer: streamBuffer
+            ) { [weak self] result in
                 switch result {
                 case let .success(event):
                     continuation.yield(event)
@@ -93,6 +128,15 @@ public final class RuntimeClient: RuntimeClientProtocol, @unchecked Sendable {
                     }
 
                 case let .failure(error):
+                    // Snapshot both weak client ownership and the request identity
+                    // before crossing into a sending Task closure. Capturing the
+                    // mutable weak-self box here is rejected by the stock macOS 15
+                    // Swift 6 compiler and could race deinitialization in principle.
+                    let cancellationClient = self
+                    let generationID = request.generationID
+                    Task { [cancellationClient, generationID] in
+                        _ = try? await cancellationClient?.cancelGeneration(generationID)
+                    }
                     continuation.finish(throwing: error)
                 }
             }
@@ -132,7 +176,11 @@ public final class RuntimeClient: RuntimeClientProtocol, @unchecked Sendable {
 
             service.generate(requestData, eventSink: eventSink) { responseData in
                 do {
-                    let response = try RuntimeXPCCodec.decode(GenerateStartResponse.self, from: responseData)
+                    let response = try RuntimeXPCCodec.decodeResponse(
+                        GenerateStartResponse.self,
+                        from: responseData,
+                        policy: self.budgetPolicy
+                    )
                     if response.status != .started {
                         continuation.finish(throwing: RuntimeClientError.generationRejected(response))
                     }
@@ -144,22 +192,32 @@ public final class RuntimeClient: RuntimeClientProtocol, @unchecked Sendable {
     }
 
     public func countTokens(_ request: CountTokensRequest) async throws -> CountTokensResponse {
+        try RuntimeMethodPolicy.require(.ordinaryDataPlane, for: .countTokens)
         let requestData = try encode(request)
         let response = try await sendRequest(CountTokensResponse.self) { service, reply in
             service.countTokens(requestData, withReply: reply)
         }
+        guard response.modelID == request.modelID else {
+            throw RuntimeClientError.invalidTokenCountResponse
+        }
+        do {
+            try responseBudgetValidator.validate(
+                response,
+                expectedRequestItemCount: response.error == nil
+                    ? request.texts.count
+                    : response.counts.count
+            )
+        } catch {
+            throw RuntimeClientError.invalidTokenCountResponse
+        }
         if let error = response.error {
             throw RuntimeClientError.remoteInvocationFailed(error.message)
-        }
-        guard response.modelID == request.modelID,
-              response.counts.count == request.texts.count,
-              response.counts.allSatisfy({ $0 >= 0 }) else {
-            throw RuntimeClientError.invalidTokenCountResponse
         }
         return response
     }
 
     public func cancelGeneration(_ generationID: GenerationID) async throws -> CancelGenerationResponse {
+        try RuntimeMethodPolicy.require(.independentlyAdmitted, for: .cancelGeneration)
         let generationIDData = try encode(generationID)
         return try await sendRequest(CancelGenerationResponse.self) { service, reply in
             service.cancelGeneration(generationIDData, withReply: reply)
@@ -167,6 +225,7 @@ public final class RuntimeClient: RuntimeClientProtocol, @unchecked Sendable {
     }
 
     public func recentEvents(for generationID: GenerationID, after sequenceNumber: Int) async throws -> [GenerationEvent] {
+        try RuntimeMethodPolicy.require(.independentlyAdmitted, for: .recentEvents)
         let generationIDData = try encode(generationID)
         return try await sendRequest([GenerationEvent].self) { service, reply in
             service.recentEvents(for: generationIDData, after: sequenceNumber, withReply: reply)
@@ -174,31 +233,87 @@ public final class RuntimeClient: RuntimeClientProtocol, @unchecked Sendable {
     }
 
     public func unloadModel() async throws -> UnloadModelResponse {
-        try await sendRequest(UnloadModelResponse.self) { service, reply in
+        try RuntimeMethodPolicy.require(.ordinaryDataPlane, for: .unloadModel)
+        return try await sendRequest(UnloadModelResponse.self) { service, reply in
             service.unloadModel(withReply: reply)
         }
     }
 
     public func reloadCurrentModel() async throws -> LoadModelResponse {
-        try await sendRequest(LoadModelResponse.self) { service, reply in
+        try RuntimeMethodPolicy.require(.ordinaryDataPlane, for: .reloadCurrentModel)
+        return try await sendRequest(LoadModelResponse.self) { service, reply in
             service.reloadCurrentModel(withReply: reply)
         }
     }
 
     public func runtimeStatus() async throws -> RuntimeStatus {
-        try await sendRequest(RuntimeStatus.self) { service, reply in
+        try RuntimeMethodPolicy.require(.independentlyAdmitted, for: .runtimeStatus)
+        return try await sendRequest(RuntimeStatus.self) { service, reply in
             service.runtimeStatus(withReply: reply)
         }
     }
 
+    public func runtimeResidencySnapshot() async throws -> RuntimeServiceResidencySnapshot {
+        try RuntimeMethodPolicy.require(.recoveryControlPlane, for: .runtimeResidencySnapshot)
+        return try await sendRequest(RuntimeServiceResidencySnapshot.self) { service, reply in
+            service.runtimeResidencySnapshot(withReply: reply)
+        }
+    }
+
+    public func evictRuntimeArtifact(
+        _ request: RuntimeServiceArtifactEvictionRequest
+    ) async throws -> RuntimeServiceArtifactEvictionResponse {
+        try RuntimeMethodPolicy.require(.recoveryControlPlane, for: .evictRuntimeArtifact)
+        let requestData = try encode(request)
+        let response = try await sendRequest(RuntimeServiceArtifactEvictionResponse.self) {
+            service, reply in
+            service.evictRuntimeArtifact(requestData, withReply: reply)
+        }
+        if let error = response.error {
+            throw RuntimeClientError.remoteInvocationFailed(error.message)
+        }
+        guard response.evictedModelID == request.modelID else {
+            throw RuntimeClientError.remoteInvocationFailed(
+                "The runtime did not confirm the exact artifact eviction."
+            )
+        }
+        return response
+    }
+
+    public func resetRuntime(
+        _ request: RuntimeServiceResetRequest
+    ) async throws -> RuntimeServiceResetReceipt {
+        try RuntimeMethodPolicy.require(.recoveryControlPlane, for: .resetRuntime)
+        let requestData = try encode(request)
+        let response = try await sendRequest(RuntimeServiceResetResponse.self) { service, reply in
+            service.resetRuntime(requestData, withReply: reply)
+        }
+        if let error = response.error {
+            throw RuntimeClientError.remoteInvocationFailed(error.message)
+        }
+        guard let receipt = response.receipt,
+              receipt.requestID == request.requestID,
+              receipt.previousEpoch == request.expectedEpoch else {
+            throw RuntimeClientError.remoteInvocationFailed(
+                "The runtime returned an invalid reset receipt."
+            )
+        }
+        return receipt
+    }
+
 #if DEBUG
     public func runtimeLifecycleDebugStatus() async throws -> RuntimeLifecycleDebugStatus {
-        try await sendRequest(RuntimeLifecycleDebugStatus.self) { service, reply in
+        try RuntimeMethodPolicy.require(.independentlyAdmitted, for: .runtimeLifecycleDebugStatus)
+        return try await sendRequest(RuntimeLifecycleDebugStatus.self) { service, reply in
             service.runtimeLifecycleDebugStatus(withReply: reply)
         }
     }
 
     public func triggerReservationTerminationProbe(_ generationID: GenerationID) async throws -> Bool {
+        try RuntimeMethodPolicy.require(
+            .recoveryControlPlane,
+            for: .triggerReservationTerminationProbe
+        )
         let generationIDData = try encode(generationID)
         return try await sendRequest(Bool.self) { service, reply in
             service.triggerReservationTerminationProbe(generationIDData, withReply: reply)
@@ -207,6 +322,7 @@ public final class RuntimeClient: RuntimeClientProtocol, @unchecked Sendable {
 #endif
 
     public func loadEmbeddingModel(_ request: LoadEmbeddingModelRequest) async throws -> LoadEmbeddingModelResponse {
+        try RuntimeMethodPolicy.require(.ordinaryDataPlane, for: .loadEmbeddingModel)
         let requestData = try encode(request)
         return try await sendRequest(LoadEmbeddingModelResponse.self) { service, reply in
             service.loadEmbeddingModel(requestData, withReply: reply)
@@ -214,19 +330,29 @@ public final class RuntimeClient: RuntimeClientProtocol, @unchecked Sendable {
     }
 
     public func embedTexts(_ request: EmbedTextRequest) async throws -> EmbedTextResponse {
+        try RuntimeMethodPolicy.require(.ordinaryDataPlane, for: .embedTexts)
         let requestData = try encode(request)
-        return try await sendRequest(EmbedTextResponse.self) { service, reply in
+        let response = try await sendRequest(EmbedTextResponse.self) { service, reply in
             service.embedTexts(requestData, withReply: reply)
         }
+        try responseBudgetValidator.validate(
+            response,
+            expectedVectorCount: response.state == .loaded
+                ? request.texts.count
+                : response.vectors.count
+        )
+        return response
     }
 
     public func embeddingStatus() async throws -> EmbeddingModelStatus {
-        try await sendRequest(EmbeddingModelStatus.self) { service, reply in
+        try RuntimeMethodPolicy.require(.independentlyAdmitted, for: .embeddingStatus)
+        return try await sendRequest(EmbeddingModelStatus.self) { service, reply in
             service.embeddingStatus(withReply: reply)
         }
     }
 
     public func restartRuntimeService() async throws {
+        try RuntimeMethodPolicy.require(.recoveryControlPlane, for: .restartRuntimeService)
         invalidateConnection()?.invalidate()
         try await connect()
     }
@@ -245,7 +371,15 @@ public final class RuntimeClient: RuntimeClientProtocol, @unchecked Sendable {
 
                 send(service) { responseData in
                     do {
-                        reply.complete(.success(try RuntimeXPCCodec.decode(responseType, from: responseData)))
+                        reply.complete(
+                            .success(
+                                try RuntimeXPCCodec.decodeResponse(
+                                    responseType,
+                                    from: responseData,
+                                    policy: self.budgetPolicy
+                                )
+                            )
+                        )
                     } catch {
                         reply.complete(.failure(RuntimeClientError.decodingFailed(error.localizedDescription)))
                     }
@@ -352,7 +486,15 @@ public final class RuntimeClient: RuntimeClientProtocol, @unchecked Sendable {
 
     private func encode<T: Encodable>(_ value: T) throws -> Data {
         do {
-            return try RuntimeXPCCodec.encode(value)
+            let data = try RuntimeXPCCodec.encode(value)
+            guard data.count <= budgetPolicy.maxEncodedRequestBytes else {
+                throw RuntimeBudgetViolation(
+                    dimension: .encodedRequestBytes,
+                    limit: budgetPolicy.maxEncodedRequestBytes,
+                    actual: data.count
+                )
+            }
+            return data
         } catch {
             throw RuntimeClientError.encodingFailed(error.localizedDescription)
         }
@@ -401,14 +543,64 @@ private final class RuntimeGenerationStreamState: @unchecked Sendable {
 
 private final class RuntimeClientEventSink: NSObject, SupraGenerationEventXPCSinkProtocol {
     private let receiveEvent: (Result<GenerationEvent, Error>) -> Void
+    private let expectedGenerationID: GenerationID
+    private let budgetPolicy: RuntimeBudgetPolicy
+    private let lock = NSLock()
+    private var outputBudgetTracker: RuntimeGenerationOutputBudgetTracker
+    private var streamAssembler: RuntimeClientStreamAssembler
+    private var seenSequenceNumbers: Set<Int> = []
+    private var lastTerminalFlush: RuntimeStreamFlushReceipt?
 
-    init(receiveEvent: @escaping (Result<GenerationEvent, Error>) -> Void) {
+    init(
+        expectedGenerationID: GenerationID,
+        budgetPolicy: RuntimeBudgetPolicy,
+        streamBuffer: RuntimeGenerationStreamBuffer,
+        receiveEvent: @escaping (Result<GenerationEvent, Error>) -> Void
+    ) {
+        self.expectedGenerationID = expectedGenerationID
+        self.budgetPolicy = budgetPolicy
+        self.outputBudgetTracker = RuntimeGenerationOutputBudgetTracker(policy: budgetPolicy)
+        self.streamAssembler = RuntimeClientStreamAssembler(buffer: streamBuffer)
         self.receiveEvent = receiveEvent
     }
 
     func receive(_ eventData: Data, withReply reply: @escaping () -> Void) {
         do {
-            let event = try RuntimeXPCCodec.decode(GenerationEvent.self, from: eventData)
+            try RuntimeMethodPolicy.require(
+                .independentlyAdmitted,
+                for: .receiveGenerationEvent
+            )
+            let event = try RuntimeXPCCodec.decodeResponse(
+                GenerationEvent.self,
+                from: eventData,
+                policy: budgetPolicy
+            )
+            guard event.generationID == expectedGenerationID else {
+                throw RuntimeClientError.decodingFailed(
+                    "The runtime event did not match the active generation."
+                )
+            }
+            lock.lock()
+            if seenSequenceNumbers.insert(event.sequenceNumber).inserted {
+                do {
+                    try outputBudgetTracker.record(event)
+                    try streamAssembler.ingest(event)
+                    if event.type == .generationCompleted
+                        || event.type == .generationCancelled
+                        || event.type == .generationFailed {
+                        let terminalFlush = try streamAssembler.terminalFlush(for: event.type)
+                        lastTerminalFlush = terminalFlush
+                    }
+                } catch {
+                    lock.unlock()
+                    throw error
+                }
+            } else {
+                lock.unlock()
+                reply()
+                return
+            }
+            lock.unlock()
             receiveEvent(.success(event))
         } catch {
             receiveEvent(.failure(RuntimeClientError.decodingFailed(error.localizedDescription)))

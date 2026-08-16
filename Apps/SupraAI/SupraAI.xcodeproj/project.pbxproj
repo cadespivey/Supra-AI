@@ -72,15 +72,25 @@
 		A42B02020000000000000002 /* RuntimeXPCIntegrationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A42B02020000000000000102 /* RuntimeXPCIntegrationView.swift */; };
 		A42B02030000000000000003 /* RuntimeModelDirectoryAccess.swift in Sources */ = {isa = PBXBuildFile; fileRef = A42B02030000000000000103 /* RuntimeModelDirectoryAccess.swift */; };
 		A42B02040000000000000004 /* SignedReleaseSmokeHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = A42B02040000000000000104 /* SignedReleaseSmokeHost.swift */; };
+		B6A815000000000000000001 /* NativeRAGControlRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6A815000000000000000101 /* NativeRAGControlRunner.swift */; };
 		A42B02050000000000000005 /* SupraRuntimeModelSecurity in Frameworks */ = {isa = PBXBuildFile; productRef = A42B02050000000000000422 /* SupraRuntimeModelSecurity */; };
 		C8914D48FD9E94ED7FA33488 /* ScratchPadView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8792ADFD107281343AFEEA5C /* ScratchPadView.swift */; };
 		D43B113C5FCE7B2343E29B6A /* PublicRecordsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEBC0EB0D3FD3BAFBA6FE8C8 /* PublicRecordsView.swift */; };
 		D75FC07E8CB2C15E194220DE /* WindowChromeLayoutUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0762F779C5E28BCDE5295FBA /* WindowChromeLayoutUITests.swift */; };
 		E4A400010000000000000001 /* RestoreSettingsUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4A400010000000000000101 /* RestoreSettingsUITests.swift */; };
-		C0A720260807000000000001 /* CorpusReviewQueueCompositionUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0A720260807000000000101 /* CorpusReviewQueueCompositionUITests.swift */; };
-		C0A820260808000000000001 /* CaseFileReviewUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0A820260808000000000101 /* CaseFileReviewUITests.swift */; };
-		C0A920260808000000000001 /* CaseFileReviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0A920260808000000000101 /* CaseFileReviewView.swift */; };
-		C0AA20260809000000000001 /* CaseFileReviewCreationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0AA20260809000000000101 /* CaseFileReviewCreationView.swift */; };
+		A0B120260813000000000001 /* ArchitectureUXRetirementUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0B120260813000000000101 /* ArchitectureUXRetirementUITests.swift */; };
+		D1E701010000000000000001 /* ArchitectureUXTUxDelete01Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1E701010000000000000101 /* ArchitectureUXTUxDelete01Tests.swift */; };
+		D1E702020000000000000002 /* ArchitectureUXTUxDelete02Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1E702020000000000000102 /* ArchitectureUXTUxDelete02Tests.swift */; };
+		D1E704040000000000000004 /* ArchitectureUXTUxSetup01Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1E704040000000000000104 /* ArchitectureUXTUxSetup01Tests.swift */; };
+		D1E705050000000000000005 /* ArchitectureUXTWindow01Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1E705050000000000000105 /* ArchitectureUXTWindow01Tests.swift */; };
+		D1E706060000000000000006 /* ArchitectureUXTDataReady01Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1E706060000000000000106 /* ArchitectureUXTDataReady01Tests.swift */; };
+		D1E707070000000000000007 /* CanonicalMatterIdentityUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1E707070000000000000107 /* CanonicalMatterIdentityUITests.swift */; };
+		D1E708080000000000000008 /* ArchitectureUXTAttachNativeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1E708080000000000000108 /* ArchitectureUXTAttachNativeTests.swift */; };
+		E5A500000000000000000001 /* ArchitectureUXPhase5VisualTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5A500000000000000000101 /* ArchitectureUXPhase5VisualTests.swift */; };
+		E5A500000000000000000002 /* ArchitectureUXPhase5ContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5A500000000000000000102 /* ArchitectureUXPhase5ContractTests.swift */; };
+		D1E709090000000000000009 /* ArchitectureUXTDataIdentityConsumerSourceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1E709090000000000000109 /* ArchitectureUXTDataIdentityConsumerSourceTests.swift */; };
+		D1E70A0A000000000000000A /* ArchitectureUXTMutationNativeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1E70A0A000000000000010A /* ArchitectureUXTMutationNativeTests.swift */; };
+		D1E70B0B000000000000000B /* UserMutationFailureBanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1E70B0B000000000000010B /* UserMutationFailureBanner.swift */; };
 		D8049735424078FD470EAD6B /* RecycleBinView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF9D6D522EA0F7997D75B63B /* RecycleBinView.swift */; };
 		F56264303FD9BE608870FB9F /* MultilineField.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E06DCE8DB8B78E41F939F2C /* MultilineField.swift */; };
 /* End PBXBuildFile section */
@@ -120,13 +130,23 @@
 		34B94BA2F51DCE8E94476893 /* DownloadProgressRow.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DownloadProgressRow.swift; sourceTree = "<group>"; };
 		0762F779C5E28BCDE5295FBA /* WindowChromeLayoutUITests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WindowChromeLayoutUITests.swift; sourceTree = "<group>"; };
 		E4A400010000000000000101 /* RestoreSettingsUITests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RestoreSettingsUITests.swift; sourceTree = "<group>"; };
-		C0A720260807000000000101 /* CorpusReviewQueueCompositionUITests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CorpusReviewQueueCompositionUITests.swift; sourceTree = "<group>"; };
-		C0A820260808000000000101 /* CaseFileReviewUITests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CaseFileReviewUITests.swift; sourceTree = "<group>"; };
-		C0A920260808000000000101 /* CaseFileReviewView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CaseFileReviewView.swift; sourceTree = "<group>"; };
-		C0AA20260809000000000101 /* CaseFileReviewCreationView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CaseFileReviewCreationView.swift; sourceTree = "<group>"; };
+		A0B120260813000000000101 /* ArchitectureUXRetirementUITests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ArchitectureUXRetirementUITests.swift; sourceTree = "<group>"; };
+		D1E701010000000000000101 /* ArchitectureUXTUxDelete01Tests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ArchitectureUXTUxDelete01Tests.swift; sourceTree = "<group>"; };
+		D1E702020000000000000102 /* ArchitectureUXTUxDelete02Tests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ArchitectureUXTUxDelete02Tests.swift; sourceTree = "<group>"; };
+		D1E704040000000000000104 /* ArchitectureUXTUxSetup01Tests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ArchitectureUXTUxSetup01Tests.swift; sourceTree = "<group>"; };
+		D1E705050000000000000105 /* ArchitectureUXTWindow01Tests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ArchitectureUXTWindow01Tests.swift; sourceTree = "<group>"; };
+		D1E706060000000000000106 /* ArchitectureUXTDataReady01Tests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ArchitectureUXTDataReady01Tests.swift; sourceTree = "<group>"; };
+		D1E707070000000000000107 /* CanonicalMatterIdentityUITests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CanonicalMatterIdentityUITests.swift; sourceTree = "<group>"; };
+		D1E708080000000000000108 /* ArchitectureUXTAttachNativeTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ArchitectureUXTAttachNativeTests.swift; sourceTree = "<group>"; };
+		E5A500000000000000000101 /* ArchitectureUXPhase5VisualTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ArchitectureUXPhase5VisualTests.swift; sourceTree = "<group>"; };
+		E5A500000000000000000102 /* ArchitectureUXPhase5ContractTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ArchitectureUXPhase5ContractTests.swift; sourceTree = "<group>"; };
+		D1E709090000000000000109 /* ArchitectureUXTDataIdentityConsumerSourceTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ArchitectureUXTDataIdentityConsumerSourceTests.swift; sourceTree = "<group>"; };
+		D1E70A0A000000000000010A /* ArchitectureUXTMutationNativeTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ArchitectureUXTMutationNativeTests.swift; sourceTree = "<group>"; };
+		D1E70B0B000000000000010B /* UserMutationFailureBanner.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = UserMutationFailureBanner.swift; sourceTree = "<group>"; };
 		45DF0346474345DA98F88B95 /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/Cocoa.framework; sourceTree = DEVELOPER_DIR; };
 		5A0000000000000000000101 /* SupraAIApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupraAIApp.swift; sourceTree = "<group>"; };
 		5A0000000000000000000102 /* AppEnvironment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppEnvironment.swift; sourceTree = "<group>"; };
+		B6A815000000000000000101 /* NativeRAGControlRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeRAGControlRunner.swift; sourceTree = "<group>"; };
 		5A0000000000000000000103 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		5A0000000000000000000104 /* MainShellView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainShellView.swift; sourceTree = "<group>"; };
 		5A0000000000000000000105 /* SidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarView.swift; sourceTree = "<group>"; };
@@ -242,7 +262,9 @@
 				5A0000000000000000000101 /* SupraAIApp.swift */,
 				A42B02040000000000000104 /* SignedReleaseSmokeHost.swift */,
 				5A0000000000000000000102 /* AppEnvironment.swift */,
+				B6A815000000000000000101 /* NativeRAGControlRunner.swift */,
 				5A0000000000000000000103 /* RootView.swift */,
+				D1E70B0B000000000000010B /* UserMutationFailureBanner.swift */,
 				A42B02020000000000000102 /* RuntimeXPCIntegrationView.swift */,
 				5A0000000000000000000104 /* MainShellView.swift */,
 				5A0000000000000000000105 /* SidebarView.swift */,
@@ -254,7 +276,6 @@
 				5A0000000000000000000907 /* Research */,
 				5A0000000000000000000909 /* Authorities */,
 				5A000000000000000000090A /* Outputs */,
-				C0A920260808000000000901 /* Review */,
 				5A000000000000000000090B /* Documents */,
 				5A0000000000000000000903 /* Navigation */,
 				5A0000000000000000000904 /* Status */,
@@ -354,15 +375,6 @@
 			path = Outputs;
 			sourceTree = "<group>";
 		};
-		C0A920260808000000000901 /* Review */ = {
-			isa = PBXGroup;
-			children = (
-				C0A920260808000000000101 /* CaseFileReviewView.swift */,
-				C0AA20260809000000000101 /* CaseFileReviewCreationView.swift */,
-			);
-			path = Review;
-			sourceTree = "<group>";
-		};
 		5A000000000000000000090B /* Documents */ = {
 			isa = PBXGroup;
 			children = (
@@ -380,8 +392,18 @@
 				A42B02010000000000000101 /* RuntimeXPCIntegrationTests.swift */,
 				0762F779C5E28BCDE5295FBA /* WindowChromeLayoutUITests.swift */,
 				E4A400010000000000000101 /* RestoreSettingsUITests.swift */,
-				C0A720260807000000000101 /* CorpusReviewQueueCompositionUITests.swift */,
-				C0A820260808000000000101 /* CaseFileReviewUITests.swift */,
+				A0B120260813000000000101 /* ArchitectureUXRetirementUITests.swift */,
+				D1E701010000000000000101 /* ArchitectureUXTUxDelete01Tests.swift */,
+				D1E702020000000000000102 /* ArchitectureUXTUxDelete02Tests.swift */,
+				D1E704040000000000000104 /* ArchitectureUXTUxSetup01Tests.swift */,
+				D1E705050000000000000105 /* ArchitectureUXTWindow01Tests.swift */,
+				D1E706060000000000000106 /* ArchitectureUXTDataReady01Tests.swift */,
+				D1E707070000000000000107 /* CanonicalMatterIdentityUITests.swift */,
+				D1E708080000000000000108 /* ArchitectureUXTAttachNativeTests.swift */,
+				E5A500000000000000000101 /* ArchitectureUXPhase5VisualTests.swift */,
+				E5A500000000000000000102 /* ArchitectureUXPhase5ContractTests.swift */,
+				D1E709090000000000000109 /* ArchitectureUXTDataIdentityConsumerSourceTests.swift */,
+				D1E70A0A000000000000010A /* ArchitectureUXTMutationNativeTests.swift */,
 			);
 			path = SupraAIUITests;
 			sourceTree = "<group>";
@@ -613,7 +635,9 @@
 				5A0000000000000000000001 /* SupraAIApp.swift in Sources */,
 				A42B02040000000000000004 /* SignedReleaseSmokeHost.swift in Sources */,
 				5A0000000000000000000002 /* AppEnvironment.swift in Sources */,
+				B6A815000000000000000001 /* NativeRAGControlRunner.swift in Sources */,
 				5A0000000000000000000003 /* RootView.swift in Sources */,
+				D1E70B0B000000000000000B /* UserMutationFailureBanner.swift in Sources */,
 				A42B02020000000000000002 /* RuntimeXPCIntegrationView.swift in Sources */,
 				5A0000000000000000000004 /* MainShellView.swift in Sources */,
 				5A0000000000000000000005 /* SidebarView.swift in Sources */,
@@ -632,8 +656,6 @@
 				5A000000000000000000002C /* MatterAuthoritiesView.swift in Sources */,
 				5A000000000000000000002D /* AuthorityDetailView.swift in Sources */,
 				5A000000000000000000002E /* MatterOutputsView.swift in Sources */,
-				C0A920260808000000000001 /* CaseFileReviewView.swift in Sources */,
-				C0AA20260809000000000001 /* CaseFileReviewCreationView.swift in Sources */,
 				5A00000000000000000000E3 /* MatterDocumentsView.swift in Sources */,
 				5A00000000000000000000E4 /* PartTextEditSheet.swift in Sources */,
 				F7A000000000000000000001 /* DocumentRelationReviewSheet.swift in Sources */,
@@ -675,8 +697,18 @@
 				A42B02010000000000000001 /* RuntimeXPCIntegrationTests.swift in Sources */,
 				D75FC07E8CB2C15E194220DE /* WindowChromeLayoutUITests.swift in Sources */,
 				E4A400010000000000000001 /* RestoreSettingsUITests.swift in Sources */,
-				C0A720260807000000000001 /* CorpusReviewQueueCompositionUITests.swift in Sources */,
-				C0A820260808000000000001 /* CaseFileReviewUITests.swift in Sources */,
+				A0B120260813000000000001 /* ArchitectureUXRetirementUITests.swift in Sources */,
+				D1E701010000000000000001 /* ArchitectureUXTUxDelete01Tests.swift in Sources */,
+				D1E702020000000000000002 /* ArchitectureUXTUxDelete02Tests.swift in Sources */,
+				D1E704040000000000000004 /* ArchitectureUXTUxSetup01Tests.swift in Sources */,
+				D1E705050000000000000005 /* ArchitectureUXTWindow01Tests.swift in Sources */,
+				D1E706060000000000000006 /* ArchitectureUXTDataReady01Tests.swift in Sources */,
+				D1E707070000000000000007 /* CanonicalMatterIdentityUITests.swift in Sources */,
+				D1E708080000000000000008 /* ArchitectureUXTAttachNativeTests.swift in Sources */,
+				E5A500000000000000000001 /* ArchitectureUXPhase5VisualTests.swift in Sources */,
+				E5A500000000000000000002 /* ArchitectureUXPhase5ContractTests.swift in Sources */,
+				D1E709090000000000000009 /* ArchitectureUXTDataIdentityConsumerSourceTests.swift in Sources */,
+				D1E70A0A000000000000000A /* ArchitectureUXTMutationNativeTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

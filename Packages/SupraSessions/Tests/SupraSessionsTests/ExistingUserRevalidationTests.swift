@@ -7,6 +7,155 @@ import XCTest
 
 @MainActor
 final class ExistingUserRevalidationTests: XCTestCase {
+    func testJourney4EditedSavedWorkCreatesARecheckedVersionAndPreservesTheOriginal() throws {
+        // Journey 4 expected RED: StructuredOutputController has no owner-edit
+        // boundary that creates a new immutable version and rechecks the exact
+        // retained packet before making that version active.
+        let store = try SupraStore.inMemory()
+        let matter = try store.matters.createMatter(name: "Synthetic Edited Work")
+        let blob = try store.documentLibrary.upsertBlob(DocumentBlobRecord(
+            sha256: String(repeating: "e", count: 64),
+            byteSize: 31,
+            originalExtension: "txt",
+            managedRelativePath: "blobs/ee/payment.txt"
+        )).blob
+        let document = try store.documentLibrary.insertDocument(MatterDocumentRecord(
+            matterID: matter.id,
+            blobID: blob.id,
+            displayName: "synthetic-payment.txt",
+            status: MatterDocumentStatus.ready.rawValue
+        ))
+        let output = try store.structuredOutputs.createOutput(
+            matterID: matter.id,
+            title: "Payment terms",
+            outputType: .documentQA,
+            status: .complete
+        )
+        let sourceSet = try store.documentSources.createSourceSet(
+            matterID: matter.id,
+            mode: .autoSource,
+            retrievalQuery: "synthetic payment date"
+        )
+        try store.documentSources.addOutputSources([DocumentOutputSourceRecord(
+            sourceSetID: sourceSet.id,
+            documentID: document.id,
+            chunkID: nil,
+            citationLabel: "S1",
+            locatorJSON: #"{"page":1}"#,
+            excerpt: "Payment was due March 3, 2025.",
+            rank: 0
+        )])
+        let originalText = "Payment was due March 3, 2025 [S1]."
+        let originalSupport = try PropositionSupportResult(
+            propositionID: "synthetic-payment-date",
+            status: .supported,
+            reasons: [],
+            evidence: [SupportEvidence(
+                sourceID: document.id,
+                sourceLabel: "S1",
+                locator: "page 1",
+                retainedExcerpt: "Payment was due March 3, 2025.",
+                verifierName: "ExistingUserRevalidationTests",
+                verifierVersion: "journey-4-v1"
+            )],
+            timestamp: Date(timeIntervalSinceReferenceDate: 4)
+        )
+        let original = try store.structuredOutputs.createVersion(
+            structuredOutputID: output.id,
+            contentMarkdown: originalText,
+            requiredSections: [],
+            presentSections: [],
+            missingSections: [],
+            verificationStatus: .allSupported,
+            verificationVersion: "journey-4-v1",
+            verificationResults: [originalSupport],
+            verificationDimensions: VerificationDimensionsMapper.dimensions(
+                verificationResults: [originalSupport]
+            ),
+            sourceSetID: sourceSet.id,
+            assuranceState: .propositionSupported,
+            outputStatus: .complete
+        )
+        let blockedActive = try store.structuredOutputs.createVersion(
+            structuredOutputID: output.id,
+            contentMarkdown: "Unsupported active successor.",
+            requiredSections: [],
+            presentSections: [],
+            missingSections: [],
+            parentVersionID: original.id,
+            repairReason: "synthetic_review_required_successor",
+            verificationStatus: .legacyUnverified,
+            assuranceState: .supportNeedsReview,
+            outputStatus: .needsReview
+        )
+        var exportedVersionID: String?
+        let controller = StructuredOutputController(
+            store: store,
+            runtimeClient: StubRuntimeClient { request in
+                .events([.event(request, 1, .generationCompleted)])
+            },
+            matterID: matter.id,
+            exportAction: { _, versionID, _ in
+                exportedVersionID = versionID
+                return FileManager.default.temporaryDirectory
+                    .appendingPathComponent("synthetic-selected-version.md")
+            }
+        )
+        let editedText = "Payment was due March 3, 2025 [S1].\n"
+
+        let export = controller.attemptExportOutput(
+            outputID: output.id,
+            versionID: original.id,
+            format: .markdown
+        )
+        XCTAssertTrue(export.didCommit)
+        XCTAssertEqual(exportedVersionID, original.id)
+
+        XCTAssertTrue(
+            controller.saveEditedVersion(
+                outputID: output.id,
+                baseVersionID: original.id,
+                contentMarkdown: editedText
+            ),
+            controller.message ?? ""
+        )
+
+        let versions = try store.structuredOutputs.fetchVersions(
+            structuredOutputID: output.id
+        )
+        XCTAssertEqual(versions.count, 3)
+        XCTAssertEqual(versions.first { $0.id == original.id }?.contentMarkdown, originalText)
+        XCTAssertEqual(
+            versions.first { $0.id == blockedActive.id }?.contentMarkdown,
+            "Unsupported active successor."
+        )
+        let refreshedOutput = try XCTUnwrap(
+            try store.structuredOutputs.fetchOutputs(matterID: matter.id).first
+        )
+        let edited = try XCTUnwrap(
+            versions.first { $0.id == refreshedOutput.activeVersionID }
+        )
+        XCTAssertNotEqual(edited.id, original.id)
+        XCTAssertEqual(edited.parentVersionID, original.id)
+        XCTAssertEqual(edited.contentMarkdown, editedText)
+        XCTAssertEqual(
+            edited.verificationStatus,
+            OutputVerificationStatus.allSupported.rawValue
+        )
+        XCTAssertFalse(edited.contentMarkdown == originalText)
+        let clonedPacket = try XCTUnwrap(
+            store.documentSources.fetchSourceSet(
+                structuredOutputVersionID: edited.id
+            )
+        )
+        XCTAssertNotEqual(clonedPacket.id, sourceSet.id)
+        XCTAssertEqual(
+            try store.documentSources.fetchSources(sourceSetID: clonedPacket.id)
+                .map(\.citationLabel),
+            ["S1"]
+        )
+    }
+
     func testACRRECOVERY005RetainedPacketReverificationPreservesLegacyVersion() throws {
         let store = try SupraStore.inMemory()
         let matter = try store.matters.createMatter(name: "Synthetic Retained Packet")

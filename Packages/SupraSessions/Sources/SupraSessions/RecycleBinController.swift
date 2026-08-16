@@ -39,6 +39,7 @@ public final class RecycleBinController: ObservableObject {
     @Published public private(set) var chats: [DeletedChat] = []
     @Published public private(set) var documents: [DeletedDocument] = []
     @Published public private(set) var deletionError: String?
+    @Published public private(set) var lastMutationFailure: UserMutationFailure?
 
     private let store: SupraStore
     private let storage: DocumentStorage
@@ -77,18 +78,78 @@ public final class RecycleBinController: ObservableObject {
     // MARK: - Restore
 
     public func restoreMatter(id: String) {
-        _ = try? store.matters.restoreMatter(id: id)
-        reload()
+        _ = attemptRestoreMatter(id: id)
     }
 
     public func restoreChat(id: String) {
-        _ = try? store.chats.restoreChat(id: id)
-        reload()
+        _ = attemptRestoreChat(id: id)
     }
 
     public func restoreDocument(id: String) {
-        _ = try? store.documentLibrary.restoreDocument(id: id)
-        reload()
+        _ = attemptRestoreDocument(id: id)
+    }
+
+    public func attemptRestoreMatter(id: String) -> UserMutationOutcome<String> {
+        attemptRestore(
+            id: id,
+            unavailableMessage: "The matter is no longer available in the Recycle Bin.",
+            action: { try store.matters.restoreMatter(id: id) }
+        )
+    }
+
+    public func attemptRestoreChat(id: String) -> UserMutationOutcome<String> {
+        attemptRestore(
+            id: id,
+            unavailableMessage: "The chat is no longer available in the Recycle Bin.",
+            action: { try store.chats.restoreChat(id: id) }
+        )
+    }
+
+    public func attemptRestoreDocument(id: String) -> UserMutationOutcome<String> {
+        attemptRestore(
+            id: id,
+            unavailableMessage: "The source is no longer available in the Recycle Bin.",
+            action: {
+                try store.documentLibrary.restoreDocument(id: id)
+                return true
+            }
+        )
+    }
+
+    private func attemptRestore(
+        id: String,
+        unavailableMessage: String,
+        action: () throws -> Bool
+    ) -> UserMutationOutcome<String> {
+        do {
+            guard try action() else {
+                return rejectRestore(
+                    unavailableMessage,
+                    recoveryActions: [.correctInput]
+                )
+            }
+            reload()
+            lastMutationFailure = nil
+            return .committed(id)
+        } catch {
+            reload()
+            return rejectRestore(
+                "Couldn’t restore the item. \(error.localizedDescription)"
+            )
+        }
+    }
+
+    private func rejectRestore(
+        _ message: String,
+        recoveryActions: Set<UserMutationRecoveryAction> = [.retry]
+    ) -> UserMutationOutcome<String> {
+        let failure = UserMutationFailure(
+            operation: .recycleRestore,
+            userMessage: message,
+            recoveryActions: recoveryActions
+        )
+        lastMutationFailure = failure
+        return .failed(failure)
     }
 
     // MARK: - Permanent delete

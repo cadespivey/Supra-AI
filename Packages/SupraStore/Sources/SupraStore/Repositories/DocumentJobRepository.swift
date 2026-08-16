@@ -6,6 +6,38 @@ import SupraCore
 /// (Milestone 3). Enforces a single active job with FIFO queue positions and
 /// supports relaunch reconciliation of interrupted jobs.
 public final class DocumentJobRepository: @unchecked Sendable {
+    public struct SelectedImportSource: Sendable {
+        public let sourceKey: String
+        public let sourceDisplayPath: String
+        public let sourceBookmark: Data?
+
+        public init(
+            sourceKey: String,
+            sourceDisplayPath: String,
+            sourceBookmark: Data?
+        ) {
+            self.sourceKey = sourceKey
+            self.sourceDisplayPath = sourceDisplayPath
+            self.sourceBookmark = sourceBookmark
+        }
+    }
+
+    public struct ImportEnqueueResult: Sendable {
+        public let batch: DocumentImportBatchRecord
+        public let sources: [DocumentImportSourceRecord]
+        public let job: DocumentProcessingJobRecord
+
+        public init(
+            batch: DocumentImportBatchRecord,
+            sources: [DocumentImportSourceRecord],
+            job: DocumentProcessingJobRecord
+        ) {
+            self.batch = batch
+            self.sources = sources
+            self.job = job
+        }
+    }
+
     private let writer: any DatabaseWriter
 
     public init(writer: any DatabaseWriter) {
@@ -13,6 +45,107 @@ public final class DocumentJobRepository: @unchecked Sendable {
     }
 
     // MARK: - Import batches
+
+    /// Creates the import batch, exact selected-source ledger, progress, and
+    /// FIFO job as one Store-owned transaction. A failure at any N+1 write
+    /// leaves none of the initiation rows behind.
+    public func enqueueImportAtomically(
+        matterID: String,
+        sourceRootDisplay: String? = nil,
+        targetFolderID: String? = nil,
+        targetFolderRequested: Bool = false,
+        selections: [SelectedImportSource]
+    ) throws -> ImportEnqueueResult {
+        guard !selections.isEmpty else {
+            throw DocumentJobRepositoryError.requiredFieldMissing("selections")
+        }
+        let normalizedSelections = try selections.map { selection in
+            let key = selection.sourceKey.trimmingCharacters(in: .whitespacesAndNewlines)
+            let path = selection.sourceDisplayPath.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !key.isEmpty else {
+                throw DocumentJobRepositoryError.requiredFieldMissing("source_key")
+            }
+            guard !path.isEmpty, !NSString(string: path).isAbsolutePath else {
+                throw DocumentJobRepositoryError.invalidSourceDisplayPath(
+                    selection.sourceDisplayPath
+                )
+            }
+            return SelectedImportSource(
+                sourceKey: key,
+                sourceDisplayPath: path,
+                sourceBookmark: selection.sourceBookmark
+            )
+        }
+        guard Set(normalizedSelections.map(\.sourceKey)).count == normalizedSelections.count else {
+            throw DocumentJobRepositoryError.sourceIdentityMismatch("duplicate selection key")
+        }
+
+        return try writer.write { db in
+            guard targetFolderRequested == (targetFolderID != nil) else {
+                throw DocumentJobRepositoryError.invalidTargetFolderIntent
+            }
+            if let targetFolderID {
+                guard let folder = try DocumentFolderRecord.fetchOne(db, key: targetFolderID),
+                      folder.matterID == matterID,
+                      folder.deletedAt == nil else {
+                    throw DocumentJobRepositoryError.targetFolderUnavailable(targetFolderID)
+                }
+            }
+
+            let now = Date()
+            let batch = DocumentImportBatchRecord(
+                matterID: matterID,
+                status: DocumentImportBatchStatus.processing.rawValue,
+                sourceRootDisplay: sourceRootDisplay,
+                targetFolderID: targetFolderID,
+                targetFolderRequested: targetFolderRequested,
+                discoveredCount: normalizedSelections.count,
+                importedCount: 0,
+                failedCount: 0,
+                startedAt: now,
+                createdAt: now,
+                updatedAt: now
+            )
+            try batch.insert(db)
+
+            let sourceRows = normalizedSelections.map { selection in
+                DocumentImportSourceRecord(
+                    importBatchID: batch.id,
+                    matterID: matterID,
+                    sourceKey: selection.sourceKey,
+                    sourceDisplayPath: selection.sourceDisplayPath,
+                    sourceBookmark: selection.sourceBookmark,
+                    state: DocumentImportSourceState.selected.rawValue,
+                    createdAt: now,
+                    updatedAt: now
+                )
+            }
+            for source in sourceRows {
+                try source.insert(db)
+            }
+
+            let maxPosition = try Int.fetchOne(
+                db,
+                sql: """
+                    SELECT MAX(queue_position) FROM document_processing_jobs
+                    WHERE status IN (?, ?)
+                    """,
+                arguments: [
+                    DocumentProcessingJobStatus.queued.rawValue,
+                    DocumentProcessingJobStatus.active.rawValue,
+                ]
+            ) ?? -1
+            let job = DocumentProcessingJobRecord(
+                matterID: matterID,
+                importBatchID: batch.id,
+                queuePosition: maxPosition + 1,
+                createdAt: now,
+                updatedAt: now
+            )
+            try job.insert(db)
+            return ImportEnqueueResult(batch: batch, sources: sourceRows, job: job)
+        }
+    }
 
     @discardableResult
     public func createBatch(
@@ -506,6 +639,31 @@ public final class DocumentJobRepository: @unchecked Sendable {
             next.updatedAt = now
             try next.update(db)
             return next
+        }
+    }
+
+    /// Atomically promotes one exact queued identity only when the global job
+    /// slot is idle. Selection policy remains with the caller; Store enforces
+    /// only status and single-owner compare-and-set semantics.
+    @discardableResult
+    public func activateQueuedJobIfIdle(id: String) throws -> DocumentProcessingJobRecord? {
+        try writer.write { db in
+            let activeCount = try Int.fetchOne(
+                db,
+                sql: "SELECT COUNT(*) FROM document_processing_jobs WHERE status = ?",
+                arguments: [DocumentProcessingJobStatus.active.rawValue]
+            ) ?? 0
+            guard activeCount == 0,
+                  var selected = try DocumentProcessingJobRecord.fetchOne(db, key: id),
+                  selected.status == DocumentProcessingJobStatus.queued.rawValue else {
+                return nil
+            }
+            let now = Date()
+            selected.status = DocumentProcessingJobStatus.active.rawValue
+            selected.startedAt = selected.startedAt ?? now
+            selected.updatedAt = now
+            try selected.update(db)
+            return selected
         }
     }
 

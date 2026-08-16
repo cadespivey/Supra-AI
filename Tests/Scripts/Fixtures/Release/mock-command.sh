@@ -30,6 +30,10 @@ case "$name" in
   release-gate)
     [[ "${MOCK_RELEASE_GATE_FAIL:-0}" != "1" ]]
     ;;
+  scope-gate)
+    [[ "${1:-}" == "--require-owner-approval" ]]
+    [[ "${MOCK_SCOPE_GATE_FAIL:-0}" != "1" ]]
+    ;;
   website-gate)
     printf 'website-gate-env SUPRA_SKIP_DEP_AUDIT=%s\n' "${SUPRA_SKIP_DEP_AUDIT:-unset}" >>"$log"
     [[ "${MOCK_WEBSITE_FAIL:-0}" != "1" ]]

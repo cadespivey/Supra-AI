@@ -37,64 +37,6 @@ public enum ContentBoundModelLoadError: Error, LocalizedError, Equatable, Sendab
     }
 }
 
-public enum CorpusAnalysisModelPinError: Error, LocalizedError, Equatable, Sendable {
-    case cancelled
-    case modelRegistryUnavailable
-    case modelUnavailable(String)
-    case modelNotManaged(String)
-    case verificationFailed(String)
-
-    public var errorDescription: String? {
-        switch self {
-        case .cancelled:
-            "Model verification was cancelled."
-        case .modelRegistryUnavailable:
-            "The registered model library could not be read."
-        case .modelUnavailable:
-            "The selected local model is no longer registered."
-        case .modelNotManaged:
-            "Review creation requires a model downloaded and managed by Supra AI."
-        case .verificationFailed:
-            "The selected app-managed model did not pass fresh content verification."
-        }
-    }
-}
-
-/// Executes the expensive exact-tree and byte inspection used to create a
-/// durable corpus-analysis pin. The executor is deliberately independent of
-/// runtime loading and runs outside the MainActor.
-struct ManagedModelPinningExecutor: Sendable {
-    typealias Inspect = @Sendable (URL, URL) throws -> RuntimeModelContentBinding
-
-    let inspect: Inspect
-
-    static let live = ManagedModelPinningExecutor { modelDirectory, managedRoot in
-        try SignedReleaseModelAuthorization.inspectContentBinding(
-            modelDirectory: modelDirectory,
-            managedRoot: managedRoot
-        )
-    }
-
-    func run(
-        modelDirectory: URL,
-        managedRoot: URL
-    ) async throws -> RuntimeModelContentBinding {
-        try Task.checkCancellation()
-        let inspect = inspect
-        let worker = Task.detached(priority: .userInitiated) {
-            try Task.checkCancellation()
-            let binding = try inspect(modelDirectory, managedRoot)
-            try Task.checkCancellation()
-            return binding
-        }
-        return try await withTaskCancellationHandler {
-            try await worker.value
-        } onCancel: {
-            worker.cancel()
-        }
-    }
-}
-
 struct ContentBoundAuthorizationExecutor: Sendable {
     struct PreparedLoad: @unchecked Sendable {
         var authorization: SignedReleaseModelAuthorization
@@ -153,7 +95,7 @@ struct ContentBoundAuthorizationExecutor: Sendable {
 ///
 /// All state is published on the main actor for SwiftUI. The orchestration is
 /// kept here (rather than in the app target) so it can be unit-tested against a
-/// stub `RuntimeClientProtocol` and an in-memory `SupraStore`.
+/// stub `ModelExecutionGateway` and an in-memory `SupraStore`.
 @MainActor
 public final class ModelLibrary: ObservableObject {
     public enum LoadState: Equatable, Sendable {
@@ -167,58 +109,52 @@ public final class ModelLibrary: ObservableObject {
     @Published public private(set) var loadState: LoadState = .idle
     @Published public private(set) var roleAssignments: ModelRoleAssignments
     /// A user-pinned model that overrides per-route Autoselect for chat generation.
-    /// `nil` means Autoselect — resolve each request via the Models-tab role
+    /// `nil` means Autoselect — resolve each request via the AI Setup role
     /// preference. App-wide and persisted across launches.
     @Published public private(set) var forcedModelID: ModelID?
     /// Stable hardware snapshot used for fit presentation during this library's
     /// lifetime. Tests and doubly gated app fixtures may inject an exact profile.
     public let hardwareProfile: MacHardwareProfile
     static let forcedChatModelSettingsKey = "chat.forced_model_id"
-    private static let runtimeReservedMessage = "Case File Review is using the local runtime. Try this model change after the Review pauses or finishes."
-
     private let store: SupraStore
-    private let runtimeClient: any RuntimeClientProtocol
+    private let modelExecutionGateway: any ModelExecutionGateway
+    private let modelExecutionCoordinator: ModelExecutionCoordinator?
+    private let runtimeResidencyCoordinator: RuntimeResidencyCoordinator?
     private let managedModelRoots: [URL]
     private let authorizationExecutor: ContentBoundAuthorizationExecutor
-    private let modelPinningExecutor: ManagedModelPinningExecutor
     private var hasPersistedRoleAssignments: Bool
-    /// Whether the runtime is mid-generation. Speculative pre-warms consult this so
-    /// they never evict the model out from under an in-flight generation; wired by the
-    /// app to the runtime status (defaults to "not generating" for tests/headless).
-    public var isRuntimeGenerating: () -> Bool = { false }
-    /// True while process-wide admission is waiting for, owned by, or recovering
-    /// from exclusive Review work. Speculative and manual model mutation must not
-    /// race that owner even when the XPC service is idle between partitions.
-    public var isRuntimeReserved: () -> Bool = { false }
 
     public convenience init(
         store: SupraStore,
-        runtimeClient: any RuntimeClientProtocol,
+        runtimeClient: any ModelExecutionGateway,
         managedModelRoots: [URL] = [ManagedModelStorage.modelsDirectory()],
-        hardwareProfile: MacHardwareProfile? = nil
+        hardwareProfile: MacHardwareProfile? = nil,
+        runtimeResidencyCoordinator: RuntimeResidencyCoordinator? = nil
     ) {
         self.init(
             store: store,
             runtimeClient: runtimeClient,
             managedModelRoots: managedModelRoots,
             authorizationExecutor: .live,
-            hardwareProfile: hardwareProfile
+            hardwareProfile: hardwareProfile,
+            runtimeResidencyCoordinator: runtimeResidencyCoordinator
         )
     }
 
     init(
         store: SupraStore,
-        runtimeClient: any RuntimeClientProtocol,
+        runtimeClient: any ModelExecutionGateway,
         managedModelRoots: [URL],
         authorizationExecutor: ContentBoundAuthorizationExecutor,
-        modelPinningExecutor: ManagedModelPinningExecutor = .live,
-        hardwareProfile: MacHardwareProfile? = nil
+        hardwareProfile: MacHardwareProfile? = nil,
+        runtimeResidencyCoordinator: RuntimeResidencyCoordinator? = nil
     ) {
         self.store = store
-        self.runtimeClient = runtimeClient
+        self.modelExecutionGateway = runtimeClient
+        self.modelExecutionCoordinator = runtimeClient as? ModelExecutionCoordinator
+        self.runtimeResidencyCoordinator = runtimeResidencyCoordinator
         self.managedModelRoots = managedModelRoots
         self.authorizationExecutor = authorizationExecutor
-        self.modelPinningExecutor = modelPinningExecutor
         self.hardwareProfile = hardwareProfile ?? MacHardwareProfileProbe.current(
             modelsDirectory: managedModelRoots.first ?? ManagedModelStorage.modelsDirectory()
         )
@@ -306,6 +242,18 @@ public final class ModelLibrary: ObservableObject {
         for role: ModelRole,
         configuration: LegalModelConfiguration = .fromEnvironment()
     ) async -> Result<ModelID, ModelRouteResolutionIssue> {
+        await ensureLoadedRoutedModelID(
+            for: role,
+            configuration: configuration,
+            runtimeGateway: modelExecutionGateway
+        )
+    }
+
+    private func ensureLoadedRoutedModelID(
+        for role: ModelRole,
+        configuration: LegalModelConfiguration,
+        runtimeGateway: any ModelExecutionGateway
+    ) async -> Result<ModelID, ModelRouteResolutionIssue> {
         guard !Task.isCancelled else { return .failure(.cancelled(role: role)) }
         refresh()
         let resolution = resolvedModelWithIssue(for: role, configuration: configuration)
@@ -319,13 +267,14 @@ public final class ModelLibrary: ObservableObject {
             return .failure(.assignedModelMissing(role: role, modelID: preferred.id))
         }
         guard await settleInFlightLoad() else { return .failure(.cancelled(role: role)) }
-        if loadedModelID?.rawValue == uuid, await runtimeConfirmsLoaded(uuid) {
+        if loadedModelID?.rawValue == uuid,
+           await runtimeConfirmsLoaded(uuid, runtimeGateway: runtimeGateway) {
             guard !Task.isCancelled else { return .failure(.cancelled(role: role)) }
             return .success(ModelID(uuid))
         }
 
         guard !Task.isCancelled else { return .failure(.cancelled(role: role)) }
-        await activateAndLoad(modelID: preferred.id)
+        await activateAndLoad(modelID: preferred.id, runtimeGateway: runtimeGateway)
         guard !Task.isCancelled else { return .failure(.cancelled(role: role)) }
         if loadedModelID?.rawValue == uuid {
             return .success(ModelID(uuid))
@@ -367,10 +316,11 @@ public final class ModelLibrary: ObservableObject {
     /// message right after a model switch) doesn't wait on the multi-second load. A
     /// no-op when that model is already loaded, or a load is already in flight.
     public func prewarmChatModel(configuration: LegalModelConfiguration = .fromEnvironment()) {
-        if case .loading = loadState { return }
-        if isRuntimeGenerating() { return }
-        if isRuntimeReserved() { return }
-        Task { _ = await ensureLoadedChatModelID(for: .legalReasoning, configuration: configuration) }
+        schedulePrewarm(
+            role: .legalReasoning,
+            configuration: configuration,
+            honorsForcedChatSelection: true
+        )
     }
 
     /// Fire-and-forget warm of a role's assigned model (drafting, high-quality
@@ -378,10 +328,11 @@ public final class ModelLibrary: ObservableObject {
     /// feature's screen opens so the load hides behind the user's setup time. Ignores
     /// the chat forced-pin (that's chat-only). No-op while a load is in flight.
     public func prewarm(role: ModelRole, configuration: LegalModelConfiguration = .fromEnvironment()) {
-        if case .loading = loadState { return }
-        if isRuntimeGenerating() { return }
-        if isRuntimeReserved() { return }
-        Task { _ = await ensureLoadedRoutedModelID(for: role, configuration: configuration) }
+        schedulePrewarm(
+            role: role,
+            configuration: configuration,
+            honorsForcedChatSelection: false
+        )
     }
 
     /// Chat model resolution honoring the user's forced-model pin: if a model is
@@ -391,22 +342,43 @@ public final class ModelLibrary: ObservableObject {
         for role: ModelRole,
         configuration: LegalModelConfiguration = .fromEnvironment()
     ) async -> Result<ModelID, ModelRouteResolutionIssue> {
+        await ensureLoadedChatModelID(
+            for: role,
+            configuration: configuration,
+            runtimeGateway: modelExecutionGateway
+        )
+    }
+
+    private func ensureLoadedChatModelID(
+        for role: ModelRole,
+        configuration: LegalModelConfiguration,
+        runtimeGateway: any ModelExecutionGateway
+    ) async -> Result<ModelID, ModelRouteResolutionIssue> {
         guard !Task.isCancelled else { return .failure(.cancelled(role: role)) }
         guard let forced = forcedModelID else {
-            return await ensureLoadedRoutedModelID(for: role, configuration: configuration)
+            return await ensureLoadedRoutedModelID(
+                for: role,
+                configuration: configuration,
+                runtimeGateway: runtimeGateway
+            )
         }
         refresh()
         guard let model = models.first(where: { $0.id == forced.rawValue.uuidString }) else {
             setForcedModel(nil)
-            return await ensureLoadedRoutedModelID(for: role, configuration: configuration)
+            return await ensureLoadedRoutedModelID(
+                for: role,
+                configuration: configuration,
+                runtimeGateway: runtimeGateway
+            )
         }
         guard await settleInFlightLoad() else { return .failure(.cancelled(role: role)) }
-        if loadedModelID?.rawValue == forced.rawValue, await runtimeConfirmsLoaded(forced.rawValue) {
+        if loadedModelID?.rawValue == forced.rawValue,
+           await runtimeConfirmsLoaded(forced.rawValue, runtimeGateway: runtimeGateway) {
             guard !Task.isCancelled else { return .failure(.cancelled(role: role)) }
             return .success(forced)
         }
         guard !Task.isCancelled else { return .failure(.cancelled(role: role)) }
-        await activateAndLoad(modelID: model.id)
+        await activateAndLoad(modelID: model.id, runtimeGateway: runtimeGateway)
         guard !Task.isCancelled else { return .failure(.cancelled(role: role)) }
         if loadedModelID?.rawValue == forced.rawValue {
             return .success(forced)
@@ -418,6 +390,156 @@ public final class ModelLibrary: ObservableObject {
             message = "The runtime did not confirm that the selected model is loaded."
         }
         return .failure(.assignedModelLoadFailed(role: role, displayName: model.displayName, message: message))
+    }
+
+    private func schedulePrewarm(
+        role: ModelRole,
+        configuration: LegalModelConfiguration,
+        honorsForcedChatSelection: Bool
+    ) {
+        guard let runtimeResidencyCoordinator else {
+            scheduleExecutionPrewarm(
+                role: role,
+                configuration: configuration,
+                honorsForcedChatSelection: honorsForcedChatSelection
+            )
+            return
+        }
+        guard let target = prewarmTarget(
+            role: role,
+            configuration: configuration,
+            honorsForcedChatSelection: honorsForcedChatSelection
+        ), loadedModelID?.rawValue.uuidString.lowercased() != target.id.lowercased() else { return }
+
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let request = try await self.prewarmResidencyRequest(for: target)
+                let plan = try await runtimeResidencyCoordinator.requestPrewarm(request)
+                guard plan.disposition == .admitted
+                        || plan.disposition == .admittedAfterEviction else { return }
+                self.scheduleExecutionPrewarm(
+                    role: role,
+                    configuration: configuration,
+                    honorsForcedChatSelection: honorsForcedChatSelection
+                )
+            } catch {
+                // Speculative work fails closed and never changes user-visible
+                // model state when exact resource facts are unavailable.
+                return
+            }
+        }
+    }
+
+    private func scheduleExecutionPrewarm(
+        role: ModelRole,
+        configuration: LegalModelConfiguration,
+        honorsForcedChatSelection: Bool
+    ) {
+        guard let coordinator = modelExecutionCoordinator else {
+            Task { [weak self] in
+                guard let self else { return }
+                if honorsForcedChatSelection {
+                    _ = await ensureLoadedChatModelID(for: role, configuration: configuration)
+                } else {
+                    _ = await ensureLoadedRoutedModelID(for: role, configuration: configuration)
+                }
+            }
+            return
+        }
+
+        let supersessionKey = honorsForcedChatSelection
+            ? "chat-model-prewarm"
+            : "role-model-prewarm-\(role.rawValue)"
+        let request = ModelExecutionRequest(
+            taskID: ModelExecutionTaskID(rawValue: UUID().uuidString.lowercased()),
+            operation: ModelExecutionOperation.prewarm(supersessionKey: supersessionKey),
+            priority: .speculative,
+            modelBinding: nil,
+            duplicateKey: nil
+        )
+        Task { [weak self] in
+            guard let self else { return }
+            _ = try? await coordinator.execute(request) { permit in
+                await permit.markRunning()
+                if honorsForcedChatSelection {
+                    _ = await self.ensureLoadedChatModelID(
+                        for: role,
+                        configuration: configuration,
+                        runtimeGateway: permit
+                    )
+                } else {
+                    _ = await self.ensureLoadedRoutedModelID(
+                        for: role,
+                        configuration: configuration,
+                        runtimeGateway: permit
+                    )
+                }
+            }
+        }
+    }
+
+    private func prewarmTarget(
+        role: ModelRole,
+        configuration: LegalModelConfiguration,
+        honorsForcedChatSelection: Bool
+    ) -> ModelSummary? {
+        if honorsForcedChatSelection,
+           let forcedModelID,
+           let forced = models.first(where: {
+               $0.id == forcedModelID.rawValue.uuidString
+           }) {
+            return forced
+        }
+        return resolvedModel(for: role, configuration: configuration)
+    }
+
+    private func prewarmResidencyRequest(
+        for model: ModelSummary
+    ) async throws -> RuntimePrewarmRequest {
+        guard let modelID = model.modelID,
+              let managedRoot = managedModelRoots.first(where: {
+                  ManagedModelStorage.isManaged(path: model.path, roots: [$0])
+              }) else {
+            throw RuntimeResidencyError.invalidRequest
+        }
+        let modelDirectory = URL(fileURLWithPath: model.path, isDirectory: true)
+        return try await Task.detached(priority: .utility) {
+            let binding = try SignedReleaseModelAuthorization.inspectContentBinding(
+                modelDirectory: modelDirectory,
+                managedRoot: managedRoot
+            )
+            let configData = try Data(
+                contentsOf: modelDirectory.appendingPathComponent("config.json"),
+                options: [.mappedIfSafe]
+            )
+            let profile = try RuntimeModelResourceProfileBuilder(
+                calibration: .productionChat
+            ).buildChatProfile(
+                profileID: "prewarm-\(model.id.lowercased())",
+                modelID: modelID,
+                binding: binding,
+                configData: configData
+            )
+            let residentBytes = profile.weightBytes.addingReportingOverflow(
+                profile.nonWeightOverheadBytes
+            )
+            guard !residentBytes.overflow else {
+                throw RuntimeResidencyError.arithmeticOverflow
+            }
+            return RuntimePrewarmRequest(
+                wireID: "prewarm-\(model.id.lowercased())-\(binding.revision)",
+                artifact: RuntimeResidentArtifact(
+                    modelID: model.id.lowercased(),
+                    revision: binding.revision,
+                    kind: .chat,
+                    estimatedBytes: residentBytes.partialValue,
+                    isActive: false,
+                    lastUseSequence: 0
+                ),
+                workClass: .speculative
+            )
+        }.value
     }
 
     /// A suggested model for a role given what is currently registered: the plan's
@@ -487,7 +609,7 @@ public final class ModelLibrary: ObservableObject {
         hasPersistedRoleAssignments = true
         persistRoleAssignments()
         // Auto-load the just-assigned model so the user doesn't have to make a second
-        // trip to the Models tab to press "Load". We only auto-load when the runtime
+        // trip to AI Setup to press "Load". We only auto-load when the runtime
         // is idle or failed (never interrupt an in-flight load, and never silently
         // swap a model out from under an active generation): the common case is a
         // first-run user picking their model in Settings and expecting it to be ready.
@@ -502,35 +624,8 @@ public final class ModelLibrary: ObservableObject {
 
     /// Reloads the registered models from the store.
     public func refresh() {
-        models = (try? store.models.fetchModels())?.map { record in
-            ModelSummary(
-                record: record,
-                managedRepositoryID: managedRepositoryID(for: record)
-            )
-        } ?? []
+        models = (try? store.models.fetchModels())?.map(ModelSummary.init(record:)) ?? []
         bootstrapRoleAssignmentsIfNeeded(configuration: .fromEnvironment())
-    }
-
-    /// Reads only validated manifest structure for managed-model fit metadata.
-    /// Exact tree and byte verification remains the later pinning/load boundary.
-    private func managedRepositoryID(for record: ModelRecord) -> String? {
-        guard record.bookmarkData == nil else { return nil }
-        let directory = URL(fileURLWithPath: record.path, isDirectory: true)
-            .standardizedFileURL
-            .resolvingSymlinksInPath()
-        guard managedModelRoots.contains(where: { root in
-            let standardizedRoot = root.standardizedFileURL.resolvingSymlinksInPath()
-            return directory.path != standardizedRoot.path
-                && ManagedModelStorage.isManaged(
-                    path: directory.path,
-                    roots: [standardizedRoot]
-                )
-        }) else {
-            return nil
-        }
-        return try? ManagedModelStorage.readManifest(
-            at: ManagedModelStorage.manifestURL(in: directory)
-        ).repositoryID
     }
 
     /// Reconciles the published load state with a model the runtime already holds
@@ -574,9 +669,6 @@ public final class ModelLibrary: ObservableObject {
     /// assignments pointing at it are cleared so no "Missing model" ghost remains.
     @discardableResult
     public func deleteModel(modelID: String) async -> DeleteModelResult {
-        guard !isRuntimeReserved() else {
-            return .blocked(message: Self.runtimeReservedMessage)
-        }
         if case let .loading(id) = loadState, id == modelID {
             return .blocked(message: "This model is still loading. Wait for it to finish before deleting it.")
         }
@@ -587,7 +679,7 @@ public final class ModelLibrary: ObservableObject {
         // Evict it from the runtime first if it's the one currently loaded.
         if loadedModelID?.rawValue.uuidString == modelID {
             do {
-                _ = try await runtimeClient.unloadModel()
+                _ = try await modelExecutionGateway.unloadModel()
             } catch {
                 return .blocked(message: error.localizedDescription)
             }
@@ -632,7 +724,7 @@ public final class ModelLibrary: ObservableObject {
         ManagedModelStorage.isManaged(path: model.path, roots: managedModelRoots)
     }
 
-    /// Waits out a load another caller already started (a prewarm, the Models tab,
+    /// Waits out a load another caller already started (a prewarm, AI Setup,
     /// a concurrent feature) instead of failing because the runtime is busy. Every
     /// generation surface funnels through the ensure functions, and the user's
     /// expectation is "clicking Generate loads what it needs" — so an in-flight
@@ -662,77 +754,16 @@ public final class ModelLibrary: ObservableObject {
     /// with the runtime's "No matching runtime model is loaded." A status probe is
     /// a millisecond RPC next to a multi-second generate; an unreachable service
     /// reports unconfirmed, and the caller falls through to a real load.
-    private func runtimeConfirmsLoaded(_ uuid: UUID) async -> Bool {
-        guard let status = try? await runtimeClient.runtimeStatus() else { return false }
+    private func runtimeConfirmsLoaded(
+        _ uuid: UUID,
+        runtimeGateway: any ModelExecutionGateway
+    ) async -> Bool {
+        guard let status = try? await runtimeGateway.runtimeStatus() else { return false }
         if status.loadedModelID?.rawValue == uuid { return true }
-        // The cache lied — resynchronize it so status surfaces (Models tab, chat
+        // The cache lied — resynchronize it so status surfaces (AI Setup, chat
         // footer) stop reporting a model the runtime does not hold.
         if case .loaded = loadState { loadState = .idle }
         return false
-    }
-
-    /// Creates a fresh, durable pin for exactly the registered app-managed model
-    /// selected by the caller. This path never resolves a role, falls back to a
-    /// preferred model, or contacts the runtime. Every call re-inspects the
-    /// manifest, exclusive tree, and declared artifact bytes off the MainActor.
-    public func makeCorpusAnalysisPinnedModel(
-        modelID: ModelID
-    ) async throws -> CorpusAnalysisPinnedModel {
-        guard !Task.isCancelled else {
-            throw CorpusAnalysisModelPinError.cancelled
-        }
-
-        let registeredID = modelID.rawValue.uuidString
-        let record: ModelRecord
-        do {
-            guard let registered = try store.models.fetchModel(id: registeredID) else {
-                throw CorpusAnalysisModelPinError.modelUnavailable(registeredID)
-            }
-            record = registered
-        } catch let error as CorpusAnalysisModelPinError {
-            throw error
-        } catch {
-            throw CorpusAnalysisModelPinError.modelRegistryUnavailable
-        }
-
-        let modelDirectory = URL(
-            fileURLWithPath: record.path,
-            isDirectory: true
-        ).standardizedFileURL
-        guard record.bookmarkData == nil,
-              let managedRoot = managedModelRoots.first(where: { root in
-                  let standardizedRoot = root.standardizedFileURL
-                  return modelDirectory.path != standardizedRoot.path
-                      && ManagedModelStorage.isManaged(
-                          path: modelDirectory.path,
-                          roots: [standardizedRoot]
-                      )
-              }) else {
-            throw CorpusAnalysisModelPinError.modelNotManaged(registeredID)
-        }
-
-        do {
-            let binding = try await modelPinningExecutor.run(
-                modelDirectory: modelDirectory,
-                managedRoot: managedRoot.standardizedFileURL
-            )
-            try Task.checkCancellation()
-            let pinnedModel = CorpusAnalysisPinnedModel(
-                modelRepository: binding.repositoryID,
-                modelRevision: binding.revision,
-                contentBindingAlgorithm: binding.algorithm,
-                contentBindingSchemaVersion: binding.schemaVersion,
-                artifactFingerprintSHA256: binding.fingerprintSHA256
-            )
-            try pinnedModel.validate()
-            return pinnedModel
-        } catch is CancellationError {
-            throw CorpusAnalysisModelPinError.cancelled
-        } catch let error as CorpusAnalysisModelPinError {
-            throw error
-        } catch {
-            throw CorpusAnalysisModelPinError.verificationFailed(registeredID)
-        }
     }
 
     /// Loads the one app-managed model whose manifest identity and independently
@@ -841,7 +872,7 @@ public final class ModelLibrary: ObservableObject {
             loadState = .loading(modelID: selected.candidate.record.id)
             ownedLoadingModelID = selected.candidate.record.id
 
-            let response = try await runtimeClient.loadModel(selected.preparedLoad.request)
+            let response = try await modelExecutionGateway.loadModel(selected.preparedLoad.request)
             guard response.status == .loaded else {
                 throw ContentBoundModelLoadError.runtimeRejected(
                     Self.failureMessage(response.error)
@@ -894,11 +925,17 @@ public final class ModelLibrary: ObservableObject {
 
     /// Marks the given model active in the store and loads it into the runtime service.
     public func activateAndLoad(modelID modelIDString: String) async {
+        await activateAndLoad(
+            modelID: modelIDString,
+            runtimeGateway: modelExecutionGateway
+        )
+    }
+
+    private func activateAndLoad(
+        modelID modelIDString: String,
+        runtimeGateway: any ModelExecutionGateway
+    ) async {
         guard !Task.isCancelled else { return }
-        guard !isRuntimeReserved() else {
-            loadState = .failed(message: Self.runtimeReservedMessage)
-            return
-        }
         // Ignore overlapping loads so concurrent taps cannot leave the published
         // load state and the runtime out of sync.
         if case .loading = loadState { return }
@@ -943,6 +980,7 @@ public final class ModelLibrary: ObservableObject {
         // returns (the multi-GB read happens service-side during that call).
         var scopedAccess: SecurityScopedModelAccess?
         var scopedAccessTransferred = false
+        var preparedManagedLoad: ContentBoundAuthorizationExecutor.PreparedLoad?
         defer {
             if !scopedAccessTransferred {
                 scopedAccess?.release()
@@ -958,14 +996,14 @@ public final class ModelLibrary: ObservableObject {
             scopedAccess = access
 
             guard access.hasAccess else {
-                loadState = .failed(message: "Could not access the model folder. Re-add it from the Models tab.")
+                loadState = .failed(message: "Could not access the model folder. Re-add it from AI Setup.")
                 return
             }
             // Staleness reported to the original app signer is authoritative,
             // unlike the signer-induced stale bit seen only in the XPC service.
             // Never silently reauthorize a replacement at the same path.
             guard !access.isStale else {
-                loadState = .failed(message: "The model folder moved or changed. Re-add it from the Models tab.")
+                loadState = .failed(message: "The model folder moved or changed. Re-add it from AI Setup.")
                 return
             }
             guard let authorization = access.makeTransferableAuthorization() else {
@@ -978,20 +1016,33 @@ public final class ModelLibrary: ObservableObject {
         } else if let managedRoot = managedModelRoots.first(where: {
             ManagedModelStorage.isManaged(path: record.path, roots: [$0])
         }) {
-            // App-downloaded model: establish an app-held scope before minting
-            // the plain bookmark. A path or unscoped bookmark is not authority.
-            let access = SecurityScopedModelAccess(
-                url: URL(fileURLWithPath: record.path, isDirectory: true)
-            )
-            scopedAccess = access
-            guard access.hasAccess,
-                  let authorization = access.makeTransferableAuthorization() else {
-                loadState = .failed(message: "The downloaded model files could not be found. Re-download the model.")
+            // Managed installs already carry a revision-pinned manifest. Build
+            // the ordinary AI Setup request through the same byte-verified
+            // authorization used by protected loads; a managed model never
+            // falls back to UUID/path-only runtime authority.
+            let modelDirectory = URL(fileURLWithPath: record.path, isDirectory: true)
+            do {
+                let inspectedBinding = try await Task.detached(priority: .userInitiated) {
+                    try SignedReleaseModelAuthorization.inspectContentBinding(
+                        modelDirectory: modelDirectory,
+                        managedRoot: managedRoot
+                    )
+                }.value
+                let prepared = try await authorizationExecutor.prepare(
+                    modelDirectory: modelDirectory,
+                    managedRoot: managedRoot,
+                    expectedSHA256: inspectedBinding.fingerprintSHA256,
+                    modelID: ModelID(uuid),
+                    displayName: record.displayName
+                )
+                preparedManagedLoad = prepared
+                modelBookmark = prepared.request.modelBookmark
+                directoryIdentity = prepared.request.modelDirectoryIdentity
+                managedRootPath = prepared.request.managedRootPath
+            } catch {
+                loadState = .failed(message: error.localizedDescription)
                 return
             }
-            modelBookmark = authorization.bookmark
-            directoryIdentity = authorization.directoryIdentity
-            managedRootPath = managedRoot.path
         } else {
             // Raw paths are never authority at the service boundary. Preserve the
             // explicit failure path so the user is told to re-add the folder.
@@ -1000,7 +1051,7 @@ public final class ModelLibrary: ObservableObject {
             directoryIdentity = nil
         }
 
-        let request = LoadModelRequest(
+        let request = preparedManagedLoad?.request ?? LoadModelRequest(
             modelID: ModelID(uuid),
             modelPath: record.path,
             displayName: record.displayName,
@@ -1010,12 +1061,13 @@ public final class ModelLibrary: ObservableObject {
         )
 
         let retainedScopedAccess = scopedAccess
+        let retainedManagedAuthorization = preparedManagedLoad?.authorization
         scopedAccessTransferred = true
-        Task { @MainActor [weak self, retainedScopedAccess] in
+        Task { @MainActor [weak self, retainedScopedAccess, retainedManagedAuthorization] in
             defer { retainedScopedAccess?.release() }
             guard let self else { return }
             do {
-                let response = try await runtimeClient.loadModel(request)
+                let response = try await runtimeGateway.loadModel(request)
                 switch response.status {
                 case .loaded:
                     loadState = .loaded(modelID: record.id)
@@ -1030,6 +1082,7 @@ public final class ModelLibrary: ObservableObject {
             } catch {
                 loadState = .failed(message: error.localizedDescription)
             }
+            withExtendedLifetime(retainedManagedAuthorization) {}
         }
         _ = await settleInFlightLoad()
     }

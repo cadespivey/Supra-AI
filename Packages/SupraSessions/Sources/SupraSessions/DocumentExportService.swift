@@ -13,7 +13,7 @@ public final class DocumentExportService: @unchecked Sendable {
     private let store: SupraStore
     private let storage: DocumentStorage
     private let fileWriter: DurableFileWriter
-    private let completionRecorder: CompletionRecorder
+    private let completionRecorder: CompletionRecorder?
 
     public init(
         store: SupraStore,
@@ -24,28 +24,34 @@ public final class DocumentExportService: @unchecked Sendable {
         self.store = store
         self.storage = storage
         self.fileWriter = fileWriter
-        self.completionRecorder = completionRecorder ?? { export, auditEvent in
-            try store.documentSources.recordExportCompletion(export, auditEvent: auditEvent)
-        }
+        self.completionRecorder = completionRecorder
     }
 
     public enum ExportError: Error, LocalizedError {
         case outputNotFound
         case noActiveVersion
+        case selectedVersionUnavailable
         case assuranceBlocked(String)
         case completionRecordingFailed(String)
         case partialFailure(recording: String, compensation: String)
+        case publicationRecoveryRequired(String)
+        case filenameAllocationFailed
 
         public var errorDescription: String? {
             switch self {
             case .outputNotFound: "The output to export was not found."
             case .noActiveVersion: "The output has no active version to export."
+            case .selectedVersionUnavailable: "The selected output version is unavailable."
             case let .assuranceBlocked(state):
                 "The output cannot be exported while its assurance state is \(state)."
             case let .completionRecordingFailed(detail):
                 "The export was not recorded and the file change was rolled back: \(detail)"
             case let .partialFailure(recording, compensation):
                 "The export file was installed, but recording failed (\(recording)) and rollback also failed (\(compensation))."
+            case let .publicationRecoveryRequired(detail):
+                "The export reached an uncertain publication state and requires recovery: \(detail)"
+            case .filenameAllocationFailed:
+                "A unique export filename could not be allocated."
             }
         }
     }
@@ -53,19 +59,26 @@ public final class DocumentExportService: @unchecked Sendable {
     private static let reviewWarning = "Machine-generated from your local documents. Verify every citation against the source before relying on or sharing this."
 
     @discardableResult
-    public func export(matterID: String, structuredOutputID: String, format: DocumentExportFormat) throws -> URL {
+    public func export(
+        matterID: String,
+        structuredOutputID: String,
+        structuredOutputVersionID: String? = nil,
+        format: DocumentExportFormat
+    ) throws -> URL {
         guard let output = try store.structuredOutputs.fetchOutputs(matterID: matterID).first(where: { $0.id == structuredOutputID }) else {
             throw ExportError.outputNotFound
         }
         let versions = try store.structuredOutputs.fetchVersions(structuredOutputID: structuredOutputID)
-        guard let activeVersionID = output.activeVersionID,
-              let activeVersion = versions.first(where: { $0.id == activeVersionID }) else {
+        guard let requestedVersionID = structuredOutputVersionID ?? output.activeVersionID else {
             throw ExportError.noActiveVersion
         }
-        let verificationStatus = OutputVerificationStatus(rawValue: activeVersion.verificationStatus)
+        guard let selectedVersion = versions.first(where: { $0.id == requestedVersionID }) else {
+            throw ExportError.selectedVersionUnavailable
+        }
+        let verificationStatus = OutputVerificationStatus(rawValue: selectedVersion.verificationStatus)
             ?? .legacyUnverified
         let assurance = OutputAssurancePresentation.state(
-            rawValue: activeVersion.assuranceState,
+            rawValue: selectedVersion.assuranceState,
             verificationStatus: verificationStatus
         )
         guard verificationStatus == .allSupported,
@@ -73,11 +86,11 @@ public final class DocumentExportService: @unchecked Sendable {
             throw ExportError.assuranceBlocked(OutputAssurancePresentation.text(for: assurance))
         }
         if output.outputType == StructuredOutputType.documentExhaustiveList.rawValue {
-            guard let rawAssurance = activeVersion.assuranceState,
+            guard let rawAssurance = selectedVersion.assuranceState,
                   let exactAssurance = OutputAssuranceState(rawValue: rawAssurance),
                   let proofRun = try store.corpusAnalysis.fetchExactExportRun(
                       matterID: matterID,
-                      structuredOutputVersionID: activeVersion.id
+                      structuredOutputVersionID: selectedVersion.id
                   ),
                   proofRun.assuranceState == exactAssurance.rawValue else {
                 throw ExportError.assuranceBlocked(
@@ -86,62 +99,145 @@ public final class DocumentExportService: @unchecked Sendable {
             }
         }
 
-        let payload = try makePayload(output: output, version: activeVersion, matterID: matterID)
+        let payload = try makePayload(output: output, version: selectedVersion, matterID: matterID)
+        let rendered = try DocumentExportBuilder.renderValidatedData(payload, format: format)
         let directory = storage.exportsDirectory(forMatterID: matterID)
-        let fileName = "\(sanitize(output.title))-v\(activeVersion.versionIndex).\(format.fileExtension)"
-        let url = directory.appendingPathComponent(fileName)
-        let previousData = try snapshotExistingFile(at: url)
-        try DocumentExportBuilder.write(payload, format: format, to: url, writer: fileWriter)
+        let sanitizedTitle = sanitize(output.title)
+        let stem = sanitizedTitle.isEmpty ? "Export" : sanitizedTitle
 
-        let relativePath = "exports/\(matterID)/\(fileName)"
-        let exportRecord = DocumentExportRecord(
-            structuredOutputID: structuredOutputID,
-            structuredOutputVersionID: activeVersion.id,
-            matterID: matterID,
-            format: format.rawValue,
-            managedRelativePath: relativePath
-        )
-        let auditEvent = AuditEventRecord(
-            matterID: matterID,
-            eventType: "export_completed",
-            actor: "user",
-            summary: "Exported \(output.title) as \(format.rawValue)",
-            relatedTable: "structured_outputs",
-            relatedID: structuredOutputID
-        )
-        do {
-            try completionRecorder(exportRecord, auditEvent)
-        } catch {
-            let recordingDescription = error.localizedDescription
+        for _ in 1...100 {
+            try Task.checkCancellation()
+            let intentID = UUID().uuidString.lowercased()
+            let fileName = "\(stem)-v\(selectedVersion.versionIndex)-\(intentID).\(format.fileExtension)"
+            let url = directory.appendingPathComponent(fileName, isDirectory: false)
+            let intent: DraftArtifactIntentRecord
             do {
-                try compensateFile(at: url, previousData: previousData)
-            } catch {
-                throw ExportError.partialFailure(
-                    recording: recordingDescription,
-                    compensation: error.localizedDescription
+                intent = try store.draftArtifacts.prepareStructuredOutputExportIntent(
+                    matterID: matterID,
+                    structuredOutputID: structuredOutputID,
+                    structuredOutputVersionID: selectedVersion.id,
+                    workProductVersion: selectedVersion.versionIndex,
+                    format: Self.intentFormat(format),
+                    fileName: fileName,
+                    output: rendered,
+                    id: intentID
                 )
+            } catch DraftArtifactIntentError.fileNameReserved {
+                continue
             }
-            throw ExportError.completionRecordingFailed(recordingDescription)
+
+            let installedIdentity: DurableFileWriter.InstalledFileIdentity
+            do {
+                installedIdentity = try fileWriter.writeNewOwned(
+                    rendered,
+                    to: url,
+                    containedIn: storage.root
+                ) { candidate in
+                    guard candidate == rendered else {
+                        throw DraftArtifactIntentError.installedArtifactMismatch
+                    }
+                    try DocumentExportValidator.validate(candidate, as: format)
+                }
+            } catch DurableFileWriter.WriterError.destinationExists {
+                try? store.draftArtifacts.abortIntent(id: intent.id)
+                continue
+            } catch let DurableFileWriter.WriterError.createOnlyRollbackSynchronizationFailed(detail) {
+                try? store.draftArtifacts.markRecoveryRequired(id: intent.id)
+                throw ExportError.publicationRecoveryRequired(detail)
+            } catch let DurableFileWriter.WriterError.postInstallStateUncertain(detail) {
+                try? store.draftArtifacts.markRecoveryRequired(id: intent.id)
+                throw ExportError.publicationRecoveryRequired(detail)
+            } catch let DurableFileWriter.WriterError.managedTemporaryCleanupUncertain(name, detail) {
+                try? store.draftArtifacts.markRecoveryRequired(id: intent.id)
+                throw ExportError.publicationRecoveryRequired("\(name): \(detail)")
+            } catch {
+                try? store.draftArtifacts.abortIntent(id: intent.id)
+                throw error
+            }
+
+            do {
+                let exportRecord = try store.draftArtifacts.structuredOutputExportPreview(
+                    intentID: intent.id
+                )
+                let auditEvent = try store.draftArtifacts.auditEventPreview(intentID: intent.id)
+                if let completionRecorder {
+                    try completionRecorder(exportRecord, auditEvent)
+                }
+                let installed = try fileWriter.durablyValidatedInstalledFileData(
+                    matching: installedIdentity,
+                    at: url,
+                    containedIn: storage.root,
+                    expectedByteCount: intent.outputByteSize
+                ) { candidate in
+                    guard candidate.count == intent.outputByteSize,
+                          DocumentStorage.sha256Hex(of: candidate) == intent.outputSHA256 else {
+                        throw DraftArtifactIntentError.installedArtifactMismatch
+                    }
+                    try DocumentExportValidator.validate(candidate, as: format)
+                }
+                if completionRecorder == nil {
+                    try store.draftArtifacts.finalizeIntent(
+                        id: intent.id,
+                        installedOutput: installed
+                    )
+                }
+                _ = try store.draftArtifacts.verifyCompletedStructuredOutputExportIntent(
+                    id: intent.id,
+                    installedOutput: installed
+                )
+            } catch {
+                let recordingDescription = error.localizedDescription
+                do {
+                    try removeInstalledExport(
+                        at: url,
+                        format: format,
+                        expectedIdentity: installedIdentity,
+                        intent: intent
+                    )
+                    try store.draftArtifacts.abortIntent(id: intent.id)
+                } catch {
+                    try? store.draftArtifacts.markRecoveryRequired(id: intent.id)
+                    throw ExportError.partialFailure(
+                        recording: recordingDescription,
+                        compensation: error.localizedDescription
+                    )
+                }
+                throw ExportError.completionRecordingFailed(recordingDescription)
+            }
+            return url
         }
-        return url
+        throw ExportError.filenameAllocationFailed
     }
 
-    /// `nil` means the path did not exist; non-nil data is an exact rollback
-    /// snapshot. An unreadable existing artifact fails before rendering.
-    private func snapshotExistingFile(at url: URL) throws -> Data? {
-        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
-        return try Data(contentsOf: url, options: .mappedIfSafe)
+    private func removeInstalledExport(
+        at url: URL,
+        format: DocumentExportFormat,
+        expectedIdentity: DurableFileWriter.InstalledFileIdentity,
+        intent: DraftArtifactIntentRecord
+    ) throws {
+        let removed = try fileWriter.removeInstalledFile(
+            matching: expectedIdentity,
+            at: url,
+            containedIn: storage.root,
+            expectedByteCount: intent.outputByteSize,
+            missingIsSuccess: true,
+            contentValidator: { candidate in
+                guard DocumentStorage.sha256Hex(of: candidate) == intent.outputSHA256 else {
+                    throw DraftArtifactIntentError.installedArtifactMismatch
+                }
+                try DocumentExportValidator.validate(candidate, as: format)
+            }
+        )
+        guard removed else { throw DraftArtifactIntentError.installedArtifactMismatch }
     }
 
-    private func compensateFile(at url: URL, previousData: Data?) throws {
-        if let previousData {
-            // The snapshot is restored exactly, even if it predates current
-            // validators. It was the caller's preexisting artifact.
-            try fileWriter.write(previousData, to: url) { _ in }
-        } else if FileManager.default.fileExists(atPath: url.path) {
-            // The snapshot proved this destination was absent before export;
-            // remove only the newly installed, unrecorded artifact.
-            try FileManager.default.removeItem(at: url)
+    private static func intentFormat(_ format: DocumentExportFormat) -> DraftArtifactIntentFormat {
+        switch format {
+        case .pdf: .pdf
+        case .markdown: .markdown
+        case .docx: .docx
+        case .csv: .csv
+        case .xlsx: .xlsx
         }
     }
 

@@ -65,5 +65,6 @@ Runtime/XPC qualification:
   20 iterations and covers bookmark rejection/containment, load/unload concurrency,
   reconnect, client drop, cancellation, and exactly-once stream completion.
 - `run-runtime-sanitizer.sh thread|address|undefined` applies the requested sanitizer to the
-  focused runtime package/hosted lifecycle gate. Tool exclusions and observed results live
-  in `Docs/Architecture/RuntimeXPCQualification.md`.
+  focused runtime package/hosted lifecycle gate. The instrumented lifecycle records XPC RSS
+  but does not claim the separate uninstrumented 256 MiB production envelope. Tool exclusions
+  and observed results live in `Docs/Architecture/RuntimeXPCQualification.md`.

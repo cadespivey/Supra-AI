@@ -68,8 +68,24 @@ public struct ResearchSessionSummary: Identifiable, Sendable, Equatable {
     }
 }
 
-public enum ResearchSessionError: Error, Equatable, Sendable {
+private let researchChooseCourtMessage =
+    "Choose Court in Matter Edit before planning or running matter-scoped research."
+
+public enum ResearchSessionError: LocalizedError, Equatable, Sendable {
     case noApprovedQueries
+    case courtSelectionRequired
+    case invalidCourtFilter
+
+    public var errorDescription: String? {
+        switch self {
+        case .noApprovedQueries:
+            return "Approve at least one non-empty research query before saving."
+        case .courtSelectionRequired:
+            return researchChooseCourtMessage
+        case .invalidCourtFilter:
+            return "The saved court filters do not match the matter's canonical court. Review the plan and try again."
+        }
+    }
 }
 
 /// Drives research-session planning for one matter: generates proposed queries
@@ -77,6 +93,12 @@ public enum ResearchSessionError: Error, Equatable, Sendable {
 /// persists the approved queries (spec §9 / WO 24). Running the searches is WO 25.
 @MainActor
 public final class ResearchSessionController: ObservableObject {
+    private struct CanonicalResearchContext {
+        let courtPresentation: MatterCourtPresentation
+        let authorityScope: JurisdictionAuthorityScope
+        let partyPerspective: String
+    }
+
     public struct PlannedQuery: Identifiable, Sendable, Equatable {
         public let id: UUID
         public var text: String
@@ -125,6 +147,7 @@ public final class ResearchSessionController: ObservableObject {
     @Published public private(set) var sessions: [ResearchSessionSummary] = []
     @Published public private(set) var planState: PlanState = .idle
     @Published public var plannedQueries: [PlannedQuery] = []
+    @Published public private(set) var lastMutationFailure: UserMutationFailure?
 
     // Open-session run/detail state (WO 25).
     @Published public private(set) var openSessionID: String?
@@ -133,18 +156,26 @@ public final class ResearchSessionController: ObservableObject {
     @Published public private(set) var isRunning = false
     @Published public private(set) var runMessage: String?
 
+    /// A typed UI recovery signal for the Store-owned court gate. Callers can
+    /// open the canonical Matter editor without parsing user-facing error copy.
+    public var requiresCourtSelection: Bool {
+        runMessage == researchChooseCourtMessage
+    }
+
     private let store: SupraStore
-    private let runtimeClient: any RuntimeClientProtocol
+    private let runtimeClient: any ModelExecutionGateway
+    private var modelExecutionGateway: any ModelExecutionGateway { runtimeClient }
     private let defaultSystemPrompt: String?
     private let planner = ResearchQueryPlanner()
     private let tokenStore: any APIKeyStoreProtocol
     private let courtListenerClient: any CourtListenerClientProtocol
+    private let legalQueryEgressGate: LegalQueryEgressGate
     private let logPrivilegedQueryTerms: Bool
     public let matterID: String
 
     public init(
         store: SupraStore,
-        runtimeClient: any RuntimeClientProtocol,
+        runtimeClient: any ModelExecutionGateway,
         matterID: String,
         defaultSystemPrompt: String? = nil,
         legalConfiguration: LegalModelConfiguration = .fromEnvironment(),
@@ -161,14 +192,32 @@ public final class ResearchSessionController: ObservableObject {
         // Build the default CourtListener stack from the store; every request is
         // allowlisted, rate-limited, and logged to network_requests by the client.
         // Privileged query terms are redacted from the log unless explicitly enabled.
-        self.courtListenerClient = courtListenerClient ?? CourtListenerClient(
+        let resolvedCourtListenerClient = courtListenerClient ?? CourtListenerClient(
             httpClient: AuthorizedHTTPClient(
                 keyStore: resolvedTokenStore,
                 policy: NetworkPolicyService(),
-                logger: NetworkRequestLogger(repository: store.networkRequests),
+                logger: NetworkRequestLogger(writer: store.networkRequestAudits),
                 redactsQueryValues: !legalConfiguration.logPrivilegedQueryTerms
             )
         )
+        self.courtListenerClient = resolvedCourtListenerClient
+        self.legalQueryEgressGate = LegalQueryEgressGate(
+            providerID: .courtListener,
+            courtListenerClient: resolvedCourtListenerClient
+        )
+    }
+
+    /// Returns the matter's court and parties from one immutable Store snapshot.
+    /// Legacy jurisdiction/court/perspective strings remain migration evidence and
+    /// are never promoted to resolved truth by this read seam.
+    public func legalIdentityReadProjection() throws -> MatterLegalIdentityReadProjection {
+        guard let snapshot = try store.matterIdentity.fetchSnapshot(matterID: matterID) else {
+            throw MatterIdentityRepositoryError.matterUnavailable
+        }
+        return MatterLegalIdentityReadProjectionBuilder(
+            courtPresentationBuilder: MatterCourtPresentationBuilder(catalog: .shared),
+            draftPartyDefaultsBuilder: DraftPartyDefaultsBuilder()
+        ).makeProjection(for: snapshot)
     }
 
     public var hasCourtListenerToken: Bool {
@@ -261,13 +310,20 @@ public final class ResearchSessionController: ObservableObject {
         // (e.g. the explicit commit landing while the speculative run is still going)
         // is a no-op — the caller waits out the in-flight run and reuses its queries.
         if case .generating = planState { return }
+        let identity: CanonicalResearchContext
+        do {
+            identity = try canonicalResearchContext()
+        } catch {
+            planState = .incomplete(researchChooseCourtMessage)
+            return
+        }
         let effectiveRoute = route ?? ModelRouter().route(for: .legalResearch)
         guard let modelID else {
             if plannedQueries.isEmpty {
                 addQuery()
             }
             planState = .incomplete(
-                "Assign a \(effectiveRoute.role.displayName) model in the Models tab to generate queries, or add them manually."
+                "Assign a \(effectiveRoute.role.displayName) model in AI Setup to generate queries, or add them manually."
             )
             return
         }
@@ -275,10 +331,10 @@ public final class ResearchSessionController: ObservableObject {
         do {
             let prompt = try planner.buildPrompt(
                 issueText: draft.issueText,
-                jurisdiction: draft.jurisdiction,
-                jurisdictionContext: effectiveJurisdictionContext(for: draft),
-                partyPerspective: draft.partyPerspective,
-                preferredCourts: effectivePreferredCourts(for: draft),
+                jurisdiction: identity.authorityScope.jurisdictionName,
+                jurisdictionContext: identity.authorityScope.modelContext,
+                partyPerspective: identity.partyPerspective,
+                preferredCourts: identity.authorityScope.preferredCourtNames,
                 excludedCourts: draft.excludedCourts,
                 dateRange: formatDateRange(start: draft.dateRangeStart, end: draft.dateRangeEnd)
             )
@@ -314,34 +370,35 @@ public final class ResearchSessionController: ObservableObject {
     /// `approved`) and writes a `research_queries_approved` audit event.
     @discardableResult
     public func savePlan(draft: ResearchPlanDraft) throws -> String {
+        let identity = try canonicalResearchContext()
         let approved = plannedQueries.filter {
             $0.approved && !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
         guard !approved.isEmpty else { throw ResearchSessionError.noApprovedQueries }
 
-        let session = try store.research.createSession(
+        let courtFilter = JurisdictionCatalog.courtFilterString(
+            try validatedCourtFilterIDs(draft.courtFilterIDs, identity: identity)
+        )
+        let result = try store.research.createApprovedSessionAtomically(
             matterID: matterID,
             title: draft.title,
             issueText: draft.issueText,
-            jurisdiction: draft.jurisdiction,
-            preferredCourts: effectivePreferredCourts(for: draft),
+            jurisdiction: identity.authorityScope.jurisdictionName,
+            preferredCourts: identity.authorityScope.preferredCourtNames,
             excludedCourts: draft.excludedCourts,
             dateRangeStart: draft.dateRangeStart,
             dateRangeEnd: draft.dateRangeEnd,
-            status: .approved
+            queries: approved.enumerated().map { index, query in
+                ResearchRepository.ApprovedQueryInput(
+                    queryText: query.text,
+                    queryIndex: index,
+                    courtFilter: courtFilter,
+                    dateFiledAfter: draft.dateRangeStart,
+                    dateFiledBefore: draft.dateRangeEnd
+                )
+            }
         )
-        let courtFilter = JurisdictionCatalog.courtFilterString(draft.courtFilterIDs)
-        for (index, query) in approved.enumerated() {
-            _ = try store.research.createQuery(
-                researchSessionID: session.id,
-                queryText: query.text.trimmingCharacters(in: .whitespacesAndNewlines),
-                queryIndex: index,
-                courtFilter: courtFilter,
-                dateFiledAfter: draft.dateRangeStart,
-                dateFiledBefore: draft.dateRangeEnd,
-                status: .approved
-            )
-        }
+        let session = result.session
         _ = try? store.auditEvents.recordEvent(
             matterID: matterID,
             eventType: "research_queries_approved",
@@ -352,7 +409,27 @@ public final class ResearchSessionController: ObservableObject {
         )
         resetPlan()
         loadSessions()
+        lastMutationFailure = nil
         return session.id
+    }
+
+    /// Converts the route-dependent save into a presentation-safe commit
+    /// boundary. The draft and planned queries are reset only after the Store
+    /// atomically accepts the full session aggregate.
+    public func attemptSavePlan(
+        draft: ResearchPlanDraft
+    ) -> UserMutationOutcome<String> {
+        do {
+            return .committed(try savePlan(draft: draft))
+        } catch {
+            let failure = UserMutationFailure(
+                operation: .routeDependentSave,
+                userMessage: "Couldn’t save the research plan. \(error.localizedDescription)",
+                recoveryActions: [.retry]
+            )
+            lastMutationFailure = failure
+            return .failed(failure)
+        }
     }
 
     // MARK: - Run (WO 25)
@@ -381,6 +458,24 @@ public final class ResearchSessionController: ObservableObject {
     /// ends results_ready if any query succeeded, else failed.
     public func runApprovedSearches() async {
         guard let sessionID = openSessionID, !isRunning else { return }
+        let identity: CanonicalResearchContext
+        do {
+            identity = try canonicalResearchContext()
+        } catch {
+            runMessage = researchChooseCourtMessage
+            return
+        }
+        do {
+            for query in sessionQueries where query.status == ResearchQueryStatus.approved.rawValue {
+                _ = try validatedCourtFilterIDs(
+                    JurisdictionCatalog.courtFilterIDs(from: query.courtFilter),
+                    identity: identity
+                )
+            }
+        } catch {
+            runMessage = ResearchSessionError.invalidCourtFilter.localizedDescription
+            return
+        }
         guard hasCourtListenerToken else {
             runMessage = "Add a CourtListener API token in Settings to run searches."
             return
@@ -449,7 +544,18 @@ public final class ResearchSessionController: ObservableObject {
         let requestMeta = requestMeta(request)
         try? store.research.updateQueryExecution(queryID: query.id, status: .running, executedAt: nil)
         do {
-            let response = try await courtListenerClient.searchOpinions(request, relatedResearchSessionID: sessionID)
+            let egress = try await approvedFormalResearchEgress(
+                request: request,
+                queryID: query.id,
+                sessionID: sessionID,
+                purpose: "formal-research-run"
+            )
+            let response = try await legalQueryEgressGate.searchOpinions(
+                request,
+                intent: egress.intent,
+                authorization: egress.authorization,
+                relatedResearchSessionID: sessionID
+            )
             for dto in response.results {
                 _ = try? store.research.insertResult(makeResultRecord(dto, queryID: query.id))
             }
@@ -498,6 +604,20 @@ public final class ResearchSessionController: ObservableObject {
     public func rerunQuery(queryID: String) async {
         guard let sessionID = openSessionID, !isRunning,
               let query = sessionQueries.first(where: { $0.id == queryID }) else { return }
+        let identity: CanonicalResearchContext
+        do {
+            identity = try canonicalResearchContext()
+            _ = try validatedCourtFilterIDs(
+                JurisdictionCatalog.courtFilterIDs(from: query.courtFilter),
+                identity: identity
+            )
+        } catch ResearchSessionError.invalidCourtFilter {
+            runMessage = ResearchSessionError.invalidCourtFilter.localizedDescription
+            return
+        } catch {
+            runMessage = researchChooseCourtMessage
+            return
+        }
         guard hasCourtListenerToken else {
             runMessage = "Add a CourtListener API token in Settings to run searches."
             return
@@ -524,12 +644,35 @@ public final class ResearchSessionController: ObservableObject {
               let query = sessionQueries.first(where: { $0.id == queryID }),
               let next = query.nextURL, let cursorURL = URL(string: next)
         else { return }
+        let identity: CanonicalResearchContext
+        do {
+            identity = try canonicalResearchContext()
+            _ = try validatedCourtFilterIDs(
+                JurisdictionCatalog.courtFilterIDs(from: query.courtFilter),
+                identity: identity
+            )
+        } catch ResearchSessionError.invalidCourtFilter {
+            runMessage = ResearchSessionError.invalidCourtFilter.localizedDescription
+            return
+        } catch {
+            runMessage = researchChooseCourtMessage
+            return
+        }
 
         isRunning = true
         runMessage = nil
         do {
-            let response = try await courtListenerClient.searchOpinions(
-                CourtListenerSearchRequest(query: query.text, cursorURL: cursorURL),
+            let request = CourtListenerSearchRequest(query: query.text, cursorURL: cursorURL)
+            let egress = try await approvedFormalResearchEgress(
+                request: request,
+                queryID: query.id,
+                sessionID: sessionID,
+                purpose: "formal-research-load-more"
+            )
+            let response = try await legalQueryEgressGate.searchOpinions(
+                request,
+                intent: egress.intent,
+                authorization: egress.authorization,
                 relatedResearchSessionID: sessionID
             )
             for dto in response.results {
@@ -548,6 +691,38 @@ public final class ResearchSessionController: ObservableObject {
         }
         isRunning = false
         reloadOpenSession()
+    }
+
+    /// The query is already visible in the saved Research session and this path
+    /// runs only from the user's Run/Rerun/Load More action. Mint a short-lived,
+    /// single-use grant for those exact UTF-8 bytes immediately before transport.
+    private func approvedFormalResearchEgress(
+        request: CourtListenerSearchRequest,
+        queryID: String,
+        sessionID: String,
+        purpose: String
+    ) async throws -> (
+        intent: LegalQueryEgressIntent,
+        authorization: LegalQueryEgressAuthorization
+    ) {
+        let intent = LegalQueryEgressIntent(
+            providerID: .courtListener,
+            origin: .formalResearch,
+            queryBytes: Data(request.query.utf8),
+            purpose: "\(purpose):\(queryID)",
+            matterID: matterID,
+            researchSessionID: sessionID,
+            sourceSetDigest: nil,
+            classification: .matterDerived
+        )
+        let preview = try await legalQueryEgressGate.preview(for: intent)
+        let approvedAt = Date()
+        let grant = try await legalQueryEgressGate.approve(
+            preview: preview,
+            approvedAt: approvedAt,
+            expiresAt: approvedAt.addingTimeInterval(60)
+        )
+        return (intent, .grant(grant))
     }
 
     /// Records a network/research diagnostic warning for policy/auth failures
@@ -850,19 +1025,52 @@ public final class ResearchSessionController: ObservableObject {
 
     // MARK: - Helpers
 
-    private func effectiveJurisdictionContext(for draft: ResearchPlanDraft) -> String {
-        let trimmed = draft.jurisdictionContext.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmed.isEmpty { return trimmed }
-        return JurisdictionCatalog.shared.authorityScope(jurisdiction: draft.jurisdiction)?.modelContext ?? ""
+    private func canonicalResearchContext() throws -> CanonicalResearchContext {
+        let projection: MatterLegalIdentityReadProjection
+        do {
+            projection = try legalIdentityReadProjection()
+        } catch {
+            throw ResearchSessionError.courtSelectionRequired
+        }
+        let presentation = projection.courtPresentation
+        guard presentation.canRunCourtScopedResearch,
+              let authorityScope = presentation.authorityScope,
+              presentation.resolvedCourtName != nil,
+              presentation.resolvedJurisdictionName != nil else {
+            throw ResearchSessionError.courtSelectionRequired
+        }
+        let partyPerspective: String
+        switch projection.draftParties {
+        case let .available(defaults):
+            partyPerspective =
+                "Representing \(defaults.representedClientName) as \(defaults.representedDesignation) "
+                + "against \(defaults.opposingPartyName) as \(defaults.opposingDesignation)"
+        case .blocked:
+            partyPerspective = "Structured party identity incomplete; do not infer a represented side."
+        }
+        return CanonicalResearchContext(
+            courtPresentation: presentation,
+            authorityScope: authorityScope,
+            partyPerspective: partyPerspective
+        )
     }
 
-    private func effectivePreferredCourts(for draft: ResearchPlanDraft) -> [String] {
-        var courts = draft.preferredCourts
-        if courts.isEmpty,
-           let scope = JurisdictionCatalog.shared.authorityScope(jurisdiction: draft.jurisdiction) {
-            courts = scope.preferredCourtNames
+    private func validatedCourtFilterIDs(
+        _ requestedIDs: [String],
+        identity: CanonicalResearchContext
+    ) throws -> [String] {
+        let requested = Self.uniquePreservingOrder(requestedIDs)
+        guard !requested.isEmpty else { return [] }
+        var allowed = Set(identity.authorityScope.courtListenerIDs)
+        if let state = identity.courtPresentation.resolvedFilingStateName {
+            allowed.formUnion(
+                JurisdictionCatalog.shared.relatedFederalCourtIDs(forState: state)
+            )
         }
-        return Self.uniquePreservingOrder(courts)
+        guard requested.allSatisfy(allowed.contains) else {
+            throw ResearchSessionError.invalidCourtFilter
+        }
+        return requested
     }
 
     private static func uniquePreservingOrder(_ values: [String]) -> [String] {
@@ -902,9 +1110,10 @@ public final class ResearchSessionController: ObservableObject {
             // machine-parsed into `## Query N` blocks, so a broader route prompt
             // must not override the required structure.
             systemPrompt: defaultSystemPrompt,
+            contextWorkload: .groundedExactEvidence,
             options: options
         )
-        return try await runtimeClient.collectGeneratedText(request)
+        return try await modelExecutionGateway.collectGeneratedText(request)
     }
 
     private func formatDateRange(start: Date?, end: Date?) -> String {

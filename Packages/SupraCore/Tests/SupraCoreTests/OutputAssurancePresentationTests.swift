@@ -8,7 +8,7 @@ final class OutputAssurancePresentationTests: XCTestCase {
         let expected: [(OutputAssuranceState, String)] = [
             (.preliminary, "Preliminary — ranked sources only"),
             (.supportNeedsReview, "Support needs review"),
-            (.propositionSupported, "Propositions supported — completeness not assessed"),
+            (.propositionSupported, "Supported by selected sources — not exhaustive"),
             (.corpusIncomplete, "Corpus incomplete — review gaps"),
             (.corpusComplete, "Corpus complete for this task and scope"),
             (.negativeBlocked, "Negative conclusion blocked"),
@@ -22,7 +22,7 @@ final class OutputAssurancePresentationTests: XCTestCase {
         }
 
         let incompleteRow = OutputAssurancePresentation.text(for: .corpusIncomplete)
-        XCTAssertFalse(incompleteRow.contains("Propositions supported"))
+        XCTAssertFalse(incompleteRow.contains("Supported by selected sources"))
         XCTAssertTrue(OutputAssurancePresentation.isExportEligible(.propositionSupported))
         XCTAssertTrue(OutputAssurancePresentation.isExportEligible(.corpusComplete))
         XCTAssertFalse(OutputAssurancePresentation.isExportEligible(.corpusIncomplete))

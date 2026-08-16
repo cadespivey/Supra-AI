@@ -1,5 +1,6 @@
 import Foundation
 import SupraCore
+import SupraResearch
 import SupraRuntimeInterface
 @testable import SupraSessions
 import SupraStore
@@ -39,6 +40,7 @@ final class ResearchPlannerRoutingTests: XCTestCase {
     func testPlannerForcesThinkingOffAndCapsOutputBudget() async throws {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "Acme")
+        try resolveResearchCourt(store, matterID: matter.id)
         let markdown = fiveQueryMarkdown
         let runtime = StubRuntimeClient(outcome: { request in
             // The legalResearch preset's heavy thinking budget must not reach the runtime.
@@ -72,6 +74,7 @@ final class ResearchPlannerRoutingTests: XCTestCase {
     func testReasoningModelClosedThinkingStillParsesQueries() async throws {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "Acme")
+        try resolveResearchCourt(store, matterID: matter.id)
         let reasoningOutput = """
         <think>
         The user asks whether the UCC governs sales of goods under $500. Article 2 applies to
@@ -100,6 +103,7 @@ final class ResearchPlannerRoutingTests: XCTestCase {
     func testProseWithoutHeadingsReportsIncomplete() async throws {
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "Acme")
+        try resolveResearchCourt(store, matterID: matter.id)
         let runtime = StubRuntimeClient(outcome: { request in
             .events([
                 .event(request, 0, .token, token: "The UCC applies to transactions in goods regardless of price."),
@@ -122,5 +126,35 @@ final class ResearchPlannerRoutingTests: XCTestCase {
             .appendingPathComponent("ResearchPlannerStore-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
         return try SupraStore(url: directoryURL.appendingPathComponent("test.sqlite"))
+    }
+
+    private func resolveResearchCourt(_ store: SupraStore, matterID: String) throws {
+        let snapshot = try XCTUnwrap(
+            try store.matterIdentity.fetchSnapshot(matterID: matterID)
+        )
+        let catalog = JurisdictionCatalog.shared
+        let court = try XCTUnwrap(
+            catalog.resolvePersistedCourtIdentity("Supreme Court of Florida")
+        )
+        let jurisdiction = try XCTUnwrap(
+            catalog.canonicalJurisdictionOption(forSelectedOptionID: court.id)
+        )
+        _ = try store.matterIdentity.updateMatter(
+            command: MatterIdentityUpdateCommand(
+                matterID: matterID,
+                expectedIdentityRevision: snapshot.identityRevision,
+                legacyJurisdictionText: snapshot.legacyJurisdictionText,
+                legacyCourtText: court.displayName,
+                legacyPartyPerspective: .neutral,
+                legacyClientNames: nil,
+                courtResolutionState: .court,
+                canonicalCatalogVersion: catalog.catalogVersion,
+                canonicalCatalogDigestSHA256: catalog.identityDigestSHA256,
+                canonicalJurisdictionID: CanonicalJurisdictionID(rawValue: jurisdiction.id),
+                canonicalCourtID: CanonicalCourtID(rawValue: court.id),
+                parties: snapshot.parties,
+                representations: snapshot.representations
+            )
+        )
     }
 }

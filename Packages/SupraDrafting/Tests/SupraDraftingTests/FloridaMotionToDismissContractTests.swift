@@ -2,6 +2,42 @@ import SupraDrafting
 import XCTest
 
 final class FloridaMotionToDismissContractTests: XCTestCase {
+    func testCanonicalFilingStateAuthorizesCatalogTrialCourtNames() {
+        XCTAssertTrue(
+            FloridaMotionToDismissContract.isSupportedFilingCourt(
+                "Circuit Court of the Fourth Judicial Circuit in and for Duval County",
+                filingStateName: "Florida"
+            )
+        )
+        XCTAssertTrue(
+            FloridaMotionToDismissContract.isSupportedFilingCourt(
+                "County Court in and for Duval County",
+                filingStateName: "Florida"
+            )
+        )
+    }
+
+    func testCanonicalFilingStateDoesNotAuthorizeWrongStateOrCourtLevel() {
+        XCTAssertFalse(
+            FloridaMotionToDismissContract.isSupportedFilingCourt(
+                "Superior Court of Fulton County",
+                filingStateName: "Georgia"
+            )
+        )
+        XCTAssertFalse(
+            FloridaMotionToDismissContract.isSupportedFilingCourt(
+                "First District Court of Appeal of Florida",
+                filingStateName: "Florida"
+            )
+        )
+        XCTAssertFalse(
+            FloridaMotionToDismissContract.isSupportedFilingCourt(
+                "United States District Court for the Middle District of Florida",
+                filingStateName: "Florida"
+            )
+        )
+    }
+
     // T-MTD-CITE-02. Expected RED: the current parser searches for a supported
     // state reporter anywhere before a Florida parenthetical, so a string that
     // also embeds federal authority is accepted as a supported state citation.

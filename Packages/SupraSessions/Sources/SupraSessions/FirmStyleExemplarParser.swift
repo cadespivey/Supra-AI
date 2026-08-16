@@ -35,12 +35,13 @@ public struct ExemplarParseOutcome: Sendable, Equatable {
 /// truncates at the first digit/@ so phone numbers, bar numbers, and e-mail addresses can never
 /// reach the candidate even if the model leaks them (invariant 4: identity is slot-only).
 public struct FirmStyleExemplarParser: Sendable {
-    private let runtimeClient: any RuntimeClientProtocol
+    private let runtimeClient: any ModelExecutionGateway
+    private var modelExecutionGateway: any ModelExecutionGateway { runtimeClient }
     private let modelID: ModelID
     private let extraction: ExtractionService
 
     public init(
-        runtimeClient: any RuntimeClientProtocol,
+        runtimeClient: any ModelExecutionGateway,
         modelID: ModelID,
         extraction: ExtractionService = ExtractionService()
     ) {
@@ -136,6 +137,7 @@ public struct FirmStyleExemplarParser: Sendable {
             modelID: modelID,
             prompt: prompt,
             systemPrompt: Self.systemContract(kind: kind),
+            contextWorkload: .groundedExactEvidence,
             options: GenerationOptions(
                 preset: .extractive,
                 temperature: 0.0,
@@ -144,7 +146,7 @@ public struct FirmStyleExemplarParser: Sendable {
                 thinkingBudget: .off
             )
         )
-        guard let raw = try? await runtimeClient.collectGeneratedText(request) else { return nil }
+        guard let raw = try? await modelExecutionGateway.collectGeneratedText(request) else { return nil }
         return ReasoningContent.answer(from: raw)
     }
 

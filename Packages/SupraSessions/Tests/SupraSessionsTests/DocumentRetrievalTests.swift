@@ -12,6 +12,12 @@ final class DocumentRetrievalTests: XCTestCase {
         // reported fully ready even when it has zero vectors for model B.
         let store = try makeStore()
         let matter = try store.matters.createMatter(name: "Synthetic active-model readiness")
+        let modelA = FixedVectorEmbedder(
+            modelID: "tops03-model-a",
+            vector: [1, 0],
+            modelRevision: "tops03-model-a-revision-17"
+        )
+        try configureActiveEmbeddingModel(store, embedder: modelA)
         let blob = try store.documentLibrary.upsertBlob(
             DocumentBlobRecord(
                 sha256: "tops03-active-model",
@@ -28,21 +34,33 @@ final class DocumentRetrievalTests: XCTestCase {
             "Active Model Evidence.txt",
             "A nondefault semantic canary proves active-model readiness."
         )
-        let modelA = FixedVectorEmbedder(modelID: "tops03-model-a", vector: [1, 0])
         _ = try await DocumentIndexingService(store: store, embedder: modelA)
             .indexMatter(matterID: matter.id)
         XCTAssertFalse(try store.documentIndex.fetchEmbeddings(
             documentID: document.id,
             embeddingModelID: modelA.modelID
         ).isEmpty)
+        let modelAReceipt = try store.documentReadiness.fetchReceipt(documentID: document.id)
+        XCTAssertTrue(modelAReceipt.isBaseReady)
+        XCTAssertEqual(modelAReceipt.activeEmbeddingModelID, modelA.modelID)
+        XCTAssertEqual(modelAReceipt.activeEmbeddingModelRevision, modelA.modelRevision)
 
-        let modelB = FixedVectorEmbedder(modelID: "tops03-model-b", vector: [0, 1])
+        let modelB = FixedVectorEmbedder(
+            modelID: "tops03-model-b",
+            vector: [0, 1],
+            modelRevision: "tops03-model-b-revision-19"
+        )
+        try configureActiveEmbeddingModel(store, embedder: modelB)
         let readiness = try DocumentRetrievalService(store: store, embedder: modelB)
             .scopeReadiness(matterID: matter.id, scope: .wholeMatter)
 
         XCTAssertFalse(readiness.isFullyReady)
         XCTAssertEqual(readiness.readyDocuments, 0)
         XCTAssertEqual(readiness.pendingDocuments, 1)
+        let modelBReceipt = try XCTUnwrap(readiness.documentReadiness.first?.baseReceipt)
+        XCTAssertEqual(modelBReceipt.activeEmbeddingModelID, modelB.modelID)
+        XCTAssertEqual(modelBReceipt.activeEmbeddingModelRevision, modelB.modelRevision)
+        XCTAssertEqual(modelBReceipt.primaryExclusion, .semanticIndexIncomplete)
         XCTAssertEqual(
             try store.documentLibrary.fetchDocument(id: document.id)?.indexStatus,
             DocumentIndexStatus.ready.rawValue,
@@ -70,6 +88,7 @@ final class DocumentRetrievalTests: XCTestCase {
         let docNote = try makeDocument(store, matter.id, noteBlob.id, notes.id, "intake.txt", "Client met with witness about the wire transfer on March 3.")
 
         let embedder = BagOfWordsEmbedder()
+        try configureActiveEmbeddingModel(store, embedder: embedder)
         let indexer = DocumentIndexingService(store: store, embedder: embedder)
 
         // Before indexing, scope is not ready (gating).
@@ -110,15 +129,71 @@ final class DocumentRetrievalTests: XCTestCase {
         let blob = try store.documentLibrary.upsertBlob(DocumentBlobRecord(sha256: "x", byteSize: 1, originalExtension: "txt", managedRelativePath: "blobs/x.txt")).blob
         _ = try makeDocument(store, matter.id, blob.id, nil, "a.txt", "Some indexable content about damages.")
 
+        let requiredModel = FixedVectorEmbedder(
+            modelID: "text-only-required-model-731",
+            vector: [1, 0],
+            modelRevision: "text-only-required-revision-17"
+        )
+        try configureActiveEmbeddingModel(store, embedder: requiredModel)
+
         let indexer = DocumentIndexingService(store: store, embedder: nil)
         _ = try await indexer.indexMatter(matterID: matter.id)
 
-        // No embedder → text-indexed counts as ready, and FTS retrieval works.
+        // FTS remains provisionally useful, but it cannot redefine canonical
+        // semantic readiness when the selected model has no matching vectors.
         let retrieval = DocumentRetrievalService(store: store, embedder: nil)
-        XCTAssertTrue(try retrieval.scopeReadiness(matterID: matter.id, scope: .wholeMatter).isFullyReady)
+        let readiness = try retrieval.scopeReadiness(matterID: matter.id, scope: .wholeMatter)
+        XCTAssertFalse(readiness.isFullyReady)
+        XCTAssertEqual(readiness.readyDocuments, 0)
+        XCTAssertEqual(readiness.pendingDocuments, 1)
+        XCTAssertEqual(readiness.documentReadiness.first?.primaryBaseExclusion, .semanticIndexIncomplete)
+        XCTAssertEqual(
+            readiness.documentReadiness.first?.baseReceipt.activeEmbeddingModelID,
+            requiredModel.modelID
+        )
         let result = try await retrieval.retrieve(matterID: matter.id, query: "damages", scope: .wholeMatter)
         XCTAssertFalse(result.usedSemantic)
         XCTAssertTrue(result.sources.contains { $0.text.contains("damages") })
+        XCTAssertNotNil(result.incompleteScopeWarning)
+        XCTAssertTrue(result.incompleteScopeWarning?.contains("0/1 documents ready") == true)
+    }
+
+    func testDeterministicLegacyFixtureChunkIDsIgnoreStoreGeneratedLineageIDs() async throws {
+        // Deterministic benchmark stores are rebuilt from scratch. Their document,
+        // part, and revision IDs are intentionally fresh, but the same fixture bytes
+        // must still produce the same chunk IDs so equal-score retrieval ties cannot
+        // drift between local and hosted runs.
+        func fixtureChunkIDs() async throws -> [String] {
+            let store = try makeStore()
+            try store.documentSettings.updateSettings { $0.chunkerVersion = 1 }
+            let matter = try store.matters.createMatter(name: "Deterministic fixture matter")
+            let blob = try store.documentLibrary.upsertBlob(DocumentBlobRecord(
+                sha256: "deterministic-legacy-fixture",
+                byteSize: 1,
+                originalExtension: "txt",
+                managedRelativePath: "blobs/deterministic-legacy-fixture.txt"
+            )).blob
+            let document = try makeDocument(
+                store,
+                matter.id,
+                blob.id,
+                nil,
+                "stable-fixture.txt",
+                String(repeating: "Stable benchmark evidence with equal-score terms. ", count: 80)
+            )
+            _ = try await DocumentIndexingService(
+                store: store,
+                embedder: nil,
+                deterministicLegacyChunkIDs: true
+            ).indexDocument(documentID: document.id)
+            return try store.documentIndex.fetchChunks(documentID: document.id).map(\.id)
+        }
+
+        let first = try await fixtureChunkIDs()
+        let second = try await fixtureChunkIDs()
+
+        XCTAssertGreaterThan(first.count, 1)
+        XCTAssertEqual(first, second)
     }
 
     func testRRFContributionRewardsTopRanksAndDualMatches() {
@@ -296,9 +371,17 @@ final class DocumentRetrievalTests: XCTestCase {
         )
 
         func install(version: Int) throws {
+            let distractorPart = try XCTUnwrap(
+                store.documentIndex.fetchParts(documentID: distractor.id).first
+            )
+            let structuredPart = try XCTUnwrap(
+                store.documentIndex.fetchParts(documentID: structured.id).first
+            )
             try store.documentIndex.replaceChunks(documentID: distractor.id, chunks: [
                 DocumentChunkRecord(
                     id: "literal-v\(version)", documentID: distractor.id,
+                    pagePartID: distractorPart.id,
+                    revisionID: distractorPart.currentRevisionID,
                     unitKind: version == 2 ? DocumentStructureNodeKind.paragraph.rawValue : nil,
                     chunkerVersion: version, chunkIndex: 0, sourceKind: "text",
                     normalizedText: "comment table context"
@@ -307,12 +390,16 @@ final class DocumentRetrievalTests: XCTestCase {
             try store.documentIndex.replaceChunks(documentID: structured.id, chunks: [
                 DocumentChunkRecord(
                     id: "comment-v\(version)", documentID: structured.id,
+                    pagePartID: structuredPart.id,
+                    revisionID: structuredPart.currentRevisionID,
                     unitKind: version == 2 ? DocumentStructureNodeKind.comment.rawValue : nil,
                     chunkerVersion: version, chunkIndex: 0, sourceKind: "text",
                     normalizedText: "Reviewer asks whether business days apply"
                 ),
                 DocumentChunkRecord(
                     id: "cell-v\(version)", documentID: structured.id,
+                    pagePartID: structuredPart.id,
+                    revisionID: structuredPart.currentRevisionID,
                     unitKind: version == 2 ? DocumentStructureNodeKind.tableCell.rawValue : nil,
                     chunkerVersion: version, chunkIndex: 1, sourceKind: "text",
                     normalizedText: "Amount 275000"
@@ -320,6 +407,7 @@ final class DocumentRetrievalTests: XCTestCase {
             ])
             try store.documentLibrary.updateIndexStatus(documentID: distractor.id, indexStatus: .textIndexed)
             try store.documentLibrary.updateIndexStatus(documentID: structured.id, indexStatus: .textIndexed)
+            try store.documentSettings.updateSettings { $0.chunkerVersion = version }
         }
 
         try install(version: 2)
@@ -407,12 +495,78 @@ final class DocumentRetrievalTests: XCTestCase {
         let doc = try store.documentLibrary.insertDocument(MatterDocumentRecord(
             matterID: matterID, blobID: blobID, folderID: folderID, displayName: name,
             status: MatterDocumentStatus.indexing.rawValue,
-            extractionStatus: DocumentExtractionStatus.extracted.rawValue
+            extractionStatus: DocumentExtractionStatus.extracted.rawValue,
+            sourceKind: DocumentSourceKind.text.rawValue,
+            extractionMethod: "synthetic@toolchain:retrieval-fixture-17",
+            extractedTextChecksum: "retrieval-checksum-\(name)-731",
+            pagePartCount: 1
         ))
-        try store.documentIndex.replaceParts(documentID: doc.id, parts: [
-            DocumentPagePartRecord(documentID: doc.id, partIndex: 0, sourceKind: DocumentSourceKind.text.rawValue, normalizedText: text, charCount: text.count)
-        ])
+        let part = DocumentPagePartRecord(
+            id: "retrieval-part-\(doc.id)",
+            documentID: doc.id,
+            partIndex: 0,
+            sourceKind: DocumentSourceKind.text.rawValue,
+            normalizedText: text,
+            charCount: text.count
+        )
+        let revision = DocumentPartRevisionRecord(
+            id: "retrieval-revision-\(doc.id)",
+            documentID: doc.id,
+            partIndex: 0,
+            derivationKey: "retrieval-derivation-\(doc.id)-17",
+            origin: "parser",
+            method: "synthetic_exact_text",
+            text: text,
+            charCount: text.count,
+            toolchainVersion: "retrieval-toolchain-17"
+        )
+        let selection = DocumentPartSelectionRecord(
+            id: "retrieval-selection-\(doc.id)",
+            documentID: doc.id,
+            partIndex: 0,
+            selectedRevisionID: revision.id,
+            selectionKey: "retrieval-selection-key-\(doc.id)-17",
+            selectedBy: "synthetic_policy",
+            policyVersion: 17,
+            decisionJSON: #"{"wire":"RETRIEVAL_CANONICAL_LINEAGE_731"}"#
+        )
+        _ = try store.documentRevisions.replacePartsAndPersistLineage(
+            documentID: doc.id,
+            parts: [part],
+            revisions: [revision],
+            selections: [selection]
+        )
         return doc
+    }
+
+    private func configureActiveEmbeddingModel(
+        _ store: SupraStore,
+        embedder: any TextEmbedder
+    ) throws {
+        let testedAt = Date(timeIntervalSince1970: 1_946_248_731)
+        _ = try store.documentSettings.loadSettings()
+        try store.documentSettings.upsertEmbeddingModel(
+            DocumentEmbeddingModelRecord(
+                id: embedder.modelID,
+                repoID: embedder.modelRepoID,
+                localPath: "/synthetic/readiness/\(embedder.modelID)",
+                displayName: embedder.modelDisplayName,
+                dimension: embedder.dimension,
+                runtimeFamily: "retrieval-readiness-fixture-17",
+                revision: embedder.modelRevision,
+                isDefault: false,
+                isSelected: false,
+                lastTestLoadAt: testedAt,
+                lastTestLoadResult: "passed",
+                createdAt: testedAt,
+                updatedAt: testedAt
+            )
+        )
+        try store.documentSettings.selectEmbeddingModel(id: embedder.modelID)
+        try store.documentSettings.updateSettings {
+            $0.embeddingModelLastTestedAt = testedAt
+            $0.chunkerVersion = 2
+        }
     }
 
     private func makeStore() throws -> SupraStore {
@@ -429,7 +583,7 @@ private struct BagOfWordsEmbedder: TextEmbedder {
     let modelID = "bow-test"
     let modelRepoID = "bow-test"
     let modelDisplayName = "Bag of Words (test)"
-    let modelRevision: String? = nil
+    let modelRevision: String? = "bow-test-revision-17"
     let dimension = 64
 
     func embed(_ texts: [String]) async throws -> [[Float]] {
@@ -455,10 +609,16 @@ private struct BagOfWordsEmbedder: TextEmbedder {
 private struct FixedVectorEmbedder: TextEmbedder {
     let modelID: String
     let vector: [Float]
+    let modelRevision: String?
     var modelRepoID: String { modelID }
     var modelDisplayName: String { modelID }
-    let modelRevision: String? = nil
     var dimension: Int { vector.count }
+
+    init(modelID: String, vector: [Float], modelRevision: String? = nil) {
+        self.modelID = modelID
+        self.vector = vector
+        self.modelRevision = modelRevision
+    }
 
     func embed(_ texts: [String]) async throws -> [[Float]] {
         texts.map { _ in vector }

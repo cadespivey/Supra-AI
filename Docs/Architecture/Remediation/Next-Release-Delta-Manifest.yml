@@ -1,0 +1,961 @@
+# Frozen inventory for the publicly unreleased delta after v2.3.4.
+# Paths are explicit and are evaluated only against the frozen Git diff. A path must
+# appear exactly once. v070-v073 are immutable; v073 is dormant compatibility history.
+schema_version: 1
+manifest_id: "next-release-v2.3.4-to-22472816"
+generated_on: "2026-08-13"
+
+baseline:
+  public_tag: "v2.3.4"
+  base_sha: "c0a2648b4c65c066f85eb6bf6ae702f9aa779864"
+  head_ref: "origin/main"
+  head_sha: "22472816d3346a1bb4688c3a867b66fa61fb5ba4"
+  commit_count: 471
+  changed_file_count: 270
+  added_files: 98
+  modified_files: 170
+  deleted_files: 2
+  insertions: 84722
+  deletions: 1864
+  commit_inventory_sha256: "a2aabefdbaaf46d37044710d4346606c10b28cfd4924ce6e2733392141bf7666"
+  name_status_inventory_sha256: "6586b4bf0f7324f99226f6e30ce2ce454115e10291000c74e3d31127d0d2cd36"
+  numstat_inventory_sha256: "e8bfa900c8e86892f4bc4fbe2ef845934693fbe20f6c8ee02453057d708be14b"
+
+selector_semantics:
+  universe: "git diff --name-status v2.3.4..22472816d3346a1bb4688c3a867b66fa61fb5ba4"
+  path_mode: "explicit frozen paths"
+  require_exactly_one_group_per_path: true
+  reject_count_drift: true
+  reject_unclassified_paths: true
+  reject_duplicate_paths: true
+
+commit_buckets:
+  - id: "PR-136"
+    pr: 136
+    title: "Publish v2.3.4 appcast"
+    merge_sha: "776686072afccc3b176f4c1e15144b0e5c6616b7"
+    branch_tip_sha: "f8aa12681474578d78aac072344854ddbc20cd59"
+    introduced_commit_count_including_merge: 2
+    owner: "Product, security, and release engineering"
+    disposition: "retain_historical_publication"
+    categories: ["G17"]
+  - id: "PR-125"
+    pr: 125
+    title: "Download-progress byte reporting"
+    merge_sha: "920dd818ce3bc500263bec60aad06a63eafe27c7"
+    branch_tip_sha: "156a32caa0935325332c14d0fe78c7682499f145"
+    introduced_commit_count_including_merge: 4
+    owner: "Networking and security engineering"
+    disposition: "retain"
+    categories: ["G11"]
+  - id: "PR-135"
+    pr: 135
+    title: "Transaction harness CI"
+    merge_sha: "3ca9ad1adefc598b7a285f4fc47c0dd8a9ce5a11"
+    branch_tip_sha: "e22375d6b7d94576c6ce46068fc419baf339f09b"
+    introduced_commit_count_including_merge: 12
+    owner: "Security, release, and build engineering"
+    disposition: "retain_and_update"
+    categories: ["G14","G17"]
+  - id: "PR-134"
+    pr: 134
+    title: "Rehearsal publish-path scope"
+    merge_sha: "f40f953c1c906e4fcdc5eeb420281c1b265c3249"
+    branch_tip_sha: "5871c4f431e68537872221b166e79ae6894b2aa7"
+    introduced_commit_count_including_merge: 3
+    owner: "Security and release engineering"
+    disposition: "retain"
+    categories: ["G14"]
+  - id: "PR-137"
+    pr: 137
+    title: "Assurance-backlog closure"
+    merge_sha: "907deddac67070bc9102277540287ee0feea343f"
+    branch_tip_sha: "7a62cfba7e3019bfd60d14d5e0edc2b64b7279fb"
+    introduced_commit_count_including_merge: 2
+    owner: "Assurance and release engineering"
+    disposition: "refresh_or_mark_historical"
+    categories: ["G04","G07","G10","G14","G15","G16","G17","G18","G19"]
+  - id: "PR-138"
+    pr: 138
+    title: "OCR image overlay"
+    merge_sha: "9a613dfac862579c36499bdc72a65a05362a5f1e"
+    branch_tip_sha: "a5c479b8ae15d02a0646a2e5ac2916b33e4526bd"
+    introduced_commit_count_including_merge: 5
+    owner: "Document and session engineering"
+    disposition: "retain"
+    categories: ["G08"]
+  - id: "PR-139"
+    pr: 139
+    title: "Rich export model"
+    merge_sha: "a8c4228cd43357e4537534d853aeb0eeb9fc1fed"
+    branch_tip_sha: "40edba2cbbbdd5db744b141d7854c3e0607b0f82"
+    introduced_commit_count_including_merge: 4
+    owner: "Document and export engineering"
+    disposition: "retain"
+    categories: ["G06"]
+  - id: "PR-140"
+    pr: 140
+    title: "Rich export renderers"
+    merge_sha: "9f345f06661311c34162696df2f08eda28f00d42"
+    branch_tip_sha: "7f8bbec7bb8d5610d45dec5aaa8815b23067371e"
+    introduced_commit_count_including_merge: 5
+    owner: "Document and export engineering"
+    disposition: "retain"
+    categories: ["G06"]
+  - id: "PR-141"
+    pr: 141
+    title: "Backup and restore core"
+    merge_sha: "4db0e8f9a950733a36986d06de2653fe5bf9ec5f"
+    branch_tip_sha: "c1070eb04109ff792058af2a56f520d68d2f28c2"
+    introduced_commit_count_including_merge: 7
+    owner: "Persistence reliability engineering"
+    disposition: "retain_and_qualify"
+    categories: ["G03"]
+  - id: "PR-142"
+    pr: 142
+    title: "Restore activation"
+    merge_sha: "f3596edf7ab37b9241b600b6c4d215d85bada8b1"
+    branch_tip_sha: "96a0a90514e06ba7ec03f95e0fa269c37ad0b9d3"
+    introduced_commit_count_including_merge: 7
+    owner: "Application and persistence engineering"
+    disposition: "retain_and_qualify"
+    categories: ["G03","G13"]
+  - id: "PR-143"
+    pr: 143
+    title: "Guided document QA"
+    merge_sha: "b4eb5a34fe1bb41d74eb71f79a46fcf7bfbd70e6"
+    branch_tip_sha: "7b1263db81220ddca49551e7350bd5a2a44ff7f6"
+    introduced_commit_count_including_merge: 18
+    owner: "Application, document, session, and persistence engineering"
+    disposition: "retain_and_harden"
+    categories: ["G03","G04","G08","G12","G13","G14","G20"]
+  - id: "PR-144"
+    pr: 144
+    title: "Backup and restore UI integration"
+    merge_sha: "d4e4396d9a245476841bca06c50c7115ab15b0fe"
+    branch_tip_sha: "4e223c66e528ae8912628e2a8402b8e2c450ef1d"
+    introduced_commit_count_including_merge: 82
+    owner: "Application, session, persistence, and release engineering"
+    disposition: "retain_and_qualify"
+    categories: ["G03","G12","G13","G14","G17"]
+  - id: "PR-145"
+    pr: 145
+    title: "Fictional motion drafting and publication durability"
+    merge_sha: "f5a9598965c7e05495dd3b4da9d7ece2d2eed37a"
+    branch_tip_sha: "4877e277d46ca685534f23e8df245d2d69d1433b"
+    introduced_commit_count_including_merge: 209
+    owner: "Drafting, document, session, persistence, and release engineering"
+    disposition: "retain_and_harden"
+    categories: ["G02","G03","G04","G05","G06","G07","G08","G09","G12","G13","G14","G17","G20"]
+  - id: "PR-146"
+    pr: 146
+    title: "Current-capabilities documentation"
+    merge_sha: "c8e70ae00bba793bd9abe952f15145498e7228fd"
+    branch_tip_sha: "0882589ca51b24d2130f6ecf8556f75c23b1c72e"
+    introduced_commit_count_including_merge: 2
+    owner: "Product, architecture, and release engineering"
+    disposition: "resynchronize_to_final_candidate"
+    categories: ["G03","G07","G09","G14","G17","G18"]
+  - id: "PR-147"
+    pr: 147
+    title: "Case File Review and corpus trust"
+    merge_sha: "22472816d3346a1bb4688c3a867b66fa61fb5ba4"
+    branch_tip_sha: "e3c66f914dd7610c442f6018ebf4c976405f8c25"
+    introduced_commit_count_including_merge: 109
+    owner: "Application, session, persistence, runtime, document, and release engineering"
+    disposition: "split_retain_and_retire_by_group"
+    categories: ["G01","G02","G03","G04","G05","G06","G07","G08","G09","G10","G12","G13","G14","G16","G17","G20"]
+
+migrations:
+  public_base_endpoint: "v069_add_verification_dimensions"
+  immutable_added_sequence:
+    - "v070_add_authority_reviewed_proposition"
+    - "v071_create_draft_artifact_intents"
+    - "v072_harden_corpus_review_integrity"
+    - "v073_create_case_file_review_projects"
+  sequence_owner_group: "G12"
+  v073_release_disposition: "dormant_compatibility_only"
+  v073_destructive_action_authorized: false
+  next_change_rule: "append a new migration identifier; never rewrite or reuse v070-v073"
+
+groups:
+  - id: "G01"
+    title: "Case File Review product vertical"
+    owner: "Application, session, and persistence engineering"
+    source_prs: [147]
+    dimensions: ["user_visible","schema","xpc","export","model","verified_claims"]
+    disposition: "retire_before_release"
+    migration:
+      impact: "compatibility_only"
+      identifiers: ["v073_create_case_file_review_projects"]
+      data_action: "Preserve immutable migration history, dormant rows, and already-exported files; no purge is authorized."
+      destructive_action_authorized: false
+    native_journeys:
+      - id: "review-absence"
+        route: "Matter workspace, menus, Settings, status, and smoke routes"
+        fixture: "isolated synthetic v073 profile"
+        acceptance: "No visible or admissible Case File Review capability; ordinary review semantics remain."
+    release_evidence: ["T-REVIEW-RETIRE-CAP-01","T-REVIEW-RETIRE-SCHEMA-01","T-REVIEW-RETIRE-CLAIMS-01","T-REVIEW-RETIRE-SMOKE-01","native widths 880, 1100, and wide"]
+    files:
+      expected_path_count: 16
+      expected_added_files: 16
+      expected_modified_files: 0
+      expected_deleted_files: 0
+      expected_insertions: 21091
+      expected_deletions: 0
+      paths:
+        - "Apps/SupraAI/SupraAI/Review/CaseFileReviewCreationView.swift"
+        - "Apps/SupraAI/SupraAI/Review/CaseFileReviewView.swift"
+        - "Apps/SupraAI/SupraAIUITests/CaseFileReviewUITests.swift"
+        - "Packages/SupraSessions/Sources/SupraSessions/CaseFileReviewController.swift"
+        - "Packages/SupraSessions/Sources/SupraSessions/CaseFileReviewCreationController.swift"
+        - "Packages/SupraSessions/Sources/SupraSessions/CaseFileReviewExportService.swift"
+        - "Packages/SupraSessions/Tests/SupraSessionsTests/CaseFileReviewControllerTests.swift"
+        - "Packages/SupraSessions/Tests/SupraSessionsTests/CaseFileReviewCreationControllerTests.swift"
+        - "Packages/SupraSessions/Tests/SupraSessionsTests/CaseFileReviewExportServiceTests.swift"
+        - "Packages/SupraSessions/Tests/SupraSessionsTests/ReviewCreationManagedModelPinTests.swift"
+        - "Packages/SupraSessions/Tests/SupraSessionsTests/ReviewModelHardwareMetadataProjectionTests.swift"
+        - "Packages/SupraStore/Sources/SupraStore/Records/CaseFileReviewRecords.swift"
+        - "Packages/SupraStore/Sources/SupraStore/Records/CaseFileReviewSnapshotExportFormat.swift"
+        - "Packages/SupraStore/Sources/SupraStore/Repositories/CaseFileReviewRepository.swift"
+        - "Packages/SupraStore/Tests/SupraStoreTests/CaseFileReviewIntegrityMigrationTests.swift"
+        - "Packages/SupraStore/Tests/SupraStoreTests/CaseFileReviewProjectTests.swift"
+  - id: "G02"
+    title: "Generic corpus and exhaustive-analysis substrate"
+    owner: "Session and persistence engineering"
+    source_prs: [145,147]
+    dimensions: ["schema","runtime","assurance"]
+    disposition: "retain_neutral_substrate_after_owner_audit"
+    migration:
+      impact: "owns_immutable_migration"
+      identifiers: ["v072_harden_corpus_review_integrity"]
+      data_action: "Retain exact request, proof, queue, resume, and cancellation infrastructure; remove only Review-specific admission and naming."
+      destructive_action_authorized: false
+    native_journeys:
+      - id: "surviving-corpus-consumer"
+        route: "Selected independent corpus consumer"
+        fixture: "synthetic bounded corpus"
+        acceptance: "Exact reproducible completion without a Case File Review route."
+    release_evidence: ["DR-CORPUS-OWNER-01","CorpusAnalysis package tests","queue execution and proof identity tests","budget and cancellation gates"]
+    files:
+      expected_path_count: 21
+      expected_added_files: 13
+      expected_modified_files: 8
+      expected_deleted_files: 0
+      expected_insertions: 9930
+      expected_deletions: 420
+      paths:
+        - "Apps/SupraAI/SupraAIUITests/CorpusReviewQueueCompositionUITests.swift"
+        - "Packages/SupraSessions/Sources/SupraSessions/CorpusAnalysisEngine.swift"
+        - "Packages/SupraSessions/Sources/SupraSessions/CorpusAnalysisExactPlanner.swift"
+        - "Packages/SupraSessions/Sources/SupraSessions/CorpusAnalysisQueueContracts.swift"
+        - "Packages/SupraSessions/Sources/SupraSessions/CorpusAnalysisQueuePreparer.swift"
+        - "Packages/SupraSessions/Sources/SupraSessions/CorpusAnalysisQueueRunner.swift"
+        - "Packages/SupraSessions/Sources/SupraSessions/CorpusAnalysisRequestDigest.swift"
+        - "Packages/SupraSessions/Sources/SupraSessions/ExhaustiveListTask.swift"
+        - "Packages/SupraSessions/Tests/SupraSessionsTests/CorpusAnalysisEngineTests.swift"
+        - "Packages/SupraSessions/Tests/SupraSessionsTests/CorpusAnalysisQueueTests.swift"
+        - "Packages/SupraSessions/Tests/SupraSessionsTests/CorpusReviewQueueContractTests.swift"
+        - "Packages/SupraSessions/Tests/SupraSessionsTests/CorpusReviewQueueExecutionTests.swift"
+        - "Packages/SupraSessions/Tests/SupraSessionsTests/ExhaustiveListTaskTests.swift"
+        - "Packages/SupraStore/Sources/SupraStore/Records/CorpusAnalysisPartitionSliceRecord.swift"
+        - "Packages/SupraStore/Sources/SupraStore/Records/CorpusAnalysisRunRecord.swift"
+        - "Packages/SupraStore/Sources/SupraStore/Repositories/CorpusAnalysisProofIdentity.swift"
+        - "Packages/SupraStore/Sources/SupraStore/Repositories/CorpusAnalysisRepository.swift"
+        - "Packages/SupraStore/Sources/SupraStore/Repositories/CorpusAnalysisScopeInspection.swift"
+        - "Packages/SupraStore/Tests/SupraStoreTests/CorpusAnalysisMigrationTests.swift"
+        - "Packages/SupraStore/Tests/SupraStoreTests/CorpusAnalysisPreparationTests.swift"
+        - "Packages/SupraStore/Tests/SupraStoreTests/CorpusAnalysisSubmissionTests.swift"
+  - id: "G03"
+    title: "Backup, restore, recycle bin, and recovery"
+    owner: "Application, session, and persistence reliability engineering"
+    source_prs: [141,142,143,144,145,146,147]
+    dimensions: ["user_visible","schema","security"]
+    disposition: "retain_and_qualify"
+    migration:
+      impact: "cross_version_restore"
+      identifiers: ["v069_add_verification_dimensions","v072_harden_corpus_review_integrity","v073_create_case_file_review_projects"]
+      data_action: "Open and restore public v069, owner v072, and shared-main v073 copies without rebuilding the owner profile."
+      destructive_action_authorized: false
+    native_journeys:
+      - id: "backup-restore"
+        route: "Settings to Backup and Restore to activation and relaunch"
+        fixture: "isolated synthetic stores plus owner-signed copy"
+        acceptance: "Restore is truthful, recoverable, and compatible across the frozen endpoints."
+    release_evidence: ["Restore Store and session tests","Recycle Bin tests","test-backup-restore-documentation.sh","owner-signed backup and restore drill"]
+    files:
+      expected_path_count: 18
+      expected_added_files: 11
+      expected_modified_files: 7
+      expected_deleted_files: 0
+      expected_insertions: 8098
+      expected_deletions: 51
+      paths:
+        - "Apps/SupraAI/SupraAI/RecycleBinView.swift"
+        - "Apps/SupraAI/SupraAIUITests/RestoreSettingsUITests.swift"
+        - "Docs/Backup-and-Restore.md"
+        - "Packages/SupraSessions/Sources/SupraSessions/BackupController.swift"
+        - "Packages/SupraSessions/Sources/SupraSessions/DocumentMaintenance.swift"
+        - "Packages/SupraSessions/Sources/SupraSessions/RecycleBinController.swift"
+        - "Packages/SupraSessions/Tests/SupraSessionsTests/DocumentMaintenanceTests.swift"
+        - "Packages/SupraSessions/Tests/SupraSessionsTests/RestoreControllerTests.swift"
+        - "Packages/SupraStore/Sources/SupraStore/Backup/RestoreActivationService.swift"
+        - "Packages/SupraStore/Sources/SupraStore/Backup/RestoreService.swift"
+        - "Packages/SupraStore/Sources/SupraStore/Backup/RestoreSidecarStore.swift"
+        - "Packages/SupraStore/Sources/SupraStore/Backup/RestoreSnapshotInspector.swift"
+        - "Packages/SupraStore/Sources/SupraStore/Records/RemediationRecoveryItemRecord.swift"
+        - "Packages/SupraStore/Sources/SupraStore/Repositories/RemediationRecoveryRepository.swift"
+        - "Packages/SupraStore/Tests/SupraStoreTests/RestoreActivationServiceTests.swift"
+        - "Packages/SupraStore/Tests/SupraStoreTests/RestoreServiceTests.swift"
+        - "Packages/SupraStore/Tests/SupraStoreTests/RestoreSnapshotInspectorTests.swift"
+        - "Packages/SupraStore/Tests/SupraStoreTests/RestoreTestSupport.swift"
+  - id: "G04"
+    title: "Authorities and reviewed research evidence"
+    owner: "Research, session, and persistence engineering"
+    source_prs: [137,143,145,147]
+    dimensions: ["user_visible","schema","security","verified_claims"]
+    disposition: "retain_and_harden_reviewed_packet_boundary"
+    migration:
+      impact: "owns_immutable_migration"
+      identifiers: ["v070_add_authority_reviewed_proposition"]
+      data_action: "Reviewed proposition state remains canonical and becomes input to typed authority packets."
+      destructive_action_authorized: false
+    native_journeys:
+      - id: "reviewed-authority"
+        route: "Research Results to review to Authorities to permitted drafting"
+        fixture: "synthetic public authorities"
+        acceptance: "Only reviewed, matter-scoped authority evidence can support authority-asserting output."
+    release_evidence: ["AuthorityReviewedProposition tests","AuthoritiesControllerReviewedProposition tests","ResearchAuthorities UI tests","R0 authority-output containment gates"]
+    files:
+      expected_path_count: 12
+      expected_added_files: 3
+      expected_modified_files: 9
+      expected_deleted_files: 0
+      expected_insertions: 3952
+      expected_deletions: 46
+      paths:
+        - "Apps/SupraAI/SupraAI/Authorities/AuthorityDetailView.swift"
+        - "Apps/SupraAI/SupraAI/Authorities/MatterAuthoritiesView.swift"
+        - "Apps/SupraAI/SupraAIUITests/ResearchAuthoritiesUITests.swift"
+        - "Packages/SupraResearch/Tests/SupraResearchTests/Fixtures/Legal/legal-proposition-support.json"
+        - "Packages/SupraResearch/Tests/SupraResearchTests/LegalPropositionSupportTests.swift"
+        - "Packages/SupraSessions/Sources/SupraSessions/AuthoritiesController.swift"
+        - "Packages/SupraSessions/Sources/SupraSessions/ResearchSessionController.swift"
+        - "Packages/SupraSessions/Tests/SupraSessionsTests/AuthoritiesControllerReviewedPropositionTests.swift"
+        - "Packages/SupraStore/Sources/SupraStore/Records/AuthorityRecord.swift"
+        - "Packages/SupraStore/Sources/SupraStore/Records/AuthorityReviewedProposition.swift"
+        - "Packages/SupraStore/Sources/SupraStore/Repositories/AuthorityRepository.swift"
+        - "Packages/SupraStore/Tests/SupraStoreTests/AuthorityReviewedPropositionTests.swift"
+  - id: "G05"
+    title: "Atomic publication, deletion, and source integrity"
+    owner: "Document and persistence reliability engineering"
+    source_prs: [145,147]
+    dimensions: ["security","export","persistence"]
+    disposition: "retain_as_transactional_boundary"
+    migration:
+      impact: "none_owned"
+      identifiers: []
+      data_action: "Use atomic commit, durability, audit, and cleanup receipts; do not infer success from partial filesystem or Store work."
+      destructive_action_authorized: false
+    native_journeys:
+      - id: "atomic-publication"
+        route: "Draft or export publication and permanent source deletion"
+        fixture: "synthetic files with link and race adversaries"
+        acceptance: "Success is shown only after committed durable state; failures preserve recoverability."
+    release_evidence: ["DurableFileWriter tests","DraftArtifactReconciliation tests","AtomicSourcePublicationIntegrityTests","permanent deletion integrity tests"]
+    files:
+      expected_path_count: 27
+      expected_added_files: 25
+      expected_modified_files: 2
+      expected_deleted_files: 0
+      expected_insertions: 11573
+      expected_deletions: 14
+      paths:
+        - "Packages/SupraDocuments/Sources/SupraDocuments/DurableFileWriter.swift"
+        - "Packages/SupraDocuments/Tests/SupraDocumentsTests/DurableFileWriterAnchorRetentionCleanupTests.swift"
+        - "Packages/SupraDocuments/Tests/SupraDocumentsTests/DurableFileWriterBoundedReadTests.swift"
+        - "Packages/SupraDocuments/Tests/SupraDocumentsTests/DurableFileWriterDirectoryEdgeRaceTests.swift"
+        - "Packages/SupraDocuments/Tests/SupraDocumentsTests/DurableFileWriterLinkPrecedenceTests.swift"
+        - "Packages/SupraDocuments/Tests/SupraDocumentsTests/DurableFileWriterPostInstallRollbackTests.swift"
+        - "Packages/SupraDocuments/Tests/SupraDocumentsTests/DurableFileWriterPublicLinkTests.swift"
+        - "Packages/SupraDocuments/Tests/SupraDocumentsTests/DurableFileWriterRegularFileCaptureTests.swift"
+        - "Packages/SupraDocuments/Tests/SupraDocumentsTests/DurableFileWriterRemainingLinkTests.swift"
+        - "Packages/SupraDocuments/Tests/SupraDocumentsTests/DurableFileWriterRestorationDurabilityTests.swift"
+        - "Packages/SupraDocuments/Tests/SupraDocumentsTests/DurableFileWriterSingleLinkPublicationTests.swift"
+        - "Packages/SupraDocuments/Tests/SupraDocumentsTests/DurableFileWriterSourceReappearanceTests.swift"
+        - "Packages/SupraDocuments/Tests/SupraDocumentsTests/DurableFileWriterTemporaryCleanupContentTests.swift"
+        - "Packages/SupraDocuments/Tests/SupraDocumentsTests/DurableFileWriterTests.swift"
+        - "Packages/SupraDocuments/Tests/SupraDocumentsTests/DurableFileWriterValidatorMutationTests.swift"
+        - "Packages/SupraSessions/Sources/SupraSessions/DraftArtifactReconciliationService.swift"
+        - "Packages/SupraSessions/Tests/SupraSessionsTests/DraftArtifactReconciliationDurabilityTests.swift"
+        - "Packages/SupraSessions/Tests/SupraSessionsTests/DraftArtifactReconciliationPublicLinkTests.swift"
+        - "Packages/SupraSessions/Tests/SupraSessionsTests/DraftArtifactReconciliationSingleLinkTests.swift"
+        - "Packages/SupraSessions/Tests/SupraSessionsTests/DraftArtifactReconciliationTests.swift"
+        - "Packages/SupraSessions/Tests/SupraSessionsTests/PublicationPostInstallSyncTests.swift"
+        - "Packages/SupraSessions/Tests/SupraSessionsTests/PublicationSingleLinkTests.swift"
+        - "Packages/SupraSessions/Tests/SupraSessionsTests/PublicationTemporaryCleanupTests.swift"
+        - "Packages/SupraStore/Sources/SupraStore/Repositories/DocumentSourceIntegrityValidator.swift"
+        - "Packages/SupraStore/Tests/SupraStoreTests/AtomicSourcePublicationIntegrityTests.swift"
+        - "Packages/SupraStore/Tests/SupraStoreTests/PermanentDeletionBoundaryIntegrityTests.swift"
+        - "Packages/SupraStore/Tests/SupraStoreTests/PermanentSourceDeletionIntegrityTests.swift"
+  - id: "G06"
+    title: "Rich export models and artifacts"
+    owner: "Document and export engineering"
+    source_prs: [139,140,145,147]
+    dimensions: ["user_visible","export"]
+    disposition: "retain_and_qualify_surviving_exports"
+    migration:
+      impact: "none_owned"
+      identifiers: []
+      data_action: "Remove only Review-specific export entry points; retain generic DOCX, PDF, XLSX, and publication machinery."
+      destructive_action_authorized: false
+    native_journeys:
+      - id: "native-export"
+        route: "Surviving document or drafting workflow to DOCX, PDF, or XLSX"
+        fixture: "synthetic long and filtered artifacts"
+        acceptance: "Artifact opens natively with correct structure, limits, and publication receipt."
+    release_evidence: ["Rich export renderer tests","TabularXLSXRenderer tests","DocumentExport tests","native Numbers, Word, and PDF inspection"]
+    files:
+      expected_path_count: 23
+      expected_added_files: 8
+      expected_modified_files: 15
+      expected_deleted_files: 0
+      expected_insertions: 4164
+      expected_deletions: 172
+      paths:
+        - "Packages/SupraDocuments/Package.swift"
+        - "Packages/SupraDocuments/Sources/SupraDocuments/DocumentExport.swift"
+        - "Packages/SupraDocuments/Sources/SupraDocuments/DocumentExportValidator.swift"
+        - "Packages/SupraDocuments/Sources/SupraDocuments/RichDOCXExportRenderer.swift"
+        - "Packages/SupraDocuments/Sources/SupraDocuments/RichExportDocument.swift"
+        - "Packages/SupraDocuments/Sources/SupraDocuments/RichPDFExportRenderer.swift"
+        - "Packages/SupraDocuments/Sources/SupraDocuments/RichXLSXExportRenderer.swift"
+        - "Packages/SupraDocuments/Sources/SupraDocuments/TabularXLSXRenderer.swift"
+        - "Packages/SupraDocuments/Tests/SupraDocumentsTests/ExportBuilderTests.swift"
+        - "Packages/SupraDocuments/Tests/SupraDocumentsTests/RichExportDocumentTests.swift"
+        - "Packages/SupraDocuments/Tests/SupraDocumentsTests/RichExportRendererTests.swift"
+        - "Packages/SupraDocuments/Tests/SupraDocumentsTests/TabularXLSXRendererTests.swift"
+        - "Packages/SupraExports/Sources/SupraExports/CompositeRenderer.swift"
+        - "Packages/SupraExports/Sources/SupraExports/CourtFLRenderer.swift"
+        - "Packages/SupraExports/Sources/SupraExports/DocxPackage.swift"
+        - "Packages/SupraExports/Sources/SupraExports/LetterheadRenderer.swift"
+        - "Packages/SupraExports/Sources/SupraExports/Ooxml/OoxmlModel.swift"
+        - "Packages/SupraExports/Sources/SupraExports/Ooxml/OoxmlWriter.swift"
+        - "Packages/SupraExports/Sources/SupraExports/Ooxml/StyleSheetCompiler.swift"
+        - "Packages/SupraExports/Tests/SupraExportsTests/CourtFLRendererTests.swift"
+        - "Packages/SupraSessions/Sources/SupraSessions/DocumentExportService.swift"
+        - "Packages/SupraSessions/Tests/SupraSessionsTests/DocumentExportTests.swift"
+        - "Packages/SupraStore/Sources/SupraStore/Records/DocumentExportRecord.swift"
+  - id: "G07"
+    title: "Drafting and fictional motion workflow"
+    owner: "Drafting, session, and persistence engineering"
+    source_prs: [137,145,146,147]
+    dimensions: ["user_visible","schema","export","legal_identity"]
+    disposition: "retain_and_bind_to_canonical_identity_and_authorities"
+    migration:
+      impact: "owns_immutable_migration"
+      identifiers: ["v071_create_draft_artifact_intents"]
+      data_action: "Draft intents and source snapshots remain durable; authority-asserting work requires an accepted packet."
+      destructive_action_authorized: false
+    native_journeys:
+      - id: "matter-draft"
+        route: "Matter Edit to Draft to Florida Motion to Dismiss to verification and export"
+        fixture: "synthetic Florida matter"
+        acceptance: "Party, court, service, authority, cancellation, and artifact state remain exact."
+    release_evidence: ["SupraDrafting tests","MotionToDismissControllerTests","MatterDraftingController tests","canonical party and court RED gates","native artifact inspection"]
+    files:
+      expected_path_count: 28
+      expected_added_files: 12
+      expected_modified_files: 16
+      expected_deleted_files: 0
+      expected_insertions: 10686
+      expected_deletions: 172
+      paths:
+        - "Apps/SupraAI/SupraAI/Matters/MatterDraftingView.swift"
+        - "Docs/Drafting-Catalog-SPEC.md"
+        - "Docs/ScratchPad-SPEC.md"
+        - "Packages/SupraDrafting/Sources/SupraDrafting/DraftKindRegistry.swift"
+        - "Packages/SupraDrafting/Sources/SupraDrafting/FloridaMotionToDismissContract.swift"
+        - "Packages/SupraDrafting/Sources/SupraDrafting/Kinds/MotionToDismiss.swift"
+        - "Packages/SupraDrafting/Sources/SupraDrafting/MotionCitationShapeDetector.swift"
+        - "Packages/SupraDrafting/Sources/SupraDrafting/Pipeline/DraftPipeline.swift"
+        - "Packages/SupraDrafting/Sources/SupraDrafting/PreFileGate.swift"
+        - "Packages/SupraDrafting/Sources/SupraDrafting/Verifier.swift"
+        - "Packages/SupraDrafting/Tests/SupraDraftingTests/DefaultDraftKindRegistryTests.swift"
+        - "Packages/SupraDrafting/Tests/SupraDraftingTests/DraftPipelineTests.swift"
+        - "Packages/SupraDrafting/Tests/SupraDraftingTests/FloridaMotionToDismissContractTests.swift"
+        - "Packages/SupraDrafting/Tests/SupraDraftingTests/MotionAssemblyTests.swift"
+        - "Packages/SupraDrafting/Tests/SupraDraftingTests/MotionCitationShapeDetectorTests.swift"
+        - "Packages/SupraDrafting/Tests/SupraDraftingTests/MotionVerificationTests.swift"
+        - "Packages/SupraDraftingCore/Sources/SupraDraftingCore/DraftingCore.swift"
+        - "Packages/SupraDraftingCore/Tests/SupraDraftingCoreTests/DraftingCoreTypesTests.swift"
+        - "Packages/SupraSessions/Sources/SupraSessions/MatterDraftingController.swift"
+        - "Packages/SupraSessions/Tests/SupraSessionsTests/MatterDraftingControllerTests.swift"
+        - "Packages/SupraSessions/Tests/SupraSessionsTests/MotionToDismissControllerTests.swift"
+        - "Packages/SupraStore/Sources/SupraStore/Records/DraftArtifactIntentRecord.swift"
+        - "Packages/SupraStore/Sources/SupraStore/Repositories/DraftArtifactIntentRepository.swift"
+        - "Packages/SupraStore/Sources/SupraStore/Repositories/DraftingSourceRepository.swift"
+        - "Packages/SupraStore/Sources/SupraStore/Repositories/StructuredOutputRepository.swift"
+        - "Packages/SupraStore/Tests/SupraStoreTests/DraftArtifactIntentMigrationTests.swift"
+        - "Packages/SupraStore/Tests/SupraStoreTests/DraftArtifactIntentRepositoryTests.swift"
+        - "Packages/SupraStore/Tests/SupraStoreTests/DraftingSourceSnapshotTests.swift"
+  - id: "G08"
+    title: "Document ingestion, OCR, preview, structure, and QA"
+    owner: "Document, session, and persistence engineering"
+    source_prs: [138,143,145,147]
+    dimensions: ["user_visible","persistence","rag"]
+    disposition: "retain_and_converge_on_one_readiness_and_retrieval_owner"
+    migration:
+      impact: "consumes_existing_document_schema"
+      identifiers: []
+      data_action: "Preserve document lineage through v069; introduce no new v070-v073 migration ownership."
+      destructive_action_authorized: false
+    native_journeys:
+      - id: "document-readiness"
+        route: "Matter to Documents to import, OCR, preview, and QA"
+        fixture: "hostile and ordinary synthetic documents"
+        acceptance: "One readiness receipt governs downstream QA and bounded local retrieval."
+    release_evidence: ["document import and QA tests","OCR overlay and PDF structure tests","hostile document fixtures","T-RAG-SCAN gates","native quick-attachment status"]
+    files:
+      expected_path_count: 28
+      expected_added_files: 2
+      expected_modified_files: 26
+      expected_deleted_files: 0
+      expected_insertions: 3308
+      expected_deletions: 157
+      paths:
+        - "Apps/SupraAI/SupraAI/Documents/MatterDocumentsView.swift"
+        - "Packages/SupraDocuments/Sources/SupraDocuments/OCRCandidateSelection.swift"
+        - "Packages/SupraDocuments/Sources/SupraDocuments/OCRService.swift"
+        - "Packages/SupraDocuments/Sources/SupraDocuments/OfficeExtractors.swift"
+        - "Packages/SupraDocuments/Sources/SupraDocuments/PDFStructureAdapter.swift"
+        - "Packages/SupraDocuments/Tests/SupraDocumentsTests/OCRCandidateSelectionTests.swift"
+        - "Packages/SupraDocuments/Tests/SupraDocumentsTests/PDFStructureTests.swift"
+        - "Packages/SupraSessions/Sources/SupraSessions/DocumentChronologyController.swift"
+        - "Packages/SupraSessions/Sources/SupraSessions/DocumentImportService.swift"
+        - "Packages/SupraSessions/Sources/SupraSessions/DocumentPreviewLoader.swift"
+        - "Packages/SupraSessions/Sources/SupraSessions/DocumentProcessingQueue.swift"
+        - "Packages/SupraSessions/Sources/SupraSessions/DocumentQAController.swift"
+        - "Packages/SupraSessions/Sources/SupraSessions/MatterDocumentsController.swift"
+        - "Packages/SupraSessions/Sources/SupraSessions/OCRPreviewOverlay.swift"
+        - "Packages/SupraSessions/Tests/SupraSessionsTests/DocumentChronologyTests.swift"
+        - "Packages/SupraSessions/Tests/SupraSessionsTests/DocumentPreviewTests.swift"
+        - "Packages/SupraSessions/Tests/SupraSessionsTests/DocumentQATests.swift"
+        - "Packages/SupraSessions/Tests/SupraSessionsTests/DocumentRelationReviewTests.swift"
+        - "Packages/SupraSessions/Tests/SupraSessionsTests/HostileDocumentImportTests.swift"
+        - "Packages/SupraSessions/Tests/SupraSessionsTests/MatterDocumentsControllerTests.swift"
+        - "Packages/SupraSessions/Tests/SupraSessionsTests/Milestone3ValidationFixturesTests.swift"
+        - "Packages/SupraSessions/Tests/SupraSessionsTests/OCRPreviewOverlayTests.swift"
+        - "Packages/SupraStore/Sources/SupraStore/Repositories/StructureRepository.swift"
+        - "Packages/SupraStore/Tests/SupraStoreTests/DocumentClassificationLineageMigrationTests.swift"
+        - "Packages/SupraStore/Tests/SupraStoreTests/DocumentRelationMigrationTests.swift"
+        - "Packages/SupraStore/Tests/SupraStoreTests/DocumentSourceLineageMigrationTests.swift"
+        - "Packages/SupraStore/Tests/SupraStoreTests/GenerationLineageMigrationTests.swift"
+        - "Packages/SupraStore/Tests/SupraStoreTests/VerificationDimensionsMigrationTests.swift"
+  - id: "G09"
+    title: "Model catalog, loading truth, and hardware policy"
+    owner: "Runtime, application, and session engineering"
+    source_prs: [145,146,147]
+    dimensions: ["user_visible","model","runtime","verified_claims"]
+    disposition: "retain_shared_policy_remove_review_role"
+    migration:
+      impact: "none"
+      identifiers: []
+      data_action: "Retain shared loading and recommendation policy while removing Review-only model roles, reservations, and wording."
+      destructive_action_authorized: false
+    native_journeys:
+      - id: "ai-setup"
+        route: "Settings to AI Setup to model role and hardware guidance"
+        fixture: "synthetic installed and missing model identities"
+        acceptance: "Blockers and resource guidance reflect the exact available model and hardware."
+    release_evidence: ["LocalAIRecommendationPolicy tests","ModelLibrary content-bound loading tests","runtime truth tests","no stale Review role scan"]
+    files:
+      expected_path_count: 11
+      expected_added_files: 3
+      expected_modified_files: 8
+      expected_deleted_files: 0
+      expected_insertions: 1795
+      expected_deletions: 40
+      paths:
+        - "Docs/local-legal-model-setup.md"
+        - "Packages/SupraSessions/Sources/SupraSessions/EmbeddingModelCatalog.swift"
+        - "Packages/SupraSessions/Sources/SupraSessions/LocalAIRecommendationPolicy.swift"
+        - "Packages/SupraSessions/Sources/SupraSessions/ModelCatalog.swift"
+        - "Packages/SupraSessions/Sources/SupraSessions/ModelLibrary.swift"
+        - "Packages/SupraSessions/Sources/SupraSessions/ModelRoleAssignments.swift"
+        - "Packages/SupraSessions/Sources/SupraSessions/ModelSummary.swift"
+        - "Packages/SupraSessions/Sources/SupraSessions/SignedReleaseModelAuthorization.swift"
+        - "Packages/SupraSessions/Tests/SupraSessionsTests/LocalAIRecommendationPolicyTests.swift"
+        - "Packages/SupraSessions/Tests/SupraSessionsTests/ModelLibraryContentBoundLoadingTests.swift"
+        - "Packages/SupraSessions/Tests/SupraSessionsTests/ModelLibraryRuntimeTruthTests.swift"
+  - id: "G10"
+    title: "Runtime and XPC safety"
+    owner: "Runtime and application engineering"
+    source_prs: [137,147]
+    dimensions: ["xpc","runtime","security"]
+    disposition: "extract_neutral_coordinator_then_remove_exclusive_review_lease"
+    migration:
+      impact: "none"
+      identifiers: []
+      data_action: "Preserve ordinary cancellation confirmation, fail-closed quarantine, and exact payload and memory budgets."
+      destructive_action_authorized: false
+    native_journeys:
+      - id: "runtime-safety"
+        route: "Generation or embedding to status, cancellation, reset, and model switch"
+        fixture: "synthetic requests plus signed real model"
+        acceptance: "No cross-request leakage, false cancellation, or unsupported runtime state."
+    release_evidence: ["ExclusiveRuntimeClient parity tests","RuntimeModelContentBindingTests","Debug and Release app and XPC builds","signed real-model XPC smoke"]
+    files:
+      expected_path_count: 9
+      expected_added_files: 2
+      expected_modified_files: 7
+      expected_deleted_files: 0
+      expected_insertions: 1734
+      expected_deletions: 4
+      paths:
+        - "Apps/SupraAI/SupraAI/RuntimeXPCIntegrationView.swift"
+        - "Apps/SupraAI/SupraAI/Status/RuntimeStatusController.swift"
+        - "Apps/SupraAI/SupraAIUITests/RuntimeXPCIntegrationTests.swift"
+        - "Apps/SupraAI/SupraRuntimeService/SupraRuntimeService.swift"
+        - "Docs/Architecture/RuntimeXPCQualification.md"
+        - "Packages/SupraRuntimeClient/Sources/SupraRuntimeClient/ExclusiveRuntimeClient.swift"
+        - "Packages/SupraRuntimeClient/Tests/SupraRuntimeClientTests/ExclusiveRuntimeClientTests.swift"
+        - "Packages/SupraRuntimeInterface/Sources/SupraRuntimeInterface/DTOs/GenerateRequest.swift"
+        - "Packages/SupraRuntimeInterface/Tests/SupraRuntimeInterfaceTests/RuntimeModelContentBindingTests.swift"
+  - id: "G11"
+    title: "Policy-enforced download transport"
+    owner: "Networking and security engineering"
+    source_prs: [125]
+    dimensions: ["network","model"]
+    disposition: "retain"
+    migration:
+      impact: "none"
+      identifiers: []
+      data_action: "Retain policy enforcement and byte-accurate progress reporting."
+      destructive_action_authorized: false
+    native_journeys:
+      - id: "managed-download"
+        route: "Model or managed download to progress and completion"
+        fixture: "synthetic transport responses"
+        acceptance: "Origin policy, byte counts, cancellation, and completion remain exact."
+    release_evidence: ["PolicyTransportDownloadTests","signed-app network-origin inventory"]
+    files:
+      expected_path_count: 2
+      expected_added_files: 1
+      expected_modified_files: 1
+      expected_deleted_files: 0
+      expected_insertions: 462
+      expected_deletions: 6
+      paths:
+        - "Packages/SupraNetworking/Sources/SupraNetworking/PolicyEnforcingURLSessionTransport.swift"
+        - "Packages/SupraNetworking/Tests/SupraNetworkingTests/PolicyTransportDownloadTests.swift"
+  - id: "G12"
+    title: "Store schema sequence and shared persistence core"
+    owner: "Persistence and schema engineering"
+    source_prs: [143,144,145,147]
+    dimensions: ["schema","persistence","legal_identity"]
+    disposition: "retain_as_single_schema_sequence_owner"
+    migration:
+      impact: "owns_sequence"
+      identifiers: ["v070_add_authority_reviewed_proposition","v071_create_draft_artifact_intents","v072_harden_corpus_review_integrity","v073_create_case_file_review_projects"]
+      data_action: "Preserve v070 through v073 byte-for-byte and append the next identifier only; v073 is recognized but dormant."
+      destructive_action_authorized: false
+    native_journeys:
+      - id: "schema-compatibility"
+        route: "Open, edit matter, draft, close, restore, and reopen"
+        fixture: "public v069, owner v072, and shared-main v073 fixtures"
+        acceptance: "All frozen endpoints reach the actual final endpoint without rewrite or silent downgrade."
+    release_evidence: ["ShippingMigrationFixtureTests","migration manifest and sequence verification","failure injection and reopen proof","before and after row counts and digests"]
+    files:
+      expected_path_count: 11
+      expected_added_files: 0
+      expected_modified_files: 11
+      expected_deleted_files: 0
+      expected_insertions: 3158
+      expected_deletions: 80
+      paths:
+        - "Packages/SupraSessions/Sources/SupraSessions/MattersController.swift"
+        - "Packages/SupraStore/Sources/SupraStore/Database/SupraDatabase.swift"
+        - "Packages/SupraStore/Sources/SupraStore/Database/SupraMigrator.swift"
+        - "Packages/SupraStore/Sources/SupraStore/Repositories/DocumentJobRepository.swift"
+        - "Packages/SupraStore/Sources/SupraStore/Repositories/DocumentLibraryRepository.swift"
+        - "Packages/SupraStore/Sources/SupraStore/Repositories/DocumentSourceRepository.swift"
+        - "Packages/SupraStore/Sources/SupraStore/Repositories/MattersRepository.swift"
+        - "Packages/SupraStore/Sources/SupraStore/SupraStore.swift"
+        - "Packages/SupraStore/Tests/SupraStoreTests/Fixtures/ShippingMigrations/latest-minus-one.sqlite.gz"
+        - "Packages/SupraStore/Tests/SupraStoreTests/Fixtures/ShippingMigrations/manifest.json"
+        - "Packages/SupraStore/Tests/SupraStoreTests/ShippingMigrationFixtureTests.swift"
+  - id: "G13"
+    title: "App shell, composition, Settings, and window routing"
+    owner: "Application engineering"
+    source_prs: [142,143,144,145,147]
+    dimensions: ["user_visible","windowing","composition"]
+    disposition: "retain_and_refactor_remove_review_wiring"
+    migration:
+      impact: "none_direct"
+      identifiers: []
+      data_action: "Surgically remove Review composition while implementing the one-main-window contract and typed work context."
+      destructive_action_authorized: false
+    native_journeys:
+      - id: "app-shell"
+        route: "Launch to matter selection, tabs, Settings, and commands"
+        fixture: "isolated synthetic profile"
+        acceptance: "Visible route, selected matter, controller scope, and mutation target cannot diverge."
+    release_evidence: ["T-WINDOW gates","T-WORK-CONTEXT gates","T-MUTATION gates","native widths 880, 1100, and wide","accessibility traversal"]
+    files:
+      expected_path_count: 7
+      expected_added_files: 0
+      expected_modified_files: 7
+      expected_deleted_files: 0
+      expected_insertions: 2082
+      expected_deletions: 47
+      paths:
+        - "Apps/SupraAI/SupraAI.xcodeproj/project.pbxproj"
+        - "Apps/SupraAI/SupraAI/AppEnvironment.swift"
+        - "Apps/SupraAI/SupraAI/Matters/MatterWorkspaceView.swift"
+        - "Apps/SupraAI/SupraAI/RootView.swift"
+        - "Apps/SupraAI/SupraAI/SettingsView.swift"
+        - "Apps/SupraAI/SupraAI/SupraAIApp.swift"
+        - "Apps/SupraAI/SupraAI/SupraTheme.swift"
+  - id: "G14"
+    title: "CI, release, smoke, and claim governance"
+    owner: "Security, release, and build engineering"
+    source_prs: [134,135,137,143,144,145,146,147]
+    dimensions: ["ci","release","security","verified_claims"]
+    disposition: "retain_and_update_exact_gates"
+    migration:
+      impact: "verifies_migration_sequence"
+      identifiers: []
+      data_action: "Replace removed Review selectors with exact nonzero manifests and preserve fixed fourteen-package and migration checks."
+      destructive_action_authorized: false
+    native_journeys:
+      - id: "release-operator"
+        route: "Candidate checkout to deterministic gates, signed rehearsal, and publication"
+        fixture: "clean exact-head checkout"
+        acceptance: "No skipped, zero-count, stale-selector, unsigned, or wrong-head evidence is accepted."
+    release_evidence: ["verify-repo-facts.sh","verify-product-claims.sh","test-all-packages.sh","release transaction suite","protected signed rehearsal"]
+    files:
+      expected_path_count: 20
+      expected_added_files: 1
+      expected_modified_files: 18
+      expected_deleted_files: 1
+      expected_insertions: 1441
+      expected_deletions: 141
+      paths:
+        - ".github/CODEOWNERS"
+        - ".github/workflows/macos-ci.yml"
+        - "CONTRIBUTING.md"
+        - "Docs/Protected-CI.md"
+        - "Docs/Release-Protection.md"
+        - "Docs/Release-Runbook.md"
+        - "Scripts/generate-shipping-migration-fixtures.sh"
+        - "Scripts/public-ref-audit-exceptions.tsv"
+        - "Scripts/release-preflight.sh"
+        - "Scripts/release-rehearsal-required.sh"
+        - "Scripts/run-app-smoke-tests.sh"
+        - "Scripts/verify-product-claims.sh"
+        - "Scripts/verify-repo-facts.sh"
+        - "Tests/Scripts/Fixtures/Release/mock-command.sh"
+        - "Tests/Scripts/test-backup-restore-documentation.sh"
+        - "Tests/Scripts/test-macos-ci-gates.sh"
+        - "Tests/Scripts/test-release-preflight.sh"
+        - "Tests/Scripts/test-release-rehearsal-required.sh"
+        - "Tests/Scripts/test-release-transaction.sh"
+        - "Tests/Scripts/test-verify-product-claims.sh"
+  - id: "G15"
+    title: "Assurance and adversarial-review evidence"
+    owner: "Assurance and release engineering"
+    source_prs: [137]
+    dimensions: ["assurance","release"]
+    disposition: "refresh_for_candidate_or_mark_historical"
+    migration:
+      impact: "none"
+      identifiers: []
+      data_action: "Historical closure cannot qualify a new head; reconcile evidence against the candidate SHA."
+      destructive_action_authorized: false
+    native_journeys:
+      - id: "assurance-review"
+        route: "Candidate findings ledger to owner disposition"
+        fixture: "exact-head evidence bundle"
+        acceptance: "Every finding is current, explicitly historical, resolved, or blocked with evidence."
+    release_evidence: ["findings index reconciliation","execution report","open questions and limitations","candidate SHA receipt"]
+    files:
+      expected_path_count: 7
+      expected_added_files: 1
+      expected_modified_files: 6
+      expected_deleted_files: 0
+      expected_insertions: 102
+      expected_deletions: 16
+      paths:
+        - "Docs/Assurance-Closure.md"
+        - "review/adversarial-code-review/00-review-manifest.md"
+        - "review/adversarial-code-review/01-executive-summary.md"
+        - "review/adversarial-code-review/05-findings-index.csv"
+        - "review/adversarial-code-review/09-remediation-roadmap.md"
+        - "review/adversarial-code-review/10-open-questions-and-limitations.md"
+        - "review/adversarial-code-review/12-remediation-execution-report.md"
+  - id: "G16"
+    title: "Benchmark and attorney-support corpus"
+    owner: "Performance and evaluation engineering"
+    source_prs: [137,147]
+    dimensions: ["performance","evaluation"]
+    disposition: "retain_as_non_authoritative_evidence"
+    migration:
+      impact: "none"
+      identifiers: []
+      data_action: "Benchmark citations and recovery runs remain synthetic and cannot create product or legal-authority claims."
+      destructive_action_authorized: false
+    native_journeys:
+      - id: "benchmark"
+        route: "Developer benchmark command to report"
+        fixture: "synthetic attorney-support corpus"
+        acceptance: "p50, p95, TTFT, recovery, and resource measurements are reproducible."
+    release_evidence: ["SupraBench tests","AttorneySupportCorpus tests","threshold proposal review","resource-envelope report"]
+    files:
+      expected_path_count: 6
+      expected_added_files: 0
+      expected_modified_files: 6
+      expected_deleted_files: 0
+      expected_insertions: 72
+      expected_deletions: 40
+      paths:
+        - "Docs/Attorney-Support-Corpus.md"
+        - "Packages/SupraTestKit/Sources/SupraBench/PerformanceWorkload.swift"
+        - "Packages/SupraTestKit/Sources/SupraBench/SupraBenchCommand.swift"
+        - "Packages/SupraTestKit/Tests/SupraTestKitTests/AttorneySupportCorpusTests.swift"
+        - "Packages/SupraTestKit/Tests/SupraTestKitTests/Fixtures/attorney-support-corpus.json"
+        - "TestData/Benchmarks/threshold-proposals.json"
+  - id: "G17"
+    title: "Product truth, public website, and appcast"
+    owner: "Product, security, and release engineering"
+    source_prs: [135,136,137,144,145,146,147]
+    dimensions: ["user_visible","verified_claims","release","publication"]
+    disposition: "synchronize_to_final_surviving_capability"
+    migration:
+      impact: "documents_dormant_v073_only"
+      identifiers: ["v073_create_case_file_review_projects"]
+      data_action: "Remove Review claims, distinguish source from downloadable release, retain historical v2.3.4 appcast entry, and update appcast only at production publication."
+      destructive_action_authorized: false
+    native_journeys:
+      - id: "public-release-truth"
+        route: "Website to download to installed app"
+        fixture: "unauthenticated public assets"
+        acceptance: "Published wording, version, assets, appcast, and usable native capability match exactly."
+    release_evidence: ["verify-product-claims.sh","direct website inspection","unauthenticated appcast and asset digest","claim owner, anchor, job, version, and review date"]
+    files:
+      expected_path_count: 16
+      expected_added_files: 0
+      expected_modified_files: 16
+      expected_deleted_files: 0
+      expected_insertions: 533
+      expected_deletions: 118
+      paths:
+        - "ARCHITECTURE.md"
+        - "CHANGELOG.md"
+        - "Docs/Verified-Product-Claims.yml"
+        - "README.md"
+        - "ROADMAP.md"
+        - "website/README.md"
+        - "website/app/layout.tsx"
+        - "website/app/privacy-security/page.tsx"
+        - "website/app/privacy/page.tsx"
+        - "website/app/product/page.tsx"
+        - "website/components/CapabilityGrid.tsx"
+        - "website/components/PillarsSection.tsx"
+        - "website/components/ProvidersSection.tsx"
+        - "website/components/ScreenshotShowcase.tsx"
+        - "website/lib/constants.ts"
+        - "website/public/appcast.xml"
+  - id: "G18"
+    title: "Durable engineering and milestone documentation"
+    owner: "Architecture and owning feature teams"
+    source_prs: [137,146]
+    dimensions: ["documentation","architecture"]
+    disposition: "retain_and_update_after_ownership_settles"
+    migration:
+      impact: "descriptive_only"
+      identifiers: []
+      data_action: "Documentation must describe the final code and compatibility posture rather than planned or retired capability."
+      destructive_action_authorized: false
+    native_journeys:
+      - id: "documentation-consistency"
+        route: "Durable document to implementation and test anchor"
+        fixture: "candidate repository"
+        acceptance: "Every claim resolves to current code, evidence, or an explicit historical marker."
+    release_evidence: ["documentation link checks","architecture consistency review","product claim cross-check"]
+    files:
+      expected_path_count: 6
+      expected_added_files: 0
+      expected_modified_files: 6
+      expected_deleted_files: 0
+      expected_insertions: 58
+      expected_deletions: 48
+      paths:
+        - "Docs/Architecture/RuntimeFileAccess.md"
+        - "Docs/Document-Relation-Methodology.md"
+        - "Docs/Milestones/Document-Ingestion-Refinement.md"
+        - "Docs/Milestones/Milestone1.md"
+        - "Docs/Milestones/Milestone2.md"
+        - "Docs/Milestones/Milestone3.md"
+  - id: "G19"
+    title: "Obsolete updater planning scaffold"
+    owner: "Repository hygiene"
+    source_prs: [137]
+    dimensions: ["scaffolding"]
+    disposition: "accept_deletion"
+    migration:
+      impact: "none"
+      identifiers: []
+      data_action: "The deleted Hermes plan is non-durable scaffolding and has no live consumer."
+      destructive_action_authorized: false
+    native_journeys:
+      - id: "none"
+        route: "No product journey"
+        fixture: "not applicable"
+        acceptance: "No live documentation or CI reference remains."
+    release_evidence: ["reference scan","frozen deletion in name-status inventory"]
+    files:
+      expected_path_count: 1
+      expected_added_files: 0
+      expected_modified_files: 0
+      expected_deleted_files: 1
+      expected_insertions: 0
+      expected_deletions: 291
+      paths:
+        - ".hermes/plans/2026-06-26_auto-updater-sparkle.md"
+  - id: "G20"
+    title: "Shared session regression suite"
+    owner: "Session integration engineering"
+    source_prs: [143,145,147]
+    dimensions: ["integration_tests"]
+    disposition: "retain_until_focused_extraction_without_count_loss"
+    migration:
+      impact: "consumes_multiple_store_states"
+      identifiers: []
+      data_action: "The shared suite spans deletion, document QA, research, authorities, and session behavior and owns no migration."
+      destructive_action_authorized: false
+    native_journeys:
+      - id: "cross-feature-regression"
+        route: "Matter, documents, research, authorities, drafting, and deletion"
+        fixture: "synthetic session fixtures"
+        acceptance: "Focused extraction never reduces the exact executed test manifest."
+    release_evidence: ["full SupraSessions suite","exact executed-test count","zero skips and zero unexpected failures"]
+    files:
+      expected_path_count: 1
+      expected_added_files: 0
+      expected_modified_files: 1
+      expected_deleted_files: 0
+      expected_insertions: 483
+      expected_deletions: 1
+      paths:
+        - "Packages/SupraSessions/Tests/SupraSessionsTests/SupraSessionsTests.swift"
+
+coverage:
+  commit_bucket_count: 15
+  commit_bucket_count_sum: 471
+  group_count: 20
+  group_path_count_sum: 270
+  duplicate_commits: 0
+  unclassified_commits: 0
+  duplicate_paths: 0
+  unclassified_paths: 0

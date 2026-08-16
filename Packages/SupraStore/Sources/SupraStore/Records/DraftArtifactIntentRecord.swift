@@ -9,8 +9,11 @@ public enum DraftArtifactIntentStatus: String, Codable, Sendable {
 }
 
 public enum DraftArtifactIntentFormat: String, Codable, Sendable {
+    case pdf
     case docx
     case markdown
+    case csv
+    case xlsx
 }
 
 public enum DraftArtifactIntentKind: String, Codable, Sendable {
@@ -18,6 +21,7 @@ public enum DraftArtifactIntentKind: String, Codable, Sendable {
     case motionToDismiss
     case letterDemand
     case customDescription
+    case structuredOutputExport = "structured_output_export"
 }
 
 public struct DraftArtifactIntentRecord: Codable, FetchableRecord, PersistableRecord, Sendable, Identifiable {

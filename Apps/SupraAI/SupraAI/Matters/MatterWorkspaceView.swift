@@ -2,20 +2,27 @@ import Foundation
 import SupraSessions
 import SwiftUI
 
-/// The workspace for a single matter: a detail header plus the matter tab set
-/// (Chat, Research, Authorities, Outputs, Review, Documents, and Audit). Audit is placed
-/// last as the least frequently used tab.
+/// The workspace for a single matter: a detail header plus the matter tab set.
+/// Visible navigation follows the ordinary work sequence while raw values stay
+/// stable for deep links and existing automation.
 struct MatterWorkspaceView: View {
     @ObservedObject var controller: MattersController
     @ObservedObject var library: ModelLibrary
     @ObservedObject var queue: DocumentProcessingQueue
     @ObservedObject var settings: SettingsController
     let matter: MatterSummary
+    let onOpenImportSetup: () -> Void
+    let returnContext: WorkContext?
+    let onReturnContextConsumed: (WorkContext) -> Void
+    let onOpenNotesAndTime: (SavedWorkNotesHandoff) -> Void
 
     @State private var tab: MatterTab = .chat
     @State private var showEditor = false
     @State private var confirmingDelete = false
     @State private var showDraftSheet = false
+    @State private var showNewSavedWork = false
+    @State private var pendingDraftToSavedWorkHandoff = false
+    @State private var pendingDraftToMatterEditor = false
     @State private var lastUITestTabCommand: String?
     /// Set when an action outside the Research tab (the Authorities "New Research
     /// Session" button) wants the planner to open as the Research tab appears.
@@ -26,13 +33,29 @@ struct MatterWorkspaceView: View {
         case research = "Research"
         case authorities = "Authorities"
         case outputs = "Outputs"
-        case review = "Review"
         case documents = "Documents"
         case billing = "Billing"
         case audit = "Audit"
 
         var id: String { rawValue }
-        var label: String { rawValue }
+
+        static let navigationOrder: [MatterTab] = [
+            .chat,
+            .documents,
+            .research,
+            .authorities,
+            .outputs,
+            .billing,
+            .audit,
+        ]
+
+        var label: String {
+            switch self {
+            case .outputs: "Saved Work"
+            case .audit: "Activity"
+            default: rawValue
+            }
+        }
     }
 
     var body: some View {
@@ -45,31 +68,68 @@ struct MatterWorkspaceView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .sheet(isPresented: $showEditor) {
-            MatterEditorSheet(
-                mode: .edit,
-                draft: controller.draft(forMatter: matter.id) ?? MatterDraft(),
-                clientDirectory: controller.clientDirectory(),
-                practiceAreaDirectory: controller.practiceAreaDirectory()
-            ) { draft in
-                try? controller.updateMatter(id: matter.id, draft: draft)
+            if let submission = controller.identityEditorSubmission(
+                forMatter: matter.id
+            ) {
+                MatterEditorSheet(
+                    mode: .edit,
+                    submission: mutationEditorSubmission(from: submission),
+                    practiceAreaDirectory: controller.practiceAreaDirectory()
+                ) { submission in
+                    let outcome = controller.attemptUpdateMatter(identity: submission)
+                    if outcome.allowsSuccessPresentation {
+                        controller.loadMatters()
+                    }
+                    return outcome
+                }
+            } else {
+                ContentUnavailableView(
+                    "Matter identity unavailable",
+                    systemImage: "exclamationmark.triangle",
+                    description: Text("Close Edit, reopen the matter, and try again.")
+                )
+                .frame(minWidth: 480, minHeight: 360)
             }
         }
-        .sheet(isPresented: $showDraftSheet) {
+        .sheet(isPresented: $showDraftSheet, onDismiss: finishDraftHandoff) {
             if let drafting = controller.draftingController {
-                MatterDraftingView(controller: drafting, library: library, matterID: matter.id, matterName: matter.name)
+                MatterDraftingView(
+                    controller: drafting,
+                    library: library,
+                    matterID: matter.id,
+                    matterName: matter.name,
+                    onEditMatterIdentity: {
+                        pendingDraftToMatterEditor = true
+                        showDraftSheet = false
+                    },
+                    onOpenSavedWork: {
+                        pendingDraftToSavedWorkHandoff = true
+                        showDraftSheet = false
+                    }
+                )
             }
         }
+        .onAppear { applyReturnContext() }
+        .onChange(of: returnContext) { _, _ in applyReturnContext() }
         .confirmationDialog(
-            "Delete “\(matter.name)”?",
+            moveToRecycleBinPresentation.confirmationTitle,
             isPresented: $confirmingDelete,
             titleVisibility: .visible
         ) {
-            Button("Delete Matter", role: .destructive) { controller.deleteMatter(id: matter.id) }
+            Button(
+                moveToRecycleBinPresentation.actionTitle,
+                role: moveToRecycleBinPresentation.tone.buttonRole
+            ) {
+                controller.deleteMatter(id: matter.id)
+            }
+            .accessibilityIdentifier("matter.moveToRecycleBin.confirm")
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This hides the matter and its chats. You can't undo this from the app.")
+            Text(moveToRecycleBinPresentation.message)
+                .accessibilityIdentifier("matter.moveToRecycleBin.message")
         }
         .task {
+            applyUITestInitialEditor()
             applyUITestInitialTab()
             applyUITestInitialDraftSheet()
             await pollUITestTabCommand()
@@ -85,6 +145,39 @@ struct MatterWorkspaceView: View {
         #endif
     }
 
+    /// Restores the exact task carried through AI Setup or Settings. A context
+    /// for another matter is rejected instead of substituting this workspace.
+    private func applyReturnContext() {
+        guard let context = returnContext, context.matterID == matter.id else { return }
+        switch context.intent {
+        case .importDocuments: tab = .documents
+        case .draftMotion: showDraftSheet = true
+        }
+        onReturnContextConsumed(context)
+    }
+
+    /// Runs only after SwiftUI has completed dismissing the Draft sheet. Using
+    /// the sheet boundary prevents a state-observation race from dropping the
+    /// exact corrective/editor destination while the old sheet is still active.
+    private func finishDraftHandoff() {
+        if pendingDraftToMatterEditor {
+            pendingDraftToMatterEditor = false
+            showEditor = true
+            return
+        }
+        guard pendingDraftToSavedWorkHandoff else { return }
+        pendingDraftToSavedWorkHandoff = false
+        tab = .outputs
+        Task { @MainActor in
+            // Let the Saved Work tab mount before asking its sheet modifier to
+            // present the editor. Setting both in one render transaction can
+            // drop the presentation because the destination view does not exist
+            // yet.
+            await Task.yield()
+            showNewSavedWork = true
+        }
+    }
+
     private var header: some View {
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 4) {
@@ -92,7 +185,23 @@ struct MatterWorkspaceView: View {
                 Text(matterSubtitle)
                     .font(.supraSubheadline)
                     .foregroundStyle(.secondary)
-                if let detail = matterClientDetail {
+                HStack(spacing: 8) {
+                    Text(courtPresentation?.resolvedCourtName
+                        ?? courtPresentation?.savedCourtText
+                        ?? "No court selected")
+                        .font(.supraCaption)
+                        .foregroundStyle(
+                            courtPresentation?.canDraftCourtFiling == true
+                                ? Color.secondary : Color.orange
+                        )
+                        .accessibilityIdentifier("matter.identity.court.savedText")
+                    Button(courtPresentation?.actionTitle ?? "Choose Court") {
+                        showEditor = true
+                    }
+                    .buttonStyle(.link)
+                    .accessibilityIdentifier("matter.identity.court.action")
+                }
+                if let detail = matterReferenceDetail {
                     Text(detail)
                         .font(.supraCaption)
                         .foregroundStyle(.secondary)
@@ -105,31 +214,40 @@ struct MatterWorkspaceView: View {
                 } label: { Label("Draft", systemImage: "doc.badge.plus") }
                     .buttonStyle(.ghost)
                     .accessibilityIdentifier("matter.draft")
+                    .disabled(!(courtPresentation?.canDraftCourtFiling ?? false))
             }
             Button { showEditor = true } label: { Label("Edit", systemImage: "pencil") }
                 .buttonStyle(.ghost)
-            Button(role: .destructive) { confirmingDelete = true } label: {
-                Label("Delete", systemImage: "trash")
+            Button(role: moveToRecycleBinPresentation.tone.buttonRole) {
+                confirmingDelete = true
+            } label: {
+                Label(moveToRecycleBinPresentation.actionTitle, systemImage: "trash")
             }
-            .buttonStyle(.ghostDanger)
+            .deletionButtonStyle(moveToRecycleBinPresentation.tone)
+            .accessibilityIdentifier("matter.moveToRecycleBin")
         }
         .padding()
     }
 
-    private var matterSubtitle: String {
-        var parts = [matter.jurisdiction]
-        if let court = matter.court?.trimmingCharacters(in: .whitespacesAndNewlines), !court.isEmpty {
-            parts.append(court)
-        }
-        parts.append(matter.partyPerspective.rawValue.capitalized)
-        return parts.joined(separator: " · ")
+    private var moveToRecycleBinPresentation: DeletionActionPresentation {
+        .make(action: .moveToRecycleBin, target: .matter, displayName: matter.name)
     }
 
-    private var matterClientDetail: String? {
-        var parts: [String] = []
-        if let clientNames = matter.clientNames?.trimmingCharacters(in: .whitespacesAndNewlines), !clientNames.isEmpty {
-            parts.append(clientNames)
+    private var courtPresentation: MatterCourtPresentation? {
+        controller.courtPresentation(forMatter: matter.id)
+    }
+
+    private var matterSubtitle: String {
+        guard let presentation = courtPresentation,
+              presentation.canDraftCourtFiling,
+              let jurisdiction = presentation.resolvedJurisdictionName else {
+            return "Court identity unresolved"
         }
+        return jurisdiction
+    }
+
+    private var matterReferenceDetail: String? {
+        var parts: [String] = []
         if let internalID = matter.internalMatterID?.trimmingCharacters(in: .whitespacesAndNewlines), !internalID.isEmpty {
             parts.append("ID \(internalID)")
         }
@@ -137,16 +255,85 @@ struct MatterWorkspaceView: View {
     }
 
     private var tabBar: some View {
-        HStack {
-            Spacer(minLength: 0)
-            GhostSegmentedControl(
-                selection: $tab,
-                segments: MatterTab.allCases.map { ($0, $0.label, "matterTab.\($0.rawValue)") }
-            )
-            Spacer(minLength: 0)
+        GeometryReader { proxy in
+            HStack {
+                Spacer(minLength: 0)
+                GhostSegmentedControl(
+                    selection: $tab,
+                    segments: visibleTabs(for: proxy.size.width).map {
+                        ($0, $0.label, "matterTab.\($0.rawValue)")
+                    }
+                )
+                if usesCompactTabs(for: proxy.size.width) {
+                    Menu {
+                        ForEach([MatterTab.billing, .audit]) { compactTab in
+                            Button {
+                                tab = compactTab
+                            } label: {
+                                if tab == compactTab {
+                                    Label(compactTab.label, systemImage: "checkmark")
+                                } else {
+                                    Text(compactTab.label)
+                                }
+                            }
+                            .accessibilityIdentifier("matterTab.\(compactTab.rawValue)")
+                        }
+                    } label: {
+                        Label(
+                            tab == .billing || tab == .audit ? tab.label : "More",
+                            systemImage: "ellipsis.circle"
+                        )
+                    }
+                    .menuIndicator(.hidden)
+                    .buttonStyle(.ghost)
+                    .accessibilityIdentifier("matterTab.more")
+                }
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .padding(.horizontal)
-        .padding(.vertical, 6)
+        .frame(height: 44)
+    }
+
+    private func usesCompactTabs(for width: CGFloat) -> Bool {
+        width < 760
+    }
+
+    private func visibleTabs(for width: CGFloat) -> [MatterTab] {
+        usesCompactTabs(for: width)
+            ? Array(MatterTab.navigationOrder.prefix(5))
+            : MatterTab.navigationOrder
+    }
+
+    /// Keeps the synthetic edited name in the real editor's own `@State`. The
+    /// failed Store command therefore proves that the shipping sheet, not an
+    /// automation-only stand-in, retains the exact draft.
+    private func mutationEditorSubmission(
+        from ordinary: MatterIdentityEditorSubmission
+    ) -> MatterIdentityEditorSubmission {
+#if DEBUG
+        guard let wire = MutationFailureUITestWire(
+            arguments: ProcessInfo.processInfo.arguments
+        ), wire.operation == .matterEdit,
+           wire.targetMatterID == matter.id else { return ordinary }
+        var fixture = ordinary
+        fixture.draft.name = wire.draftName
+        return fixture
+#else
+        return ordinary
+#endif
+    }
+
+    @MainActor
+    private func applyUITestInitialEditor() {
+#if DEBUG
+        guard let wire = MutationFailureUITestWire(
+            arguments: ProcessInfo.processInfo.arguments
+        ), wire.operation == .matterEdit,
+           wire.targetMatterID == matter.id else { return }
+        showEditor = true
+#endif
     }
 
     @MainActor
@@ -205,7 +392,8 @@ struct MatterWorkspaceView: View {
                     controller: research,
                     library: library,
                     matter: matter,
-                    autoOpenPlanner: $autoOpenResearchPlanner
+                    autoOpenPlanner: $autoOpenResearchPlanner,
+                    onChooseCourt: { showEditor = true }
                 )
             } else {
                 placeholder(
@@ -235,27 +423,20 @@ struct MatterWorkspaceView: View {
             }
         case .outputs:
             if let outputs = controller.outputsController {
-                MatterOutputsView(controller: outputs, library: library, matter: matter)
+                MatterOutputsView(
+                    controller: outputs,
+                    library: library,
+                    matter: matter,
+                    showNew: $showNewSavedWork,
+                    onOpenDocuments: { tab = .documents },
+                    onOpenNotesAndTime: onOpenNotesAndTime,
+                    onOpenBilling: { tab = .billing }
+                )
             } else {
                 placeholder(
-                    "Outputs unavailable",
-                    "Select the matter again to load its structured outputs.",
+                    "Saved Work unavailable",
+                    "Select the matter again to load its saved work.",
                     systemImage: "doc.text"
-                )
-            }
-        case .review:
-            if let review = controller.caseFileReviewController,
-               let creation = controller.caseFileReviewCreationController {
-                CaseFileReviewView(
-                    controller: review,
-                    creationController: creation,
-                    library: library
-                )
-            } else {
-                placeholder(
-                    "Review unavailable",
-                    "Select the matter again to load its Review Projects.",
-                    systemImage: "tablecells"
                 )
             }
         case .billing:
@@ -277,7 +458,8 @@ struct MatterWorkspaceView: View {
                     queue: queue,
                     library: library,
                     qaController: controller.documentQAController,
-                    chronologyController: controller.documentChronologyController
+                    chronologyController: controller.documentChronologyController,
+                    onOpenImportSetup: onOpenImportSetup
                 )
             } else {
                 placeholder(
@@ -293,6 +475,7 @@ struct MatterWorkspaceView: View {
     private var auditTab: some View {
         MatterTabScaffold("Activity Log") {
             let entries = controller.auditEntries(forMatter: matter.id)
+                .filter { !isRetiredCapabilityAuditEvent($0.eventType) }
             if entries.isEmpty {
                 placeholder("No Activity Yet", "Matter, research, authority, and output actions are logged here.", systemImage: "list.bullet.rectangle")
             } else {
@@ -336,9 +519,9 @@ struct MatterWorkspaceView: View {
         case "document_ocr_failed": "Document OCR Failed"
         case "semantic_indexing_completed": "Semantic Indexing Completed"
         case "text_indexing_completed": "Text Indexing Completed"
-        case "folder_soft_deleted": "Folder Moved to Trash"
+        case "folder_soft_deleted": "Folder Moved to Recycle Bin"
         case "folder_restored": "Folder Restored"
-        case "document_soft_deleted": "Document Moved to Trash"
+        case "document_soft_deleted": "Document Moved to Recycle Bin"
         case "document_restored": "Document Restored"
         case "document_permanently_deleted": "Document Permanently Deleted"
         case "document_intelligence_setup_changed": "Document Intelligence Setup Changed"
@@ -348,9 +531,6 @@ struct MatterWorkspaceView: View {
         case "export_completed": "Export Completed"
         case "billing_draft_generated": "Billing Draft Generated"
         case "legal_model_route": "Model Route Used"
-        case "case_file_review_cell_value_edited": "Review Value Edited"
-        case "case_file_review_cell_value_restored": "Generated Review Value Restored"
-        case "case_file_review_snapshot_exported": "Review Snapshot Exported"
         default:
             eventType
                 .split(separator: "_")
@@ -358,12 +538,19 @@ struct MatterWorkspaceView: View {
                 .joined(separator: " ")
         }
     }
+
+    /// Shared-main databases can retain historical audit rows for the retired
+    /// capability. Keep those rows intact in Store while omitting them from the
+    /// active product presentation.
+    private func isRetiredCapabilityAuditEvent(_ eventType: String) -> Bool {
+        Array(eventType.split(separator: "_").prefix(3)) == ["case", "file", "review"]
+    }
 }
 
-/// Uniform chrome for a matter's list-style tabs (Research, Authorities, Outputs,
-/// Audit): a title row with optional trailing actions, a divider, and a content
-/// area that fills the remaining height — so empty states stay centered instead of
-/// floating in the middle of the pane.
+/// Uniform chrome for a matter's list-style tabs (Research, Authorities, Saved
+/// Work, Activity): a title row with optional trailing actions, a divider, and a
+/// content area that fills the remaining height — so empty states stay centered
+/// instead of floating in the middle of the pane.
 struct MatterTabScaffold<Actions: View, Content: View>: View {
     private let title: String
     private let actions: Actions

@@ -41,6 +41,20 @@ public protocol SupraRuntimeXPCServiceProtocol: NSObjectProtocol {
         withReply reply: @escaping (Data) -> Void
     )
 
+    func runtimeResidencySnapshot(
+        withReply reply: @escaping (Data) -> Void
+    )
+
+    func evictRuntimeArtifact(
+        _ requestData: Data,
+        withReply reply: @escaping (Data) -> Void
+    )
+
+    func resetRuntime(
+        _ requestData: Data,
+        withReply reply: @escaping (Data) -> Void
+    )
+
 #if DEBUG
     func runtimeLifecycleDebugStatus(
         withReply reply: @escaping (Data) -> Void

@@ -12,6 +12,7 @@ final class RuntimeGenerationCoordinator: @unchecked Sendable {
     private enum Phase {
         case running
         case cancelling
+        case finishing
     }
 
     private struct ActiveGeneration {
@@ -21,6 +22,7 @@ final class RuntimeGenerationCoordinator: @unchecked Sendable {
         let task: Task<Void, Never>
         let startGate: RuntimeGenerationStartGate
         var phase: Phase = .running
+        var budgetViolation: RuntimeBudgetViolation?
     }
 
     private let lock = NSLock()
@@ -61,11 +63,17 @@ final class RuntimeGenerationCoordinator: @unchecked Sendable {
             epoch: epoch,
             eventSink: eventSink,
             task: task,
-            startGate: startGate
+            startGate: startGate,
+            budgetViolation: nil
         )
         lock.unlock()
 
-        deliver(type: .generationStarted, generationID: request.generationID, eventSink: eventSink)
+        deliver(
+            type: .generationStarted,
+            generationID: request.generationID,
+            epoch: epoch,
+            eventSink: eventSink
+        )
 #if DEBUG
         // Hosted-XPC regression seam: keep the already-installed task gated after
         // admission becomes externally observable. The matching cancellation,
@@ -157,6 +165,8 @@ final class RuntimeGenerationCoordinator: @unchecked Sendable {
                     prompt: request.prompt,
                     systemPrompt: request.systemPrompt,
                     history: request.history,
+                    contextWorkload: request.contextWorkload,
+                    allowsExactSourceRepacking: request.allowsExactSourceRepacking,
                     options: request.options
                 ) { token in
                     coordinator.emitToken(
@@ -202,7 +212,13 @@ final class RuntimeGenerationCoordinator: @unchecked Sendable {
         let eventSink = activeGeneration.eventSink
         lock.unlock()
 
-        deliver(type: .token, generationID: generationID, tokenText: token, eventSink: eventSink)
+        deliver(
+            type: .token,
+            generationID: generationID,
+            epoch: epoch,
+            tokenText: token,
+            eventSink: eventSink
+        )
     }
 
     private func completeGeneration(
@@ -211,7 +227,7 @@ final class RuntimeGenerationCoordinator: @unchecked Sendable {
         metrics: RuntimeMetrics
     ) {
         lock.lock()
-        guard let activeGeneration,
+        guard var activeGeneration,
               activeGeneration.request.generationID == generationID,
               activeGeneration.epoch == epoch,
               activeGeneration.phase == .running else {
@@ -219,13 +235,26 @@ final class RuntimeGenerationCoordinator: @unchecked Sendable {
             return
         }
 
+        activeGeneration.phase = .finishing
         let eventSink = activeGeneration.eventSink
-        self.activeGeneration = nil
+        self.activeGeneration = activeGeneration
         lock.unlock()
 
-        deliver(type: .metrics, generationID: generationID, metrics: metrics, eventSink: eventSink)
-        deliver(type: .generationCompleted, generationID: generationID, metrics: metrics, eventSink: eventSink)
-        onTerminal(generationID, epoch)
+        guard deliver(
+            type: .metrics,
+            generationID: generationID,
+            epoch: epoch,
+            metrics: metrics,
+            eventSink: eventSink
+        ) else { return }
+        guard deliver(
+            type: .generationCompleted,
+            generationID: generationID,
+            epoch: epoch,
+            metrics: metrics,
+            eventSink: eventSink
+        ) else { return }
+        finishTerminalPublication(generationID: generationID, epoch: epoch)
     }
 
     private func completeCancelledGeneration(
@@ -233,7 +262,7 @@ final class RuntimeGenerationCoordinator: @unchecked Sendable {
         epoch: RuntimeGenerationEpoch
     ) {
         lock.lock()
-        guard let activeGeneration,
+        guard var activeGeneration,
               activeGeneration.request.generationID == generationID,
               activeGeneration.epoch == epoch,
               activeGeneration.phase == .running else {
@@ -241,19 +270,21 @@ final class RuntimeGenerationCoordinator: @unchecked Sendable {
             return
         }
 
+        activeGeneration.phase = .finishing
         let eventSink = activeGeneration.eventSink
-        self.activeGeneration = nil
+        self.activeGeneration = activeGeneration
         lock.unlock()
 
         let metrics = RuntimeMetrics()
-        deliver(
+        guard deliver(
             type: .generationCancelled,
             generationID: generationID,
+            epoch: epoch,
             message: "Generation cancelled.",
             metrics: metrics,
             eventSink: eventSink
-        )
-        onTerminal(generationID, epoch)
+        ) else { return }
+        finishTerminalPublication(generationID: generationID, epoch: epoch)
     }
 
     private func failGeneration(
@@ -262,7 +293,7 @@ final class RuntimeGenerationCoordinator: @unchecked Sendable {
         error: Error
     ) {
         lock.lock()
-        guard let activeGeneration,
+        guard var activeGeneration,
               activeGeneration.request.generationID == generationID,
               activeGeneration.epoch == epoch,
               activeGeneration.phase == .running else {
@@ -270,18 +301,20 @@ final class RuntimeGenerationCoordinator: @unchecked Sendable {
             return
         }
 
+        activeGeneration.phase = .finishing
         let eventSink = activeGeneration.eventSink
-        self.activeGeneration = nil
+        self.activeGeneration = activeGeneration
         lock.unlock()
 
-        deliver(
+        guard deliver(
             type: .generationFailed,
             generationID: generationID,
+            epoch: epoch,
             message: "Generation failed.",
             error: RuntimeErrorMapper.generationFailed(error),
             eventSink: eventSink
-        )
-        onTerminal(generationID, epoch)
+        ) else { return }
+        finishTerminalPublication(generationID: generationID, epoch: epoch)
     }
 
     private func finishCancellation(
@@ -293,7 +326,8 @@ final class RuntimeGenerationCoordinator: @unchecked Sendable {
         guard let activeGeneration,
               activeGeneration.request.generationID == generationID,
               activeGeneration.epoch == epoch,
-              activeGeneration.phase == .cancelling else {
+              activeGeneration.phase == .cancelling,
+              activeGeneration.budgetViolation == nil else {
             lock.unlock()
             return nil
         }
@@ -306,6 +340,7 @@ final class RuntimeGenerationCoordinator: @unchecked Sendable {
         deliver(
             type: .generationCancelled,
             generationID: generationID,
+            epoch: epoch,
             message: "Generation cancelled.",
             metrics: metrics,
             eventSink: eventSink
@@ -314,24 +349,159 @@ final class RuntimeGenerationCoordinator: @unchecked Sendable {
         return CancelGenerationResponse(status: .cancelled, generationID: generationID, metrics: metrics)
     }
 
+    @discardableResult
     private func deliver(
         type: GenerationEventType,
         generationID: GenerationID,
+        epoch: RuntimeGenerationEpoch,
         tokenText: String? = nil,
         message: String? = nil,
         metrics: RuntimeMetrics? = nil,
         error: RuntimeError? = nil,
         eventSink: any GenerationEventSinkProtocol
+    ) -> Bool {
+        do {
+            let event = try eventBuffer.append(
+                generationID: generationID,
+                type: type,
+                tokenText: tokenText,
+                message: message,
+                metrics: metrics,
+                error: error
+            )
+            eventSink.receive(event) {}
+            return true
+        } catch let violation as RuntimeBudgetViolation {
+            let cancellationStarted = cancelForBudgetViolation(
+                generationID: generationID,
+                epoch: epoch,
+                violation: violation
+            )
+            if !cancellationStarted {
+                publishLiveBudgetFailure(
+                    generationID: generationID,
+                    violation: violation,
+                    eventSink: eventSink
+                )
+            }
+            return false
+        } catch {
+            let violation = RuntimeBudgetViolation(
+                dimension: .encodedEventBytes,
+                limit: 0,
+                actual: 1
+            )
+            let cancellationStarted = cancelForBudgetViolation(
+                generationID: generationID,
+                epoch: epoch,
+                violation: violation
+            )
+            if !cancellationStarted {
+                publishLiveBudgetFailure(
+                    generationID: generationID,
+                    violation: violation,
+                    eventSink: eventSink
+                )
+            }
+            return false
+        }
+    }
+
+    /// Budget overflow uses the same task-first cancellation discipline as an
+    /// explicit client cancel. The generation slot is retained until both the
+    /// model actor and its Task have observed cancellation, preventing a delayed
+    /// cancel from reaching a successor generation that reuses the public ID.
+    private func cancelForBudgetViolation(
+        generationID: GenerationID,
+        epoch: RuntimeGenerationEpoch,
+        violation: RuntimeBudgetViolation
+    ) -> Bool {
+        lock.lock()
+        guard var activeGeneration,
+              activeGeneration.request.generationID == generationID,
+              activeGeneration.epoch == epoch,
+              activeGeneration.phase == .running
+                || activeGeneration.phase == .finishing else {
+            lock.unlock()
+            return false
+        }
+        activeGeneration.phase = .cancelling
+        activeGeneration.budgetViolation = violation
+        let task = activeGeneration.task
+        let startGate = activeGeneration.startGate
+        self.activeGeneration = activeGeneration
+        lock.unlock()
+
+        task.cancel()
+        startGate.open()
+        Task { [weak self, modelController, task] in
+            await modelController.cancel()
+            await task.value
+            self?.finishBudgetCancellation(
+                generationID: generationID,
+                epoch: epoch,
+                violation: violation
+            )
+        }
+        return true
+    }
+
+    private func finishBudgetCancellation(
+        generationID: GenerationID,
+        epoch: RuntimeGenerationEpoch,
+        violation: RuntimeBudgetViolation
     ) {
-        let event = eventBuffer.append(
+        lock.lock()
+        guard let activeGeneration,
+              activeGeneration.request.generationID == generationID,
+              activeGeneration.epoch == epoch,
+              activeGeneration.phase == .cancelling,
+              activeGeneration.budgetViolation == violation else {
+            lock.unlock()
+            return
+        }
+        let eventSink = activeGeneration.eventSink
+        self.activeGeneration = nil
+        lock.unlock()
+
+        // The replay tracker remains poisoned, so this explicit failure is sent
+        // live only. It ends the client stream without publishing a normal
+        // completion marker over partial retained output.
+        publishLiveBudgetFailure(
             generationID: generationID,
-            type: type,
-            tokenText: tokenText,
-            message: message,
-            metrics: metrics,
-            error: error
+            violation: violation,
+            eventSink: eventSink
+        )
+        onTerminal(generationID, epoch)
+    }
+
+    private func publishLiveBudgetFailure(
+        generationID: GenerationID,
+        violation: RuntimeBudgetViolation,
+        eventSink: any GenerationEventSinkProtocol
+    ) {
+        let event = eventBuffer.makeUnretainedBudgetFailureEvent(
+            generationID: generationID,
+            error: RuntimeErrorMapper.generationFailed(violation)
         )
         eventSink.receive(event) {}
+    }
+
+    private func finishTerminalPublication(
+        generationID: GenerationID,
+        epoch: RuntimeGenerationEpoch
+    ) {
+        lock.lock()
+        guard let activeGeneration,
+              activeGeneration.request.generationID == generationID,
+              activeGeneration.epoch == epoch,
+              activeGeneration.phase == .finishing else {
+            lock.unlock()
+            return
+        }
+        self.activeGeneration = nil
+        lock.unlock()
+        onTerminal(generationID, epoch)
     }
 }
 

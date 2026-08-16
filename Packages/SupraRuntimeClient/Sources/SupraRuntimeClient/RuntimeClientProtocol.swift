@@ -1,7 +1,10 @@
 import SupraCore
 import SupraRuntimeInterface
 
-public protocol RuntimeClientProtocol: Sendable {
+/// Feature-facing runtime surface. GPU-backed methods are admitted by the
+/// shared model-execution coordinator; observation and exact cancellation are
+/// independently admitted. Recovery/reset methods are deliberately absent.
+public protocol RuntimeFeatureClientProtocol: Sendable {
     /// Eagerly establishes the XPC connection. Reserved for explicit lifecycle
     /// management; the connection is otherwise established lazily on first use.
     func connect() async throws
@@ -13,10 +16,6 @@ public protocol RuntimeClientProtocol: Sendable {
     func unloadModel() async throws -> UnloadModelResponse
     func reloadCurrentModel() async throws -> LoadModelResponse
     func runtimeStatus() async throws -> RuntimeStatus
-    /// Tears down and re-establishes the XPC connection. Reserved for runtime
-    /// recovery; not currently invoked from a UI path.
-    func restartRuntimeService() async throws
-
     // MARK: - Milestone 3: embeddings
 
     func loadEmbeddingModel(_ request: LoadEmbeddingModelRequest) async throws -> LoadEmbeddingModelResponse
@@ -24,7 +23,33 @@ public protocol RuntimeClientProtocol: Sendable {
     func embeddingStatus() async throws -> EmbeddingModelStatus
 }
 
-public extension RuntimeClientProtocol {
+/// Privileged process-lifecycle controls. Ordinary feature gateways and scoped
+/// model-execution permits intentionally expose only
+/// `RuntimeFeatureClientProtocol`.
+public protocol RuntimeResidencyClientProtocol: Sendable {
+    func runtimeResidencySnapshot() async throws -> RuntimeServiceResidencySnapshot
+    func evictRuntimeArtifact(
+        _ request: RuntimeServiceArtifactEvictionRequest
+    ) async throws -> RuntimeServiceArtifactEvictionResponse
+    func resetRuntime(_ request: RuntimeServiceResetRequest) async throws -> RuntimeServiceResetReceipt
+}
+
+/// Privileged lifecycle surface held only by the process composition and
+/// RuntimeSafety recovery owner.
+public protocol RuntimeRecoveryClientProtocol: RuntimeResidencyClientProtocol {
+    /// Tears down and re-establishes the XPC connection.
+    func restartRuntimeService() async throws
+}
+
+/// Backward-compatible transport surface for low-level clients and test
+/// doubles. Ordinary feature code receives only `RuntimeFeatureClientProtocol`
+/// through `ModelExecutionGateway`; production transport owners additionally
+/// conform to `RuntimeRecoveryClientProtocol`.
+public protocol RuntimeClientProtocol: RuntimeFeatureClientProtocol {
+    func restartRuntimeService() async throws
+}
+
+public extension RuntimeFeatureClientProtocol {
     func countTokens(_ request: CountTokensRequest) async throws -> CountTokensResponse {
         throw RuntimeClientError.remoteInvocationFailed(
             "Token counting is not supported by this runtime client."

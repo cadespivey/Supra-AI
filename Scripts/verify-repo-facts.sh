@@ -17,6 +17,8 @@ fail() {
 [[ -f "$pbxproj" ]] || { printf '%s\n' 'ERROR: Xcode project source is missing' >&2; exit 1; }
 bash "${repo_root}/Scripts/list-local-packages.sh" --verify || status=1
 bash "${repo_root}/Scripts/verify-migration-sequence.sh" || status=1
+bash "${repo_root}/Scripts/verify-release-scope-ledger.sh" || status=1
+bash "${repo_root}/Tests/Scripts/test-release-scope-ledger.sh" || status=1
 
 temporary_dir="$(mktemp -d)"
 trap 'rm -rf "$temporary_dir"' EXIT

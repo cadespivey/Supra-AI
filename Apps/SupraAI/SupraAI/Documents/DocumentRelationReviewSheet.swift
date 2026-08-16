@@ -1,3 +1,4 @@
+import Foundation
 import SupraCore
 import SupraDesignSystem
 import SupraSessions
@@ -231,6 +232,7 @@ private struct RelationOverrideSheet: View {
 
     @State private var reverseDirection = true
     @State private var kind = DocumentRelationKind.supersedes
+    @State private var reason = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -249,6 +251,10 @@ private struct RelationOverrideSheet: View {
             }
             Toggle("Reverse document direction", isOn: $reverseDirection)
 
+            TextField("Reason for override", text: $reason)
+                .textFieldStyle(.roundedBorder)
+                .accessibilityIdentifier("relations.overrideReason")
+
             Text(directionSummary)
                 .font(.supraCaption)
                 .foregroundStyle(.secondary)
@@ -261,9 +267,17 @@ private struct RelationOverrideSheet: View {
                     .buttonStyle(.ghost)
                 Spacer()
                 Button("Save & Confirm Override") {
+                    let trimmedReason = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !trimmedReason.isEmpty,
+                          let evidenceData = try? JSONSerialization.data(withJSONObject: [
+                              "schema_version": 1,
+                              "basis": "user_review_override",
+                              "reason": trimmedReason,
+                          ]),
+                          let evidence = String(data: evidenceData, encoding: .utf8)
+                    else { return }
                     let from = reverseDirection ? item.relation.toDocumentID : item.relation.fromDocumentID
                     let to = reverseDirection ? item.relation.fromDocumentID : item.relation.toDocumentID
-                    let evidence = #"{"schema_version":1,"basis":"user_review_override"}"#
                     if (try? controller.createAndConfirmOverride(
                         replacingRelationID: item.id,
                         fromDocumentID: from,
@@ -275,6 +289,7 @@ private struct RelationOverrideSheet: View {
                     }
                 }
                 .buttonStyle(.borderedProminent)
+                .disabled(reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 .accessibilityIdentifier("relations.saveOverride")
             }
         }

@@ -22,6 +22,14 @@ struct DatabaseRecoveryState: Sendable {
     let failure: Failure
     let recoveryItemURL: URL?
 
+    private var liveDatabaseURL: URL? {
+        try? DatabasePath.appSupportDatabaseURL()
+    }
+
+    private var liveBlobsDirectoryURL: URL {
+        DocumentStorage.makeDefault().blobsDirectory
+    }
+
     var title: String {
         switch failure {
         case .snapshot: "Database upgrade paused"
@@ -41,27 +49,308 @@ struct DatabaseRecoveryState: Sendable {
         }
     }
 
-    var recoveryActionTitle: String {
-        switch failure {
-        case .restore: "Show Recovery Safety Copy"
-        case .snapshot, .migration: "Show Recovery Snapshot"
+    var recoveryFolderURL: URL? {
+        return switch failure {
+        case .restore:
+            recoveryItemURL
+        case .migration:
+            recoveryItemURL.map {
+                $0.hasDirectoryPath ? $0 : $0.deletingLastPathComponent()
+            }
+        case .snapshot:
+            liveDatabaseURL?.deletingLastPathComponent()
         }
     }
+
+    var recoveryDatabaseURL: URL? {
+        switch failure {
+        case .restore:
+            recoveryItemURL?.appendingPathComponent(
+                "restore-safety.sqlite",
+                isDirectory: false
+            )
+        case .migration:
+            recoveryItemURL.map {
+                $0.hasDirectoryPath
+                    ? $0.appendingPathComponent("SupraAI.sqlite", isDirectory: false)
+                    : $0
+            }
+        case .snapshot:
+            liveDatabaseURL
+        }
+    }
+
+    var recoveryBlobsDirectoryURL: URL? {
+        switch failure {
+        case .restore:
+            recoveryItemURL?.appendingPathComponent("blobs", isDirectory: true)
+        case .snapshot, .migration:
+            liveBlobsDirectoryURL
+        }
+    }
+
+    var recoveryActionTitle: String { "Show Recovery Folder" }
 
     var recoveryActionHint: String {
         switch failure {
         case .restore:
             "Opens Finder with the complete verified safety folder selected."
         case .snapshot, .migration:
-            "Opens Finder with the verified recovery database selected."
+            "Opens Finder with the folder containing the recovery database selected."
+        }
+    }
+
+    var supportDetails: String {
+        let databaseLabel: String
+        switch failure {
+        case .snapshot: databaseLabel = "Existing database"
+        case .migration, .restore: databaseLabel = "Recovery database"
+        }
+        let databasePath = recoveryDatabaseURL?.path ?? "unavailable"
+        let blobPath = recoveryBlobsDirectoryURL?.path ?? "unavailable"
+        let outcome: String
+        switch failure {
+        case .snapshot:
+            outcome = "No pre-upgrade recovery database was created. The existing database and managed-document blobs were not changed."
+        case .migration:
+            outcome = "The existing database was not replaced. The pre-upgrade database copy and existing managed-document blobs must be preserved together."
+        case .restore:
+            outcome = "Preserve the entire safety folder so the recovery database and managed-document blobs remain together."
+        }
+        return """
+        \(databaseLabel): \(databasePath)
+        Managed-document blobs: \(blobPath)
+        Recovery folder: \(recoveryFolderURL?.path ?? "unavailable")
+
+        \(outcome)
+        """
+    }
+
+    var diagnosticReport: String {
+        let stage: String
+        switch failure {
+        case .snapshot: stage = "pre-upgrade snapshot"
+        case .migration: stage = "database migration"
+        case .restore: stage = "restore activation"
+        }
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString")
+            as? String ?? "unknown"
+        return """
+        Supra AI recovery diagnostic
+        Failure stage: \(stage)
+        Normal work enabled: no
+        Recovery folder available: \(recoveryFolderURL == nil ? "no" : "yes")
+        Application version: \(version)
+        Operating system: \(ProcessInfo.processInfo.operatingSystemVersionString)
+
+        This diagnostic contains no document text, matter names, prompts, or generated output.
+        """
+    }
+}
+
+private enum CanonicalReadinessSeed {
+    static let embeddingModelID = "canonical-readiness-embedding-model-769"
+    static let embeddingModelRepoID = "synthetic/canonical-readiness-embedding-769"
+    static let embeddingModelDisplayName = "Canonical Readiness Embedding 769"
+    static let embeddingModelRevision = "canonical-readiness-revision-23"
+    static let embeddingDimension = 8
+    static let chunkerVersion = 2
+    static let timestamp = Date(timeIntervalSince1970: 1_946_249_769)
+
+    static let demoMSAName = "Master Services Agreement (2024).pdf"
+    static let demoDepositionName = "Deposition Tr. — R. Calloway (Vol. I).pdf"
+    static let demoCoverageName = "Insurance Coverage Letter.docx"
+}
+
+/// Demo mode advertises one intentionally synthetic, already-verified embedding
+/// model so the hermetic sample store never depends on a downloaded model. New
+/// demo imports still need to cross the same semantic-readiness boundary as the
+/// prebuilt sample documents, so this embedder supplies deterministic vectors for
+/// that exact synthetic model identity. App composition selects it only while
+/// `-demoMode` is active and only for `CanonicalReadinessSeed.embeddingModelID`.
+private struct CanonicalReadinessDemoEmbedder: TextEmbedder {
+    let modelID = CanonicalReadinessSeed.embeddingModelID
+    let modelRepoID = CanonicalReadinessSeed.embeddingModelRepoID
+    let modelDisplayName = CanonicalReadinessSeed.embeddingModelDisplayName
+    let modelRevision: String? = CanonicalReadinessSeed.embeddingModelRevision
+    let dimension = CanonicalReadinessSeed.embeddingDimension
+
+    func embed(_ texts: [String]) async throws -> [[Float]] {
+        texts.map { text in
+            var vector = [Float](repeating: 0, count: dimension)
+            for token in text.lowercased().components(
+                separatedBy: CharacterSet.alphanumerics.inverted
+            ) where token.count >= 2 {
+                vector[Self.bucket(token, dimension: dimension)] += 1
+            }
+            return vector
+        }
+    }
+
+    private static func bucket(_ token: String, dimension: Int) -> Int {
+        var hash: UInt64 = 1_469_598_103_934_665_603
+        for byte in token.utf8 {
+            hash = (hash ^ UInt64(byte)) &* 1_099_511_628_211
+        }
+        return Int(hash % UInt64(dimension))
+    }
+}
+
+private enum CanonicalReadinessSeedError: Error, LocalizedError {
+    case selectedEmbeddingModelUnavailable
+    case receiptNotReady(documentID: String, exclusions: [DocumentReadinessExclusionReason])
+    case consumerMismatch(consumer: DocumentReadinessConsumer, ready: Int, total: Int)
+
+    var errorDescription: String? {
+        switch self {
+        case .selectedEmbeddingModelUnavailable:
+            "The synthetic canonical-readiness embedding model is unavailable."
+        case let .receiptNotReady(documentID, exclusions):
+            "Document \(documentID) did not produce a base-ready receipt (\(exclusions.map(\.rawValue).joined(separator: ", ")))."
+        case let .consumerMismatch(consumer, ready, total):
+            "The \(consumer.rawValue) demo projection reported \(ready) of \(total) base ready."
         }
     }
 }
+
+#if DEBUG
+private enum CanonicalReadinessUITestScenario {
+    case receiptTable
+    case canonicalDemo
+
+    init?(arguments: [String]) {
+        let tableCount = arguments.filter { $0 == "-uiTestCanonicalDocumentReadiness" }.count
+        let demoCount = arguments.filter { $0 == "-uiTestCanonicalDemoReadiness" }.count
+        switch (tableCount, demoCount) {
+        case (1, 0): self = .receiptTable
+        case (0, 1): self = .canonicalDemo
+        default: return nil
+        }
+    }
+}
+
+/// Exact launch-only selector for the canonical identity fixture. The scenario,
+/// value flag, and one allowed stable matter ID must each appear exactly once;
+/// malformed launches fall through to the ordinary hermetic UI-test fixture.
+@MainActor
+struct CanonicalMatterIdentityUITestWire: Equatable {
+    static let unresolvedMatterID = "matter-identity-unresolved-971"
+    static let plaintiffMatterID = "matter-identity-plaintiff-977"
+    static let defendantMatterID = "matter-identity-defendant-983"
+
+    let matterID: String
+
+    init?(arguments: [String]) {
+        let scenario = "-uiTestCanonicalMatterIdentity"
+        let valueFlag = "-uiTestCanonicalMatterID"
+        let allowedIDs = Set([
+            Self.unresolvedMatterID,
+            Self.plaintiffMatterID,
+            Self.defendantMatterID,
+        ])
+        let scenarioMatches = arguments.indices.filter {
+            arguments[$0] == scenario
+        }
+        let valueMatches = arguments.indices.filter {
+            arguments[$0] == valueFlag
+        }
+        guard AppEnvironment.isUITestMode,
+              scenarioMatches.count == 1,
+              valueMatches.count == 1,
+              let valueIndex = valueMatches.first,
+              arguments.indices.contains(valueIndex + 1),
+              allowedIDs.contains(arguments[valueIndex + 1]),
+              arguments.filter({ allowedIDs.contains($0) }).count == 1 else {
+            return nil
+        }
+        matterID = arguments[valueIndex + 1]
+    }
+}
+
+/// Exact DEBUG-only launch contract for the native mutation-failure journey.
+/// Values stay test-owned and are accepted only with the dedicated scenario in
+/// the already-hermetic UI-test Store. Duplicate, incomplete, or mixed create /
+/// edit wires are rejected instead of falling back to a plausible fixture.
+@MainActor
+struct MutationFailureUITestWire: Equatable {
+    enum Operation: String, Equatable {
+        case matterCreate
+        case matterEdit
+    }
+
+    let operation: Operation
+    let draftName: String
+    let failureMarker: String
+    let matterID: String?
+    let originalName: String?
+
+    /// Create needs a stable request identity so an exact Retry cannot produce a
+    /// second lookalike command after SwiftUI recomputes the sheet content.
+    var targetMatterID: String {
+        matterID ?? "matter-ui-test-mutation-create"
+    }
+
+    init?(arguments: [String]) {
+        func exactValue(after flag: String) -> String? {
+            let matches = arguments.indices.filter { arguments[$0] == flag }
+            guard matches.count == 1,
+                  let index = matches.first,
+                  arguments.indices.contains(index + 1) else { return nil }
+            let value = arguments[index + 1]
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !value.isEmpty,
+                  value.count <= 240,
+                  !value.unicodeScalars.contains(where: {
+                      CharacterSet.controlCharacters.contains($0)
+                  }) else { return nil }
+            return value
+        }
+
+        let scenario = "-uiTestMutationFailureTruth"
+        guard AppEnvironment.isUITestMode,
+              arguments.filter({ $0 == scenario }).count == 1,
+              let operationRaw = exactValue(after: "-uiTestMutationOperation"),
+              let operation = Operation(rawValue: operationRaw),
+              let draftName = exactValue(after: "-uiTestMutationDraftName"),
+              let failureMarker = exactValue(after: "-uiTestMutationFailureMarker") else {
+            return nil
+        }
+
+        let matterID = exactValue(after: "-uiTestMutationMatterID")
+        let originalName = exactValue(after: "-uiTestMutationOriginalName")
+        let matterIDFlagCount = arguments.filter {
+            $0 == "-uiTestMutationMatterID"
+        }.count
+        let originalNameFlagCount = arguments.filter {
+            $0 == "-uiTestMutationOriginalName"
+        }.count
+        switch operation {
+        case .matterCreate:
+            guard matterIDFlagCount == 0,
+                  originalNameFlagCount == 0,
+                  matterID == nil,
+                  originalName == nil else { return nil }
+        case .matterEdit:
+            guard matterIDFlagCount == 1,
+                  originalNameFlagCount == 1,
+                  matterID != nil,
+                  originalName != nil else { return nil }
+        }
+
+        self.operation = operation
+        self.draftName = draftName
+        self.failureMarker = failureMarker
+        self.matterID = matterID
+        self.originalName = originalName
+    }
+}
+#endif
 
 @MainActor
 final class AppEnvironment: ObservableObject {
     @Published var runtimeServiceState: RuntimeServiceState = .disconnected
     @Published var runtimeStatusMessage = "Checking runtime"
+    @Published private(set) var runtimeRecoverySnapshot: RuntimeRecoverySnapshot = .available
     /// True when the on-disk store could not be opened and the app fell back to a
     /// throwaway temporary database — surfaced as a warning so the user knows their
     /// data is not being persisted.
@@ -118,25 +407,27 @@ final class AppEnvironment: ObservableObject {
     let scratchPadController: ScratchPadController
     /// Key-less government-data searches (SEC EDGAR, CFPB, NLRB).
     let publicRecordsController: PublicRecordsController
+    private(set) var publicRecordsMatterHandoff: PublicRecordMatterHandoff?
     let billingDraftController: BillingDraftController
     let billingSettingsController: BillingSettingsController
     // Milestone 3: document intelligence setup.
     let documentSetupController: DocumentIntelligenceSetupController
     let embeddingDownloadController: EmbeddingModelDownloadController
     let documentQueue: DocumentProcessingQueue
+    private(set) var quickAttachmentMatterHandoff: QuickAttachmentMatterHandoff?
+    private(set) var quickAttachmentUITestComposerAttachments: [ChatAttachmentContext] = []
     private let draftArtifactStorage: DocumentStorage
     private let draftArtifactReconciler: DraftArtifactReconciliationService
     private let interruptedDraftRecoveryUITestRoot: URL?
 
     private let runtimeStatusController: RuntimeStatusController
-    private let runtimeClient: ExclusiveRuntimeClient
+    private let modelExecutionCoordinator: ModelExecutionCoordinator
+    private let runtimeResidencyControlPlane: ProcessRuntimeResidencyControlPlane
+    private let runtimeResidencyCoordinator: RuntimeResidencyCoordinator
+    private var runtimeMemoryPressureSource: DispatchSourceMemoryPressure?
     /// Non-nil only for the explicitly authorized guided-Q&A XCUITest launch.
     /// The synthetic model fixture is confined to this throwaway root.
     private let guidedQAUITestModelRoot: URL?
-    /// Non-nil only for the hermetic Guided Review creation fixture. It gives
-    /// managed-model pinning a tiny signed synthetic install without consulting
-    /// the user's model library.
-    private let reviewCreationUITestModelRoot: URL?
     /// Fires a classification-only pass for the selected matter whenever a model
     /// finishes loading, so documents imported while no model was available get
     /// classified once one is ready (the queue de-dupes and no-ops when nothing is
@@ -147,28 +438,34 @@ final class AppEnvironment: ObservableObject {
         let coldStartRestore = AppEnvironment.prepareColdStartRestore()
         let restoreActivation = coldStartRestore?.activation
         let guidedQAUITestAuthorized = Self.isUITestMode && ProcessInfo.processInfo.arguments.contains("-uiTestGuidedQA")
-        let reviewCreationUITestAuthorized = Self.isUITestMode
-            && ProcessInfo.processInfo.arguments.contains("-uiTestReviewCreation")
-        let reviewCreationUITestScenario = Self.reviewCreationUITestScenario
         let interruptedDraftRecoveryUITestRoot = Self.interruptedDraftRecoveryUITestRoot()
         let baseRuntimeClient: any RuntimeClientProtocol = guidedQAUITestAuthorized
             ? GuidedQAUITestRuntimeClient()
             : RuntimeClient()
-        let runtimeClient = ExclusiveRuntimeClient(base: baseRuntimeClient)
+        let runtimeClient = RuntimeSafetyClient(base: baseRuntimeClient)
+        let modelExecutionCoordinator = ModelExecutionCoordinator(
+            runtimeClient: runtimeClient,
+            configuration: ModelExecutionConfiguration(
+                maximumQueuedTasks: 64,
+                agingIntervalTicks: 1_000_000_000
+            ),
+            monotonicNow: { DispatchTime.now().uptimeNanoseconds }
+        )
+        let runtimeResidencyControlPlane = ProcessRuntimeResidencyControlPlane(
+            runtimeClient: runtimeClient,
+            modelExecutionCoordinator: modelExecutionCoordinator
+        )
+        let runtimeResidencyCoordinator = RuntimeResidencyCoordinator(
+            controlPlane: runtimeResidencyControlPlane,
+            policy: RuntimeResidencyPolicy(maximumActions: 7)
+        )
         let guidedQAUITestModelRoot = guidedQAUITestAuthorized
             ? Optional(FileManager.default.temporaryDirectory.appendingPathComponent(
                 "SupraAI-UITest-GuidedQA-\(UUID().uuidString)",
                 isDirectory: true
             ))
             : nil
-        let reviewCreationUITestModelRoot = reviewCreationUITestAuthorized
-            ? Optional(FileManager.default.temporaryDirectory.appendingPathComponent(
-                "SupraAI-UITest-ReviewCreationModel-\(UUID().uuidString)",
-                isDirectory: true
-            ))
-            : nil
         let guidedQAUITestManagedRoots = guidedQAUITestModelRoot.map { [$0] }
-            ?? reviewCreationUITestModelRoot.map { [$0] }
             ?? [ManagedModelStorage.modelsDirectory()]
         let storeResult = AppEnvironment.makeStore(
             after: restoreActivation,
@@ -180,25 +477,24 @@ final class AppEnvironment: ObservableObject {
         let appVersion = AppEnvironment.currentAppVersion()
         let modelLibrary = ModelLibrary(
             store: store,
-            runtimeClient: runtimeClient,
+            runtimeClient: modelExecutionCoordinator,
             managedModelRoots: guidedQAUITestManagedRoots,
-            hardwareProfile: Self.reviewCreationHardwareProfile(
-                modelsDirectory: ManagedModelStorage.modelsDirectory()
-            )
+            runtimeResidencyCoordinator: runtimeResidencyCoordinator
         )
         let tokenStore = APIKeyStoreComposition.live()
         self.store = store
         self.usingFallbackStore = storeResult.isFallback
         self.databaseRecoveryState = storeResult.recoveryState
         self.runtimeStatusController = RuntimeStatusController(runtimeClient: runtimeClient)
-        self.runtimeClient = runtimeClient
+        self.modelExecutionCoordinator = modelExecutionCoordinator
+        self.runtimeResidencyControlPlane = runtimeResidencyControlPlane
+        self.runtimeResidencyCoordinator = runtimeResidencyCoordinator
         self.guidedQAUITestModelRoot = guidedQAUITestModelRoot
-        self.reviewCreationUITestModelRoot = reviewCreationUITestModelRoot
         self.interruptedDraftRecoveryUITestRoot = interruptedDraftRecoveryUITestRoot
         self.modelLibrary = modelLibrary
         self.chatController = GlobalChatController(
             store: store,
-            runtimeClient: runtimeClient,
+            runtimeClient: modelExecutionCoordinator,
             defaultSystemPrompt: systemPrompt,
             tokenStore: tokenStore
         )
@@ -212,14 +508,20 @@ final class AppEnvironment: ObservableObject {
             appVersion: appVersion,
             tokenStore: tokenStore
         )
-        let documentStorage = DocumentStorage.makeDefault()
-        let caseFileReviewExportStorage = Self.reviewExportUITestRoot()
-            .map { DocumentStorage(root: $0) }
-            ?? documentStorage
-        let caseFileReviewExportService = CaseFileReviewExportService(
-            store: store,
-            storage: caseFileReviewExportStorage
-        )
+        // The setup-navigation wire proof must start with genuinely unmet
+        // document prerequisites and complete the real storage action without
+        // reading or changing the user's managed-document folder. Ordinary UI
+        // tests keep the existing layout; only the exact typed-setup fixture
+        // receives this process-local root and deterministic capability probe.
+        let setupNavigationUITestRequested = Self.setupNavigationUITestRequirementID != nil
+        let documentStorage = setupNavigationUITestRequested
+            ? DocumentStorage(
+                root: FileManager.default.temporaryDirectory.appendingPathComponent(
+                    "SupraAI-UITest-Setup-\(UUID().uuidString)",
+                    isDirectory: true
+                )
+            )
+            : DocumentStorage.makeDefault()
 #if DEBUG
         let restoreUITestFixture = AppEnvironment.makeRestoreUITestFixtureIfRequested()
 #else
@@ -273,7 +575,10 @@ final class AppEnvironment: ObservableObject {
                 for: router.route(for: .drafting).role, configuration: router.configuration
             ) {
             case let .success(loadedModelID):
-                return await FirmStyleExemplarParser(runtimeClient: runtimeClient, modelID: loadedModelID)
+                return await FirmStyleExemplarParser(
+                    runtimeClient: modelExecutionCoordinator,
+                    modelID: loadedModelID
+                )
                     .parse(kind: kind, fileURL: url)
             case let .failure(issue):
                 return ExemplarParseOutcome(candidate: FirmStyleProfile(), message: issue.message)
@@ -282,17 +587,28 @@ final class AppEnvironment: ObservableObject {
         self.sparkleUpdater = SparkleUpdaterController()
         self.recycleBinController = RecycleBinController(store: store)
         self.scratchPadController = ScratchPadController(store: store)
-        self.publicRecordsController = PublicRecordsController(
+        let publicRecordsController = PublicRecordsController(
             store: store,
             keyStore: tokenStore
         )
+        #if DEBUG
+        if Self.isUITestMode,
+           ProcessInfo.processInfo.arguments.contains("-uiTestPublicRecordsHandoff") {
+            publicRecordsController.seedSyntheticMatterHandoffFixture()
+        }
+        #endif
+        self.publicRecordsController = publicRecordsController
         // Phase 7: the billing draft controller is seeded from the firm's persisted
         // ScratchPad billing settings (timekeeper, rounding, sensitivity, etc.).
         let billingSettings = BillingSettingsController(store: store)
         self.billingSettingsController = billingSettings
         let billingDraft = BillingDraftController(
             store: store,
-            service: BillingDraftService.live(store: store, modelLibrary: modelLibrary, runtimeClient: runtimeClient),
+            service: BillingDraftService.live(
+                store: store,
+                modelLibrary: modelLibrary,
+                runtimeClient: modelExecutionCoordinator
+            ),
             timekeeper: billingSettings.timekeeper
         )
         billingDraft.applySettings(billingSettings.settings)
@@ -307,7 +623,28 @@ final class AppEnvironment: ObservableObject {
 
         // Document intelligence controllers must exist before MattersController so
         // it can vend a per-matter Documents controller wired to the queue + gate.
-        let documentSetup = DocumentIntelligenceSetupController(store: store, runtimeClient: runtimeClient)
+        let setupCapabilitiesProvider: @Sendable () -> DocumentToolchainCapabilities
+        if setupNavigationUITestRequested {
+            setupCapabilitiesProvider = {
+                DocumentToolchainCapabilities(
+                    version: "setup-navigation-wire-proof",
+                    pdfText: false,
+                    ocr: false,
+                    nativeImageDecoding: true,
+                    heicDecoding: false,
+                    supportedFamilies: [],
+                    ocrLanguages: []
+                )
+            }
+        } else {
+            setupCapabilitiesProvider = { DocumentToolchain.detectCapabilities() }
+        }
+        let documentSetup = DocumentIntelligenceSetupController(
+            store: store,
+            runtimeClient: modelExecutionCoordinator,
+            storage: documentStorage,
+            capabilitiesProvider: setupCapabilitiesProvider
+        )
         self.documentSetupController = documentSetup
         self.embeddingDownloadController = EmbeddingModelDownloadController(
             store: store,
@@ -316,24 +653,44 @@ final class AppEnvironment: ObservableObject {
         // A finished embedding download refreshes the setup controller's model list
         // and auto-verifies the new model, so it appears in "Select for use" and
         // turns green without a manual Re-check or Test Load.
-        self.embeddingDownloadController.onModelRegistered = { [weak documentSetup] in
-            documentSetup?.handleEmbeddingModelDownloaded()
+        self.embeddingDownloadController.onModelRegistered = {
+            [weak documentSetup] modelID, selectAfterDownload in
+            documentSetup?.handleEmbeddingModelDownloaded(
+                modelID: modelID,
+                selectAfterDownload: selectAfterDownload
+            )
         }
-        let corpusAnalysisRunner = CorpusAnalysisQueueRunner.live(
-            store: store,
-            modelLibrary: modelLibrary,
-            runtimeClient: runtimeClient
-        )
         let importService = DocumentImportService(store: store)
+        let makeDocumentTextEmbedder: @Sendable () -> (any TextEmbedder)? = {
+            guard let model = try? store.documentSettings.fetchSelectedEmbeddingModel() else {
+                return nil
+            }
+            if Self.isDemoMode, model.id == CanonicalReadinessSeed.embeddingModelID {
+                return CanonicalReadinessDemoEmbedder()
+            }
+            return RuntimeTextEmbedder(model: model, runtimeClient: modelExecutionCoordinator)
+        }
+        self.quickAttachmentMatterHandoff = QuickAttachmentMatterHandoff(
+            store: store,
+            importService: importService,
+            makeIndexingService: {
+                DocumentIndexingService(store: store, embedder: makeDocumentTextEmbedder())
+            }
+        )
+        self.publicRecordsMatterHandoff = PublicRecordMatterHandoff(
+            store: store,
+            importService: importService,
+            makeIndexingService: {
+                DocumentIndexingService(store: store, embedder: makeDocumentTextEmbedder())
+            }
+        )
         let queue = DocumentProcessingQueue(
             store: store,
             importService: importService,
             makeIndexingService: {
                 // Build a fresh indexing service per job using the currently
                 // selected embedding model (if any).
-                let model = try? store.documentSettings.fetchSelectedEmbeddingModel()
-                let embedder = model.flatMap { RuntimeTextEmbedder(model: $0, runtimeClient: runtimeClient) }
-                return DocumentIndexingService(store: store, embedder: embedder)
+                DocumentIndexingService(store: store, embedder: makeDocumentTextEmbedder())
             },
             // Suggests a taxonomy category for each imported document using the
             // assigned task model. Hermetic UI-test launches disable the service:
@@ -342,18 +699,8 @@ final class AppEnvironment: ObservableObject {
             classificationService: Self.isUITestMode ? nil : DocumentClassificationService(
                 store: store,
                 modelLibrary: modelLibrary,
-                runtimeClient: runtimeClient
-            ),
-            corpusAnalysisRunner: { payload in
-                if reviewCreationUITestScenario == "paused" {
-                    try await Task.sleep(for: .seconds(300))
-                    return
-                }
-                try await corpusAnalysisRunner.run(payload)
-            },
-            corpusAnalysisPauseRequester: { runID in
-                corpusAnalysisRunner.requestPause(runID: runID)
-            }
+                runtimeClient: modelExecutionCoordinator
+            )
         )
         documentSetup.setReindexEnqueuer { [weak queue] matterID in
             _ = queue?.enqueueReindex(matterID: matterID)
@@ -390,37 +737,9 @@ final class AppEnvironment: ObservableObject {
         }
         self.mattersController = MattersController(
             store: store,
-            runtimeClient: runtimeClient,
+            runtimeClient: modelExecutionCoordinator,
             defaultSystemPrompt: systemPrompt,
             documentQueue: queue,
-            caseFileReviewExportService: caseFileReviewExportService,
-            submitCorpusAnalysis: { request, pinnedModel, approvedScopeReceipt in
-                let prepared = try CorpusAnalysisQueuePreparer(store: store)
-                    .prepareExhaustiveListSubmission(
-                        request: request,
-                        pinnedModel: pinnedModel
-                    )
-                return try queue.enqueueCorpusAnalysis(
-                    prepared: prepared,
-                    approvedScopeReceipt: approvedScopeReceipt,
-                    startImmediately: reviewCreationUITestScenario != "setup"
-                        && reviewCreationUITestScenario != "scopeDrift"
-                )
-            },
-            makeCorpusAnalysisPinnedModel: { modelID in
-                if reviewCreationUITestScenario == "slowVerification" {
-                    try await Task.sleep(for: .seconds(300))
-                    try Task.checkCancellation()
-                }
-                let pinnedModel = try await modelLibrary.makeCorpusAnalysisPinnedModel(modelID: modelID)
-#if DEBUG
-                if reviewCreationUITestScenario == "scopeDrift" {
-                    try Self.seedUITestReviewCreationLateSource(store: store)
-                }
-#endif
-                try Task.checkCancellation()
-                return pinnedModel
-            },
             isImportReady: { documentSetup.isReadyForImport },
             draftingStorage: draftingStorage,
             beforeMotionPersistence: beforeMotionPersistence
@@ -435,10 +754,6 @@ final class AppEnvironment: ObservableObject {
         if Self.isDemoMode {
             seedDemoFixturesIfNeeded()
         }
-        // Let speculative pre-warms back off while a generation is running, so they
-        // never evict the model out from under an in-flight answer.
-        modelLibrary.isRuntimeGenerating = { [weak self] in self?.runtimeServiceState == .generating }
-        modelLibrary.isRuntimeReserved = { runtimeClient.ordinaryWorkIsBlocked }
         // When a model becomes loaded, classify any pending documents in the selected
         // matter (a no-op when none are pending). Collapse the load state to a Bool and
         // fire only on the transition into loaded.
@@ -452,6 +767,7 @@ final class AppEnvironment: ObservableObject {
                 guard let self, let matterID = self.mattersController.selectedMatterID else { return }
                 self.documentQueue.enqueueClassify(matterID: matterID)
             }
+        installRuntimeMemoryPressureHandling()
         // Headless probe dispatch (measurement qualification, finding #5): at most
         // ONE probe per launch — `HeadlessProbeMode.resolve` makes the modes
         // mutually exclusive and a conflict runs NOTHING. The model-dependent
@@ -486,6 +802,44 @@ final class AppEnvironment: ObservableObject {
             Task { await self.runCapabilityProbeIfRequested() }
         case .single(.typedProseAB):
             Task { await self.runTypedProseABProbeIfRequested() }
+        case .single(.nativeRAGControl):
+            Task { await self.runNativeRAGControlIfRequested() }
+        }
+    }
+
+    private func installRuntimeMemoryPressureHandling() {
+        let source = DispatchSource.makeMemoryPressureSource(
+            eventMask: [.normal, .warning, .critical],
+            queue: .main
+        )
+        source.setEventHandler { [weak self, weak source] in
+            guard let source else { return }
+            let level: RuntimeMemoryPressureLevel
+            if source.data.contains(.critical) {
+                level = .critical
+            } else if source.data.contains(.warning) {
+                level = .warning
+            } else {
+                level = .normal
+            }
+            Task { @MainActor [weak self] in
+                await self?.handleRuntimeMemoryPressure(level)
+            }
+        }
+        runtimeMemoryPressureSource = source
+        source.resume()
+    }
+
+    private func handleRuntimeMemoryPressure(
+        _ level: RuntimeMemoryPressureLevel
+    ) async {
+        runtimeResidencyControlPlane.setMemoryPressure(level)
+        await modelExecutionCoordinator.setRuntimeMemoryPressure(level)
+        do {
+            let queued = await modelExecutionCoordinator.runtimeResidencyQueuedWork()
+            _ = try await runtimeResidencyCoordinator.handlePressure(queuedWork: queued)
+        } catch {
+            runtimeStatusMessage = "Runtime memory-pressure recovery requires attention: \(error.localizedDescription)"
         }
     }
 
@@ -530,6 +884,87 @@ final class AppEnvironment: ObservableObject {
         terminateAfterHeadlessProbe()
     }
 
+    /// Runs the exact downloaded embedding/chat pair over the fixed synthetic
+    /// legal corpus. The runner owns a throwaway Store and temp document storage;
+    /// this method only resolves the typed invocation and emits a re-scorable raw
+    /// record. Failures use the same delimited channel so a harness never hangs.
+    private func runNativeRAGControlIfRequested() async {
+        guard case .single(.nativeRAGControl) = Self.headlessProbeResolution else { return }
+        let invocation: NativeRAGControlInvocation
+        do {
+            invocation = try NativeRAGControlInvocation.resolve()
+        } catch {
+            emitNativeRAGControlPayload(
+                json: Self.headlessFailureJSON(
+                    status: "invalid_invocation",
+                    detail: error.localizedDescription
+                ),
+                outputURL: nil
+            )
+            return
+        }
+
+        do {
+            let record = try await NativeRAGControlRunner(
+                store: store,
+                modelLibrary: modelLibrary,
+                runtimeClient: modelExecutionCoordinator
+            ).run(invocation)
+            try await resetRuntimeAfterNativeRAGControl(
+                sourceCommitSHA: invocation.sourceCommitSHA
+            )
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+            let data = try encoder.encode(record)
+            emitNativeRAGControlPayload(
+                json: String(data: data, encoding: .utf8) ?? "{}",
+                outputURL: invocation.outputURL
+            )
+        } catch {
+            let failure = error
+            try? await resetRuntimeAfterNativeRAGControl(
+                sourceCommitSHA: invocation.sourceCommitSHA
+            )
+            emitNativeRAGControlPayload(
+                json: Self.headlessFailureJSON(
+                    status: "control_failed",
+                    detail: failure.localizedDescription
+                ),
+                outputURL: invocation.outputURL
+            )
+        }
+    }
+
+    private func resetRuntimeAfterNativeRAGControl(sourceCommitSHA: String) async throws {
+        let snapshot = try await runtimeResidencyControlPlane.residencySnapshot()
+        _ = try await runtimeResidencyCoordinator.reset(RuntimeResetRequest(
+            requestID: "native-rag-control-reset-\(sourceCommitSHA.prefix(12))",
+            expectedEpoch: snapshot.epoch
+        ))
+    }
+
+    private static func headlessFailureJSON(status: String, detail: String) -> String {
+        let payload: [String: String] = ["status": status, "detail": detail]
+        return (try? JSONSerialization.data(
+            withJSONObject: payload,
+            options: [.prettyPrinted, .sortedKeys]
+        )).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+    }
+
+    private func emitNativeRAGControlPayload(json: String, outputURL: URL?) {
+        if let outputURL {
+            try? Data(json.utf8).write(to: outputURL, options: .atomic)
+        }
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString("===NATIVE_RAG_CONTROL_REPORT===\n\(json)", forType: .string)
+        print("===NATIVE_RAG_CONTROL_REPORT_BEGIN===")
+        print(json)
+        print("===NATIVE_RAG_CONTROL_REPORT_END===")
+        terminateAfterHeadlessProbe()
+    }
+
     /// Probes leave through the app's NORMAL termination path — never `exit(0)`
     /// from application code (measurement qualification, finding #5), so lifecycle
     /// teardown (delegates, XPC connections, pending writes) runs as on any quit.
@@ -571,7 +1006,6 @@ final class AppEnvironment: ObservableObject {
         // immediately while the rest of bootstrap finishes.
         if Self.isUITestMode {
             seedUITestFixturesIfNeeded()
-            await seedUITestReviewProjectIfNeeded()
         }
         if Self.isDemoMode { seedDemoFixturesIfNeeded() }
         #if DEBUG
@@ -579,17 +1013,14 @@ final class AppEnvironment: ObservableObject {
         dumpOpinionToPasteboardIfRequested()
         #endif
         await refreshRuntimeStatus()
-        // Reconcile and claim persisted corpus work before scheduling the ordinary
-        // chat-model warm. Both use the one chat-runtime slot, and exact review
-        // loads must never race a routed fallback load during launch.
+        // Reconcile persisted document work before scheduling the ordinary
+        // chat-model warm.
         documentQueue.bootstrap()
         // If the runtime already holds a model from a previous session, re-enable
         // chat without forcing the user to re-load it (the chat gate keys on
         // ModelLibrary.loadState, which otherwise starts idle each launch).
         modelLibrary.reconcileLoadedModel(runtimeStatusController.loadedModelID)
-        if !documentQueue.hasPendingCorpusAnalysisWork {
-            autoLoadStartupModelIfNeeded()
-        }
+        autoLoadStartupModelIfNeeded()
         await documentSetupController.refreshAll()
         documentChunkerVersion = (try? store.documentSettings.loadSettings().chunkerVersion)
             ?? DocumentChunkerRolloutService.approvedDefaultVersion
@@ -603,7 +1034,9 @@ final class AppEnvironment: ObservableObject {
         // lives in a separate runtime slot from the chat model, so this never evicts
         // the chat model — and it removes the first-use wait on Document Q&A, semantic
         // search, and import indexing.
-        if !Self.isUITestMode, !Self.isHeadlessProbeMode { documentSetupController.prewarmEmbeddingModel() }
+        if !Self.isUITestMode, !Self.isDemoMode, !Self.isHeadlessProbeMode {
+            documentSetupController.prewarmEmbeddingModel()
+        }
         // Auto-purge documents and chats soft-deleted past the retention window
         // (plan §12.2). Matters are never auto-purged — only manually from the Recycle Bin.
         let maintenance = DocumentMaintenance(store: store)
@@ -653,7 +1086,7 @@ final class AppEnvironment: ObservableObject {
             modelID: modelID,
             options: options,
             systemPrompt: nil,
-            runtimeClient: runtimeClient
+            runtimeClient: modelExecutionCoordinator
         )
     }
 
@@ -662,7 +1095,9 @@ final class AppEnvironment: ObservableObject {
     /// one idiom for vending the real embedder (the runtime client is otherwise private).
     func makeSelectedEmbedder() -> (any TextEmbedder)? {
         let selectedModel = try? store.documentSettings.fetchSelectedEmbeddingModel()
-        return selectedModel.flatMap { RuntimeTextEmbedder(model: $0, runtimeClient: runtimeClient) }
+        return selectedModel.flatMap {
+            RuntimeTextEmbedder(model: $0, runtimeClient: modelExecutionCoordinator)
+        }
     }
 
     /// Headless typed-vs-prose A/B (`-runTypedProseABProbe`, optional `-abRepeats N`): runs both
@@ -705,7 +1140,7 @@ final class AppEnvironment: ObservableObject {
         payload["repeats"] = repeats
         let outcomes = await TypedProseABProbe.run(
             modelID: modelID, options: options, systemPrompt: nil,
-            runtimeClient: runtimeClient, repeats: repeats
+            runtimeClient: modelExecutionCoordinator, repeats: repeats
         )
         payload["status"] = "ok"
         for arm in [TypedProseArm.typed, .prose] {
@@ -922,7 +1357,9 @@ final class AppEnvironment: ObservableObject {
 
     private func makeDocumentChunkerRolloutService() -> DocumentChunkerRolloutService {
         let selectedModel = try? store.documentSettings.fetchSelectedEmbeddingModel()
-        let embedder = selectedModel.flatMap { RuntimeTextEmbedder(model: $0, runtimeClient: runtimeClient) }
+        let embedder = selectedModel.flatMap {
+            RuntimeTextEmbedder(model: $0, runtimeClient: modelExecutionCoordinator)
+        }
         return DocumentChunkerRolloutService(store: store, embedder: embedder)
     }
 
@@ -973,59 +1410,78 @@ final class AppEnvironment: ObservableObject {
         await runtimeStatusController.refresh()
         runtimeServiceState = runtimeStatusController.serviceState
         runtimeStatusMessage = runtimeStatusController.statusMessage
+        runtimeRecoverySnapshot = runtimeStatusController.recoverySnapshot
+    }
+
+    func recoverRuntime() async {
+        runtimeRecoverySnapshot = RuntimeRecoverySnapshot(
+            phase: .recovering,
+            message: runtimeRecoverySnapshot.message
+        )
+        await runtimeStatusController.recoverRuntime()
+        runtimeServiceState = runtimeStatusController.serviceState
+        runtimeStatusMessage = runtimeStatusController.statusMessage
+        runtimeRecoverySnapshot = runtimeStatusController.recoverySnapshot
     }
 
     /// True when launched by the XCUITest harness (passes `-uiTestMode`). Drives a
     /// hermetic throwaway store + a seeded matter so UI tests never touch real data.
     static var isUITestMode: Bool {
-        ProcessInfo.processInfo.arguments.contains("-uiTestMode")
-    }
-
-    private static var reviewCreationUITestScenario: String? {
-        let arguments = ProcessInfo.processInfo.arguments
-        guard isUITestMode,
-              arguments.contains("-uiTestReviewCreation"),
-              let marker = arguments.firstIndex(of: "-uiTestReviewCreationScenario"),
-              arguments.indices.contains(marker + 1) else { return nil }
-        return arguments[marker + 1]
-    }
-
-    /// Resolves the hardware profile projected into Guided New Review. Production
-    /// and every unauthorized fixture path use the live Mac probe; the exact Review
-    /// XCUITest launch may inject only physical memory so 96 GB and 128 GB policy
-    /// tiers remain independently observable without spoofing production state.
-    private static func reviewCreationHardwareProfile(
-        modelsDirectory: URL,
-        arguments: [String] = ProcessInfo.processInfo.arguments
-    ) -> MacHardwareProfile {
 #if DEBUG
-        if isUITestMode,
-           arguments.contains("-uiTestReviewCreation"),
-           let marker = arguments.firstIndex(of: "-uiTestLocalAIMemoryGB"),
-           arguments.indices.contains(marker + 1),
-           let memoryGB = UInt64(arguments[marker + 1]),
-           memoryGB > 0 {
-            let (physicalMemoryBytes, overflow) = memoryGB.multipliedReportingOverflow(
-                by: 1_073_741_824
-            )
-            if !overflow {
-                return MacHardwareProfile(
-                    physicalMemoryBytes: physicalMemoryBytes,
-                    recommendedWorkingSetBytes: (physicalMemoryBytes / 4) * 3,
-                    availableModelDiskBytes: nil
-                )
-            }
-        }
+        ProcessInfo.processInfo.arguments.contains("-uiTestMode")
+#else
+        false
 #endif
-        return MacHardwareProfileProbe.current(modelsDirectory: modelsDirectory)
+    }
+
+    /// Places width-driven visual fixtures without coupling the shipping shell layout to
+    /// AppKit display metrics. Oversized hosted-runner fixtures retain their requested width
+    /// while anchoring the leading navigation to the visible display edge.
+    @MainActor
+    static func placeUITestWindow(width requestedWidth: CGFloat, window: NSWindow) {
+        guard isUITestMode else { return }
+        var frame = window.frame
+        let centeredX = frame.origin.x + (frame.width - requestedWidth) / 2
+        if let visibleFrame = (window.screen ?? NSScreen.main)?.visibleFrame {
+            let maximumX = max(visibleFrame.minX, visibleFrame.maxX - requestedWidth)
+            frame.origin.x = min(max(centeredX, visibleFrame.minX), maximumX)
+        } else {
+            frame.origin.x = centeredX
+        }
+        frame.size.width = requestedWidth
+        window.setFrame(frame, display: true)
+    }
+
+    /// Resolves the dedicated typed-setup fixture without a fallback value.
+    /// Release builds cannot activate this path, and malformed or duplicated
+    /// launch arguments are rejected rather than silently choosing a target.
+    private static var setupNavigationUITestRequirementID: String? {
+#if DEBUG
+        guard isUITestMode else { return nil }
+        let arguments = ProcessInfo.processInfo.arguments
+        let matches = arguments.indices.filter {
+            arguments[$0] == "-uiTestSetupRequirement"
+        }
+        guard matches.count == 1,
+              let index = matches.first,
+              arguments.indices.contains(index + 1),
+              SetupRequirement(id: arguments[index + 1]) != nil else { return nil }
+        return arguments[index + 1]
+#else
+        return nil
+#endif
     }
 
     /// True when launched with `-demoMode`: the same hermetic throwaway store as UI
     /// tests, seeded with entirely FICTITIOUS demo data (fictional parties, clients,
     /// and documents; only the case law is real) for marketing screenshots. Never
     /// touches the user's real database.
-    static var isDemoMode: Bool {
+    nonisolated static var isDemoMode: Bool {
+#if DEBUG
         ProcessInfo.processInfo.arguments.contains("-demoMode")
+#else
+        false
+#endif
     }
 
     /// The headless probe requested by this launch, if any — resolved once, mutually
@@ -1058,12 +1514,35 @@ final class AppEnvironment: ObservableObject {
 
     /// Seeds a deterministic matter for UI tests if none exists yet.
     private func seedUITestFixturesIfNeeded() {
+#if DEBUG
+        seedUITestWindowLedgerMatterIfNeeded()
+        seedUITestCanonicalMatterIdentityIfNeeded()
+        seedUITestMutationFailureIfNeeded()
+        seedUITestDefaultCanonicalMatterIfNeeded()
+        seedUITestQuickAttachmentTruthIfNeeded()
+#endif
         mattersController.loadMatters()
         if mattersController.matters.isEmpty {
-            _ = try? mattersController.createMatter(name: "McKernon Motors v. Liberty Rail")
+            do {
+                _ = try mattersController.createMatter(
+                    name: "McKernon Motors v. Liberty Rail"
+                )
+            } catch {
+                assertionFailure("Could not seed ordinary UI-test matter: \(error)")
+            }
             mattersController.loadMatters()
         }
+#if DEBUG
+        seedUITestCanonicalReadinessIfNeeded()
+#endif
         seedUITestCitationsChatIfNeeded()
+        #if DEBUG
+        seedUITestDeletionSemanticsIfNeeded()
+        #endif
+        // The controller loads before fixtures are inserted during bootstrap.
+        // Reload once after the citations fixture so the real chat history UI
+        // observes the newly committed row in this process.
+        chatController.loadChats()
         seedUITestRemediationWarningsIfNeeded()
         seedUITestInterruptedDraftRecoveryIfNeeded()
         seedUITestImportFailureIfNeeded()
@@ -1071,620 +1550,608 @@ final class AppEnvironment: ObservableObject {
         seedUITestDocumentCorrectionIfNeeded()
         seedUITestDocumentRelationsIfNeeded()
         seedUITestGuidedQAIfNeeded()
-        seedUITestReviewCreationIfNeeded()
         seedUITestMotionDraftIfNeeded()
     }
 
-    /// Builds one coverage-complete, exact-v2 exhaustive result whose contrary
-    /// evidence intentionally leaves it review-required, then freezes it as a
-    /// Review Project only for the dedicated hosted Review tests. An additional
-    /// switching flag adds one older, exact-run-backed project without enlarging
-    /// the ordinary Review fixture. `-uiTestMode` keeps both synthetic graphs in a
-    /// fresh, throwaway store rather than the user's database.
-    private func seedUITestReviewProjectIfNeeded() async {
+#if DEBUG
+    /// Creates the one row needed by the deletion round-trip without coupling
+    /// that common workflow to the much richer citation/demo fixture.
+    private func seedUITestDeletionSemanticsIfNeeded() {
         guard Self.isUITestMode,
-              ProcessInfo.processInfo.arguments.contains("-uiTestReviewProject"),
-              let matterID = mattersController.matters.first?.id else { return }
+              ProcessInfo.processInfo.arguments.contains("-uiTestDeletionSemantics")
+        else { return }
+        let existing = (try? store.chats.fetchGlobalChats()) ?? []
+        guard !existing.contains(where: { $0.title == "Citations Demo" }) else { return }
+        _ = try? store.chats.createGlobalChat(title: "Citations Demo")
+    }
+#endif
+
+#if DEBUG
+    private enum CanonicalMatterIdentityFixtureError: Error {
+        case incoherentCatalogSelection(courtID: String, jurisdictionID: String)
+    }
+
+    /// Seeds only the aggregate needed by edit, then makes the exact submitted
+    /// create/update command fail inside the real Store transaction. The trigger
+    /// is installed after seeding so the saved original can never be confused
+    /// with the user's retained edited draft.
+    private func seedUITestMutationFailureIfNeeded() {
+        guard let wire = MutationFailureUITestWire(
+            arguments: ProcessInfo.processInfo.arguments
+        ) else { return }
 
         do {
-            guard try store.caseFileReviews.fetchProjects(matterID: matterID).isEmpty else {
-                return
-            }
-
-            let alphaExcerpt =
-                "The fictional Atlas Supply Agreement fixes payment on March 18, 2031."
-            let betaSupportingExcerpt =
-                "The fictional Atlas Supply Agreement requires renewal notice at least 120 calendar days before expiration."
-            let betaContraryExcerpt =
-                "A fictional amendment states that either party may give renewal notice 90 calendar days before expiration."
-            let sourceSpecs = [
-                (
-                    documentID: "ui-review-a-payment-document",
-                    revisionID: "ui-review-a-payment-revision",
-                    displayName: "Atlas Payment Schedule.txt",
-                    text: alphaExcerpt
-                ),
-                (
-                    documentID: "ui-review-b-renewal-document",
-                    revisionID: "ui-review-b-renewal-revision",
-                    displayName: "Atlas Renewal Clause.txt",
-                    text: betaSupportingExcerpt
-                ),
-                (
-                    documentID: "ui-review-c-amendment-document",
-                    revisionID: "ui-review-c-amendment-revision",
-                    displayName: "Atlas Amendment.txt",
-                    text: betaContraryExcerpt
-                ),
-            ]
-            let modelLineageJSON =
-                #"{"artifact_fingerprint_sha256":"7777777777777777777777777777777777777777777777777777777777777777","content_binding_algorithm":"supra-release-model-sha256-v1","content_binding_schema_version":1,"model_repository":"synthetic/review-uitest","model_revision":"0123456789abcdef0123456789abcdef01234567"}"#
-
-            for spec in sourceSpecs where try store.documentLibrary.fetchDocument(
-                id: spec.documentID
-            ) == nil {
-                let contentDigest = SHA256.hash(data: Data(spec.text.utf8))
-                    .map { String(format: "%02x", $0) }
-                    .joined()
-                let blob = try store.documentLibrary.upsertBlob(DocumentBlobRecord(
-                    id: "\(spec.documentID)-blob",
-                    sha256: contentDigest,
-                    byteSize: spec.text.utf8.count,
-                    originalExtension: "txt",
-                    managedRelativePath: "uitest/\(spec.displayName)"
-                )).blob
-                let document = try store.documentLibrary.insertDocument(MatterDocumentRecord(
-                    id: spec.documentID,
-                    matterID: matterID,
-                    blobID: blob.id,
-                    displayName: spec.displayName,
-                    status: MatterDocumentStatus.ready.rawValue,
-                    extractionStatus: DocumentExtractionStatus.extracted.rawValue,
-                    indexStatus: DocumentIndexStatus.textIndexed.rawValue,
-                    sourceKind: DocumentSourceKind.text.rawValue,
-                    extractionMethod: "synthetic@toolchain:review-uitest"
-                ))
-                _ = try store.documentRevisions.replacePartsAndPersistLineage(
-                    documentID: document.id,
-                    parts: [DocumentPagePartRecord(
-                        id: "\(spec.documentID)-part",
-                        documentID: document.id,
-                        partIndex: 0,
-                        sourceKind: DocumentSourceKind.text.rawValue,
-                        normalizedText: spec.text,
-                        charCount: spec.text.count
-                    )],
-                    revisions: [DocumentPartRevisionRecord(
-                        id: spec.revisionID,
-                        documentID: document.id,
-                        partIndex: 0,
-                        derivationKey: "review-uitest:\(spec.documentID)",
-                        origin: "synthetic_test",
-                        method: "plain-text",
-                        text: spec.text,
-                        charCount: spec.text.count
-                    )],
-                    selections: [DocumentPartSelectionRecord(
-                        id: "\(spec.documentID)-selection",
-                        documentID: document.id,
-                        partIndex: 0,
-                        selectedRevisionID: spec.revisionID,
-                        selectionKey: "review-uitest:\(spec.documentID)",
-                        selectedBy: "test",
-                        decisionJSON: #"{"rule":"synthetic_review_ui_fixture"}"#
-                    )]
+            if wire.operation == .matterEdit,
+               try store.matters.fetchMatter(id: wire.targetMatterID) == nil {
+                try createCanonicalIdentityFixture(
+                    matterID: wire.targetMatterID,
+                    name: wire.originalName ?? "Synthetic mutation matter",
+                    legacyJurisdiction: "Not applicable",
+                    legacyCourt: nil,
+                    legacyPerspective: .neutral,
+                    legacyClientNames: nil,
+                    courtState: .notApplicable,
+                    jurisdictionID: nil,
+                    courtID: nil,
+                    parties: [],
+                    representations: []
                 )
             }
 
-            let result = try await ExhaustiveListTask(store: store).run(
-                request: ExhaustiveListRequest(
-                    runKey: "ui-review-project-run",
-                    matterID: matterID,
-                    title: "Atlas Supply Agreement review",
-                    query: "Extract the exact payment deadline and renewal notice period, retaining contrary terms.",
-                    scope: CorpusAnalysisScope(documentIDs: sourceSpecs.map(\.documentID)),
-                    characterBudget: 4_219,
-                    modelLineageJSON: modelLineageJSON
-                )
-            ) { input in
-                func reference(
-                    documentID: String,
-                    revisionID: String,
-                    quote: String
-                ) throws -> CorpusAnalysisEvidenceReference {
-                    guard let source = input.partition.sources.first(where: {
-                        $0.documentID == documentID && $0.revisionID == revisionID
-                    }) else {
-                        throw CorpusAnalysisMapFailure.permanent(
-                            "Synthetic Review UI source was not presented to the mapper."
-                        )
-                    }
-                    guard let range = Self.reviewUITestCharacterRange(of: quote, in: source.text) else {
-                        throw CorpusAnalysisMapFailure.permanent(
-                            "Synthetic Review UI excerpt was not present in its exact slice."
-                        )
-                    }
-                    return CorpusAnalysisEvidenceReference(
-                        documentID: source.documentID,
-                        revisionID: source.revisionID,
-                        locatorJSON: source.locatorJSON,
-                        quote: quote,
-                        charStart: range.lowerBound,
-                        charEnd: range.upperBound
-                    )
-                }
-
-                let response = ReviewUITestMapResponse(items: [
-                    ReviewUITestMapItem(
-                        itemKey: "Synthetic payment deadline",
-                        value: "March 18, 2031",
-                        evidence: [try reference(
-                            documentID: sourceSpecs[0].documentID,
-                            revisionID: sourceSpecs[0].revisionID,
-                            quote: alphaExcerpt
-                        )],
-                        contraryEvidence: []
-                    ),
-                    ReviewUITestMapItem(
-                        itemKey: "Synthetic renewal notice period",
-                        value: "120 calendar days",
-                        evidence: [try reference(
-                            documentID: sourceSpecs[1].documentID,
-                            revisionID: sourceSpecs[1].revisionID,
-                            quote: betaSupportingExcerpt
-                        )],
-                        contraryEvidence: [try reference(
-                            documentID: sourceSpecs[2].documentID,
-                            revisionID: sourceSpecs[2].revisionID,
-                            quote: betaContraryExcerpt
-                        )]
-                    ),
-                ])
-                let encoder = JSONEncoder()
-                encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-                return String(decoding: try encoder.encode(response), as: UTF8.self)
+            let triggerName: String
+            let timing: String
+            switch wire.operation {
+            case .matterCreate:
+                triggerName = "ui_test_mutation_create_failure"
+                timing = "INSERT"
+            case .matterEdit:
+                triggerName = "ui_test_mutation_edit_failure"
+                timing = "UPDATE OF name"
             }
+            let matterID = Self.sqliteStringLiteral(wire.targetMatterID)
+            let draftName = Self.sqliteStringLiteral(wire.draftName)
+            let failureMarker = Self.sqliteStringLiteral(wire.failureMarker)
+            try store.database.writer.write { database in
+                try database.execute(sql: """
+                    CREATE TRIGGER IF NOT EXISTS \(triggerName)
+                    BEFORE \(timing) ON matters
+                    WHEN NEW.id = \(matterID) AND NEW.name = \(draftName)
+                    BEGIN
+                        SELECT RAISE(ABORT, \(failureMarker));
+                    END
+                    """)
+            }
+        } catch {
+            assertionFailure("Could not seed mutation-failure UI-test fixture: \(error)")
+        }
+    }
 
-            _ = try store.caseFileReviews.createOrFetchProject(
+    /// The trigger grammar cannot bind parameters inside `RAISE`. This narrow
+    /// quoting helper is used only after the DEBUG launch parser rejects control
+    /// characters, and it still escapes SQLite's sole string delimiter.
+    private static func sqliteStringLiteral(_ value: String) -> String {
+        "'\(value.replacingOccurrences(of: "'", with: "''"))'"
+    }
+
+    /// Seeds the exact unresolved/plaintiff/defendant table consumed by the
+    /// native WP-1.1 journey. All three are created through the Store's atomic
+    /// identity workspace command; no party is inferred from `clientNames`.
+    private func seedUITestCanonicalMatterIdentityIfNeeded() {
+        guard CanonicalMatterIdentityUITestWire(
+            arguments: ProcessInfo.processInfo.arguments
+        ) != nil else { return }
+
+        do {
+            try createCanonicalIdentityFixture(
+                matterID: CanonicalMatterIdentityUITestWire.unresolvedMatterID,
+                name: "Unresolved Maritime Identity 971",
+                legacyJurisdiction: "Legacy maritime forum 971",
+                legacyCourt: "Fictional Maritime Claims Tribunal 971",
+                legacyPerspective: .neutral,
+                legacyClientNames: "Legacy unresolved client evidence 971",
+                courtState: .unresolved,
+                jurisdictionID: nil,
+                courtID: nil,
+                parties: [],
+                representations: []
+            )
+
+            let plaintiffMatterID = CanonicalMatterIdentityUITestWire.plaintiffMatterID
+            let plaintiffPartyID = "party-identity-plaintiff-client-977"
+            let plaintiffOpponentID = "party-identity-plaintiff-opponent-979"
+            try createCanonicalIdentityFixture(
+                matterID: plaintiffMatterID,
+                name: "Aster Harbor v. Northline Rail 977",
+                legacyJurisdiction: "Florida",
+                legacyCourt: "S.D. Fla.",
+                legacyPerspective: .plaintiff,
+                legacyClientNames: "Aster Harbor legacy evidence 977",
+                courtState: .court,
+                jurisdictionID: federalEleventhCircuitJurisdictionID,
+                courtID: federalSouthernDistrictCourtID,
+                parties: [
+                    MatterPartyIdentity(
+                        id: plaintiffPartyID,
+                        matterID: plaintiffMatterID,
+                        displayName: "Aster Harbor Fabrication 977",
+                        captionName: "ASTER HARBOR FABRICATION 977,",
+                        baseRole: .plaintiff,
+                        captionOrder: 0,
+                        clientStatus: .represented
+                    ),
+                    MatterPartyIdentity(
+                        id: plaintiffOpponentID,
+                        matterID: plaintiffMatterID,
+                        displayName: "Northline Rail Logistics 979",
+                        captionName: "NORTHLINE RAIL LOGISTICS 979,",
+                        baseRole: .defendant,
+                        captionOrder: 1,
+                        clientStatus: .notRepresented
+                    ),
+                ],
+                representations: [
+                    canonicalFixtureRepresentation(
+                        id: "representation-identity-plaintiff-opponent-981",
+                        matterID: plaintiffMatterID,
+                        representedPartyID: plaintiffOpponentID,
+                        sequence: 981
+                    ),
+                ]
+            )
+
+            let defendantMatterID = CanonicalMatterIdentityUITestWire.defendantMatterID
+            let defendantPartyID = "party-identity-defendant-client-983"
+            let defendantOpponentID = "party-identity-defendant-opponent-991"
+            try createCanonicalIdentityFixture(
+                matterID: defendantMatterID,
+                name: "Northline Rail v. Aster Harbor 983",
+                legacyJurisdiction: "Florida",
+                legacyCourt: "S.D. Fla.",
+                legacyPerspective: .defendant,
+                legacyClientNames: "Northline Rail legacy evidence 983",
+                courtState: .court,
+                jurisdictionID: federalEleventhCircuitJurisdictionID,
+                courtID: federalSouthernDistrictCourtID,
+                parties: [
+                    MatterPartyIdentity(
+                        id: defendantOpponentID,
+                        matterID: defendantMatterID,
+                        displayName: "Aster Harbor Fabrication 991",
+                        captionName: "ASTER HARBOR FABRICATION 991,",
+                        baseRole: .plaintiff,
+                        captionOrder: 0,
+                        clientStatus: .notRepresented
+                    ),
+                    MatterPartyIdentity(
+                        id: defendantPartyID,
+                        matterID: defendantMatterID,
+                        displayName: "Northline Rail Logistics 983",
+                        captionName: "NORTHLINE RAIL LOGISTICS 983,",
+                        baseRole: .defendant,
+                        captionOrder: 1,
+                        clientStatus: .represented
+                    ),
+                ],
+                representations: [
+                    canonicalFixtureRepresentation(
+                        id: "representation-identity-defendant-opponent-997",
+                        matterID: defendantMatterID,
+                        representedPartyID: defendantOpponentID,
+                        sequence: 997
+                    ),
+                ]
+            )
+        } catch {
+            assertionFailure("Could not seed canonical matter-identity fixture: \(error)")
+        }
+    }
+
+    /// Ordinary UI tests still receive one usable matter, but its historical
+    /// caption form is now produced from the same canonical graph as shipping
+    /// Drafting instead of view-local plaintiff/defendant/counsel defaults.
+    private func seedUITestDefaultCanonicalMatterIfNeeded() {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard CanonicalMatterIdentityUITestWire(arguments: arguments) == nil,
+              WindowSessionLedgerWire(arguments: arguments) == nil else { return }
+        do {
+            guard try store.matters.fetchMatters().isEmpty else { return }
+            let matterID = "00000000-0000-4000-8000-000000000971"
+            let plaintiffID = "party-default-mckernon-1201"
+            let defendantID = "party-default-liberty-1207"
+            try createCanonicalIdentityFixture(
                 matterID: matterID,
-                sourceRunID: result.run.id,
-                title: "Atlas Supply Agreement review",
-                actor: "Synthetic UI reviewer",
-                at: Date(timeIntervalSince1970: 1_931_478_400)
-            )
-
-            if ProcessInfo.processInfo.arguments.contains("-uiTestReviewProjectSwitching") {
-                let amendmentSource = sourceSpecs[2]
-                let amendmentResult = try await ExhaustiveListTask(store: store).run(
-                    request: ExhaustiveListRequest(
-                        runKey: "ui-review-project-switching-run",
+                name: "McKernon Motors v. Liberty Rail",
+                legacyJurisdiction: "Florida",
+                legacyCourt: "IN THE CIRCUIT COURT OF THE FOURTH JUDICIAL CIRCUIT,\nIN AND FOR DUVAL COUNTY, FLORIDA",
+                legacyPerspective: .defendant,
+                legacyClientNames: "Liberty Rail, LLC",
+                courtState: .court,
+                jurisdictionID: floridaStateJurisdictionID,
+                courtID: floridaDuvalCircuitCourtID,
+                parties: [
+                    MatterPartyIdentity(
+                        id: plaintiffID,
                         matterID: matterID,
-                        title: "Atlas Amendment review",
-                        query: "Extract the exact amended renewal notice period.",
-                        scope: CorpusAnalysisScope(documentIDs: [amendmentSource.documentID]),
-                        characterBudget: 4_219,
-                        modelLineageJSON: modelLineageJSON
-                    )
-                ) { input in
-                    guard let source = input.partition.sources.first(where: {
-                        $0.documentID == amendmentSource.documentID
-                            && $0.revisionID == amendmentSource.revisionID
-                    }) else {
-                        throw CorpusAnalysisMapFailure.permanent(
-                            "Synthetic Review switching source was not presented to the mapper."
-                        )
-                    }
-                    guard let range = Self.reviewUITestCharacterRange(
-                        of: betaContraryExcerpt,
-                        in: source.text
-                    ) else {
-                        throw CorpusAnalysisMapFailure.permanent(
-                            "Synthetic Review switching excerpt was not present in its exact slice."
-                        )
-                    }
-                    let reference = CorpusAnalysisEvidenceReference(
-                        documentID: source.documentID,
-                        revisionID: source.revisionID,
-                        locatorJSON: source.locatorJSON,
-                        quote: betaContraryExcerpt,
-                        charStart: range.lowerBound,
-                        charEnd: range.upperBound
-                    )
-                    let response = ReviewUITestMapResponse(items: [
-                        ReviewUITestMapItem(
-                            itemKey: "Synthetic amended renewal notice period",
-                            value: "90 calendar days",
-                            evidence: [reference],
-                            contraryEvidence: []
+                        displayName: "McKernon Motors, Inc.",
+                        captionName: "MCKERNON MOTORS, INC.,",
+                        baseRole: .plaintiff,
+                        captionOrder: 0,
+                        clientStatus: .notRepresented
+                    ),
+                    MatterPartyIdentity(
+                        id: defendantID,
+                        matterID: matterID,
+                        displayName: "Liberty Rail, LLC",
+                        captionName: "LIBERTY RAIL, LLC,",
+                        baseRole: .defendant,
+                        captionOrder: 1,
+                        clientStatus: .represented
+                    ),
+                ],
+                representations: [
+                    MatterRepresentationIdentity(
+                        id: "representation-default-mckernon-counsel-1213",
+                        matterID: matterID,
+                        representedPartyID: plaintiffID,
+                        relationshipKind: .counsel,
+                        representativeName: "Daniel Hardman, Esq.",
+                        firmName: "Hardman & Tanner, LLP",
+                        serviceAddress: MatterServiceAddress(
+                            street: "1 Independent Drive",
+                            city: "Jacksonville",
+                            state: "Florida",
+                            postalCode: "32202"
                         ),
-                    ])
-                    let encoder = JSONEncoder()
-                    encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-                    return String(decoding: try encoder.encode(response), as: UTF8.self)
-                }
-
-                let amendmentProject = try store.caseFileReviews.createOrFetchProject(
-                    matterID: matterID,
-                    sourceRunID: amendmentResult.run.id,
-                    title: "Atlas Amendment review",
-                    actor: "Synthetic UI reviewer",
-                    at: Date(timeIntervalSince1970: 1_931_478_300)
+                        serviceEmails: ["dhardman@example.test"],
+                        serviceOrder: 0
+                    ),
+                ],
+                workspace: MatterIdentityWorkspaceDetails(
+                    name: "McKernon Motors v. Liberty Rail",
+                    judge: nil,
+                    docketNumber: nil,
+                    practiceArea: nil,
+                    matterDescription: nil,
+                    internalMatterID: nil,
+                    clientID: nil,
+                    clientMatterID: nil,
+                    notes: nil,
+                    starterFolderNames: PracticeAreaFolderTemplates.generalFolders
                 )
-
-#if DEBUG
-                if Self.isUITestMode,
-                   ProcessInfo.processInfo.arguments.contains("-uiTestReviewNavigationFailure") {
-                    try await store.database.writer.write { db in
-                        try db.execute(
-                            sql: """
-                                UPDATE case_file_review_projects
-                                SET active_table_id = NULL
-                                WHERE id = ? AND active_table_id IS NOT NULL
-                                """,
-                            arguments: [amendmentProject.project.id]
-                        )
-                        guard db.changesCount == 1 else {
-                            throw CaseFileReviewRepositoryError.corruptGraph(
-                                amendmentProject.project.id
-                            )
-                        }
-                    }
-                }
-#endif
-            }
-            mattersController.caseFileReviewController?.load()
+            )
         } catch {
-            assertionFailure("Could not seed Review Project accessibility fixture: \(error)")
+            assertionFailure("Could not seed default canonical UI-test matter: \(error)")
         }
     }
 
-    /// Seeds the Guided New Review surface with two exact eligible documents,
-    /// three named exclusions, and one tiny signed managed model. The paused
-    /// scenario additionally creates a 1-of-3 durable corpus ledger so the hosted
-    /// test can cross a real process boundary before resuming it. Every path is
-    /// doubly gated and uses the UI-test Store; none can reach user data.
-    private func seedUITestReviewCreationIfNeeded() {
-#if DEBUG
-        guard Self.isUITestMode,
-              ProcessInfo.processInfo.arguments.contains("-uiTestReviewCreation"),
-              let reviewCreationUITestModelRoot,
-              let matterID = mattersController.matters.first?.id else { return }
+    /// Hermetic native proof for the session-only quick-attachment disclosure and
+    /// explicit durable handoff. The two files and the matter live only in the
+    /// isolated UI-test store/root selected by `makeStore()`.
+    private func seedUITestQuickAttachmentTruthIfNeeded() {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard arguments.contains("-uiTestQuickAttachmentTruth") else { return }
+
+        let truncatedID = "quick-attachment-native-941"
+        let fullID = "quick-attachment-native-947"
+        let matterID = "matter-quick-attachment-native-953"
+        let matterName = "Aster Harbor Attachment Matter 953"
 
         do {
-            _ = try seedUITestReviewCreationModel(
-                in: reviewCreationUITestModelRoot
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+                "SupraAI-UITest-QuickAttachment",
+                isDirectory: true
             )
-            for document in try store.documentLibrary.fetchDocuments(matterID: matterID)
-                where document.displayName == "agreement.pdf" {
-                _ = try store.documentLibrary.permanentlyDeleteDocument(
-                    id: document.id,
-                    actor: "guided-review-ui-test",
-                    at: Date(timeIntervalSince1970: 1_931_478_200)
+            try FileManager.default.createDirectory(
+                at: root,
+                withIntermediateDirectories: true
+            )
+            let partialURL = root.appendingPathComponent("partial-941.txt")
+            let fullURL = root.appendingPathComponent("full-947.txt")
+            let partialSource = String(repeating: "P", count: 40_001)
+            let fullSource = String(repeating: "F", count: 731)
+            try partialSource.write(to: partialURL, atomically: true, encoding: .utf8)
+            try fullSource.write(to: fullURL, atomically: true, encoding: .utf8)
+
+            let truncated = ChatAttachmentContext(
+                id: truncatedID,
+                name: "Partial Contract 941.txt",
+                text: String(partialSource.prefix(40_000)),
+                sourceURL: partialURL,
+                originalCharacterCount: partialSource.count,
+                extractionMode: .plainText
+            )
+            let full = ChatAttachmentContext(
+                id: fullID,
+                name: "Full Contract 947.txt",
+                text: fullSource,
+                sourceURL: fullURL,
+                originalCharacterCount: fullSource.count,
+                extractionMode: .plainText
+            )
+            quickAttachmentUITestComposerAttachments = [truncated]
+
+            if try store.matters.fetchMatter(id: matterID) == nil {
+                let catalog = JurisdictionCatalog()
+                _ = try store.matterIdentity.createMatter(
+                    command: MatterIdentityCreateCommand(
+                        matterID: matterID,
+                        name: matterName,
+                        legacyJurisdictionText: "Not applicable",
+                        legacyCourtText: nil,
+                        legacyPartyPerspective: .neutral,
+                        legacyClientNames: nil,
+                        courtResolutionState: .notApplicable,
+                        canonicalCatalogVersion: catalog.catalogVersion,
+                        canonicalCatalogDigestSHA256: catalog.identityDigestSHA256,
+                        canonicalJurisdictionID: nil,
+                        canonicalCourtID: nil,
+                        parties: [],
+                        representations: [],
+                        workspaceDetails: MatterIdentityWorkspaceDetails(
+                            name: matterName,
+                            judge: nil,
+                            docketNumber: nil,
+                            practiceArea: nil,
+                            matterDescription: "Synthetic quick-attachment handoff fixture.",
+                            internalMatterID: nil,
+                            clientID: nil,
+                            clientMatterID: nil,
+                            notes: nil,
+                            starterFolderNames: []
+                        )
+                    )
                 )
             }
-            let documents = try store.documentLibrary.fetchDocuments(matterID: matterID)
-            if !documents.contains(where: { $0.id == "ui-review-create-default-document" }) {
-                try seedUITestReviewCreationSources(matterID: matterID)
-            }
-            if Self.reviewCreationUITestScenario == "paused" {
-                try seedUITestPausedReviewCreationRun(
-                    matterID: matterID
-                )
-            }
+
+            try chatController.installQuickAttachmentUITestFixture(
+                chatTitle: "Quick Attachment Truth 947",
+                attachment: full,
+                answer: "This answer used the quick attachment for a session-only summary."
+            )
         } catch {
-            assertionFailure("Could not seed Guided Review creation fixture: \(error)")
+            assertionFailure("Could not seed quick-attachment truth fixture: \(error)")
         }
-#endif
     }
 
-#if DEBUG
-    private func seedUITestReviewCreationModel(
-        in authorizedRoot: URL
-    ) throws -> ModelID {
-        let modelIDString = "88888888-8888-4888-8888-888888888888"
-        let scenario = Self.reviewCreationUITestScenario
-        let usesRecommendedHardwareModel = scenario == "hardware96"
-            || scenario == "hardware128"
-        let repositoryID = usesRecommendedHardwareModel
-            ? "mlx-community/Qwen3-32B-4bit"
-            : "supra-test/guided-review"
-        let displayName = usesRecommendedHardwareModel
-            ? "Qwen3 32B (4-bit)"
-            : "Synthetic Review Model"
-        let modelDirectory = authorizedRoot
-            .appendingPathComponent("guided-review-ui-model", isDirectory: true)
-        try FileManager.default.createDirectory(
-            at: modelDirectory,
-            withIntermediateDirectories: true
-        )
-        let artifacts: [(String, Data)] = [
-            ("config.json", Data(#"{"model_type":"guided_review_ui_test"}"#.utf8)),
-            ("model.safetensors", Data("guided-review-ui-test-weights".utf8)),
-        ]
-        for (name, data) in artifacts {
-            try data.write(
-                to: modelDirectory.appendingPathComponent(name, isDirectory: false),
-                options: .atomic
-            )
-        }
-        let manifest = ModelArtifactManifest(
-            repositoryID: repositoryID,
-            revision: String(repeating: "8", count: 40),
-            files: artifacts.map { name, data in
-                ModelArtifactManifest.File(
-                    relativePath: name,
-                    size: Int64(data.count),
-                    digestAlgorithm: .sha256,
-                    digest: SHA256.hash(data: data)
-                        .map { String(format: "%02x", $0) }
-                        .joined()
-                )
-            }
-        )
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        try encoder.encode(manifest).write(
-            to: ManagedModelStorage.manifestURL(in: modelDirectory),
-            options: .atomic
-        )
-        try store.models.upsertModel(ModelRecord(
-            id: modelIDString,
-            displayName: displayName,
-            path: modelDirectory.path,
-            isActive: true,
-            validationStatus: "verified"
-        ))
-        modelLibrary.refresh()
-        guard let uuid = UUID(uuidString: modelIDString) else {
-            throw CaseFileReviewCreationError.modelUnavailable
-        }
-        return ModelID(uuid)
+    private var federalEleventhCircuitJurisdictionID: String {
+        "federal-united-states-court-of-appeals-for-the-eleventh-circuit"
     }
 
-    private func seedUITestReviewCreationSources(matterID: String) throws {
-        let defaultText = String(repeating: "Atlas ready agreement renewal terms. ", count: 3)
-        let amendmentText = String(repeating: "Atlas amendment fixes notice at ninety days. ", count: 6)
-        try Self.insertUITestReviewCreationSource(
-            store: store,
-            matterID: matterID,
-            id: "ui-review-create-default-document",
-            name: "Atlas Ready Agreement.txt",
-            text: defaultText,
-            status: .ready,
-            extractionStatus: .extracted,
-            indexStatus: .textIndexed
-        )
-        try Self.insertUITestReviewCreationSource(
-            store: store,
-            matterID: matterID,
-            id: "ui-review-create-amendment-document",
-            name: "Atlas Amendment.txt",
-            text: amendmentText,
-            status: .ready,
-            extractionStatus: .extracted,
-            indexStatus: .textIndexed
-        )
-        try Self.insertUITestReviewCreationSource(
-            store: store,
-            matterID: matterID,
-            id: "ui-review-create-review-required-document",
-            name: "Beacon Review Draft.txt",
-            text: nil,
-            status: .needsReview,
-            extractionStatus: .extracted,
-            indexStatus: .textIndexed
-        )
-        try Self.insertUITestReviewCreationSource(
-            store: store,
-            matterID: matterID,
-            id: "ui-review-create-extraction-failed-document",
-            name: "Atlas Extraction Failure.txt",
-            text: nil,
-            status: .failed,
-            extractionStatus: .failed,
-            indexStatus: .failed
-        )
-
-        let batch = try store.documentJobs.createBatch(matterID: matterID)
-        let unfinished = try store.documentJobs.recordDiscovered(
-            batchID: batch.id,
-            matterID: matterID,
-            sourceKey: "selection:review-creation-import-pending",
-            sourceDisplayPath: "Atlas Import Pending.txt",
-            sourceBookmark: Data("SYNTHETIC-REVIEW-CREATION-BOOKMARK".utf8),
-            state: .selected
-        )
-        _ = try store.documentJobs.markState(sourceID: unfinished.id, state: .copying)
+    private var federalSouthernDistrictCourtID: String {
+        "federal-florida-united-states-district-court-for-the-southern-district-of-florida"
     }
 
-    private static func seedUITestReviewCreationLateSource(store: SupraStore) throws {
-        guard Self.isUITestMode,
-              ProcessInfo.processInfo.arguments.contains("-uiTestReviewCreation"),
-              Self.reviewCreationUITestScenario == "scopeDrift",
-              let matterID = try store.matters.fetchMatters().first?.id else {
-            throw CaseFileReviewCreationError.submissionFailed
-        }
-        let documentID = "ui-review-create-late-document"
-        guard try !store.documentLibrary.fetchDocuments(matterID: matterID).contains(where: {
-            $0.id == documentID
-        }) else { return }
-        try Self.insertUITestReviewCreationSource(
-            store: store,
-            matterID: matterID,
-            id: documentID,
-            name: "Atlas Late Addendum.txt",
-            text: String(repeating: "Atlas late addendum extends renewal notice. ", count: 4),
-            status: .ready,
-            extractionStatus: .extracted,
-            indexStatus: .textIndexed
-        )
+    private var floridaStateJurisdictionID: String {
+        "state-florida-courts"
     }
 
-    private static func insertUITestReviewCreationSource(
-        store: SupraStore,
-        matterID: String,
+    private var floridaDuvalCircuitCourtID: String {
+        "state-florida-circuit-court-of-the-fourth-judicial-circuit-in-and-for-duval-county"
+    }
+
+    private func canonicalFixtureRepresentation(
         id: String,
-        name: String,
-        text: String?,
-        status: MatterDocumentStatus,
-        extractionStatus: DocumentExtractionStatus,
-        indexStatus: DocumentIndexStatus
-    ) throws {
-        let blob = try store.documentLibrary.upsertBlob(DocumentBlobRecord(
-            id: "\(id)-blob",
-            sha256: "\(id)-synthetic-sha",
-            byteSize: text?.utf8.count ?? 0,
-            originalExtension: "txt",
-            managedRelativePath: "uitest/review-creation/\(name)"
-        )).blob
-        let document = try store.documentLibrary.insertDocument(MatterDocumentRecord(
+        matterID: String,
+        representedPartyID: String,
+        sequence: Int
+    ) -> MatterRepresentationIdentity {
+        MatterRepresentationIdentity(
             id: id,
             matterID: matterID,
-            blobID: blob.id,
-            displayName: name,
-            status: status.rawValue,
-            extractionStatus: extractionStatus.rawValue,
-            indexStatus: indexStatus.rawValue,
-            extractionMethod: "synthetic@toolchain:review-creation-uitest"
-        ))
-        guard let text else { return }
-        let part = DocumentPagePartRecord(
-            id: "\(id)-part",
-            documentID: document.id,
-            partIndex: 0,
-            sourceKind: DocumentSourceKind.text.rawValue,
-            normalizedText: text,
-            charCount: text.count
-        )
-        let revision = DocumentPartRevisionRecord(
-            id: "\(id)-revision",
-            documentID: document.id,
-            partIndex: 0,
-            derivationKey: "review-creation-uitest:\(id)",
-            origin: "parser",
-            method: "synthetic",
-            text: text,
-            charCount: text.count
-        )
-        let selection = DocumentPartSelectionRecord(
-            id: "\(id)-selection",
-            documentID: document.id,
-            partIndex: 0,
-            selectedRevisionID: revision.id,
-            selectionKey: "review-creation-uitest:\(id)",
-            selectedBy: "policy",
-            policyVersion: 1,
-            decisionJSON: #"{"rule":"synthetic_review_creation_ui_fixture"}"#
-        )
-        _ = try store.documentRevisions.replacePartsAndPersistLineage(
-            documentID: document.id,
-            parts: [part],
-            revisions: [revision],
-            selections: [selection]
-        )
-    }
-
-    private func seedUITestPausedReviewCreationRun(
-        matterID: String
-    ) throws {
-        let existing = try store.documentJobs.fetchJobs(matterID: matterID).contains {
-            $0.kind == DocumentProcessingJobKind.corpusAnalysis.rawValue
-        }
-        guard !existing else { return }
-
-        let pinnedModel = CorpusAnalysisPinnedModel(
-            modelRepository: "supra-test/guided-review",
-            modelRevision: String(repeating: "8", count: 40),
-            contentBindingAlgorithm: RuntimeModelContentBinding.fingerprintAlgorithm,
-            contentBindingSchemaVersion: RuntimeModelContentBinding.supportedManifestSchemaVersion,
-            artifactFingerprintSHA256: SHA256.hash(
-                data: Data("guided-review-paused-ui-pin".utf8)
-            ).map { String(format: "%02x", $0) }.joined()
-        )
-        let request = ExhaustiveListQueuedRequest(
-            taskSchemaVersion: ExhaustiveListTask.schemaVersion,
-            promptBuilderVersion: ExhaustiveListTask.promptBuilderVersion,
-            runKey: "ui-review-creation-paused-run",
-            matterID: matterID,
-            title: "Paused Atlas deadline review",
-            query: "Extract the amended renewal deadline from the synthetic Atlas source.",
-            scope: CorpusAnalysisScope(
-                schemaVersion: 1,
-                documentIDs: ["ui-review-create-amendment-document"]
+            representedPartyID: representedPartyID,
+            relationshipKind: .counsel,
+            representativeName: "Avery Synthetic, Esq. \(sequence)",
+            firmName: "Synthetic Trial Group \(sequence)",
+            serviceAddress: MatterServiceAddress(
+                street: "\(sequence) Fictional Avenue",
+                city: "Miami",
+                state: "Florida",
+                postalCode: "33131"
             ),
-            characterBudget: 100,
-            maximumRetryCount: 2
+            serviceEmails: ["service+\(sequence)@example.test"],
+            serviceOrder: 0
         )
-        let payload = try CorpusAnalysisQueuePreparer(store: store).prepareExhaustiveList(
-            request: request,
-            pinnedModel: pinnedModel
-        )
-        let partitions = try store.corpusAnalysis.fetchPartitions(
-            matterID: matterID,
-            runID: payload.runID
-        )
-        guard partitions.count == 3 else {
-            throw CaseFileReviewCreationError.submissionFailed
-        }
-        _ = try store.corpusAnalysis.updateStatus(
-            matterID: matterID,
-            runID: payload.runID,
-            to: .running
-        )
-        let first = try store.corpusAnalysis.beginAttempt(
-            matterID: matterID,
-            runID: payload.runID,
-            partitionID: partitions[0].id
-        )
-        try store.corpusAnalysis.completeAttemptSucceeded(
-            matterID: matterID,
-            runID: payload.runID,
-            partitionID: first.id,
-            findingsJSON: "[]"
-        )
-        let payloadJSON = String(decoding: try JSONEncoder().encode(payload), as: UTF8.self)
-        let job = try store.documentJobs.enqueueJob(
-            matterID: matterID,
-            kind: DocumentProcessingJobKind.corpusAnalysis.rawValue,
-            payloadJSON: payloadJSON
-        )
-        try store.documentJobs.pauseJob(id: job.id)
     }
 
+    private func createCanonicalIdentityFixture(
+        matterID: String,
+        name: String,
+        legacyJurisdiction: String,
+        legacyCourt: String?,
+        legacyPerspective: PartyPerspective,
+        legacyClientNames: String?,
+        courtState: MatterCourtResolutionState,
+        jurisdictionID: String?,
+        courtID: String?,
+        parties: [MatterPartyIdentity],
+        representations: [MatterRepresentationIdentity],
+        workspace: MatterIdentityWorkspaceDetails? = nil
+    ) throws {
+        let catalog = JurisdictionCatalog.shared
+        if let courtID, let jurisdictionID {
+            guard catalog.option(id: courtID) != nil,
+                  catalog.canonicalJurisdictionOption(
+                    forSelectedOptionID: courtID
+                  )?.id == jurisdictionID else {
+                throw CanonicalMatterIdentityFixtureError.incoherentCatalogSelection(
+                    courtID: courtID,
+                    jurisdictionID: jurisdictionID
+                )
+            }
+        }
+        _ = try store.matterIdentity.createMatter(
+            command: MatterIdentityCreateCommand(
+                matterID: matterID,
+                name: name,
+                legacyJurisdictionText: legacyJurisdiction,
+                legacyCourtText: legacyCourt,
+                legacyPartyPerspective: legacyPerspective,
+                legacyClientNames: legacyClientNames,
+                courtResolutionState: courtState,
+                canonicalCatalogVersion: catalog.catalogVersion,
+                canonicalCatalogDigestSHA256: catalog.identityDigestSHA256,
+                canonicalJurisdictionID: jurisdictionID.map {
+                    CanonicalJurisdictionID(rawValue: $0)
+                },
+                canonicalCourtID: courtID.map { CanonicalCourtID(rawValue: $0) },
+                parties: parties,
+                representations: representations,
+                workspaceDetails: workspace ?? MatterIdentityWorkspaceDetails(
+                    name: name,
+                    judge: nil,
+                    docketNumber: nil,
+                    practiceArea: nil,
+                    matterDescription: nil,
+                    internalMatterID: nil,
+                    clientID: nil,
+                    clientMatterID: nil,
+                    notes: nil
+                )
+            )
+        )
+    }
+
+    /// Hermetic native boundary for T-DATA-READY-01/02/03. Exact flag parsing
+    /// rejects duplicate or conflicting scenarios; all records remain in the
+    /// throwaway UI-test Store selected by `makeStore()`.
+    private func seedUITestCanonicalReadinessIfNeeded() {
+        guard let scenario = CanonicalReadinessUITestScenario(
+            arguments: ProcessInfo.processInfo.arguments
+        ), let matterID = mattersController.matters.first?.id else { return }
+
+        do {
+            try configureCanonicalReadinessEmbeddingModel()
+            switch scenario {
+            case .receiptTable:
+                try seedUITestCanonicalReadinessTable(matterID: matterID)
+            case .canonicalDemo:
+                let documentIDs = try seedCanonicalDemoDocuments(matterID: matterID)
+                try validateCanonicalDemoReadiness(
+                    matterID: matterID,
+                    documentIDs: documentIDs
+                )
+            }
+        } catch {
+            assertionFailure("Could not seed canonical document-readiness fixture: \(error)")
+        }
+    }
+
+    private func seedUITestCanonicalReadinessTable(matterID: String) throws {
+        let readyID = try seedCanonicalReadinessDocumentGraph(
+            documentID: "readiness-ready-ui-document-743",
+            matterID: matterID,
+            name: "Canonical Ready 743.txt",
+            shaSeed: "readiness-ready-ui-sha-743",
+            text: "T_DATA_READY_UI_CANONICAL_READY_743",
+            includeSemanticIndex: true
+        )
+        let staleID = try seedCanonicalReadinessDocumentGraph(
+            documentID: "readiness-raw-green-stale-ui-document-751",
+            matterID: matterID,
+            name: "Raw Green Stale 751.txt",
+            shaSeed: "readiness-raw-green-stale-ui-sha-751",
+            text: "T_DATA_READY_UI_RAW_GREEN_STALE_751",
+            includeSemanticIndex: true
+        )
+        try store.documentLibrary.updateIndexStatus(
+            documentID: staleID,
+            indexStatus: .stale
+        )
+        let modelMissingID = try seedCanonicalReadinessDocumentGraph(
+            documentID: "readiness-raw-green-model-missing-ui-document-757",
+            matterID: matterID,
+            name: "Raw Green Model Missing 757.txt",
+            shaSeed: "readiness-raw-green-model-missing-ui-sha-757",
+            text: "T_DATA_READY_UI_RAW_GREEN_MODEL_MISSING_757",
+            includeSemanticIndex: false
+        )
+
+        let ready = try store.documentReadiness.fetchReceipt(documentID: readyID)
+        let stale = try store.documentReadiness.fetchReceipt(documentID: staleID)
+        let modelMissing = try store.documentReadiness.fetchReceipt(
+            documentID: modelMissingID
+        )
+        let rawStale = try store.documentLibrary.fetchDocument(id: staleID)
+        let rawModelMissing = try store.documentLibrary.fetchDocument(id: modelMissingID)
+        guard ready.isBaseReady,
+              rawStale?.status == MatterDocumentStatus.ready.rawValue,
+              stale.primaryExclusion == .staleRevision,
+              rawModelMissing?.status == MatterDocumentStatus.ready.rawValue,
+              modelMissing.exclusions.contains(.semanticIndexIncomplete) else {
+            throw CanonicalReadinessSeedError.receiptNotReady(
+                documentID: readyID,
+                exclusions: ready.exclusions
+            )
+        }
+    }
+
+    private func seedCanonicalDemoDocuments(matterID: String) throws -> [String] {
+        let msaText = "T_DATA_READY_DEMO_MSA_761. Carrier will indemnify Meridian."
+        let depositionText = "T_DATA_READY_DEMO_DEPOSITION_763. The straps were not doubled."
+        let coverageText = "T_DATA_READY_DEMO_COVERAGE_767. Coverage is subject to a reservation of rights."
+        return [
+            try seedDemoDocument(
+                matterID: matterID,
+                name: CanonicalReadinessSeed.demoMSAName,
+                sha: "canonical-demo-msa-761",
+                text: msaText,
+                documentID: "canonical-demo-msa-document-761"
+            ),
+            try seedDemoDocument(
+                matterID: matterID,
+                name: CanonicalReadinessSeed.demoDepositionName,
+                sha: "canonical-demo-deposition-763",
+                text: depositionText,
+                documentID: "canonical-demo-deposition-document-763"
+            ),
+            try seedDemoDocument(
+                matterID: matterID,
+                name: CanonicalReadinessSeed.demoCoverageName,
+                sha: "canonical-demo-coverage-767",
+                text: coverageText,
+                documentID: "canonical-demo-coverage-document-767"
+            ),
+        ]
+    }
+
+    /// Creates the exact synthetic matter carried by T-WINDOW-01's parsed wire.
+    /// The ordinary UI-test default remains unchanged when any field is absent,
+    /// duplicated, or empty. This always runs against `makeStore()`'s throwaway
+    /// database and cannot reach the user's matter store.
+    private func seedUITestWindowLedgerMatterIfNeeded() {
+        guard let wire = WindowSessionLedgerWire(
+            arguments: ProcessInfo.processInfo.arguments
+        ) else { return }
+
+        do {
+            guard try store.matters.fetchMatter(id: wire.matterID) == nil else { return }
+            let catalog = JurisdictionCatalog()
+            _ = try store.matterIdentity.createMatter(
+                command: MatterIdentityCreateCommand(
+                    matterID: wire.matterID,
+                    name: wire.matterName,
+                    legacyJurisdictionText: "Unspecified",
+                    legacyCourtText: nil,
+                    legacyPartyPerspective: .neutral,
+                    legacyClientNames: nil,
+                    courtResolutionState: .unresolved,
+                    canonicalCatalogVersion: catalog.catalogVersion,
+                    canonicalCatalogDigestSHA256: catalog.identityDigestSHA256,
+                    canonicalJurisdictionID: nil,
+                    canonicalCourtID: nil,
+                    parties: [],
+                    representations: []
+                )
+            )
+            _ = try store.chats.createMatterChat(
+                matterID: wire.matterID,
+                title: "General — \(wire.matterName)"
+            )
+        } catch {
+            assertionFailure("Could not seed window-session ledger fixture: \(error)")
+        }
+    }
 #endif
-
-    nonisolated private static func reviewUITestCharacterRange(
-        of quote: String,
-        in value: String
-    ) -> Range<Int>? {
-        guard let range = value.range(of: quote) else { return nil }
-        return value.distance(from: value.startIndex, to: range.lowerBound)
-            ..< value.distance(from: value.startIndex, to: range.upperBound)
-    }
-
-    private struct ReviewUITestMapResponse: Encodable, Sendable {
-        var schemaVersion = 1
-        var items: [ReviewUITestMapItem]
-
-        private enum CodingKeys: String, CodingKey {
-            case schemaVersion = "schema_version"
-            case items
-        }
-    }
-
-    private struct ReviewUITestMapItem: Encodable, Sendable {
-        var itemKey: String
-        var value: String
-        var evidence: [CorpusAnalysisEvidenceReference]
-        var contraryEvidence: [CorpusAnalysisEvidenceReference]
-
-        private enum CodingKeys: String, CodingKey {
-            case itemKey = "item_key"
-            case value
-            case evidence
-            case contraryEvidence = "contrary_evidence"
-        }
-    }
 
     /// Seeds one ready and one review-required revision-bound passage plus a
     /// throwaway model for the guided Q&A hosted test. Both synthetic runtime and
@@ -1861,6 +2328,7 @@ final class AppEnvironment: ObservableObject {
                 draft.docketNumber = "2026-CA-001847"
                 try mattersController.updateMatter(id: matterID, draft: draft)
             }
+            try ensureUITestMotionCanonicalIdentity(matterID: matterID)
 
             var profile = AssistantProfile()
             profile.fullName = "Harvey Specter"
@@ -1878,79 +2346,19 @@ final class AppEnvironment: ObservableObject {
             try store.appSettings.setSetting(AssistantProfile.profileKey, value: profile)
 
             let factName = "Motion Draft First Amended Complaint.txt"
-            if !(try store.documentLibrary.fetchDocuments(matterID: matterID)).contains(where: { $0.displayName == factName }) {
-                let text = "The fictional pleading alleges that Liberty Rail received rail components, without alleging a breached contractual duty. "
-                    + "It identifies a shipment, describes the component category, and alleges receipt at the fictional project location, but it does not identify a contractual promise that Liberty Rail failed to perform. "
-                    + "Full review tail: the fictional pleading alleges no damages amount."
-                let blob = try store.documentLibrary.upsertBlob(DocumentBlobRecord(
-                    sha256: DocumentStorage.sha256Hex(of: Data("uitest-motion-fact".utf8)),
-                    byteSize: text.utf8.count,
-                    originalExtension: "txt",
-                    managedRelativePath: "uitest/\(factName)"
-                )).blob
-                let document = try store.documentLibrary.insertDocument(MatterDocumentRecord(
-                    matterID: matterID,
-                    blobID: blob.id,
-                    displayName: factName,
-                    status: MatterDocumentStatus.ready.rawValue,
-                    extractionStatus: DocumentExtractionStatus.extracted.rawValue,
-                    indexStatus: DocumentIndexStatus.textIndexed.rawValue,
-                    extractionMethod: "synthetic@toolchain:motion-uitest"
-                ))
-                let part = DocumentPagePartRecord(
-                    id: "ui-motion-fact-part",
-                    documentID: document.id,
-                    partIndex: 0,
-                    sourceKind: DocumentSourceKind.text.rawValue,
-                    normalizedText: text,
-                    charCount: text.count
-                )
-                let revision = DocumentPartRevisionRecord(
-                    id: "ui-motion-fact-revision",
-                    documentID: document.id,
-                    partIndex: 0,
-                    derivationKey: "motion-uitest:\(document.id)",
-                    origin: "parser",
-                    method: "synthetic",
-                    text: text,
-                    charCount: text.count
-                )
-                let selection = DocumentPartSelectionRecord(
-                    id: "ui-motion-fact-selection",
-                    documentID: document.id,
-                    partIndex: 0,
-                    selectedRevisionID: revision.id,
-                    selectionKey: "motion-uitest:\(document.id)",
-                    selectedBy: "policy",
-                    policyVersion: 1,
-                    decisionJSON: #"{"rule":"synthetic_motion_ui_fixture"}"#
-                )
-                _ = try store.documentRevisions.replacePartsAndPersistLineage(
-                    documentID: document.id,
-                    parts: [part],
-                    revisions: [revision],
-                    selections: [selection]
-                )
-                try store.documentIndex.replaceChunks(documentID: document.id, chunks: [
-                    DocumentChunkRecord(
-                        id: "ui-motion-fact-chunk",
-                        documentID: document.id,
-                        pagePartID: part.id,
-                        revisionID: revision.id,
-                        // This hand-authored hosted fixture uses the stable chunk ID
-                        // asserted by XCUITest. Keep it on the supported v1 exact-slice
-                        // contract; v2 IDs are owned by the production chunk producer.
-                        chunkerVersion: 1,
-                        chunkIndex: 0,
-                        sourceKind: DocumentSourceKind.text.rawValue,
-                        charStart: 0,
-                        charEnd: text.count,
-                        normalizedText: text,
-                        displayExcerpt: text,
-                        tokenCount: 24
-                    )
-                ])
-            }
+            let factText = "The fictional pleading alleges that Liberty Rail received rail components, without alleging a breached contractual duty. "
+                + "It identifies a shipment, describes the component category, and alleges receipt at the fictional project location, but it does not identify a contractual promise that Liberty Rail failed to perform. "
+                + "Full review tail: the fictional pleading alleges no damages amount."
+            try configureCanonicalReadinessEmbeddingModel()
+            _ = try seedCanonicalReadinessDocumentGraph(
+                documentID: "ui-motion-fact-document",
+                matterID: matterID,
+                name: factName,
+                shaSeed: "uitest-motion-fact",
+                text: factText,
+                includeSemanticIndex: true,
+                draftingSnapshotCompatible: true
+            )
 
             let authorityName = blocked
                 ? "Fictional Motion Authority — Review Required"
@@ -2019,6 +2427,94 @@ final class AppEnvironment: ObservableObject {
         } catch {
             assertionFailure("Could not seed motion drafting UI fixture: \(error)")
         }
+    }
+
+    /// Legacy fixture setup predates the canonical identity graph. Re-publish the
+    /// exact fictional Florida court, parties, and opposing counsel after the
+    /// legacy matter update so the shipping Draft eligibility gate is exercised
+    /// rather than bypassed. The second bootstrap pass is an exact no-op.
+    private func ensureUITestMotionCanonicalIdentity(matterID: String) throws {
+        let catalog = JurisdictionCatalog.shared
+        let jurisdictionID = CanonicalJurisdictionID(rawValue: "state-florida-courts")
+        let courtID = CanonicalCourtID(
+            rawValue: "state-florida-circuit-court-of-the-fourth-judicial-circuit-in-and-for-duval-county"
+        )
+        let plaintiffID = "party-motion-mckernon-2201"
+        let defendantID = "party-motion-liberty-2203"
+        let expectedParties = [
+            MatterPartyIdentity(
+                id: plaintiffID,
+                matterID: matterID,
+                displayName: "McKernon Motors, Inc.",
+                captionName: "MCKERNON MOTORS, INC.,",
+                baseRole: .plaintiff,
+                captionOrder: 0,
+                clientStatus: .notRepresented
+            ),
+            MatterPartyIdentity(
+                id: defendantID,
+                matterID: matterID,
+                displayName: "Liberty Rail, LLC",
+                captionName: "LIBERTY RAIL, LLC,",
+                baseRole: .defendant,
+                captionOrder: 1,
+                clientStatus: .represented
+            ),
+        ]
+        let expectedRepresentations = [
+            MatterRepresentationIdentity(
+                id: "representation-motion-hardman-2207",
+                matterID: matterID,
+                representedPartyID: plaintiffID,
+                relationshipKind: .counsel,
+                representativeName: "Daniel Hardman, Esq.",
+                firmName: "Hardman & Tanner, LLP",
+                serviceAddress: MatterServiceAddress(
+                    street: "1 Independent Drive",
+                    city: "Jacksonville",
+                    state: "Florida",
+                    postalCode: "32202"
+                ),
+                serviceEmails: ["dhardman@example.test"],
+                serviceOrder: 0
+            ),
+        ]
+        guard let snapshot = try store.matterIdentity.fetchSnapshot(matterID: matterID),
+              snapshot.courtResolutionState != .court
+                || snapshot.canonicalJurisdictionID != jurisdictionID
+                || snapshot.canonicalCourtID != courtID
+                || snapshot.parties != expectedParties
+                || snapshot.representations != expectedRepresentations
+        else { return }
+        guard let matter = try store.matters.fetchMatter(id: matterID) else {
+            throw MatterIdentityRepositoryError.matterUnavailable
+        }
+        _ = try store.matterIdentity.updateMatter(command: MatterIdentityUpdateCommand(
+            matterID: matterID,
+            expectedIdentityRevision: snapshot.identityRevision,
+            legacyJurisdictionText: "Florida",
+            legacyCourtText: "IN THE CIRCUIT COURT OF THE FOURTH JUDICIAL CIRCUIT,\nIN AND FOR DUVAL COUNTY, FLORIDA",
+            legacyPartyPerspective: .defendant,
+            legacyClientNames: "Liberty Rail, LLC",
+            courtResolutionState: .court,
+            canonicalCatalogVersion: catalog.catalogVersion,
+            canonicalCatalogDigestSHA256: catalog.identityDigestSHA256,
+            canonicalJurisdictionID: jurisdictionID,
+            canonicalCourtID: courtID,
+            parties: expectedParties,
+            representations: expectedRepresentations,
+            workspaceDetails: MatterIdentityWorkspaceDetails(
+                name: matter.name,
+                judge: matter.judge,
+                docketNumber: matter.docketNumber,
+                practiceArea: matter.practiceArea,
+                matterDescription: matter.matterDescription,
+                internalMatterID: matter.internalMatterID,
+                clientID: matter.clientID,
+                clientMatterID: matter.clientMatterID,
+                notes: matter.notes
+            )
+        ))
     }
 
     /// Seeds one completed encrypted-source rejection for the T-OPS-07 warning
@@ -2315,6 +2811,35 @@ final class AppEnvironment: ObservableObject {
                     relatedID: output.id
                 )
             }
+            if !existing.contains(where: { $0.title == "Stale Dependency Fixture" }) {
+                let output = try store.structuredOutputs.createOutput(
+                    matterID: matterID,
+                    title: "Stale Dependency Fixture",
+                    outputType: .documentQA,
+                    status: .needsReview
+                )
+                let version = try store.structuredOutputs.createVersion(
+                    structuredOutputID: output.id,
+                    contentMarkdown: "# Stale Dependency Fixture\n\nSynthetic immutable prior content.",
+                    requiredSections: [],
+                    presentSections: [],
+                    missingSections: [],
+                    verificationStatus: .needsReview,
+                    verificationVersion: "synthetic-stale-v1",
+                    verificationDimensions: .allNotRun,
+                    assuranceState: .stale,
+                    outputStatus: .needsReview
+                )
+                try store.database.writer.write { db in
+                    try db.execute(
+                        sql: "UPDATE structured_output_versions SET stale_reason = ? WHERE id = ?",
+                        arguments: [
+                            "source_revision_changed:document=stale-source-document-751:from=revision-23:to=revision-24",
+                            version.id,
+                        ]
+                    )
+                }
+            }
 
             let formatter = DateFormatter()
             formatter.calendar = Calendar(identifier: .gregorian)
@@ -2347,6 +2872,17 @@ final class AppEnvironment: ObservableObject {
     /// `[S1]` preview resolves to real content. Lets UI tests exercise the sources
     /// block / inline-citation / export features without a model or network.
     private func seedUITestCitationsChatIfNeeded() {
+#if DEBUG
+        if let readinessScenario = CanonicalReadinessUITestScenario(
+            arguments: ProcessInfo.processInfo.arguments
+        ), case .canonicalDemo = readinessScenario {
+            // T-DATA-READY-02 owns an exact three-document denominator. The
+            // generic citation fixture's raw-ready agreement would otherwise
+            // make the visible native projection report 3 of 4 even though the
+            // canonical demo receipts themselves are exact.
+            return
+        }
+#endif
         let existing = (try? store.chats.fetchGlobalChats()) ?? []
         guard !existing.contains(where: { $0.title == "Citations Demo" }) else { return }
         do {
@@ -2508,7 +3044,7 @@ final class AppEnvironment: ObservableObject {
             httpClient: AuthorizedHTTPClient(
                 keyStore: tokenStore,
                 policy: NetworkPolicyService(),
-                logger: NetworkRequestLogger(repository: store.networkRequests)
+                logger: NetworkRequestLogger(writer: store.networkRequestAudits)
             )
         )
         Task { @MainActor in
@@ -2618,6 +3154,7 @@ final class AppEnvironment: ObservableObject {
                 matterID: matter.id,
                 practiceArea: "Commercial Litigation"
             )
+            try configureCanonicalReadinessEmbeddingModel()
 
             // Fictitious documents with real (fictional) contract text so previews work.
             let msaText = """
@@ -2654,6 +3191,10 @@ final class AppEnvironment: ObservableObject {
                 matterID: matter.id, name: "Insurance Coverage Letter.docx",
                 sha: "demo-coverage", text: coverageText
             )
+            try validateCanonicalDemoReadiness(
+                matterID: matter.id,
+                documentIDs: [msaID, depoID, coverageID]
+            )
             let contractsTag = try store.documentLibrary.createTag(matterID: matter.id, name: "Contracts")
             let depositionsTag = try store.documentLibrary.createTag(matterID: matter.id, name: "Depositions")
             let insuranceTag = try store.documentLibrary.createTag(matterID: matter.id, name: "Insurance")
@@ -2689,24 +3230,33 @@ final class AppEnvironment: ObservableObject {
                     messageID: docAssistant.id, label: "S1", kind: "source",
                     documentID: msaID,
                     locatorJSON: DocumentSourceLocator(sourceKind: .text, charStart: 0, charEnd: 320).encodedJSON(),
-                    displayName: "Master Services Agreement (2024).pdf",
+                    displayName: CanonicalReadinessSeed.demoMSAName,
                     matchText: "SECTION 9. INDEMNIFICATION", rank: 0
                 ),
                 MessageCitationRecord(
                     messageID: docAssistant.id, label: "S2", kind: "source",
                     documentID: coverageID,
                     locatorJSON: DocumentSourceLocator(sourceKind: .text, charStart: 0, charEnd: 200).encodedJSON(),
-                    displayName: "Insurance Coverage Letter.docx",
+                    displayName: CanonicalReadinessSeed.demoCoverageName,
                     matchText: "reservation of rights", rank: 1
                 ),
                 MessageCitationRecord(
                     messageID: docAssistant.id, label: "S3", kind: "source",
                     documentID: depoID,
                     locatorJSON: DocumentSourceLocator(sourceKind: .text, charStart: 0, charEnd: 220).encodedJSON(),
-                    displayName: "Deposition Tr. — R. Calloway (Vol. I).pdf",
+                    displayName: CanonicalReadinessSeed.demoDepositionName,
                     matchText: "tie-down procedures", rank: 2
                 )
             ])
+            try seedDemoGroundedSourcePacket(
+                matterID: matter.id,
+                messageID: docAssistant.id,
+                labeledDocumentIDs: [
+                    ("S1", msaID),
+                    ("S2", coverageID),
+                    ("S3", depoID),
+                ]
+            )
 
             // A saved authority with REAL case law (public domain) so the in-app
             // opinion reader has offline text: Winter v. NRDC, 555 U.S. 7 (2008).
@@ -2851,29 +3401,362 @@ final class AppEnvironment: ObservableObject {
         }
     }
 
-    /// One fictitious, fully-indexed demo document (ready status, previewable text).
-    private func seedDemoDocument(matterID: String, name: String, sha: String, text: String) throws -> String {
+    /// One fictitious demo document built through the complete canonical graph.
+    /// The derived receipt is the completion boundary; a raw document status can
+    /// never make this producer return success.
+    private func seedDemoDocument(
+        matterID: String,
+        name: String,
+        sha: String,
+        text: String,
+        documentID: String? = nil
+    ) throws -> String {
+        let resolvedDocumentID = documentID ?? "demo-document-\(sha)"
+        let seededDocumentID = try seedCanonicalReadinessDocumentGraph(
+            documentID: resolvedDocumentID,
+            matterID: matterID,
+            name: name,
+            shaSeed: sha,
+            text: text,
+            includeSemanticIndex: true
+        )
+        let receipt = try store.documentReadiness.fetchReceipt(
+            documentID: seededDocumentID
+        )
+        guard receipt.isBaseReady else {
+            // Fail closed even if graph creation reached its final status update.
+            try? store.documentLibrary.updateStatus(
+                documentID: seededDocumentID,
+                status: .failed
+            )
+            throw CanonicalReadinessSeedError.receiptNotReady(
+                documentID: seededDocumentID,
+                exclusions: receipt.exclusions
+            )
+        }
+        return seededDocumentID
+    }
+
+    /// Retains the exact chunks behind the demo chat's visible citations. The
+    /// pending packet is the production promotion precondition: without it the
+    /// answer may be previewed, but cannot cross the atomic Saved Work boundary.
+    private func seedDemoGroundedSourcePacket(
+        matterID: String,
+        messageID: String,
+        labeledDocumentIDs: [(label: String, documentID: String)]
+    ) throws {
+        guard let model = try store.documentSettings.fetchSelectedEmbeddingModel() else {
+            throw CanonicalReadinessSeedError.selectedEmbeddingModelUnavailable
+        }
+        let retained = try labeledDocumentIDs.enumerated().map { rank, source in
+            guard let chunk = try store.documentIndex.fetchChunks(documentID: source.documentID).first,
+                  let revisionID = chunk.revisionID else {
+                throw CanonicalReadinessSeedError.receiptNotReady(
+                    documentID: source.documentID,
+                    exclusions: []
+                )
+            }
+            let locator = DocumentSourceLocator(
+                sourceKind: DocumentSourceKind(rawValue: chunk.sourceKind) ?? .text,
+                pageIndex: chunk.pageIndex,
+                pageLabel: chunk.pageLabel,
+                sheetName: chunk.sheetName,
+                cellRange: chunk.cellRange,
+                emailPartPath: chunk.emailPartPath,
+                charStart: chunk.charStart,
+                charEnd: chunk.charEnd,
+                boundingBoxesJSON: chunk.boundingBoxesJSON
+            ).encodedJSON()
+            return (
+                label: source.label,
+                rank: rank,
+                documentID: source.documentID,
+                chunk: chunk,
+                revisionID: revisionID,
+                locator: locator
+            )
+        }
+        let verification = try PropositionSupportResult(
+            propositionID: "demo-grounded-answer",
+            status: .supported,
+            reasons: [],
+            evidence: retained.map { source in
+                SupportEvidence(
+                    sourceID: "\(matterID)/\(source.chunk.id)",
+                    sourceLabel: source.label,
+                    locator: source.locator,
+                    retainedExcerpt: source.chunk.normalizedText,
+                    verifierName: "Canonical demo fixture",
+                    verifierVersion: DocumentSupportVerifier.version
+                )
+            },
+            timestamp: CanonicalReadinessSeed.timestamp
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        let verificationJSON = String(
+            decoding: try encoder.encode([verification]),
+            as: UTF8.self
+        )
+        let scopeJSON = String(
+            decoding: try JSONSerialization.data(
+                withJSONObject: ["documentIDs": labeledDocumentIDs.map(\.documentID)],
+                options: [.sortedKeys]
+            ),
+            as: UTF8.self
+        )
+        let sourceSet = try store.documentSources.createSourceSet(
+            matterID: matterID,
+            mode: .autoSource,
+            scopeJSON: scopeJSON,
+            retrievalQuery: "What do my documents say about indemnification and insurance coverage?",
+            retrievalDepth: RetrievalDepth.deep.rawValue,
+            packingReportJSON: #"{"candidates":[],"packedSourceIDs":[]}"#,
+            embeddingModelID: model.id,
+            embeddingModelRevision: model.revision,
+            chunkerVersion: CanonicalReadinessSeed.chunkerVersion,
+            retrievalConfigJSON: #"{"depth":"deep","fixture":"canonical-demo"}"#,
+            corpusSnapshotHash: "canonical-demo-grounded-packet-23",
+            messageID: messageID
+        )
+        try store.documentSources.addOutputSources(retained.map { source in
+            DocumentOutputSourceRecord(
+                sourceSetID: sourceSet.id,
+                documentID: source.documentID,
+                chunkID: source.chunk.id,
+                revisionID: source.revisionID,
+                citationLabel: source.label,
+                locatorJSON: source.locator,
+                excerpt: source.chunk.displayExcerpt ?? source.chunk.normalizedText,
+                rank: source.rank,
+                warningsJSON: verificationJSON,
+                createdAt: CanonicalReadinessSeed.timestamp
+            )
+        })
+    }
+
+    private func configureCanonicalReadinessEmbeddingModel() throws {
+        _ = try store.documentSettings.loadSettings()
+        try store.documentSettings.upsertEmbeddingModel(
+            DocumentEmbeddingModelRecord(
+                id: CanonicalReadinessSeed.embeddingModelID,
+                repoID: CanonicalReadinessSeed.embeddingModelRepoID,
+                localPath: "/synthetic/canonical-readiness-embedding-769",
+                displayName: CanonicalReadinessSeed.embeddingModelDisplayName,
+                dimension: CanonicalReadinessSeed.embeddingDimension,
+                runtimeFamily: "canonical-readiness-synthetic-23",
+                revision: CanonicalReadinessSeed.embeddingModelRevision,
+                isDefault: false,
+                isSelected: false,
+                lastTestLoadAt: CanonicalReadinessSeed.timestamp,
+                lastTestLoadResult: "passed",
+                createdAt: CanonicalReadinessSeed.timestamp,
+                updatedAt: CanonicalReadinessSeed.timestamp
+            )
+        )
+        try store.documentSettings.selectEmbeddingModel(
+            id: CanonicalReadinessSeed.embeddingModelID
+        )
+        try store.documentSettings.updateSettings { settings in
+            settings.embeddingModelLastTestedAt = CanonicalReadinessSeed.timestamp
+            settings.chunkerVersion = CanonicalReadinessSeed.chunkerVersion
+        }
+    }
+
+    /// Shared synchronous producer for hermetic demos and native qualification.
+    /// It mirrors the real completion graph: terminal extraction metadata,
+    /// immutable revision + selection, current chunk + FTS row, and an exact
+    /// selected-model vector. `includeSemanticIndex` exists only to construct the
+    /// raw-green negative fixture under the parsed DEBUG scenario.
+    private func seedCanonicalReadinessDocumentGraph(
+        documentID: String,
+        matterID: String,
+        name: String,
+        shaSeed: String,
+        text: String,
+        includeSemanticIndex: Bool,
+        draftingSnapshotCompatible: Bool = false
+    ) throws -> String {
+        if try store.documentLibrary.fetchDocument(id: documentID) != nil {
+            return documentID
+        }
+        guard let model = try store.documentSettings.fetchSelectedEmbeddingModel(),
+              model.id == CanonicalReadinessSeed.embeddingModelID else {
+            throw CanonicalReadinessSeedError.selectedEmbeddingModelUnavailable
+        }
+
+        let timestamp = CanonicalReadinessSeed.timestamp
+        let textChecksum = DocumentStorage.sha256Hex(of: Data(text.utf8))
         let blob = try store.documentLibrary.upsertBlob(
             DocumentBlobRecord(
-                sha256: sha, byteSize: 0,
+                id: "\(documentID)-blob",
+                sha256: DocumentStorage.sha256Hex(
+                    of: Data("\(shaSeed)\u{001f}\(text)".utf8)
+                ),
+                byteSize: text.utf8.count,
                 originalExtension: (name as NSString).pathExtension,
-                managedRelativePath: "demo/\(sha)"
+                managedRelativePath: "demo/\(shaSeed)",
+                mimeType: "text/plain",
+                integrityStatus: DocumentBlobIntegrityStatus.verified.rawValue,
+                verifiedAt: timestamp,
+                createdAt: timestamp
             )
         ).blob
         let document = try store.documentLibrary.insertDocument(
             MatterDocumentRecord(
-                matterID: matterID, blobID: blob.id, displayName: name,
-                status: MatterDocumentStatus.ready.rawValue
+                id: documentID,
+                matterID: matterID,
+                blobID: blob.id,
+                displayName: name,
+                status: MatterDocumentStatus.indexing.rawValue,
+                extractionStatus: DocumentExtractionStatus.extracted.rawValue,
+                indexStatus: DocumentIndexStatus.notIndexed.rawValue,
+                sourceKind: DocumentSourceKind.text.rawValue,
+                extractionMethod: "synthetic_exact_text@toolchain:canonical-readiness-23",
+                extractedTextChecksum: textChecksum,
+                pagePartCount: 1,
+                importedAt: timestamp,
+                createdAt: timestamp,
+                updatedAt: timestamp
             )
         )
-        try store.documentIndex.replaceParts(documentID: document.id, parts: [
-            DocumentPagePartRecord(
-                documentID: document.id, partIndex: 0,
-                sourceKind: DocumentSourceKind.text.rawValue,
-                normalizedText: text, charCount: text.count
+        let part = DocumentPagePartRecord(
+            id: "\(documentID)-part-0",
+            documentID: document.id,
+            partIndex: 0,
+            sourceKind: DocumentSourceKind.text.rawValue,
+            normalizedText: text,
+            charCount: text.count,
+            createdAt: timestamp,
+            updatedAt: timestamp
+        )
+        let revision = DocumentPartRevisionRecord(
+            id: "\(documentID)-revision-23",
+            documentID: document.id,
+            partIndex: 0,
+            derivationKey: "canonical-readiness:\(documentID):revision-23",
+            origin: "parser",
+            method: "synthetic_exact_text",
+            text: text,
+            charCount: text.count,
+            toolchainVersion: "canonical-readiness-toolchain-23",
+            createdAt: timestamp
+        )
+        let selection = DocumentPartSelectionRecord(
+            id: "\(documentID)-selection-23",
+            documentID: document.id,
+            partIndex: 0,
+            selectedRevisionID: revision.id,
+            selectionKey: "canonical-readiness:\(documentID):selection-23",
+            selectedBy: "synthetic_policy",
+            policyVersion: 23,
+            decisionJSON: #"{"rule":"canonical_readiness_fixture_23"}"#,
+            createdAt: timestamp
+        )
+        _ = try store.documentRevisions.replacePartsAndPersistLineage(
+            documentID: document.id,
+            parts: [part],
+            revisions: [revision],
+            selections: [selection]
+        )
+
+        let chunkID: String
+        let unitKind: String?
+        if draftingSnapshotCompatible {
+            // DraftingSourceRepository independently reconstructs the shipping
+            // v2 producer output before it captures an immutable source
+            // snapshot. With no structure nodes, v2 deliberately falls back to
+            // one v1-style text range and binds it with the production
+            // content-addressed identity.
+            let identity = [
+                "chunk-v2", document.id, revision.id, part.id, "", "0", "0",
+                String(text.count), text,
+            ].joined(separator: "\u{001f}")
+            let digest = SHA256.hash(data: Data(identity.utf8))
+                .map { String(format: "%02x", $0) }
+                .joined()
+            chunkID = "chunk-v2-\(digest)"
+            unitKind = nil
+        } else {
+            chunkID = "\(documentID)-chunk-23"
+            unitKind = "document"
+        }
+        let chunk = DocumentChunkRecord(
+            id: chunkID,
+            documentID: document.id,
+            pagePartID: part.id,
+            revisionID: revision.id,
+            unitKind: unitKind,
+            chunkerVersion: CanonicalReadinessSeed.chunkerVersion,
+            chunkIndex: 0,
+            sourceKind: DocumentSourceKind.text.rawValue,
+            charStart: 0,
+            charEnd: text.count,
+            normalizedText: text,
+            displayExcerpt: text,
+            tokenCount: max(1, text.split(whereSeparator: { $0.isWhitespace }).count),
+            createdAt: timestamp,
+            updatedAt: timestamp
+        )
+        try store.documentIndex.replaceChunks(
+            documentID: document.id,
+            chunks: [chunk]
+        )
+        if includeSemanticIndex {
+            var vector = [Float](repeating: 0, count: model.dimension)
+            let digest = SHA256.hash(data: Data(text.utf8))
+            let deterministicIndex = digest.prefix(8).reduce(UInt64(0)) {
+                ($0 << 8) | UInt64($1)
+            }
+            vector[Int(deterministicIndex % UInt64(model.dimension))] = 1
+            try store.documentIndex.upsertEmbedding(
+                DocumentChunkEmbeddingRecord(
+                    id: "\(documentID)-embedding-23",
+                    chunkID: chunk.id,
+                    documentID: document.id,
+                    embeddingModelID: model.id,
+                    modelDisplayName: model.displayName,
+                    modelRevision: model.revision,
+                    dimension: model.dimension,
+                    normalized: true,
+                    vector: VectorMath.encode(vector),
+                    createdAt: timestamp
+                )
             )
-        ])
+        }
+        try store.documentLibrary.updateIndexStatus(
+            documentID: document.id,
+            indexStatus: .ready
+        )
+        _ = try store.documentLibrary.promoteStatus(
+            documentID: document.id,
+            to: .ready,
+            whenCurrentIn: [.indexing]
+        )
         return document.id
+    }
+
+    private func validateCanonicalDemoReadiness(
+        matterID: String,
+        documentIDs: [String]
+    ) throws {
+        let projections = try CanonicalDocumentReadinessLedger(store: store)
+            .consumerProjections(
+                matterID: matterID,
+                documentIDs: documentIDs
+            )
+        for consumer in DocumentReadinessConsumer.allCases {
+            let consumerProjections = projections.filter { $0.consumer == consumer }
+            let ready = consumerProjections.filter(\.isBaseReady).count
+            guard consumerProjections.count == documentIDs.count,
+                  ready == documentIDs.count else {
+                throw CanonicalReadinessSeedError.consumerMismatch(
+                    consumer: consumer,
+                    ready: ready,
+                    total: consumerProjections.count
+                )
+            }
+        }
     }
 
     /// Authorizes the one UI test that must retain Store state across a real
@@ -2914,61 +3797,6 @@ final class AppEnvironment: ObservableObject {
             .appendingPathComponent("SupraAI.sqlite", isDirectory: false)
     }
 
-    /// Allows only the dedicated paused and cancellation Guided Review fixtures to
-    /// retain their throwaway Store across relaunch. The XCUITest supplies a path
-    /// inside this app container's temporary directory; all other Review launches
-    /// stay fresh.
-    private static func reviewCreationUITestRoot() -> URL? {
-        let environment = ProcessInfo.processInfo.environment
-        guard isUITestMode,
-              ProcessInfo.processInfo.arguments.contains("-uiTestReviewCreation"),
-              let scenario = reviewCreationUITestScenario,
-              ["paused", "slowVerification"].contains(scenario),
-              let rawRoot = environment["SUPRA_UI_TEST_REVIEW_CREATION_ROOT"]?
-                .trimmingCharacters(in: .whitespacesAndNewlines),
-              !rawRoot.isEmpty else { return nil }
-
-        let temporaryRoot = FileManager.default.temporaryDirectory
-            .standardizedFileURL
-            .resolvingSymlinksInPath()
-        let candidate = URL(fileURLWithPath: rawRoot, isDirectory: true)
-            .standardizedFileURL
-            .resolvingSymlinksInPath()
-        guard candidate.path.hasPrefix("\(temporaryRoot.path)/") else { return nil }
-        return candidate
-    }
-
-    private static func reviewCreationUITestStoreURL() -> URL? {
-        reviewCreationUITestRoot()?
-            .appendingPathComponent(".supra-ui-test-store", isDirectory: true)
-            .appendingPathComponent("SupraAI.sqlite", isDirectory: false)
-    }
-
-    /// Gives only the dedicated Review-export UI test a throwaway managed-file
-    /// root. Normal launches always use the app's standard managed storage.
-    private static func reviewExportUITestRoot() -> URL? {
-#if DEBUG
-        let arguments = ProcessInfo.processInfo.arguments
-        let environment = ProcessInfo.processInfo.environment
-        guard isUITestMode,
-              arguments.contains("-uiTestReviewExport"),
-              let rawRoot = environment["SUPRA_UI_TEST_REVIEW_EXPORT_ROOT"]?
-                .trimmingCharacters(in: .whitespacesAndNewlines),
-              !rawRoot.isEmpty else { return nil }
-
-        let temporaryRoot = FileManager.default.temporaryDirectory
-            .standardizedFileURL
-            .resolvingSymlinksInPath()
-        let candidate = URL(fileURLWithPath: rawRoot, isDirectory: true)
-            .standardizedFileURL
-            .resolvingSymlinksInPath()
-        guard candidate.path.hasPrefix("\(temporaryRoot.path)/") else { return nil }
-        return candidate
-#else
-        return nil
-#endif
-    }
-
     /// Opens the on-disk store, falling back to a temporary store so the app still
     /// launches if the Application Support database cannot be created. `isFallback`
     /// is true for that degraded last-resort store (not for the UI-test store).
@@ -2994,8 +3822,7 @@ final class AppEnvironment: ObservableObject {
             // migrates the user's real store — which also removes the Debug-build
             // erase-on-schema-change hazard for probe runs.
             let url: URL
-            if let persistentUITestStoreURL = interruptedDraftRecoveryUITestStoreURL()
-                ?? reviewCreationUITestStoreURL() {
+            if let persistentUITestStoreURL = interruptedDraftRecoveryUITestStoreURL() {
                 try? FileManager.default.createDirectory(
                     at: persistentUITestStoreURL.deletingLastPathComponent(),
                     withIntermediateDirectories: true

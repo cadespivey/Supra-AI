@@ -128,6 +128,18 @@ private func distinctCanaries(in text: String, canaries: [String]) -> Int {
     canaries.filter { text.contains($0) }.count
 }
 
+private struct CanonicalDocumentQATestEmbedder: TextEmbedder {
+    let modelID = "document-qa-canonical-model-811"
+    let modelRepoID = "synthetic/document-qa-canonical-model-811"
+    let modelDisplayName = "Document QA Canonical Model 811"
+    let modelRevision: String? = "document-qa-canonical-revision-17"
+    let dimension = 8
+
+    func embed(_ texts: [String]) async throws -> [[Float]] {
+        texts.map { _ in [1, 0, 0, 0, 0, 0, 0, 0] }
+    }
+}
+
 @MainActor
 final class DocumentQATests: XCTestCase {
     private static let syntheticModelLineage = DocumentGenerationModelLineage(
@@ -1543,13 +1555,57 @@ final class DocumentQATests: XCTestCase {
         let doc = try store.documentLibrary.insertDocument(MatterDocumentRecord(
             matterID: matterID, blobID: blob.id, displayName: name,
             status: MatterDocumentStatus.indexing.rawValue,
-            extractionStatus: DocumentExtractionStatus.extracted.rawValue
+            extractionStatus: DocumentExtractionStatus.extracted.rawValue,
+            sourceKind: DocumentSourceKind.text.rawValue,
+            extractionMethod: "synthetic@toolchain:document-qa-17",
+            extractedTextChecksum: "document-qa-checksum-\(docSafeName(name))-811",
+            pagePartCount: 1
         ))
-        try store.documentIndex.replaceParts(documentID: doc.id, parts: [
-            DocumentPagePartRecord(documentID: doc.id, partIndex: 0, sourceKind: DocumentSourceKind.text.rawValue, normalizedText: text, charCount: text.count)
-        ])
-        // Index text-only (no embedder) so the scope is ready for FTS retrieval.
-        _ = try await DocumentIndexingService(store: store, embedder: nil).indexDocument(documentID: doc.id)
+        let part = DocumentPagePartRecord(
+            id: "document-qa-part-\(doc.id)",
+            documentID: doc.id,
+            partIndex: 0,
+            sourceKind: DocumentSourceKind.text.rawValue,
+            normalizedText: text,
+            charCount: text.count
+        )
+        let revision = DocumentPartRevisionRecord(
+            id: "document-qa-revision-\(doc.id)",
+            documentID: doc.id,
+            partIndex: 0,
+            derivationKey: "document-qa-derivation-\(doc.id)-17",
+            origin: "parser",
+            method: "synthetic_exact_text",
+            text: text,
+            charCount: text.count,
+            toolchainVersion: "document-qa-toolchain-17"
+        )
+        let selection = DocumentPartSelectionRecord(
+            id: "document-qa-selection-\(doc.id)",
+            documentID: doc.id,
+            partIndex: 0,
+            selectedRevisionID: revision.id,
+            selectionKey: "document-qa-selection-key-\(doc.id)-17",
+            selectedBy: "synthetic_policy",
+            policyVersion: 17,
+            decisionJSON: #"{"wire":"DOCUMENT_QA_CANONICAL_LINEAGE_811"}"#
+        )
+        _ = try store.documentRevisions.replacePartsAndPersistLineage(
+            documentID: doc.id,
+            parts: [part],
+            revisions: [revision],
+            selections: [selection]
+        )
+        _ = try await DocumentIndexingService(
+            store: store,
+            embedder: CanonicalDocumentQATestEmbedder()
+        ).indexDocument(documentID: doc.id)
+        XCTAssertTrue(try store.documentReadiness.fetchReceipt(documentID: doc.id).isBaseReady)
+    }
+
+    private func docSafeName(_ name: String) -> String {
+        name.unicodeScalars.map { CharacterSet.alphanumerics.contains($0) ? Character(String($0)) : "-" }
+            .reduce(into: "") { $0.append($1) }
     }
 
     private struct RevisionBoundFixture {
@@ -1576,7 +1632,10 @@ final class DocumentQATests: XCTestCase {
             displayName: name,
             status: MatterDocumentStatus.indexing.rawValue,
             extractionStatus: DocumentExtractionStatus.extracted.rawValue,
-            extractionMethod: "synthetic@toolchain:guided-qa"
+            sourceKind: DocumentSourceKind.text.rawValue,
+            extractionMethod: "synthetic@toolchain:guided-qa-17",
+            extractedTextChecksum: "guided-qa-checksum-\(docSafeName(name))-823",
+            pagePartCount: 1
         ))
         let part = DocumentPagePartRecord(
             documentID: document.id,
@@ -1609,8 +1668,12 @@ final class DocumentQATests: XCTestCase {
             revisions: [revision],
             selections: [selection]
         )
-        _ = try await DocumentIndexingService(store: store, embedder: nil)
+        _ = try await DocumentIndexingService(
+            store: store,
+            embedder: CanonicalDocumentQATestEmbedder()
+        )
             .indexDocument(documentID: document.id)
+        XCTAssertTrue(try store.documentReadiness.fetchReceipt(documentID: document.id).isBaseReady)
         let chunk = try XCTUnwrap(store.documentIndex.fetchChunks(documentID: document.id).first)
         XCTAssertEqual(chunk.revisionID, revision.id)
         return RevisionBoundFixture(
@@ -1624,6 +1687,32 @@ final class DocumentQATests: XCTestCase {
         let directoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("QAStore-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
-        return try SupraStore(url: directoryURL.appendingPathComponent("test.sqlite"))
+        let store = try SupraStore(url: directoryURL.appendingPathComponent("test.sqlite"))
+        let embedder = CanonicalDocumentQATestEmbedder()
+        let testedAt = Date(timeIntervalSince1970: 1_946_248_811)
+        _ = try store.documentSettings.loadSettings()
+        try store.documentSettings.upsertEmbeddingModel(
+            DocumentEmbeddingModelRecord(
+                id: embedder.modelID,
+                repoID: embedder.modelRepoID,
+                localPath: "/synthetic/document-qa-canonical-model-811",
+                displayName: embedder.modelDisplayName,
+                dimension: embedder.dimension,
+                runtimeFamily: "document-qa-readiness-fixture-17",
+                revision: embedder.modelRevision,
+                isDefault: false,
+                isSelected: false,
+                lastTestLoadAt: testedAt,
+                lastTestLoadResult: "passed",
+                createdAt: testedAt,
+                updatedAt: testedAt
+            )
+        )
+        try store.documentSettings.selectEmbeddingModel(id: embedder.modelID)
+        try store.documentSettings.updateSettings {
+            $0.embeddingModelLastTestedAt = testedAt
+            $0.chunkerVersion = 2
+        }
+        return store
     }
 }

@@ -3,9 +3,9 @@ import SupraResearch
 import SupraSessions
 import SwiftUI
 
-/// Create/edit form for a matter. Name, jurisdiction, and party perspective are
-/// required (spec §8.4); the rest are optional. Save is blocked until the
-/// required fields are valid, with inline messages.
+/// Canonical create/edit form for a matter. Structured parties and
+/// representations are the only editable drafting identity; legacy client
+/// perspective/name bytes remain visible only as read-only migration evidence.
 struct MatterEditorSheet: View {
     enum Mode {
         case create
@@ -27,44 +27,76 @@ struct MatterEditorSheet: View {
     }
 
     let mode: Mode
+    private let matterID: String
+    private let expectedIdentityRevision: Int?
     @State private var draft: MatterDraft
-    /// Known clients from existing matters; recommends the matching number when
-    /// a name is typed (and vice versa) so client identities stay consistent.
-    private let clientDirectory: ClientDirectory
+    @State private var courtResolutionState: MatterCourtResolutionState
+    @State private var canonicalJurisdictionID: CanonicalJurisdictionID?
+    @State private var canonicalCourtID: CanonicalCourtID?
+    @State private var parties: [MatterPartyIdentity]
+    @State private var representations: [MatterRepresentationIdentity]
     /// Known practice areas from existing matters; recommends an existing
     /// spelling as one is typed.
     private let practiceAreaDirectory: PracticeAreaDirectory
-    private let onSave: (MatterDraft) -> Void
+    private let onSave: (MatterIdentityEditorSubmission) -> UserMutationOutcome<String>
 
     @Environment(\.dismiss) private var dismiss
     @State private var showValidation = false
     @State private var selectedCourtID: String
+    @State private var lastMutationFailure: UserMutationFailure?
+    @State private var focusChain = SupraFocusChain()
 
     init(
         mode: Mode,
-        draft: MatterDraft,
-        clientDirectory: ClientDirectory = .empty,
+        submission: MatterIdentityEditorSubmission,
         practiceAreaDirectory: PracticeAreaDirectory = .empty,
-        onSave: @escaping (MatterDraft) -> Void
+        onSave: @escaping (MatterIdentityEditorSubmission) -> UserMutationOutcome<String>
     ) {
-        let selected = JurisdictionCatalog.shared.bestMatch(jurisdiction: draft.jurisdiction, court: draft.court)
         self.mode = mode
-        self._draft = State(initialValue: draft)
-        self.clientDirectory = clientDirectory
+        self.matterID = submission.matterID
+        self.expectedIdentityRevision = submission.expectedIdentityRevision
+        self._draft = State(initialValue: submission.draft)
+        self._courtResolutionState = State(initialValue: submission.courtResolutionState)
+        self._canonicalJurisdictionID = State(initialValue: submission.canonicalJurisdictionID)
+        self._canonicalCourtID = State(initialValue: submission.canonicalCourtID)
+        self._parties = State(initialValue: submission.parties)
+        self._representations = State(initialValue: submission.representations)
         self.practiceAreaDirectory = practiceAreaDirectory
-        self._selectedCourtID = State(initialValue: selected?.id ?? "")
+        self._selectedCourtID = State(
+            initialValue: submission.canonicalCourtID?.rawValue
+                ?? submission.canonicalJurisdictionID?.rawValue
+                ?? ""
+        )
         self.onSave = onSave
     }
 
     var body: some View {
-        SupraSheetScaffold(mode.title, doneLabel: "Cancel", onClose: { dismiss() }) {
-            editorForm
+        SupraSheetScaffold(
+            mode.title,
+            doneLabel: "Cancel",
+            titleAccessibilityIdentifier: "matter.editor.sheet",
+            onClose: { dismiss() }
+        ) {
+            VStack(spacing: 0) {
+                if let failure = lastMutationFailure {
+                    UserMutationFailureBanner(
+                        failure: failure,
+                        retry: save,
+                        correct: {
+                            _ = focusChain.focus(identifier: "matter.editor.name")
+                        }
+                    )
+                    .padding([.horizontal, .top], 12)
+                }
+                editorForm
+            }
         } footer: {
             Spacer()
             Button(mode.confirmLabel) { save() }
                 .buttonStyle(.ghost)
                 .keyboardShortcut(.defaultAction)
                 .disabled(showValidation && !draft.isValid)
+                .accessibilityIdentifier("matter.editor.commit")
         }
         .frame(minWidth: 480, idealWidth: 600, maxWidth: .infinity, minHeight: 520, idealHeight: 640, maxHeight: .infinity)
     }
@@ -72,39 +104,36 @@ struct MatterEditorSheet: View {
     private var editorForm: some View {
             Form {
                 Section("Required") {
-                    field("Matter name", text: $draft.name, invalid: nameInvalid, message: "Name is required.")
+                    field(
+                        "Matter name",
+                        text: $draft.name,
+                        invalid: nameInvalid,
+                        message: "Name is required.",
+                        focusOrder: 10,
+                        accessibilityID: "matter.editor.name"
+                    )
                     JurisdictionAutocompleteField(
                         jurisdiction: $draft.jurisdiction,
                         court: $draft.court,
                         selectedCourtID: $selectedCourtID,
-                        invalid: jurisdictionInvalid
+                        courtResolutionState: $courtResolutionState,
+                        canonicalJurisdictionID: $canonicalJurisdictionID,
+                        canonicalCourtID: $canonicalCourtID,
+                        invalid: jurisdictionInvalid,
+                        focusChain: focusChain,
+                        focusOrder: 20
                     )
-                    Picker("Client perspective", selection: $draft.partyPerspective) {
-                        ForEach(PartyPerspective.allCases, id: \.self) { perspective in
-                            Text(perspective.rawValue.capitalized).tag(perspective)
-                        }
-                    }
                 }
 
+                structuredPartiesSection
+                structuredRepresentationsSection
+                legacyIdentityEvidenceSection
+
                 Section("Optional") {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Client name(s)").font(.supraCaption).foregroundStyle(.secondary)
-                        MultilineField(placeholder: "Client name(s)", text: $draft.clientNames, minLines: 2)
-                        SuggestionList(
-                            suggestions: nameSuggestions,
-                            title: { $0.name ?? "" },
-                            detail: { entry in
-                                let parts = [entry.clientID.map { "Client ID \($0)" }, matterCountLabel(entry)]
-                                return parts.compactMap(\.self).joined(separator: " · ")
-                            },
-                            onSelect: applyClient
-                        )
-                    }
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Matter description").font(.supraCaption).foregroundStyle(.secondary)
                         MultilineField(placeholder: "Matter description", text: $draft.matterDescription, minLines: 3)
                     }
-                    LabeledTextField(label: "Court", text: $draft.court)
                     LabeledTextField(label: "Judge", text: $draft.judge)
                     LabeledTextField(label: "Case number", text: $draft.docketNumber)
                     VStack(alignment: .leading, spacing: 4) {
@@ -126,15 +155,6 @@ struct MatterEditorSheet: View {
                     LabeledTextField(label: "Firm matter ID", text: $draft.internalMatterID, prompt: "LAW_FIRM_MATTER_ID")
                     VStack(alignment: .leading, spacing: 4) {
                         LabeledTextField(label: "Client ID", text: $draft.clientID, prompt: "CLIENT_ID")
-                        SuggestionList(
-                            suggestions: numberSuggestions,
-                            title: { $0.clientID ?? "" },
-                            detail: { entry in
-                                let parts = [entry.name, matterCountLabel(entry)]
-                                return parts.compactMap(\.self).joined(separator: " · ")
-                            },
-                            onSelect: applyClient
-                        )
                     }
                     LabeledTextField(label: "Client matter ID", text: $draft.clientMatterID, prompt: "CLIENT_MATTER_ID")
                 } header: {
@@ -146,18 +166,180 @@ struct MatterEditorSheet: View {
             .formStyle(.grouped)
     }
 
-    /// Known clients matching the typed name. The entry already carried by the
-    /// fields drops out (nothing left to recommend for it), but OTHER matches
-    /// stay visible — two clients sharing a name is exactly when the list must
-    /// keep disambiguating.
-    private var nameSuggestions: [ClientDirectoryEntry] {
-        clientDirectory.suggestions(forName: draft.clientNames)
-            .filter { !clientDirectory.isApplied($0, number: draft.clientID, name: draft.clientNames) }
+    private var structuredPartiesSection: some View {
+        Section {
+            if parties.isEmpty {
+                Text("No structured parties yet. Add the parties needed for captions and represented-side drafting.")
+                    .font(.supraCaption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            ForEach(Array(parties.enumerated()), id: \.element.id) { index, party in
+                VStack(alignment: .leading, spacing: 7) {
+                    HStack {
+                        Text("Party \(index + 1)").font(.supraHeadline)
+                        Spacer()
+                        Button {
+                            removeParty(id: party.id)
+                        } label: {
+                            Label("Remove party", systemImage: "minus.circle")
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("matter.identity.party.remove.\(party.id)")
+                    }
+                    LabeledTextField(
+                        label: "Display name",
+                        text: partyTextBinding(at: index, field: .displayName)
+                    )
+                    LabeledTextField(
+                        label: "Caption name",
+                        text: partyTextBinding(at: index, field: .captionName)
+                    )
+                    HStack {
+                        Picker("Case role", selection: partyRoleBinding(at: index)) {
+                            ForEach(MatterPartyBaseRole.allCases, id: \.self) { role in
+                                Text(identityLabel(role.rawValue)).tag(role)
+                            }
+                        }
+                        Picker("Firm relationship", selection: partyStatusBinding(at: index)) {
+                            ForEach(MatterPartyClientStatus.allCases, id: \.self) { status in
+                                Text(identityLabel(status.rawValue)).tag(status)
+                            }
+                        }
+                    }
+                }
+                .padding(.vertical, 3)
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("matter.identity.party.\(party.id)")
+            }
+            Button {
+                addParty()
+            } label: {
+                Label("Add structured party", systemImage: "plus.circle")
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("matter.identity.party.add")
+        } header: {
+            Text("Structured parties")
+        } footer: {
+            Text("Mark exactly one client as Represented and one opposing party as Not Represented for court drafting. Legacy client-name and perspective fields remain compatibility evidence only.")
+        }
     }
 
-    private var numberSuggestions: [ClientDirectoryEntry] {
-        clientDirectory.suggestions(forNumber: draft.clientID)
-            .filter { !clientDirectory.isApplied($0, number: draft.clientID, name: draft.clientNames) }
+    private var structuredRepresentationsSection: some View {
+        Section {
+            if representations.isEmpty {
+                Text("No structured counsel or service recipient yet.")
+                    .font(.supraCaption)
+                    .foregroundStyle(.secondary)
+            }
+            ForEach(Array(representations.enumerated()), id: \.element.id) { index, representation in
+                VStack(alignment: .leading, spacing: 7) {
+                    HStack {
+                        Text("Counsel / service \(index + 1)").font(.supraHeadline)
+                        Spacer()
+                        Button {
+                            representations.removeAll { $0.id == representation.id }
+                        } label: {
+                            Label("Remove representation", systemImage: "minus.circle")
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier(
+                            "matter.identity.representation.remove.\(representation.id)"
+                        )
+                    }
+                    Picker(
+                        "Represents",
+                        selection: representedPartyBinding(at: index)
+                    ) {
+                        Text("Choose party").tag("")
+                        ForEach(parties, id: \.id) { party in
+                            Text(party.displayName.ifEmpty("Unnamed party"))
+                                .tag(party.id)
+                        }
+                    }
+                    Picker(
+                        "Relationship",
+                        selection: representationRelationshipBinding(at: index)
+                    ) {
+                        ForEach(MatterRepresentationRelationshipKind.allCases, id: \.self) { kind in
+                            Text(identityLabel(kind.rawValue)).tag(kind)
+                        }
+                    }
+                    LabeledTextField(
+                        label: "Representative name",
+                        text: representationTextBinding(at: index, field: .representativeName)
+                    )
+                    LabeledTextField(
+                        label: "Firm",
+                        text: representationTextBinding(at: index, field: .firmName)
+                    )
+                    LabeledTextField(
+                        label: "Service street",
+                        text: representationTextBinding(at: index, field: .street)
+                    )
+                    HStack {
+                        LabeledTextField(
+                            label: "City",
+                            text: representationTextBinding(at: index, field: .city)
+                        )
+                        LabeledTextField(
+                            label: "State",
+                            text: representationTextBinding(at: index, field: .state)
+                        )
+                        .frame(width: 100)
+                        LabeledTextField(
+                            label: "Postal code",
+                            text: representationTextBinding(at: index, field: .postalCode)
+                        )
+                        .frame(width: 110)
+                    }
+                    LabeledTextField(
+                        label: "Service emails",
+                        text: representationTextBinding(at: index, field: .serviceEmails),
+                        prompt: "Comma-separated"
+                    )
+                }
+                .padding(.vertical, 3)
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier(
+                    "matter.identity.representation.\(representation.id)"
+                )
+            }
+            Button {
+                addRepresentation()
+            } label: {
+                Label("Add counsel / service", systemImage: "plus.circle")
+            }
+            .buttonStyle(.plain)
+            .disabled(parties.isEmpty)
+            .accessibilityIdentifier("matter.identity.representation.add")
+        } header: {
+            Text("Counsel and service")
+        } footer: {
+            Text("Court drafting requires one complete Counsel record for the opposing party. The represented party is selected by its stable structured-party ID.")
+        }
+    }
+
+    private var legacyIdentityEvidenceSection: some View {
+        Section {
+            LabeledContent("Prior client perspective") {
+                Text(identityLabel(draft.partyPerspective.rawValue))
+                    .textSelection(.enabled)
+                    .accessibilityIdentifier("matter.identity.legacy.perspective")
+            }
+            LabeledContent("Prior client name text") {
+                Text(draft.clientNames.ifEmpty("None preserved"))
+                    .textSelection(.enabled)
+                    .accessibilityIdentifier("matter.identity.legacy.clientNames")
+            }
+        } header: {
+            Text("Legacy compatibility evidence")
+        } footer: {
+            Text("Read-only migration evidence. These values are preserved unchanged for compatibility and never select caption parties, the represented client, opposing counsel, or service recipients.")
+        }
     }
 
     /// Known practice areas matching the typed text; the exact spelling already
@@ -167,15 +349,249 @@ struct MatterEditorSheet: View {
             .filter { !practiceAreaDirectory.isApplied($0, text: draft.practiceArea) }
     }
 
-    /// Fills both client fields from a recommendation, leaving a field alone
-    /// when the entry has nothing for it (a name-only client keeps a typed ID).
-    private func applyClient(_ entry: ClientDirectoryEntry) {
-        if let name = entry.name { draft.clientNames = name }
-        if let number = entry.clientID { draft.clientID = number }
+    private enum PartyTextField {
+        case displayName
+        case captionName
     }
 
-    private func matterCountLabel(_ entry: ClientDirectoryEntry) -> String {
-        entry.matterCount == 1 ? "1 matter" : "\(entry.matterCount) matters"
+    private enum RepresentationTextField {
+        case representativeName
+        case firmName
+        case street
+        case city
+        case state
+        case postalCode
+        case serviceEmails
+    }
+
+    private func addParty() {
+        parties.append(MatterPartyIdentity(
+            id: "party:\(matterID):\(UUID().uuidString)",
+            matterID: matterID,
+            displayName: "",
+            captionName: "",
+            baseRole: .other,
+            captionOrder: parties.count,
+            clientStatus: .unresolved
+        ))
+    }
+
+    private func removeParty(id: String) {
+        parties.removeAll { $0.id == id }
+        representations.removeAll { $0.representedPartyID == id }
+        parties = parties.enumerated().map { index, party in
+            MatterPartyIdentity(
+                id: party.id,
+                matterID: matterID,
+                displayName: party.displayName,
+                captionName: party.captionName,
+                baseRole: party.baseRole,
+                captionOrder: index,
+                clientStatus: party.clientStatus
+            )
+        }
+    }
+
+    private func addRepresentation() {
+        representations.append(MatterRepresentationIdentity(
+            id: "representation:\(matterID):\(UUID().uuidString)",
+            matterID: matterID,
+            representedPartyID: "",
+            relationshipKind: .counsel,
+            representativeName: "",
+            firmName: nil,
+            serviceAddress: nil,
+            serviceEmails: [],
+            serviceOrder: representations.count
+        ))
+    }
+
+    private func partyTextBinding(
+        at index: Int,
+        field: PartyTextField
+    ) -> Binding<String> {
+        Binding(
+            get: {
+                guard parties.indices.contains(index) else { return "" }
+                switch field {
+                case .displayName: return parties[index].displayName
+                case .captionName: return parties[index].captionName
+                }
+            },
+            set: { value in
+                guard parties.indices.contains(index) else { return }
+                let current = parties[index]
+                parties[index] = MatterPartyIdentity(
+                    id: current.id,
+                    matterID: matterID,
+                    displayName: field == .displayName ? value : current.displayName,
+                    captionName: field == .captionName ? value : current.captionName,
+                    baseRole: current.baseRole,
+                    captionOrder: current.captionOrder,
+                    clientStatus: current.clientStatus
+                )
+            }
+        )
+    }
+
+    private func partyRoleBinding(at index: Int) -> Binding<MatterPartyBaseRole> {
+        Binding(
+            get: {
+                parties.indices.contains(index) ? parties[index].baseRole : .other
+            },
+            set: { role in
+                guard parties.indices.contains(index) else { return }
+                let current = parties[index]
+                parties[index] = MatterPartyIdentity(
+                    id: current.id,
+                    matterID: matterID,
+                    displayName: current.displayName,
+                    captionName: current.captionName,
+                    baseRole: role,
+                    captionOrder: current.captionOrder,
+                    clientStatus: current.clientStatus
+                )
+            }
+        )
+    }
+
+    private func partyStatusBinding(
+        at index: Int
+    ) -> Binding<MatterPartyClientStatus> {
+        Binding(
+            get: {
+                parties.indices.contains(index)
+                    ? parties[index].clientStatus : .unresolved
+            },
+            set: { status in
+                guard parties.indices.contains(index) else { return }
+                let current = parties[index]
+                parties[index] = MatterPartyIdentity(
+                    id: current.id,
+                    matterID: matterID,
+                    displayName: current.displayName,
+                    captionName: current.captionName,
+                    baseRole: current.baseRole,
+                    captionOrder: current.captionOrder,
+                    clientStatus: status
+                )
+            }
+        )
+    }
+
+    private func representedPartyBinding(at index: Int) -> Binding<String> {
+        Binding(
+            get: {
+                representations.indices.contains(index)
+                    ? representations[index].representedPartyID : ""
+            },
+            set: { partyID in
+                replaceRepresentation(at: index, representedPartyID: partyID)
+            }
+        )
+    }
+
+    private func representationRelationshipBinding(
+        at index: Int
+    ) -> Binding<MatterRepresentationRelationshipKind> {
+        Binding(
+            get: {
+                representations.indices.contains(index)
+                    ? representations[index].relationshipKind : .counsel
+            },
+            set: { relationship in
+                replaceRepresentation(at: index, relationshipKind: relationship)
+            }
+        )
+    }
+
+    private func representationTextBinding(
+        at index: Int,
+        field: RepresentationTextField
+    ) -> Binding<String> {
+        Binding(
+            get: {
+                guard representations.indices.contains(index) else { return "" }
+                let representation = representations[index]
+                switch field {
+                case .representativeName: return representation.representativeName
+                case .firmName: return representation.firmName ?? ""
+                case .street: return representation.serviceAddress?.street ?? ""
+                case .city: return representation.serviceAddress?.city ?? ""
+                case .state: return representation.serviceAddress?.state ?? ""
+                case .postalCode: return representation.serviceAddress?.postalCode ?? ""
+                case .serviceEmails:
+                    return representation.serviceEmails.joined(separator: ", ")
+                }
+            },
+            set: { value in
+                guard representations.indices.contains(index) else { return }
+                let current = representations[index]
+                var representativeName = current.representativeName
+                var firmName = current.firmName
+                var street = current.serviceAddress?.street ?? ""
+                var city = current.serviceAddress?.city ?? ""
+                var state = current.serviceAddress?.state ?? ""
+                var postalCode = current.serviceAddress?.postalCode ?? ""
+                var serviceEmails = current.serviceEmails
+                switch field {
+                case .representativeName: representativeName = value
+                case .firmName: firmName = value.isEmpty ? nil : value
+                case .street: street = value
+                case .city: city = value
+                case .state: state = value
+                case .postalCode: postalCode = value
+                case .serviceEmails:
+                    serviceEmails = value.split(separator: ",")
+                        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                        .filter { !$0.isEmpty }
+                }
+                let addressValues = [street, city, state, postalCode]
+                let address = addressValues.allSatisfy(\.isEmpty)
+                    ? nil
+                    : MatterServiceAddress(
+                        street: street,
+                        city: city,
+                        state: state,
+                        postalCode: postalCode
+                    )
+                representations[index] = MatterRepresentationIdentity(
+                    id: current.id,
+                    matterID: matterID,
+                    representedPartyID: current.representedPartyID,
+                    relationshipKind: current.relationshipKind,
+                    representativeName: representativeName,
+                    firmName: firmName,
+                    serviceAddress: address,
+                    serviceEmails: serviceEmails,
+                    serviceOrder: current.serviceOrder
+                )
+            }
+        )
+    }
+
+    private func replaceRepresentation(
+        at index: Int,
+        representedPartyID: String? = nil,
+        relationshipKind: MatterRepresentationRelationshipKind? = nil
+    ) {
+        guard representations.indices.contains(index) else { return }
+        let current = representations[index]
+        representations[index] = MatterRepresentationIdentity(
+            id: current.id,
+            matterID: matterID,
+            representedPartyID: representedPartyID ?? current.representedPartyID,
+            relationshipKind: relationshipKind ?? current.relationshipKind,
+            representativeName: current.representativeName,
+            firmName: current.firmName,
+            serviceAddress: current.serviceAddress,
+            serviceEmails: current.serviceEmails,
+            serviceOrder: current.serviceOrder
+        )
+    }
+
+    private func identityLabel(_ rawValue: String) -> String {
+        rawValue.replacingOccurrences(of: "_", with: " ").capitalized
     }
 
     private var nameInvalid: Bool {
@@ -187,9 +603,22 @@ struct MatterEditorSheet: View {
     }
 
     @ViewBuilder
-    private func field(_ label: String, text: Binding<String>, invalid: Bool, message: String) -> some View {
+    private func field(
+        _ label: String,
+        text: Binding<String>,
+        invalid: Bool,
+        message: String,
+        focusOrder: Int = 0,
+        accessibilityID: String? = nil
+    ) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            LabeledTextField(label: label, text: text)
+            LabeledTextField(
+                label: label,
+                text: text,
+                focusChain: focusChain,
+                focusOrder: focusOrder,
+                accessibilityID: accessibilityID
+            )
             if invalid {
                 Text(message)
                     .font(.supraCaption)
@@ -203,7 +632,18 @@ struct MatterEditorSheet: View {
             showValidation = true
             return
         }
-        onSave(draft)
+        let outcome = onSave(MatterIdentityEditorSubmission(
+            matterID: matterID,
+            expectedIdentityRevision: expectedIdentityRevision,
+            draft: draft,
+            courtResolutionState: courtResolutionState,
+            canonicalJurisdictionID: canonicalJurisdictionID,
+            canonicalCourtID: canonicalCourtID,
+            parties: parties,
+            representations: representations
+        ))
+        lastMutationFailure = outcome.failure
+        guard outcome.allowsSuccessPresentation else { return }
         dismiss()
     }
 
@@ -254,12 +694,19 @@ struct JurisdictionAutocompleteField: View {
     @Binding var jurisdiction: String
     @Binding var court: String
     @Binding var selectedCourtID: String
+    @Binding var courtResolutionState: MatterCourtResolutionState
+    @Binding var canonicalJurisdictionID: CanonicalJurisdictionID?
+    @Binding var canonicalCourtID: CanonicalCourtID?
     let invalid: Bool
     var focusChain: SupraFocusChain? = nil
     var focusOrder: Int = 0
     var accessibilityID: String? = nil
 
     @State private var query: String
+    /// The jurisdiction bytes that predated this edit. When a user replaces a
+    /// selected court with unresolved free text, those bytes remain migration
+    /// evidence; the field never manufactures a synthetic jurisdiction label.
+    @State private var unresolvedJurisdictionEvidence: String
     /// Cached search results, refreshed off the render path by `.task(id: query)`
     /// below. Holding these in state (rather than a computed property the body reads
     /// several times per keystroke) is what keeps typing responsive.
@@ -271,6 +718,9 @@ struct JurisdictionAutocompleteField: View {
         jurisdiction: Binding<String>,
         court: Binding<String>,
         selectedCourtID: Binding<String>,
+        courtResolutionState: Binding<MatterCourtResolutionState>,
+        canonicalJurisdictionID: Binding<CanonicalJurisdictionID?>,
+        canonicalCourtID: Binding<CanonicalCourtID?>,
         invalid: Bool,
         focusChain: SupraFocusChain? = nil,
         focusOrder: Int = 0,
@@ -279,6 +729,9 @@ struct JurisdictionAutocompleteField: View {
         self._jurisdiction = jurisdiction
         self._court = court
         self._selectedCourtID = selectedCourtID
+        self._courtResolutionState = courtResolutionState
+        self._canonicalJurisdictionID = canonicalJurisdictionID
+        self._canonicalCourtID = canonicalCourtID
         self.invalid = invalid
         self.focusChain = focusChain
         self.focusOrder = focusOrder
@@ -286,6 +739,9 @@ struct JurisdictionAutocompleteField: View {
         let initial = JurisdictionCatalog.shared.option(id: selectedCourtID.wrappedValue)?.displayName
             ?? court.wrappedValue.ifEmpty(jurisdiction.wrappedValue)
         self._query = State(initialValue: initial)
+        self._unresolvedJurisdictionEvidence = State(
+            initialValue: jurisdiction.wrappedValue
+        )
     }
 
     var body: some View {
@@ -372,6 +828,11 @@ struct JurisdictionAutocompleteField: View {
             Text("No specific jurisdiction — authority scoping is disabled for this matter.")
                 .font(.supraCaption)
                 .foregroundStyle(.secondary)
+        } else if courtResolutionState == .unresolved,
+                  !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            Text("Saved text is unresolved. Choose Court from the canonical results before court-dependent work can continue.")
+                .font(.supraCaption)
+                .foregroundStyle(.orange)
         } else {
             Text("Type to search courts and jurisdictions, or choose N/A.")
                 .font(.supraCaption)
@@ -385,8 +846,16 @@ struct JurisdictionAutocompleteField: View {
             set: { newValue in
                 query = newValue
                 selectedCourtID = ""
-                jurisdiction = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
-                court = ""
+                canonicalJurisdictionID = nil
+                canonicalCourtID = nil
+                courtResolutionState = .unresolved
+                let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                if unresolvedJurisdictionEvidence.isEmpty {
+                    jurisdiction = newValue
+                } else {
+                    jurisdiction = unresolvedJurisdictionEvidence
+                }
+                court = trimmed.isEmpty ? "" : newValue
             }
         )
     }
@@ -403,7 +872,10 @@ struct JurisdictionAutocompleteField: View {
     }
 
     private var selectedScope: JurisdictionAuthorityScope? {
-        catalog.option(id: selectedCourtID).map(catalog.authorityScope(for:))
+        guard courtResolutionState == .court || courtResolutionState == .jurisdictionOnly else {
+            return nil
+        }
+        return catalog.option(id: selectedCourtID).map(catalog.authorityScope(for:))
     }
 
     private func optionDetail(_ option: JurisdictionOption) -> String? {
@@ -413,15 +885,38 @@ struct JurisdictionAutocompleteField: View {
     }
 
     private func select(_ option: JurisdictionOption) {
+        guard let canonicalJurisdiction = catalog.canonicalJurisdictionOption(
+            forSelectedOptionID: option.id
+        ) else {
+            selectedCourtID = ""
+            canonicalJurisdictionID = nil
+            canonicalCourtID = nil
+            courtResolutionState = .unresolved
+            return
+        }
         query = option.displayName
         selectedCourtID = option.id
-        jurisdiction = option.jurisdictionName
-        court = option.level == .jurisdiction ? "" : option.displayName
+        canonicalJurisdictionID = CanonicalJurisdictionID(
+            rawValue: canonicalJurisdiction.id
+        )
+        jurisdiction = canonicalJurisdiction.jurisdictionName
+        if option.level == .jurisdiction {
+            canonicalCourtID = nil
+            courtResolutionState = .jurisdictionOnly
+            court = ""
+        } else {
+            canonicalCourtID = CanonicalCourtID(rawValue: option.id)
+            courtResolutionState = .court
+            court = option.displayName
+        }
     }
 
     private func selectNotApplicable() {
         query = "N/A"
         selectedCourtID = ""
+        canonicalJurisdictionID = nil
+        canonicalCourtID = nil
+        courtResolutionState = .notApplicable
         jurisdiction = "N/A"
         court = ""
     }
@@ -429,6 +924,9 @@ struct JurisdictionAutocompleteField: View {
     private func clear() {
         query = ""
         selectedCourtID = ""
+        canonicalJurisdictionID = nil
+        canonicalCourtID = nil
+        courtResolutionState = .unresolved
         jurisdiction = ""
         court = ""
     }

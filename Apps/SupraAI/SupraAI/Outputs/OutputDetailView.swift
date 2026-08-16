@@ -1,7 +1,23 @@
 import AppKit
 import SupraCore
+import SupraDesignSystem
 import SupraSessions
 import SwiftUI
+
+/// A presentation-only request to carry one exact Saved Work identity to Notes
+/// & Time. The legal content is deliberately absent: the receiving surface may
+/// insert the reference after another explicit action, but it cannot silently
+/// turn the work product into a billing narrative.
+struct SavedWorkNotesHandoff: Identifiable, Equatable {
+    let id: String
+    let matterID: String
+    let matterName: String
+    let outputID: String
+    let outputTitle: String
+    let versionID: String
+    let versionIndex: Int
+    let contentMarkdown: String?
+}
 
 /// Structured output detail (spec §13.3): version picker, Markdown preview with a
 /// raw toggle, missing-section list, linked research session, and the Repair
@@ -10,11 +26,19 @@ struct OutputDetailView: View {
     @ObservedObject var controller: StructuredOutputController
     @ObservedObject var library: ModelLibrary
     let outputID: String
+    let matterID: String
+    let matterName: String
+    let onOpenDocuments: () -> Void
+    let onOpenNotesAndTime: (SavedWorkNotesHandoff) -> Void
+    let onOpenBilling: () -> Void
 
     @State private var selectedVersionID: String?
     @State private var showRaw = false
     @State private var routingMessage: String?
     @State private var sourcePreview: PreviewItem?
+    @State private var pendingExportFormat: DocumentExportFormat?
+    @State private var pendingExportVersionID: String?
+    @State private var editDraft: OutputEditDraft?
 
     private var router: ModelRouter { ModelRouter(configuration: .fromEnvironment()) }
 
@@ -54,6 +78,17 @@ struct OutputDetailView: View {
                     .padding(.horizontal)
                     .padding(.top, 6)
             }
+            if let failure = controller.lastMutationFailure,
+               pendingExportFormat != nil {
+                UserMutationFailureBanner(
+                    failure: failure,
+                    retry: retryExport,
+                    correct: correctExport
+                )
+                .padding(.horizontal)
+                .padding(.top, 6)
+                .accessibilityIdentifier("output.mutationFailure")
+            }
             if let selected {
                 verificationBar(selected)
                 ScrollView {
@@ -67,7 +102,10 @@ struct OutputDetailView: View {
                             // Rendered work product is a long-form reading surface —
                             // body text with reading leading and a capped measure. (Raw
                             // markdown above stays monospaced.)
-                            MarkdownPreview(markdown: selected.markdown)
+                            SupraMarkdownView(
+                                text: selected.markdown,
+                                presentation: .savedOutput
+                            )
                                 .supraReadingBody()
                         }
                     }
@@ -90,6 +128,24 @@ struct OutputDetailView: View {
         .onAppear { controller.loadOutputs() }
         .sheet(item: $sourcePreview) { item in
             DocumentPreviewView(model: item.model) { sourcePreview = nil }
+        }
+        .sheet(item: $editDraft) { draft in
+            OutputEditAndCheckSheet(
+                title: outputTitle,
+                initialMarkdown: draft.markdown
+            ) { markdown in
+                guard controller.saveEditedVersion(
+                    outputID: outputID,
+                    baseVersionID: draft.versionID,
+                    contentMarkdown: markdown
+                ) else {
+                    return controller.message ?? "The edited version could not be saved."
+                }
+                selectedVersionID = controller.versions(forOutput: outputID)
+                    .first(where: \.isActive)?.id
+                editDraft = nil
+                return nil
+            }
         }
     }
 
@@ -115,6 +171,47 @@ struct OutputDetailView: View {
                     .font(.supraCaption).foregroundStyle(.secondary)
             }
             Spacer()
+            if let selected {
+                Button("Edit & Check Sources") {
+                    editDraft = OutputEditDraft(
+                        versionID: selected.id,
+                        markdown: selected.markdown
+                    )
+                }
+                .disabled(
+                    controller.sources(forVersion: selected.id).isEmpty
+                        || selected.assuranceState == .stale
+                )
+                .accessibilityIdentifier("output.editAndCheckSources")
+                .help("Edit this version, retain its exact sources, and check support before saving")
+                Menu {
+                    Button("Open Notes & Time") {
+                        onOpenNotesAndTime(
+                            SavedWorkNotesHandoff(
+                                id: "\(outputID)@\(selected.id)",
+                                matterID: matterID,
+                                matterName: matterName,
+                                outputID: outputID,
+                                outputTitle: outputTitle,
+                                versionID: selected.id,
+                                versionIndex: selected.index,
+                                contentMarkdown: nil
+                            )
+                        )
+                    }
+                    .accessibilityIdentifier("output.openNotesAndTime")
+                    Button("Open Billing Rules") {
+                        onOpenBilling()
+                    }
+                    .accessibilityIdentifier("output.openBillingRules")
+                } label: {
+                    Label("Related Work", systemImage: "arrow.triangle.branch")
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .accessibilityIdentifier("output.relatedWork")
+                .help("Open this matter's separate Notes & Time or Billing Rules workflow")
+            }
             if let selected,
                selected.verificationStatus == OutputVerificationStatus.allSupported.rawValue,
                OutputAssurancePresentation.isExportEligible(selected.assuranceState) {
@@ -122,9 +219,7 @@ struct OutputDetailView: View {
                     Section("Format") {
                         ForEach(DocumentExportFormat.allCases, id: \.self) { format in
                             Button(format.fileExtension.uppercased()) {
-                                if let url = controller.exportOutput(outputID: outputID, format: format) {
-                                    NSWorkspace.shared.activateFileViewerSelecting([url])
-                                }
+                                performExport(format: format, versionID: selected.id)
                             }
                         }
                     }
@@ -167,7 +262,35 @@ struct OutputDetailView: View {
         VStack(alignment: .leading, spacing: 8) {
             AssuranceBadge(state: version.assuranceState)
                 .accessibilityIdentifier("output.assurance.\(version.assuranceState.rawValue)")
-            if version.verificationStatus != OutputVerificationStatus.allSupported.rawValue {
+            if version.assuranceState == .stale {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .foregroundStyle(.orange)
+                        .accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("A dependency changed")
+                            .font(.supraHeadline)
+                        Text(version.staleReason ?? "A retained source or processing dependency changed. Regenerate or recheck against the current matter sources.")
+                            .font(.supraCaption)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    Button("Open Documents") {
+                        onOpenDocuments()
+                    }
+                    .fixedSize()
+                    .accessibilityIdentifier("output.stale.openDocuments")
+                    .accessibilityHint("Review the changed matter source and rebuild readiness before creating a new verified version")
+                }
+                .padding(10)
+                .background(Color.orange.opacity(0.12))
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("output.staleWarning")
+                .accessibilityLabel(
+                    "Stale dependency. \(version.staleReason ?? "A retained source or processing dependency changed.")"
+                )
+            } else if version.verificationStatus != OutputVerificationStatus.allSupported.rawValue {
                 HStack(alignment: .top, spacing: 10) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .foregroundStyle(.orange)
@@ -251,6 +374,30 @@ struct OutputDetailView: View {
         _ = await controller.repairOutput(outputID, modelID: modelID, route: repairRoute)
     }
 
+    private func performExport(format: DocumentExportFormat, versionID: String) {
+        pendingExportFormat = format
+        pendingExportVersionID = versionID
+        let outcome = controller.attemptExportOutput(
+            outputID: outputID,
+            versionID: versionID,
+            format: format
+        )
+        guard outcome.allowsSuccessPresentation,
+              let url = outcome.committedValue else { return }
+        pendingExportFormat = nil
+        pendingExportVersionID = nil
+        NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+
+    private func retryExport() {
+        guard let pendingExportFormat, let pendingExportVersionID else { return }
+        performExport(format: pendingExportFormat, versionID: pendingExportVersionID)
+    }
+
+    private func correctExport() {
+        _ = controller.reverifyOutput(outputID)
+    }
+
     private func missingBar(_ version: StructuredOutputController.VersionItem) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text("Missing sections (\(version.missingSections.count))")
@@ -283,6 +430,71 @@ struct OutputDetailView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal)
         .padding(.bottom, 8)
+    }
+}
+
+private struct OutputEditDraft: Identifiable {
+    let versionID: String
+    let markdown: String
+
+    var id: String { versionID }
+}
+
+private struct OutputEditAndCheckSheet: View {
+    let title: String
+    let initialMarkdown: String
+    let onSave: (String) -> String?
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var markdown: String
+    @State private var errorMessage: String?
+
+    init(
+        title: String,
+        initialMarkdown: String,
+        onSave: @escaping (String) -> String?
+    ) {
+        self.title = title
+        self.initialMarkdown = initialMarkdown
+        self.onSave = onSave
+        _markdown = State(initialValue: initialMarkdown)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Edit & Check Sources")
+                .font(.supraTitle)
+            Text(title)
+                .font(.supraSubheadline)
+                .foregroundStyle(.secondary)
+            Text("Saving creates a new immutable version and checks the edited text against this version's exact retained sources. The current version is never overwritten.")
+                .font(.supraCaption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            TextEditor(text: $markdown)
+                .font(.body.monospaced())
+                .frame(minWidth: 640, minHeight: 420)
+                .accessibilityIdentifier("output.editAndCheckSources.editor")
+            if let errorMessage {
+                Text(errorMessage)
+                    .font(.supraCaption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Divider()
+            HStack {
+                Button("Cancel", role: .cancel) { dismiss() }
+                Spacer()
+                Button("Save New Version") {
+                    errorMessage = onSave(markdown)
+                    if errorMessage == nil { dismiss() }
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .accessibilityIdentifier("output.editAndCheckSources.save")
+            }
+        }
+        .padding()
     }
 }
 
@@ -320,50 +532,5 @@ struct AssuranceBadge: View {
         case .negativeBlocked: "nosign"
         case .stale: "clock.arrow.circlepath"
         }
-    }
-}
-
-/// Lightweight block-level Markdown preview: heading lines are styled by level,
-/// everything else renders with inline Markdown.
-struct MarkdownPreview: View {
-    let markdown: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
-                lineView(line)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private var lines: [String] {
-        markdown.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-    }
-
-    @ViewBuilder
-    private func lineView(_ line: String) -> some View {
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
-        if trimmed.hasPrefix("### ") {
-            Text(trimmed.dropFirst(4)).font(.subheadline.weight(.semibold))
-        } else if trimmed.hasPrefix("## ") {
-            Text(trimmed.dropFirst(3)).font(.headline)
-        } else if trimmed.hasPrefix("# ") {
-            Text(trimmed.dropFirst(2)).font(.title3.weight(.bold))
-        } else if trimmed.isEmpty {
-            Color.clear.frame(height: 2)
-        } else {
-            // Parse inline Markdown explicitly rather than via LocalizedStringKey,
-            // which would treat model output as a localization key / format string
-            // (so a stray "%@" or key-like line could be mis-rendered).
-            Text(Self.inlineMarkdown(line)).font(.callout).textSelection(.enabled)
-        }
-    }
-
-    private static func inlineMarkdown(_ line: String) -> AttributedString {
-        (try? AttributedString(
-            markdown: line,
-            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-        )) ?? AttributedString(line)
     }
 }

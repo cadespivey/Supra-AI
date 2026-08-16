@@ -1,14 +1,26 @@
 #if DEBUG
 import CryptoKit
+import Darwin
 import Foundation
 import SupraCore
 import SupraRuntimeClient
 import SupraRuntimeInterface
+import SupraSessions
 import SwiftUI
+
+enum RuntimeXPCIntegrationQualificationProfile: String {
+    case productionEnvelope = "production-envelope"
+    case sanitizerInstrumentation = "sanitizer-instrumentation"
+
+    var enforcesProductionResourceEnvelope: Bool {
+        self == .productionEnvelope
+    }
+}
 
 @MainActor
 struct RuntimeXPCIntegrationView: View {
     let scenario: String
+    let qualificationProfile: RuntimeXPCIntegrationQualificationProfile
 
     @State private var result = "RUNNING"
     @State private var detail = "Starting signed hosted-XPC checks."
@@ -18,6 +30,7 @@ struct RuntimeXPCIntegrationView: View {
     @State private var focusedControl: String?
     @State private var nextControlValue = ""
     @State private var focusChain = SupraFocusChain()
+    @State private var ragScanMetrics: [String: Int] = [:]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -26,6 +39,8 @@ struct RuntimeXPCIntegrationView: View {
 
             if scenario == "switch" {
                 switchScenario
+            } else if scenario == "rag-scan" {
+                ragScanScenario
             } else {
                 lifecycleScenario
             }
@@ -54,7 +69,10 @@ struct RuntimeXPCIntegrationView: View {
                 .accessibilityLabel("Completed lifecycle iterations")
                 .accessibilityValue("\(completedIterations)/20")
 
-            ForEach(RuntimeXPCIntegrationRunner.checkIDs, id: \.self) { checkID in
+            ForEach(
+                RuntimeXPCIntegrationRunner.checkIDs(for: qualificationProfile),
+                id: \.self
+            ) { checkID in
                 Text(checks[checkID] == true ? "PASS" : "PENDING")
                     .accessibilityIdentifier("runtimeXPCIntegration.check.\(checkID)")
                     .accessibilityLabel("Lifecycle check \(checkID)")
@@ -63,7 +81,10 @@ struct RuntimeXPCIntegrationView: View {
         }
         .task {
             do {
-                let report = try await RuntimeXPCIntegrationRunner().run(iterations: 20) {
+                let report = try await RuntimeXPCIntegrationRunner().run(
+                    iterations: 20,
+                    qualificationProfile: qualificationProfile
+                ) {
                     completedIterations = $0
                 }
                 checks = report.checks
@@ -108,12 +129,196 @@ struct RuntimeXPCIntegrationView: View {
             focusChain.installInitialFocusIfPossible()
         }
     }
+
+    private var ragScanScenario: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if result == "RUNNING" {
+                ProgressView()
+                    .accessibilityIdentifier("runtimeXPCIntegration.ragScan.progress")
+            } else {
+                Text(result)
+                    .accessibilityIdentifier("runtimeXPCIntegration.ragScan.result")
+                    .accessibilityLabel("Hosted RAG resource result")
+                    .accessibilityValue(result)
+            }
+            Text(detail)
+                .accessibilityIdentifier("runtimeXPCIntegration.ragScan.detail")
+                .accessibilityLabel("Hosted RAG resource detail")
+                .accessibilityValue(detail)
+
+            ForEach(Self.ragScanMetricElements, id: \.name) { metric in
+                let value = ragScanMetrics[metric.name]
+                Text(value.map(String.init) ?? "PENDING")
+                    .accessibilityIdentifier(metric.accessibilityID)
+                    .accessibilityLabel("Hosted RAG metric \(metric.name)")
+                    .accessibilityValue(value.map(String.init) ?? "PENDING")
+            }
+        }
+        .task {
+            do {
+                let report = try await HostedRAGScanIntegrationRunner().run()
+                ragScanMetrics = report.metrics
+                detail = report.detail
+                result = report.passed ? "PASS" : "FAIL"
+            } catch {
+                detail = error.localizedDescription
+                result = "FAIL"
+            }
+        }
+    }
+
+    private static let ragScanMetricElements: [(name: String, accessibilityID: String)] = [
+        ("scannedRows", "runtimeXPCIntegration.ragScan.scannedRows"),
+        ("maximumLivePageRows", "runtimeXPCIntegration.ragScan.maximumLivePageRows"),
+        ("maximumHeapEntries", "runtimeXPCIntegration.ragScan.maximumHeapEntries"),
+        ("maximumLiveVectorBytes", "runtimeXPCIntegration.ragScan.maximumLiveVectorBytes"),
+        ("publishedCandidateCount", "runtimeXPCIntegration.ragScan.publishedCandidateCount"),
+        ("cacheCeilingBytes", "runtimeXPCIntegration.ragScan.cacheCeilingBytes"),
+        ("appCurrentDeltaMiB", "runtimeXPCIntegration.ragScan.appCurrentDeltaMiB"),
+        ("appPeakDeltaMiB", "runtimeXPCIntegration.ragScan.appPeakDeltaMiB"),
+        ("xpcCurrentDeltaMiB", "runtimeXPCIntegration.ragScan.xpcCurrentDeltaMiB"),
+        ("xpcPeakDeltaMiB", "runtimeXPCIntegration.ragScan.xpcPeakDeltaMiB"),
+        ("combinedCurrentDeltaMiB", "runtimeXPCIntegration.ragScan.combinedCurrentDeltaMiB"),
+        ("combinedPeakDeltaMiB", "runtimeXPCIntegration.ragScan.combinedPeakDeltaMiB"),
+    ]
 }
 
 private struct RuntimeXPCIntegrationReport: Sendable {
     let iterations: Int
     let checks: [String: Bool]
     let detail: String
+}
+
+private struct HostedRAGScanIntegrationReport: Sendable {
+    let metrics: [String: Int]
+    let detail: String
+    let passed: Bool
+}
+
+private struct HostedRAGScanIntegrationRunner {
+    func run() async throws -> HostedRAGScanIntegrationReport {
+        let runtime = RuntimeClient()
+        try await runtime.connect()
+        defer { runtime.disconnect() }
+
+        let xpcBefore = try await runtime.runtimeStatus()
+        let appBefore = try ProcessMemoryObservation.capture()
+        let scan = try HostedRAGScanResourceProbe().run()
+        let appAfter = try ProcessMemoryObservation.capture()
+        let xpcAfter = try await runtime.runtimeStatus()
+
+        guard let xpcCurrentBefore = xpcBefore.metrics?.currentMemoryMb,
+              let xpcPeakBefore = xpcBefore.metrics?.peakMemoryMb,
+              let xpcCurrentAfter = xpcAfter.metrics?.currentMemoryMb,
+              let xpcPeakAfter = xpcAfter.metrics?.peakMemoryMb,
+              xpcCurrentBefore > 0,
+              xpcPeakBefore > 0,
+              xpcCurrentAfter > 0,
+              xpcPeakAfter > 0 else {
+            throw RuntimeXPCIntegrationError.assertion(
+                "hosted XPC did not publish current and peak resident memory"
+            )
+        }
+
+        let metrics = [
+            "scannedRows": scan.scannedRows,
+            "maximumLivePageRows": scan.maximumLivePageRows,
+            "maximumHeapEntries": scan.maximumHeapEntries,
+            "maximumLiveVectorBytes": scan.maximumLiveVectorBytes,
+            "publishedCandidateCount": scan.publishedCandidateCount,
+            "cacheCeilingBytes": scan.cacheCeilingBytes,
+            "appCurrentDeltaMiB": Self.nonnegativeDelta(
+                appAfter.currentMiB,
+                appBefore.currentMiB
+            ),
+            "appPeakDeltaMiB": Self.nonnegativeDelta(
+                appAfter.peakMiB,
+                appBefore.peakMiB
+            ),
+            "xpcCurrentDeltaMiB": Self.nonnegativeDelta(
+                xpcCurrentAfter,
+                xpcCurrentBefore
+            ),
+            "xpcPeakDeltaMiB": Self.nonnegativeDelta(
+                xpcPeakAfter,
+                xpcPeakBefore
+            ),
+            "combinedCurrentDeltaMiB": Self.nonnegativeDelta(
+                appAfter.currentMiB + xpcCurrentAfter,
+                appBefore.currentMiB + xpcCurrentBefore
+            ),
+            "combinedPeakDeltaMiB": Self.nonnegativeDelta(
+                appAfter.peakMiB + xpcPeakAfter,
+                appBefore.peakMiB + xpcPeakBefore
+            ),
+        ]
+        let passed = scan.scannedRows == 31
+            && scan.maximumLivePageRows <= 3
+            && scan.maximumHeapEntries <= 2
+            && scan.maximumLiveVectorBytes <= 36
+            && scan.publishedCandidateCount == 2
+            && scan.cacheCeilingBytes == 17
+            && metrics["appCurrentDeltaMiB", default: .max] <= 64
+            && metrics["appPeakDeltaMiB", default: .max] <= 64
+            && metrics["xpcCurrentDeltaMiB", default: .max] <= 32
+            && metrics["xpcPeakDeltaMiB", default: .max] <= 32
+            && metrics["combinedCurrentDeltaMiB", default: .max] <= 96
+            && metrics["combinedPeakDeltaMiB", default: .max] <= 96
+
+        return HostedRAGScanIntegrationReport(
+            metrics: metrics,
+            detail: "T_RAG_SCAN_02_WIRE_731 QUERY_713; 31 rows; page 3; K 2; dimension 3; cache ceiling 17 bytes.",
+            passed: passed
+        )
+    }
+
+    private static func nonnegativeDelta(_ after: Int, _ before: Int) -> Int {
+        max(0, after - before)
+    }
+}
+
+private struct ProcessMemoryObservation: Sendable {
+    let currentMiB: Int
+    let peakMiB: Int
+
+    static func capture() throws -> ProcessMemoryObservation {
+        let current = currentResidentMiB()
+        let peak = maximumResidentMiB()
+        guard current > 0, peak > 0 else {
+            throw RuntimeXPCIntegrationError.assertion(
+                "hosted app did not publish current and peak resident memory"
+            )
+        }
+        return ProcessMemoryObservation(currentMiB: current, peakMiB: peak)
+    }
+
+    private static func maximumResidentMiB() -> Int {
+        var usage = rusage()
+        guard getrusage(RUSAGE_SELF, &usage) == 0 else { return 0 }
+        return Int(usage.ru_maxrss / (1_024 * 1_024))
+    }
+
+    private static func currentResidentMiB() -> Int {
+        var information = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(
+            MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size
+        )
+        let result = withUnsafeMutablePointer(to: &information) { pointer in
+            pointer.withMemoryRebound(
+                to: integer_t.self,
+                capacity: Int(count)
+            ) { rebound in
+                task_info(
+                    mach_task_self_,
+                    task_flavor_t(TASK_VM_INFO),
+                    rebound,
+                    &count
+                )
+            }
+        }
+        guard result == KERN_SUCCESS else { return 0 }
+        return Int(information.phys_footprint / (1_024 * 1_024))
+    }
 }
 
 private enum RuntimeXPCIntegrationError: LocalizedError {
@@ -129,7 +334,7 @@ private enum RuntimeXPCIntegrationError: LocalizedError {
 }
 
 private struct RuntimeXPCIntegrationRunner {
-    static let checkIDs = [
+    private static let behavioralCheckIDs = [
         "statusRoundTrip",
         "nilBookmarkRejected",
         "invalidBookmarkRejected",
@@ -149,8 +354,15 @@ private struct RuntimeXPCIntegrationRunner {
         "clientTermination",
         "concurrentLoadUnload",
         "reconnect",
-        "resourceBound",
     ]
+
+    static func checkIDs(
+        for qualificationProfile: RuntimeXPCIntegrationQualificationProfile
+    ) -> [String] {
+        qualificationProfile.enforcesProductionResourceEnvelope
+            ? behavioralCheckIDs + ["resourceBound"]
+            : behavioralCheckIDs
+    }
 
     private static let markerName = ".supra-xpc-lifecycle-test-model"
     private static let markerData = Data("SUPRA-XPC-LIFECYCLE-V1\n".utf8)
@@ -162,6 +374,7 @@ private struct RuntimeXPCIntegrationRunner {
 
     func run(
         iterations: Int,
+        qualificationProfile: RuntimeXPCIntegrationQualificationProfile,
         progress: @MainActor (Int) -> Void
     ) async throws -> RuntimeXPCIntegrationReport {
         let fixture = try makeFixture()
@@ -170,7 +383,9 @@ private struct RuntimeXPCIntegrationRunner {
             try? FileManager.default.removeItem(at: fixture.base)
         }
 
-        var checks = Dictionary(uniqueKeysWithValues: Self.checkIDs.map { ($0, true) })
+        var checks = Dictionary(
+            uniqueKeysWithValues: Self.checkIDs(for: qualificationProfile).map { ($0, true) }
+        )
         let resourceProbe = RuntimeClient()
         try await resourceProbe.connect()
         let startingResidentMiB = try await resourceProbe.runtimeStatus().metrics?.peakMemoryMb
@@ -191,14 +406,23 @@ private struct RuntimeXPCIntegrationRunner {
         endingProbe.disconnect()
         try require(endingResidentMiB != nil, "XPC service did not report its final resident-memory peak")
         let residentGrowthMiB = max(0, endingResidentMiB! - startingResidentMiB!)
-        // The deterministic fixture contains no weights. Repeated connection,
-        // cancellation, and stream state must stay comfortably below this bound.
-        checks["resourceBound"] = residentGrowthMiB <= 256
+        let resourceDetail: String
+        if qualificationProfile.enforcesProductionResourceEnvelope {
+            // The deterministic fixture contains no weights. Repeated connection,
+            // cancellation, and stream state must stay comfortably below this bound.
+            checks["resourceBound"] = residentGrowthMiB <= 256
+            resourceDetail = "production 256 MiB envelope evaluated"
+        } else {
+            // Sanitizer runtimes change allocation, quarantine, and resident-memory
+            // accounting. Preserve the observation, but leave production resource
+            // qualification to the ordinary signed hosted gate.
+            resourceDetail = "production 256 MiB envelope not evaluated under sanitizer instrumentation"
+        }
 
         return RuntimeXPCIntegrationReport(
             iterations: iterations,
             checks: checks,
-            detail: "\(iterations)/\(iterations) lifecycle iterations; XPC max-RSS growth \(residentGrowthMiB) MiB; public code-signing requirement active."
+            detail: "\(iterations)/\(iterations) lifecycle iterations; XPC max-RSS growth \(residentGrowthMiB) MiB; \(resourceDetail); public code-signing requirement active."
         )
     }
 
@@ -328,6 +552,7 @@ private struct RuntimeXPCIntegrationRunner {
                         expectedModelSHA256: wrongExpectedSHA256,
                         prompt: Self.completionPrompt,
                         systemPrompt: nil,
+                        contextWorkload: .ordinaryConversation,
                         options: GenerationOptions(maxOutputTokens: 17)
                     )
                 )
@@ -372,6 +597,7 @@ private struct RuntimeXPCIntegrationRunner {
                     expectedModelSHA256: fixture.contentBinding.fingerprintSHA256,
                     prompt: Self.completionPrompt,
                     systemPrompt: nil,
+                    contextWorkload: .ordinaryConversation,
                     options: GenerationOptions(maxOutputTokens: 8)
                 )
             )
@@ -399,6 +625,7 @@ private struct RuntimeXPCIntegrationRunner {
                     modelID: modelID,
                     prompt: Self.holdPrompt,
                     systemPrompt: nil,
+                    contextWorkload: .ordinaryConversation,
                     options: GenerationOptions(maxOutputTokens: 8)
                 )
             )
@@ -463,6 +690,7 @@ private struct RuntimeXPCIntegrationRunner {
                         modelID: modelID,
                         prompt: Self.installRacePrompt,
                         systemPrompt: nil,
+                        contextWorkload: .ordinaryConversation,
                         options: GenerationOptions(maxOutputTokens: 8)
                     )
                 )
@@ -484,6 +712,7 @@ private struct RuntimeXPCIntegrationRunner {
                         modelID: modelID,
                         prompt: Self.completionPrompt,
                         systemPrompt: nil,
+                        contextWorkload: .ordinaryConversation,
                         options: GenerationOptions(maxOutputTokens: 8)
                     )
                 )
@@ -509,6 +738,7 @@ private struct RuntimeXPCIntegrationRunner {
                         modelID: modelID,
                         prompt: Self.reservationRacePrompt,
                         systemPrompt: nil,
+                        contextWorkload: .ordinaryConversation,
                         options: GenerationOptions(maxOutputTokens: 8)
                     )
                 )
@@ -548,9 +778,10 @@ private struct RuntimeXPCIntegrationRunner {
                 GenerateRequest(
                     generationID: terminatedID,
                     modelID: modelID,
-                    prompt: Self.holdPrompt,
-                    systemPrompt: nil,
-                    options: GenerationOptions(maxOutputTokens: 8)
+                prompt: Self.holdPrompt,
+                systemPrompt: nil,
+                contextWorkload: .ordinaryConversation,
+                options: GenerationOptions(maxOutputTokens: 8)
                 )
             )
         )
@@ -571,6 +802,7 @@ private struct RuntimeXPCIntegrationRunner {
                         modelID: modelID,
                         prompt: Self.holdPrompt,
                         systemPrompt: nil,
+                        contextWorkload: .ordinaryConversation,
                         options: GenerationOptions(maxOutputTokens: 8)
                     )
                 )
@@ -632,6 +864,7 @@ private struct RuntimeXPCIntegrationRunner {
                         modelID: modelID,
                         prompt: Self.staleTerminationPrompt,
                         systemPrompt: nil,
+                        contextWorkload: .ordinaryConversation,
                         options: GenerationOptions(maxOutputTokens: 8)
                     )
                 )
@@ -656,6 +889,7 @@ private struct RuntimeXPCIntegrationRunner {
                         modelID: modelID,
                         prompt: Self.holdPrompt,
                         systemPrompt: nil,
+                        contextWorkload: .ordinaryConversation,
                         options: GenerationOptions(maxOutputTokens: 8)
                     )
                 )
@@ -738,7 +972,6 @@ private struct RuntimeXPCIntegrationRunner {
             "clientTermination": true,
             "concurrentLoadUnload": true,
             "reconnect": true,
-            "resourceBound": true,
         ]
     }
 
@@ -816,6 +1049,13 @@ private struct RuntimeXPCIntegrationRunner {
         try FileManager.default.createDirectory(at: recreatedModel, withIntermediateDirectories: true)
         try FileManager.default.createSymbolicLink(at: symlinkEscape, withDestinationURL: escape)
         try Self.markerData.write(to: model.appendingPathComponent(Self.markerName), options: .atomic)
+        let configData = Data(#"{"hidden_size":98,"max_position_embeddings":713,"model_type":"synthetic-xpc-lifecycle","num_attention_heads":14,"num_hidden_layers":7,"num_key_value_heads":2,"torch_dtype":"bfloat16"}"#.utf8)
+        let weightData = Data("SUPRA-XPC-LIFECYCLE-WEIGHT-WIRE-713".utf8)
+        try configData.write(to: model.appendingPathComponent("config.json"), options: .atomic)
+        try weightData.write(
+            to: model.appendingPathComponent("model.safetensors"),
+            options: .atomic
+        )
         try Self.markerData.write(to: escape.appendingPathComponent(Self.markerName), options: .atomic)
         try Self.markerData.write(to: staleOriginal.appendingPathComponent(Self.markerName), options: .atomic)
         try Self.markerData.write(to: recreatedModel.appendingPathComponent(Self.markerName), options: .atomic)
@@ -835,6 +1075,12 @@ private struct RuntimeXPCIntegrationRunner {
         let markerSHA256 = SHA256.hash(data: Self.markerData)
             .map { String(format: "%02x", $0) }
             .joined()
+        let configSHA256 = SHA256.hash(data: configData)
+            .map { String(format: "%02x", $0) }
+            .joined()
+        let weightSHA256 = SHA256.hash(data: weightData)
+            .map { String(format: "%02x", $0) }
+            .joined()
         let contentFiles = [
             RuntimeModelContentBinding.File(
                 path: Self.markerName,
@@ -842,6 +1088,20 @@ private struct RuntimeXPCIntegrationRunner {
                 declaredDigestAlgorithm: "sha256",
                 declaredDigest: markerSHA256,
                 actualSHA256: markerSHA256
+            ),
+            RuntimeModelContentBinding.File(
+                path: "config.json",
+                size: Int64(configData.count),
+                declaredDigestAlgorithm: "sha256",
+                declaredDigest: configSHA256,
+                actualSHA256: configSHA256
+            ),
+            RuntimeModelContentBinding.File(
+                path: "model.safetensors",
+                size: Int64(weightData.count),
+                declaredDigestAlgorithm: "sha256",
+                declaredDigest: weightSHA256,
+                actualSHA256: weightSHA256
             ),
         ]
         let contentFingerprint = try RuntimeModelContentBinding.canonicalFingerprintSHA256(

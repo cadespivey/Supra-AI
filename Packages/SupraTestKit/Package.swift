@@ -32,6 +32,7 @@ let package = Package(
             dependencies: [
                 .product(name: "SupraCore", package: "SupraCore"),
                 .product(name: "SupraDocuments", package: "SupraDocuments"),
+                .product(name: "SupraSessions", package: "SupraSessions"),
                 .product(name: "ZIPFoundation", package: "ZIPFoundation")
             ]
         ),

@@ -60,9 +60,9 @@ public enum ModelRouteResolutionIssue: Error, Equatable, Sendable {
         case let .noRegisteredModels(role):
             "Add or download an MLX model before running \(role.displayName)."
         case let .roleUnassigned(role, configuredIdentifier):
-            "Assign a \(role.displayName) model in the Models tab. No registered model matches \(configuredIdentifier)."
+            "Assign a \(role.displayName) model in AI Setup. No registered model matches \(configuredIdentifier)."
         case let .assignedModelMissing(role, _):
-            "The model assigned to \(role.displayName) is no longer registered. Choose another model in the Models tab."
+            "The model assigned to \(role.displayName) is no longer registered. Choose another model in AI Setup."
         case let .assignedModelLoadFailed(role, displayName, message):
             "The \(role.displayName) model \(displayName) failed to load: \(message)"
         case let .cancelled(role):

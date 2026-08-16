@@ -68,6 +68,7 @@ public final class MatterDraftingController: ObservableObject {
     public enum DraftError: Error, LocalizedError, Equatable {
         case matterNotFound
         case incompleteFirmProfile(missing: [String])
+        case legalIdentityBlocked(String)
         case missingCaptionField(String)
         case missingRequiredSlots([String])
         case motionBlocked([String])
@@ -86,6 +87,8 @@ public final class MatterDraftingController: ObservableObject {
                 return "Describe the work product you want before generating."
             case let .incompleteFirmProfile(missing):
                 return "Complete your firm profile in Settings before drafting — still needed: \(missing.joined(separator: ", "))."
+            case let .legalIdentityBlocked(reason):
+                return "Resolve the matter's court and party identity before drafting. \(reason)"
             case let .missingCaptionField(field):
                 return "This matter is missing its \(field). Add it to the matter before drafting a court filing."
             case let .missingRequiredSlots(slots):
@@ -131,7 +134,7 @@ public final class MatterDraftingController: ObservableObject {
     /// Present when the app can call the on-device model — required for the LLM-backed
     /// kinds (`letterDemand`). The deterministic notice and supported-motion
     /// paths work without it.
-    private let runtimeClient: (any RuntimeClientProtocol)?
+    private let runtimeClient: (any ModelExecutionGateway)?
     /// The firm's structural style overrides (letterhead/caption/signature/…), or nil to use the
     /// house default. Injected as the raw value type; in the app, `FirmStyleProfileController`
     /// (M2) supplies its `.profile` here. `nil` ⇒ output is byte-for-byte `.defaultFL`.
@@ -139,7 +142,7 @@ public final class MatterDraftingController: ObservableObject {
 
     public init(
         store: SupraStore,
-        runtimeClient: (any RuntimeClientProtocol)? = nil,
+        runtimeClient: (any ModelExecutionGateway)? = nil,
         storage: DocumentStorage = .makeDefault(),
         fileWriter: DurableFileWriter = DurableFileWriter(),
         fileStampProvider: (@Sendable () -> String)? = nil,
@@ -205,6 +208,189 @@ public final class MatterDraftingController: ObservableObject {
                     fileURL: fileURL
                 )
             }
+    }
+
+    /// Loads the shared canonical read projection from one Store-owned identity
+    /// snapshot. Court and party consumers therefore cannot combine legacy text
+    /// or values from different identity revisions.
+    public func legalIdentityReadProjection(
+        matterID: String
+    ) throws -> MatterLegalIdentityReadProjection {
+        guard let snapshot = try store.matterIdentity.fetchSnapshot(matterID: matterID) else {
+            throw DraftError.matterNotFound
+        }
+        return MatterLegalIdentityReadProjectionBuilder(
+            courtPresentationBuilder: MatterCourtPresentationBuilder(catalog: .shared),
+            draftPartyDefaultsBuilder: DraftPartyDefaultsBuilder()
+        ).makeProjection(for: snapshot)
+    }
+
+    /// Derives every caption, represented-side, opposing-side, and service
+    /// default together. Legacy clientNames and partyPerspective never
+    /// participate.
+    public func draftPartyDefaults(matterID: String) throws -> DraftPartyDefaults {
+        switch try legalIdentityReadProjection(matterID: matterID).draftParties {
+        case let .available(defaults):
+            return defaults
+        case let .blocked(error):
+            throw error
+        }
+    }
+
+    private struct AuthorizedCourtFilingIdentity {
+        let identityRevision: Int
+        let courtHeader: String
+        let filingStateName: String
+        let parties: [PartyLine]
+        let representedRole: String
+        let representedName: String
+        let recipients: [ServiceRecipient]
+        let selection: DraftPartySelection
+    }
+
+    /// Authorizes caller-visible strings against one current canonical
+    /// snapshot. A conflict can cross this boundary only through the exact
+    /// Store-issued receipt named by `partySelection`; a caller-constructed
+    /// receipt value is never accepted.
+    private func authorizedCourtFilingIdentity(
+        matterID: String,
+        parties: [PartyLine],
+        partyRepresented: String,
+        representedPartyName: String,
+        recipients: [ServiceRecipient],
+        partySelection: DraftPartySelection?,
+        confirmationPurposePrefix: String
+    ) throws -> AuthorizedCourtFilingIdentity {
+        let projection = try legalIdentityReadProjection(matterID: matterID)
+        let court = projection.courtPresentation
+        guard court.canDraftCourtFiling,
+              let courtHeader = court.resolvedCourtName,
+              let filingStateName = court.resolvedFilingStateName else {
+            throw DraftError.legalIdentityBlocked(
+                "Choose Court in Matter Edit; saved legacy court text is not filing authority."
+            )
+        }
+        let defaults: DraftPartyDefaults
+        switch projection.draftParties {
+        case let .available(value):
+            defaults = value
+        case .blocked:
+            throw DraftError.legalIdentityBlocked(
+                "Choose one represented client, one opposing party, and verified service counsel."
+            )
+        }
+
+        let normalizedParties = Self.normalizedParties(parties)
+        guard normalizedParties == defaults.captionParties else {
+            throw DraftError.legalIdentityBlocked(
+                "The caption parties changed. Reload the canonical matter parties."
+            )
+        }
+        let normalizedRepresentedRole = partyRepresented
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedRepresentedName = representedPartyName
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let requestedPartyID: String
+        if normalizedRepresentedName == defaults.representedClientName,
+           normalizedRepresentedRole == defaults.representedDesignation {
+            requestedPartyID = defaults.representedClientID
+        } else if normalizedRepresentedName == defaults.opposingPartyName,
+                  normalizedRepresentedRole == defaults.opposingDesignation {
+            requestedPartyID = defaults.opposingPartyID
+        } else {
+            throw DraftError.legalIdentityBlocked(
+                "The represented party name or legal designation is not a current canonical party."
+            )
+        }
+        if let partySelection {
+            guard partySelection.matterID == matterID,
+                  partySelection.identityRevision == projection.snapshot.identityRevision,
+                  partySelection.representedPartyID == requestedPartyID else {
+                throw DraftError.legalIdentityBlocked(
+                    "The party selection belongs to a different matter or identity revision."
+                )
+            }
+        }
+
+        let confirmationReceipt: PartyConflictConfirmationReceipt?
+        if let receiptID = partySelection?.confirmationReceiptID,
+           let receiptDigest = partySelection?.confirmationRequestDigestSHA256 {
+            confirmationReceipt = try store.matterIdentity
+                .fetchPartyConflictConfirmations(matterID: matterID)
+                .first {
+                    $0.id == receiptID
+                        && $0.requestDigestSHA256 == receiptDigest
+                        && $0.purpose.hasPrefix(confirmationPurposePrefix)
+                }
+            guard confirmationReceipt != nil else {
+                throw DraftError.legalIdentityBlocked(
+                    "The attorney-confirmation receipt is missing, stale, or for another drafting purpose."
+                )
+            }
+        } else {
+            guard partySelection?.confirmationReceiptID == nil,
+                  partySelection?.confirmationRequestDigestSHA256 == nil else {
+                throw DraftError.legalIdentityBlocked(
+                    "The attorney-confirmation receipt identifier and digest must travel together."
+                )
+            }
+            confirmationReceipt = nil
+        }
+
+        let purpose = confirmationReceipt?.purpose
+            ?? "\(confirmationPurposePrefix)\(matterID):r\(projection.snapshot.identityRevision)"
+        let decision = DraftPartyDefaultsBuilder().selectionDecision(
+            for: projection.snapshot,
+            requestedRepresentedPartyID: requestedPartyID,
+            purpose: purpose,
+            confirmationReceipt: confirmationReceipt
+        )
+        let acceptedSelection: DraftPartySelection
+        switch decision {
+        case let .canonical(selection), let .confirmedOverride(selection):
+            acceptedSelection = selection
+        case .confirmationRequired:
+            throw DraftError.legalIdentityBlocked(
+                "This side conflicts with the represented client. Confirm the override before drafting."
+            )
+        case .blocked:
+            throw DraftError.legalIdentityBlocked(
+                "The party selection or confirmation receipt does not match the current identity."
+            )
+        }
+        if let partySelection, partySelection != acceptedSelection {
+            throw DraftError.legalIdentityBlocked(
+                "The supplied party selection does not match the Store-validated decision."
+            )
+        }
+
+        let expectedRecipient: ServiceRecipient
+        if acceptedSelection.representedPartyID == defaults.representedClientID {
+            expectedRecipient = defaults.serviceRecipient
+        } else {
+            expectedRecipient = try Self.serviceRecipientForOppositeParty(
+                selectedPartyID: acceptedSelection.representedPartyID,
+                snapshot: projection.snapshot,
+                defaults: defaults
+            )
+        }
+        let normalizedRecipients = Self.normalizedRecipients(recipients)
+        guard normalizedRecipients == [expectedRecipient] else {
+            throw DraftError.legalIdentityBlocked(
+                "The service recipient is not verified counsel for the canonical opposite side."
+            )
+        }
+
+        return AuthorizedCourtFilingIdentity(
+            identityRevision: projection.snapshot.identityRevision,
+            courtHeader: courtHeader,
+            filingStateName: filingStateName,
+            parties: normalizedParties,
+            representedRole: normalizedRepresentedRole,
+            representedName: normalizedRepresentedName,
+            recipients: normalizedRecipients,
+            selection: acceptedSelection
+        )
     }
 
     /// Explicitly acknowledges review of legacy file-only artifacts. The files
@@ -273,7 +459,8 @@ public final class MatterDraftingController: ObservableObject {
         partyRepresented: String,
         representedPartyName: String,
         recipients: [ServiceRecipient],
-        serviceDate: DateOnly = DateOnly.today
+        serviceDate: DateOnly = DateOnly.today,
+        partySelection: DraftPartySelection? = nil
     ) async -> Result<DraftArtifact, DraftError> {
         guard !isGenerating else {
             message = "A draft is already generating. Wait for it to finish."
@@ -284,6 +471,25 @@ public final class MatterDraftingController: ObservableObject {
         message = nil
         defer { isGenerating = false }
 
+        let filingIdentity: AuthorizedCourtFilingIdentity
+        do {
+            filingIdentity = try authorizedCourtFilingIdentity(
+                matterID: matterID,
+                parties: parties,
+                partyRepresented: partyRepresented,
+                representedPartyName: representedPartyName,
+                recipients: recipients,
+                partySelection: partySelection,
+                confirmationPurposePrefix: "notice_of_appearance:"
+            )
+        } catch let error as DraftError {
+            return .failure(error)
+        } catch {
+            return .failure(.renderFailed(error.localizedDescription))
+        }
+        guard filingIdentity.filingStateName == "Florida" else {
+            return .failure(.unsupportedJurisdiction(filingIdentity.courtHeader))
+        }
         guard let matter = try? store.matters.fetchMatter(id: matterID) else {
             return .failure(.matterNotFound)
         }
@@ -294,26 +500,19 @@ public final class MatterDraftingController: ObservableObject {
         guard let caseNumber = matter.docketNumber?.trimmingCharacters(in: .whitespacesAndNewlines), !caseNumber.isEmpty else {
             return .failure(.missingCaptionField("case/docket number"))
         }
-        let courtHeader = Self.courtHeader(for: matter)
-        guard !courtHeader.isEmpty, courtHeader.caseInsensitiveCompare("Unspecified") != .orderedSame else {
-            return .failure(.missingCaptionField("court"))
-        }
-        guard Self.isSupportedNoticeJurisdiction(matter: matter, courtHeader: courtHeader) else {
-            return .failure(.unsupportedJurisdiction(courtHeader))
-        }
-
-        // Match the bar admission to the filing's court (court text first, then the
-        // matter's jurisdiction); falls back to the primary license.
-        let firm = Self.firmProfile(from: profile, jurisdiction: matter.court ?? matter.jurisdiction)
+        let firm = Self.firmProfile(
+            from: profile,
+            jurisdiction: filingIdentity.courtHeader
+        )
         let inputs = NoticeAppearance.Inputs(
-            courtHeader: courtHeader,
-            parties: Self.normalizedParties(parties),
-            partyRepresented: partyRepresented.trimmingCharacters(in: .whitespacesAndNewlines),
-            representedPartyName: representedPartyName.trimmingCharacters(in: .whitespacesAndNewlines),
+            courtHeader: filingIdentity.courtHeader,
+            parties: filingIdentity.parties,
+            partyRepresented: filingIdentity.representedRole,
+            representedPartyName: filingIdentity.representedName,
             caseNumber: caseNumber,
             division: matter.judge?.trimmingCharacters(in: .whitespacesAndNewlines),   // division/judge line; nil-safe
             serviceDate: serviceDate,
-            recipients: Self.normalizedRecipients(recipients)
+            recipients: filingIdentity.recipients
         )
         let missingSlots = NoticeAppearanceInputValidator.validate(inputs: inputs, profile: firm)
         guard missingSlots.isEmpty else {
@@ -335,6 +534,20 @@ public final class MatterDraftingController: ObservableObject {
 
         do {
             try Task.checkCancellation()
+            let currentIdentity = try authorizedCourtFilingIdentity(
+                matterID: matterID,
+                parties: parties,
+                partyRepresented: partyRepresented,
+                representedPartyName: representedPartyName,
+                recipients: recipients,
+                partySelection: partySelection,
+                confirmationPurposePrefix: "notice_of_appearance:"
+            )
+            guard currentIdentity.identityRevision == filingIdentity.identityRevision else {
+                throw DraftError.legalIdentityBlocked(
+                    "The matter identity changed during generation. Reload the draft and try again."
+                )
+            }
             let url = try persist(
                 data: result.docx,
                 matterID: matterID,
@@ -346,6 +559,8 @@ public final class MatterDraftingController: ObservableObject {
             return .success(DraftArtifact(source: .kind(.noticeAppearance), format: .docx, title: NoticeAppearance.title, fileURL: url, followUps: followUps))
         } catch is CancellationError {
             return .failure(.cancelled)
+        } catch let error as DraftError {
+            return .failure(error)
         } catch {
             return .failure(Task.isCancelled ? .cancelled : .renderFailed(error.localizedDescription))
         }
@@ -366,7 +581,7 @@ public final class MatterDraftingController: ObservableObject {
                 isEnabled: wired.contains(kind),
                 disabledReason: wired.contains(kind)
                     ? nil
-                    : "\(Self.displayTitle(for: kind)) drafting isn't wired into the app yet — use “Custom” to describe it for now."
+                    : "This draft type is not available yet. Use Custom to describe the work product you need."
             )
         }
     }
@@ -383,7 +598,8 @@ public final class MatterDraftingController: ObservableObject {
                 partyRepresented: input.partyRepresented,
                 representedPartyName: input.representedPartyName,
                 recipients: input.recipients,
-                serviceDate: input.serviceDate
+                serviceDate: input.serviceDate,
+                partySelection: input.partySelection
             )
         case let .motionToDismiss(input):
             return await draftMotionToDismiss(matterID: matterID, input: input)
@@ -407,6 +623,14 @@ public final class MatterDraftingController: ObservableObject {
         guard let matter = try? store.matters.fetchMatter(id: matterID) else {
             return .failure(.matterNotFound)
         }
+        let identity: MatterLegalIdentityReadProjection
+        do {
+            identity = try legalIdentityReadProjection(matterID: matterID)
+        } catch let error as DraftError {
+            return .failure(error)
+        } catch {
+            return .failure(.renderFailed(error.localizedDescription))
+        }
         let description = input.description.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !description.isEmpty else {
             return .failure(.emptyDescription)
@@ -416,7 +640,8 @@ public final class MatterDraftingController: ObservableObject {
             title: title,
             description: description,
             instructions: input.instructions.trimmingCharacters(in: .whitespacesAndNewlines),
-            matter: matter
+            matter: matter,
+            courtPresentation: identity.courtPresentation
         )
         do {
             let url = try persist(
@@ -458,7 +683,7 @@ public final class MatterDraftingController: ObservableObject {
         message = nil
         defer { isGenerating = false }
 
-        guard let matter = try? store.matters.fetchMatter(id: matterID) else {
+        guard (try? store.matters.fetchMatter(id: matterID)) != nil else {
             return .failure(.matterNotFound)
         }
         let profile = (try? store.appSettings.getSetting(AssistantProfile.profileKey, as: AssistantProfile.self)) ?? .empty
@@ -470,7 +695,7 @@ public final class MatterDraftingController: ObservableObject {
             return .failure(.missingRequiredSlots(["the claim or dispute the letter is about"]))
         }
 
-        let firm = Self.firmProfile(from: profile, jurisdiction: matter.court ?? matter.jurisdiction)
+        let firm = Self.firmProfile(from: profile)
         let facts = Self.letterFacts(from: input, claim: claim)
         let voice = AssistantVoiceProfile(registerNotes: Self.voiceRegister(tone: input.tone, profile: profile))
         let parts = LetterDemand.promptParts(facts: facts, profile: voice)
@@ -608,6 +833,25 @@ public final class MatterDraftingController: ObservableObject {
         let selectedFactIDs = selectedFacts.map(\.chunkID)
         let selectedAuthorities = Self.uniqueMotionAuthoritySelections(input.selectedAuthorities)
 
+        let filingIdentity: AuthorizedCourtFilingIdentity?
+        do {
+            filingIdentity = try authorizedCourtFilingIdentity(
+                matterID: matterID,
+                parties: input.parties,
+                partyRepresented: input.partyRepresented,
+                representedPartyName: input.representedPartyName,
+                recipients: input.recipients,
+                partySelection: input.partySelection,
+                confirmationPurposePrefix: "motion_to_dismiss:"
+            )
+        } catch let error as DraftError {
+            filingIdentity = nil
+            reasons.append(error.localizedDescription)
+        } catch {
+            filingIdentity = nil
+            reasons.append("The canonical matter identity could not be loaded.")
+        }
+
         let matter: MatterRecord?
         do {
             matter = try store.matters.fetchMatter(id: matterID)
@@ -616,7 +860,7 @@ public final class MatterDraftingController: ObservableObject {
             reasons.append("The matter could not be loaded.")
         }
 
-        if let matter {
+        if let matter, let filingIdentity {
             let profile: AssistantProfile
             do {
                 profile = try store.appSettings.getSetting(AssistantProfile.profileKey, as: AssistantProfile.self) ?? .empty
@@ -624,26 +868,30 @@ public final class MatterDraftingController: ObservableObject {
                 profile = .empty
                 reasons.append("The firm profile could not be loaded.")
             }
-            let courtHeader = Self.explicitCourtHeader(for: matter)
-            if courtHeader.isEmpty {
-                reasons.append("The matter is missing an explicit court.")
-            } else if !FloridaMotionToDismissContract.isSupportedFilingCourt(courtHeader) {
+            if filingIdentity.filingStateName != "Florida"
+                || !FloridaMotionToDismissContract.isSupportedFilingCourt(
+                    filingIdentity.courtHeader,
+                    filingStateName: filingIdentity.filingStateName
+                ) {
                 reasons.append(FloridaMotionToDismissContract.filingCourtRequirement)
             }
             let noticeInputs = NoticeAppearance.Inputs(
-                courtHeader: courtHeader,
-                parties: Self.normalizedParties(input.parties),
-                partyRepresented: input.partyRepresented.trimmingCharacters(in: .whitespacesAndNewlines),
-                representedPartyName: input.representedPartyName.trimmingCharacters(in: .whitespacesAndNewlines),
+                courtHeader: filingIdentity.courtHeader,
+                parties: filingIdentity.parties,
+                partyRepresented: filingIdentity.representedRole,
+                representedPartyName: filingIdentity.representedName,
                 caseNumber: matter.docketNumber?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "",
                 division: nil,
                 serviceDate: input.serviceDate,
-                recipients: Self.normalizedRecipients(input.recipients)
+                recipients: filingIdentity.recipients
             )
-            let firm = Self.firmProfile(from: profile, jurisdiction: courtHeader)
+            let firm = Self.firmProfile(
+                from: profile,
+                jurisdiction: filingIdentity.courtHeader
+            )
             reasons.append(contentsOf: NoticeAppearanceInputValidator.validate(inputs: noticeInputs, profile: firm)
                 .map { "Missing or invalid \($0)." })
-        } else if !reasons.contains("The matter could not be loaded.") {
+        } else if matter == nil && !reasons.contains("The matter could not be loaded.") {
             reasons.append("The matter was not found.")
         }
 
@@ -737,7 +985,11 @@ public final class MatterDraftingController: ObservableObject {
         return MotionDraftReadiness(
             selectedFactCount: selectedFactIDs.count,
             selectedAuthorityCount: selectedAuthorities.count,
-            blockingReasons: uniqueReasons
+            blockingReasons: uniqueReasons,
+            factDocumentReadiness: Self.motionFactDocumentReadiness(
+                factSources: factSources,
+                selectedFactChunkIDs: Set(selectedFactIDs)
+            )
         )
     }
 
@@ -755,6 +1007,24 @@ public final class MatterDraftingController: ObservableObject {
 
         do {
             try Task.checkCancellation()
+            let initialFilingIdentity = try authorizedCourtFilingIdentity(
+                matterID: matterID,
+                parties: input.parties,
+                partyRepresented: input.partyRepresented,
+                representedPartyName: input.representedPartyName,
+                recipients: input.recipients,
+                partySelection: input.partySelection,
+                confirmationPurposePrefix: "motion_to_dismiss:"
+            )
+            guard initialFilingIdentity.filingStateName == "Florida",
+                  FloridaMotionToDismissContract.isSupportedFilingCourt(
+                    initialFilingIdentity.courtHeader,
+                    filingStateName: initialFilingIdentity.filingStateName
+                  ) else {
+                return .failure(.motionBlocked([
+                    FloridaMotionToDismissContract.filingCourtRequirement,
+                ]))
+            }
             let readiness = motionReadiness(input: input, matterID: matterID)
             guard readiness.canGenerate else {
                 return .failure(.motionBlocked(readiness.blockingReasons))
@@ -793,26 +1063,38 @@ public final class MatterDraftingController: ObservableObject {
             guard profile.hasDraftingIdentity else {
                 return .failure(.incompleteFirmProfile(missing: profile.missingDraftingIdentityFields))
             }
-            let courtHeader = Self.explicitCourtHeader(for: matter)
-            guard !courtHeader.isEmpty else {
-                return .failure(.missingCaptionField("court"))
-            }
-            guard FloridaMotionToDismissContract.isSupportedFilingCourt(courtHeader) else {
+            let filingIdentity = try authorizedCourtFilingIdentity(
+                matterID: matterID,
+                parties: input.parties,
+                partyRepresented: input.partyRepresented,
+                representedPartyName: input.representedPartyName,
+                recipients: input.recipients,
+                partySelection: input.partySelection,
+                confirmationPurposePrefix: "motion_to_dismiss:"
+            )
+            guard filingIdentity.filingStateName == "Florida",
+                  FloridaMotionToDismissContract.isSupportedFilingCourt(
+                    filingIdentity.courtHeader,
+                    filingStateName: filingIdentity.filingStateName
+                  ) else {
                 return .failure(.motionBlocked([FloridaMotionToDismissContract.filingCourtRequirement]))
             }
             guard let caseNumber = matter.docketNumber?.trimmingCharacters(in: .whitespacesAndNewlines), !caseNumber.isEmpty else {
                 return .failure(.missingCaptionField("case/docket number"))
             }
 
-            let parties = Self.normalizedParties(input.parties)
-            let recipients = Self.normalizedRecipients(input.recipients)
-            let representedName = input.representedPartyName.trimmingCharacters(in: .whitespacesAndNewlines)
-            let representedRole = input.partyRepresented.trimmingCharacters(in: .whitespacesAndNewlines)
+            let parties = filingIdentity.parties
+            let recipients = filingIdentity.recipients
+            let representedName = filingIdentity.representedName
+            let representedRole = filingIdentity.representedRole
             let respondingTo = input.respondingTo.trimmingCharacters(in: .whitespacesAndNewlines)
             let relief = input.reliefSought.trimmingCharacters(in: .whitespacesAndNewlines)
-            let firm = Self.firmProfile(from: profile, jurisdiction: courtHeader)
+            let firm = Self.firmProfile(
+                from: profile,
+                jurisdiction: filingIdentity.courtHeader
+            )
             let noticeInputs = NoticeAppearance.Inputs(
-                courtHeader: courtHeader,
+                courtHeader: filingIdentity.courtHeader,
                 parties: parties,
                 partyRepresented: representedRole,
                 representedPartyName: representedName,
@@ -901,6 +1183,20 @@ public final class MatterDraftingController: ObservableObject {
             try Task.checkCancellation()
             try await beforeMotionPersistence()
             try Task.checkCancellation()
+            let currentFilingIdentity = try authorizedCourtFilingIdentity(
+                matterID: matterID,
+                parties: input.parties,
+                partyRepresented: input.partyRepresented,
+                representedPartyName: input.representedPartyName,
+                recipients: input.recipients,
+                partySelection: input.partySelection,
+                confirmationPurposePrefix: "motion_to_dismiss:"
+            )
+            guard currentFilingIdentity.identityRevision == filingIdentity.identityRevision else {
+                throw DraftError.legalIdentityBlocked(
+                    "The matter identity changed during generation. Reload the motion and try again."
+                )
+            }
 
             let auditInput = MotionDraftAuditInput(
                 canonicalRequest: try Self.motionRequestData(
@@ -1132,17 +1428,15 @@ public final class MatterDraftingController: ObservableObject {
         return try store.draftingSources.fetchMotionFactSources(matterID: matterID).map { record in
             let document = record.document
             let chunk = record.chunk
+            let readiness = DocumentReadinessConsumerProjection(
+                consumer: .drafting,
+                baseReceipt: record.readinessReceipt
+            )
             var blockers: [String] = []
-            if document.status != MatterDocumentStatus.ready.rawValue {
-                blockers.append("the document is not ready")
-            }
-            if ![DocumentExtractionStatus.extracted.rawValue, DocumentExtractionStatus.ocrComplete.rawValue, DocumentExtractionStatus.edited.rawValue]
-                .contains(document.extractionStatus) {
-                blockers.append("text extraction is not ready")
-            }
-            if ![DocumentIndexStatus.textIndexed.rawValue, DocumentIndexStatus.ready.rawValue]
-                .contains(document.indexStatus) {
-                blockers.append("the text index is not current")
+            if let exclusion = readiness.primaryBaseExclusion {
+                blockers.append(Self.motionFactReadinessDescription(for: exclusion))
+            } else if !readiness.isBaseReady {
+                blockers.append("the document's canonical readiness could not be verified")
             }
             let revisionID = chunk.revisionID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             if revisionID.isEmpty {
@@ -1183,7 +1477,66 @@ public final class MatterDraftingController: ObservableObject {
                 locator: locator,
                 text: text,
                 isReady: blockers.isEmpty,
-                blockingReason: blockers.isEmpty ? nil : blockers.joined(separator: ", ")
+                blockingReason: blockers.isEmpty ? nil : blockers.joined(separator: ", "),
+                readiness: readiness
+            )
+        }
+    }
+
+    private static func motionFactReadinessDescription(
+        for exclusion: DocumentReadinessExclusionReason
+    ) -> String {
+        switch exclusion {
+        case .deleted:
+            "the document is in the Recycle Bin"
+        case .extractionFailed, .processingFailed:
+            "document processing failed"
+        case .reviewRequired:
+            "the document needs review"
+        case .extractionIncomplete:
+            "text extraction is not ready"
+        case .selectedRevisionIncoherent:
+            "the selected document revision is inconsistent"
+        case .textIndexFailed:
+            "text indexing failed"
+        case .staleRevision:
+            "the excerpt is stale relative to the current revision"
+        case .textIndexIncomplete:
+            "the text index is not current"
+        case .activeEmbeddingModelMissing:
+            "an active embedding model is required"
+        case .selectionInconsistent:
+            "the active embedding-model selection is inconsistent"
+        case .unverified:
+            "the active embedding model has not passed its local test"
+        case .semanticIndexIncomplete:
+            "the semantic index is not current for the active model"
+        }
+    }
+
+    private static func motionFactDocumentReadiness(
+        factSources: [MotionDraftFactSource]?,
+        selectedFactChunkIDs: Set<String>
+    ) -> [DocumentReadinessConsumerProjection] {
+        guard let factSources else { return [] }
+        let selectedDocumentIDs = Set(
+            factSources.lazy
+                .filter { selectedFactChunkIDs.contains($0.chunkID) }
+                .map(\.documentID)
+        )
+        var emittedDocumentIDs: Set<String> = []
+        return factSources.compactMap { source in
+            guard emittedDocumentIDs.insert(source.documentID).inserted else {
+                return nil
+            }
+            let taskExclusions: [DocumentTaskEligibilityExclusion] =
+                selectedDocumentIDs.contains(source.documentID)
+                ? []
+                : [.missingDraftingSourceSelection]
+            return DocumentReadinessConsumerProjection(
+                consumer: .drafting,
+                baseReceipt: source.readiness.baseReceipt,
+                taskExclusions: taskExclusions
             )
         }
     }
@@ -1379,7 +1732,8 @@ public final class MatterDraftingController: ObservableObject {
         title: String,
         description: String,
         instructions: String,
-        matter: MatterRecord
+        matter: MatterRecord,
+        courtPresentation: MatterCourtPresentation
     ) -> String {
         var lines: [String] = []
         lines.append("# \(title)")
@@ -1387,8 +1741,12 @@ public final class MatterDraftingController: ObservableObject {
         lines.append("> Work-product description — drafted by the user, not a court-ready filing or model output.")
         lines.append("")
         lines.append("**Matter:** \(matter.name)")
-        if let court = matter.court?.trimmingCharacters(in: .whitespacesAndNewlines), !court.isEmpty {
+        if let court = courtPresentation.resolvedCourtName {
             lines.append("**Court:** \(court)")
+        } else if let savedCourt = courtPresentation.savedCourtText?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+                  !savedCourt.isEmpty {
+            lines.append("**Court:** \(savedCourt) — Unresolved; Choose Court in Matter Edit")
         }
         if let docket = matter.docketNumber?.trimmingCharacters(in: .whitespacesAndNewlines), !docket.isEmpty {
             lines.append("**Case no.:** \(docket)")
@@ -1440,28 +1798,6 @@ public final class MatterDraftingController: ObservableObject {
         )
     }
 
-    nonisolated private static func courtHeader(for matter: MatterRecord) -> String {
-        if let court = matter.court?.trimmingCharacters(in: .whitespacesAndNewlines), !court.isEmpty {
-            return court
-        }
-        return matter.jurisdiction.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    /// Motions are filing documents: a broad jurisdiction label is not a court
-    /// caption and must never be substituted for one.
-    nonisolated private static func explicitCourtHeader(for matter: MatterRecord) -> String {
-        matter.court?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-    }
-
-    nonisolated private static func isSupportedNoticeJurisdiction(matter: MatterRecord, courtHeader: String) -> Bool {
-        [matter.court, matter.jurisdiction, courtHeader]
-            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .contains { candidate in
-                BarJurisdictionCatalog.match(candidate)?.id == "fl"
-                    || candidate.localizedCaseInsensitiveContains("florida")
-            }
-    }
-
     nonisolated private static func normalizedParties(_ parties: [PartyLine]) -> [PartyLine] {
         parties.map {
             PartyLine(
@@ -1491,6 +1827,68 @@ public final class MatterDraftingController: ObservableObject {
                 role: recipient.role.trimmingCharacters(in: .whitespacesAndNewlines)
             )
         }
+    }
+
+    /// Resolves the one canonical service recipient for the party opposite an
+    /// attorney-confirmed represented-side override. The receipt changes only
+    /// which structured party is represented; it cannot authorize caller text
+    /// or invent missing counsel/service coordinates.
+    nonisolated private static func serviceRecipientForOppositeParty(
+        selectedPartyID: String,
+        snapshot: MatterIdentitySnapshot,
+        defaults: DraftPartyDefaults
+    ) throws -> ServiceRecipient {
+        guard snapshot.parties.count == 2,
+              let opposite = snapshot.parties.first(where: { $0.id != selectedPartyID })
+        else {
+            throw DraftError.legalIdentityBlocked(
+                "The confirmed side does not have one canonical opposite party."
+            )
+        }
+        let designation: String
+        if opposite.id == defaults.representedClientID {
+            designation = defaults.representedDesignation
+        } else if opposite.id == defaults.opposingPartyID {
+            designation = defaults.opposingDesignation
+        } else {
+            throw DraftError.legalIdentityBlocked(
+                "The confirmed side is not part of the current canonical party pair."
+            )
+        }
+        let representations = snapshot.representations.filter {
+            $0.representedPartyID == opposite.id && $0.relationshipKind == .counsel
+        }
+        guard representations.count == 1,
+              let representation = representations.first,
+              let firm = representation.firmName,
+              !firm.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let address = representation.serviceAddress,
+              !address.street.isEmpty,
+              !address.city.isEmpty,
+              !address.state.isEmpty,
+              !address.postalCode.isEmpty,
+              !representation.representativeName.isEmpty,
+              !representation.serviceEmails.isEmpty
+        else {
+            throw DraftError.legalIdentityBlocked(
+                "Verified service counsel for the canonical opposite side is incomplete."
+            )
+        }
+        return ServiceRecipient(
+            name: representation.representativeName,
+            firm: firm,
+            address: OfficeBlock(
+                street: address.street,
+                suite: nil,
+                city: address.city,
+                state: address.state,
+                zip: address.postalCode,
+                phone: "",
+                fax: nil
+            ),
+            emails: representation.serviceEmails,
+            role: "Counsel for \(designation)"
+        )
     }
 
     // MARK: - Persistence
@@ -1934,19 +2332,24 @@ public struct NoticeAppearanceDraftInput: Sendable, Equatable {
     public var representedPartyName: String
     public var recipients: [ServiceRecipient]
     public var serviceDate: DateOnly
+    /// Store-validated selection returned after canonical party review. A
+    /// conflicting represented side requires its receipt ID and digest.
+    public var partySelection: DraftPartySelection?
 
     public init(
         parties: [PartyLine],
         partyRepresented: String,
         representedPartyName: String,
         recipients: [ServiceRecipient],
-        serviceDate: DateOnly = .today
+        serviceDate: DateOnly = .today,
+        partySelection: DraftPartySelection? = nil
     ) {
         self.parties = parties
         self.partyRepresented = partyRepresented
         self.representedPartyName = representedPartyName
         self.recipients = recipients
         self.serviceDate = serviceDate
+        self.partySelection = partySelection
     }
 }
 
@@ -1964,6 +2367,9 @@ public struct MotionToDismissDraftInput: Sendable, Equatable {
     public var reliefSought: String
     public var selectedFacts: [MotionDraftFactSourceSelection]
     public var selectedAuthorities: [MotionDraftAuthoritySourceSelection]
+    /// Store-validated selection returned after canonical party review. A
+    /// conflicting represented side requires its receipt ID and digest.
+    public var partySelection: DraftPartySelection?
 
     public init(
         parties: [PartyLine],
@@ -1975,7 +2381,8 @@ public struct MotionToDismissDraftInput: Sendable, Equatable {
         grounds: [String],
         reliefSought: String,
         selectedFacts: [MotionDraftFactSourceSelection],
-        selectedAuthorities: [MotionDraftAuthoritySourceSelection]
+        selectedAuthorities: [MotionDraftAuthoritySourceSelection],
+        partySelection: DraftPartySelection? = nil
     ) {
         self.parties = parties
         self.partyRepresented = partyRepresented
@@ -1987,6 +2394,7 @@ public struct MotionToDismissDraftInput: Sendable, Equatable {
         self.reliefSought = reliefSought
         self.selectedFacts = selectedFacts
         self.selectedAuthorities = selectedAuthorities
+        self.partySelection = partySelection
     }
 
     public var selectedFactChunkIDs: [String] { selectedFacts.map(\.chunkID) }
@@ -2035,6 +2443,10 @@ public struct MotionDraftFactSource: Sendable, Equatable, Identifiable {
     public let text: String
     public let isReady: Bool
     public let blockingReason: String?
+    /// Store-owned base readiness captured in the same database snapshot as
+    /// this displayed fact row. Input selection policy is layered later by
+    /// `MotionDraftReadiness` and never changes this receipt.
+    public let readiness: DocumentReadinessConsumerProjection
 
     public var displayExcerpt: String { String(text.prefix(240)) }
 
@@ -2047,7 +2459,8 @@ public struct MotionDraftFactSource: Sendable, Equatable, Identifiable {
         locator: String,
         text: String,
         isReady: Bool,
-        blockingReason: String?
+        blockingReason: String?,
+        readiness: DocumentReadinessConsumerProjection
     ) {
         self.chunkID = chunkID
         self.documentID = documentID
@@ -2058,6 +2471,7 @@ public struct MotionDraftFactSource: Sendable, Equatable, Identifiable {
         self.text = text
         self.isReady = isReady
         self.blockingReason = blockingReason
+        self.readiness = readiness
     }
 }
 
@@ -2096,13 +2510,22 @@ public struct MotionDraftReadiness: Sendable, Equatable {
     public let selectedFactCount: Int
     public let selectedAuthorityCount: Int
     public let blockingReasons: [String]
+    /// One projection per displayed fact document. Base readiness is the exact
+    /// Store receipt; missing input selection is an additive drafting policy.
+    public let factDocumentReadiness: [DocumentReadinessConsumerProjection]
 
     public var canGenerate: Bool { blockingReasons.isEmpty }
 
-    public init(selectedFactCount: Int, selectedAuthorityCount: Int, blockingReasons: [String]) {
+    public init(
+        selectedFactCount: Int,
+        selectedAuthorityCount: Int,
+        blockingReasons: [String],
+        factDocumentReadiness: [DocumentReadinessConsumerProjection] = []
+    ) {
         self.selectedFactCount = selectedFactCount
         self.selectedAuthorityCount = selectedAuthorityCount
         self.blockingReasons = blockingReasons
+        self.factDocumentReadiness = factDocumentReadiness
     }
 }
 

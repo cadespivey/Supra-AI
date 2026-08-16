@@ -12,35 +12,27 @@ public struct ModelSummary: Identifiable, Sendable, Equatable {
     public var path: String
     public var isActive: Bool
     public var validationStatus: String?
-    /// Repository identity read from a structurally valid manifest inside an
-    /// app-configured managed root. Presentation metadata only; it does not prove
-    /// artifact bytes or authorize a runtime load.
-    public var managedRepositoryID: String?
-
     public init(
         id: String,
         displayName: String,
         path: String,
         isActive: Bool,
-        validationStatus: String?,
-        managedRepositoryID: String? = nil
+        validationStatus: String?
     ) {
         self.id = id
         self.displayName = displayName
         self.path = path
         self.isActive = isActive
         self.validationStatus = validationStatus
-        self.managedRepositoryID = managedRepositoryID
     }
 
-    init(record: ModelRecord, managedRepositoryID: String? = nil) {
+    init(record: ModelRecord) {
         self.init(
             id: record.id,
             displayName: record.displayName,
             path: record.path,
             isActive: record.isActive,
-            validationStatus: record.validationStatus,
-            managedRepositoryID: managedRepositoryID
+            validationStatus: record.validationStatus
         )
     }
 
