@@ -21,6 +21,12 @@ final class RuntimeXPCSanitizerQualificationTests: XCTestCase {
             "Expected RED: sanitizer builds still select the production resource-envelope test"
         )
         XCTAssertTrue(
+            script.contains(
+                #"OTHER_LDFLAGS=$(inherited) -fsanitize=undefined"#
+            ),
+            "Expected RED: Xcode instruments MLX C++ for UBSAN but does not link its runtime into the XPC executable"
+        )
+        XCTAssertTrue(
             hostedTest.contains("func testSanitizedHostedBoundaryLifecycle()"),
             "the hosted suite needs an explicit sanitizer lifecycle entry point"
         )
