@@ -356,7 +356,8 @@ struct MatterWorkspaceView: View {
                     controller: research,
                     library: library,
                     matter: matter,
-                    autoOpenPlanner: $autoOpenResearchPlanner
+                    autoOpenPlanner: $autoOpenResearchPlanner,
+                    onChooseCourt: { showEditor = true }
                 )
             } else {
                 placeholder(

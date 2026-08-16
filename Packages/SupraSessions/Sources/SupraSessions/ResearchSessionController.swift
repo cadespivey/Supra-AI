@@ -156,6 +156,12 @@ public final class ResearchSessionController: ObservableObject {
     @Published public private(set) var isRunning = false
     @Published public private(set) var runMessage: String?
 
+    /// A typed UI recovery signal for the Store-owned court gate. Callers can
+    /// open the canonical Matter editor without parsing user-facing error copy.
+    public var requiresCourtSelection: Bool {
+        runMessage == researchChooseCourtMessage
+    }
+
     private let store: SupraStore
     private let runtimeClient: any ModelExecutionGateway
     private var modelExecutionGateway: any ModelExecutionGateway { runtimeClient }

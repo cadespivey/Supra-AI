@@ -11,6 +11,7 @@ struct MatterResearchView: View {
     /// action) to auto-open the planner once the Research tab appears. Reset to false
     /// after it fires so a normal return to this tab doesn't reopen the sheet.
     var autoOpenPlanner: Binding<Bool>? = nil
+    var onChooseCourt: () -> Void = {}
 
     @State private var showPlanner = false
     /// Programmatic navigation into a session (Save & Run opens it directly).
@@ -27,7 +28,11 @@ struct MatterResearchView: View {
                 content
             }
             .navigationDestination(for: String.self) { sessionID in
-                ResearchSessionDetailView(controller: controller, sessionID: sessionID)
+                ResearchSessionDetailView(
+                    controller: controller,
+                    sessionID: sessionID,
+                    onChooseCourt: onChooseCourt
+                )
             }
         }
         .sheet(isPresented: $showPlanner) {

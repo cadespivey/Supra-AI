@@ -11,6 +11,7 @@ import UniformTypeIdentifiers
 struct ResearchSessionDetailView: View {
     @ObservedObject var controller: ResearchSessionController
     let sessionID: String
+    let onChooseCourt: () -> Void
 
     @State private var selectedResult: ResearchSessionController.SessionResult?
     @State private var readerWidth: CGFloat = 760
@@ -62,14 +63,19 @@ struct ResearchSessionDetailView: View {
     }
 
     private var runBar: some View {
-        HStack(spacing: 10) {
-            Button { Task { await controller.runApprovedSearches() } } label: {
-                HStack(spacing: 6) {
-                    if controller.isRunning { ProgressView().controlSize(.small) }
-                    Text(controller.isRunning ? "Running…" : "Run Approved Searches")
+        HStack(alignment: .top, spacing: 10) {
+            VStack(alignment: .leading, spacing: 4) {
+                Button { Task { await controller.runApprovedSearches() } } label: {
+                    HStack(spacing: 6) {
+                        if controller.isRunning { ProgressView().controlSize(.small) }
+                        Text(controller.isRunning ? "Searching CourtListener…" : "Search CourtListener")
+                    }
                 }
+                .disabled(!controller.canRunOpenSession || controller.isRunning || !controller.hasCourtListenerToken)
+                Text("The approved queries shown below stay on this Mac until you choose Search CourtListener. That action sends them to CourtListener.")
+                    .font(.supraCaption)
+                    .foregroundStyle(.secondary)
             }
-            .disabled(!controller.canRunOpenSession || controller.isRunning || !controller.hasCourtListenerToken)
             researchStatusBadge
             Spacer()
         }
@@ -96,12 +102,21 @@ struct ResearchSessionDetailView: View {
             )
             .padding([.horizontal, .bottom])
         } else if let message = controller.runMessage {
-            let blocked = message.localizedCaseInsensitiveContains("blocked")
-            SupraWarningBanner(
-                blocked ? .blocking : .warning,
-                title: blocked ? "Network Blocked" : "Run Incomplete",
-                message: message
-            )
+            let blocked = controller.requiresCourtSelection
+                || message.localizedCaseInsensitiveContains("blocked")
+            VStack(alignment: .leading, spacing: 8) {
+                SupraWarningBanner(
+                    blocked ? .blocking : .warning,
+                    title: controller.requiresCourtSelection
+                        ? "Court Required"
+                        : (blocked ? "Network Blocked" : "Run Incomplete"),
+                    message: message
+                )
+                if controller.requiresCourtSelection {
+                    Button("Choose Court", action: onChooseCourt)
+                        .accessibilityIdentifier("research.chooseCourt")
+                }
+            }
             .padding([.horizontal, .bottom])
         }
     }
