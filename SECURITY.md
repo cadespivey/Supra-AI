@@ -27,12 +27,12 @@ yours while investigating.
 
 This is an early project. Security fixes target the latest release and `main`.
 
-The currently supported release line is 2.3.x.
+The currently supported release line is 3.0.x.
 
 | Version | Supported |
 |---------|-----------|
-| 2.3.x   | ✅        |
-| < 2.3   | ❌        |
+| 3.0.x   | ✅        |
+| < 3.0   | ❌        |
 
 ## Security & privacy model
 
