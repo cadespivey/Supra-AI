@@ -395,6 +395,46 @@ final class ArchitectureUXTUiProjection01Tests: XCTestCase {
         XCTAssertTrue(workspace.contains("onReturnContextConsumed(context)"))
     }
 
+    // Journey 1 owner walkthrough RED (2026-08-16): demo setup marks its
+    // canonical synthetic embedding model verified, but import composition still
+    // hands that nonexistent model path to RuntimeTextEmbedder. The import is
+    // extracted and text-indexed, then remains "Needs reindexing" forever.
+    func testDemoImportUsesTheCanonicalSyntheticEmbedderOnlyForItsExactModel() throws {
+        let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent() // SupraSessionsTests
+            .deletingLastPathComponent() // Tests
+            .deletingLastPathComponent() // SupraSessions
+            .deletingLastPathComponent() // Packages
+            .deletingLastPathComponent() // repository
+        let environment = try String(
+            contentsOf: repositoryRoot.appendingPathComponent(
+                "Apps/SupraAI/SupraAI/AppEnvironment.swift"
+            ),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(
+            environment.contains("private struct CanonicalReadinessDemoEmbedder: TextEmbedder"),
+            "Expected RED: demo imports have no deterministic embedder matching their verified synthetic model"
+        )
+        XCTAssertTrue(
+            environment.contains("let makeDocumentTextEmbedder: @Sendable () -> (any TextEmbedder)?"),
+            "the three document-ingress paths must share one exact demo/runtime selection"
+        )
+        XCTAssertTrue(
+            environment.contains("Self.isDemoMode, model.id == CanonicalReadinessSeed.embeddingModelID"),
+            "the synthetic embedder must be restricted to demo mode and the exact seeded model identity"
+        )
+        XCTAssertTrue(
+            environment.contains("return CanonicalReadinessDemoEmbedder()"),
+            "the demo import queue must receive the canonical synthetic embedder"
+        )
+        XCTAssertTrue(
+            environment.contains("return RuntimeTextEmbedder(model: model, runtimeClient: modelExecutionCoordinator)"),
+            "ordinary app imports must retain the real runtime-backed embedder"
+        )
+    }
+
     private func makeDocumentFixture() throws -> (
         store: SupraStore,
         queue: DocumentProcessingQueue,
