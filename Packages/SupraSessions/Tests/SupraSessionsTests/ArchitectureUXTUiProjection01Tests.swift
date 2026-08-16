@@ -463,6 +463,32 @@ final class ArchitectureUXTUiProjection01Tests: XCTestCase {
         XCTAssertTrue(workspace.contains("showEditor = true"))
     }
 
+    // Journey 4 owner walkthrough RED (2026-08-16): New Versioned Work closes
+    // the Draft sheet, but the onChange observer can run before the handoff flag
+    // is visible and strand the owner on the prior tab with no editor.
+    func testDraftToSavedWorkCompletesFromTheSheetDismissalBoundary() throws {
+        let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent() // SupraSessionsTests
+            .deletingLastPathComponent() // Tests
+            .deletingLastPathComponent() // SupraSessions
+            .deletingLastPathComponent() // Packages
+            .deletingLastPathComponent() // repository
+        let workspace = try String(
+            contentsOf: repositoryRoot.appendingPathComponent(
+                "Apps/SupraAI/SupraAI/Matters/MatterWorkspaceView.swift"
+            ),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(
+            workspace.contains(".sheet(isPresented: $showDraftSheet, onDismiss: finishDraftHandoff)"),
+            "Expected RED: Draft handoffs are not synchronized to the actual sheet-dismissal boundary"
+        )
+        XCTAssertTrue(workspace.contains("private func finishDraftHandoff()"))
+        XCTAssertTrue(workspace.contains("tab = .outputs"))
+        XCTAssertTrue(workspace.contains("showNewSavedWork = true"))
+    }
+
     private func makeDocumentFixture() throws -> (
         store: SupraStore,
         queue: DocumentProcessingQueue,
