@@ -489,6 +489,28 @@ final class ArchitectureUXTUiProjection01Tests: XCTestCase {
         XCTAssertTrue(workspace.contains("showNewSavedWork = true"))
     }
 
+    func testSavedWorkDetailOffersEditAndSourceCheckAsOneVersionedAction() throws {
+        // Journey 4/5 expected RED: detail has export and repair controls, but
+        // no owner edit action wired to a source-rechecked immutable version.
+        let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent() // SupraSessionsTests
+            .deletingLastPathComponent() // Tests
+            .deletingLastPathComponent() // SupraSessions
+            .deletingLastPathComponent() // Packages
+            .deletingLastPathComponent() // repository
+        let detail = try String(
+            contentsOf: repositoryRoot.appendingPathComponent(
+                "Apps/SupraAI/SupraAI/Outputs/OutputDetailView.swift"
+            ),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(detail.contains("Button(\"Edit & Check Sources\")"))
+        XCTAssertTrue(detail.contains("controller.saveEditedVersion("))
+        XCTAssertTrue(detail.contains(".accessibilityIdentifier(\"output.editAndCheckSources\")"))
+        XCTAssertTrue(detail.contains("Saving creates a new immutable version"))
+    }
+
     private func makeDocumentFixture() throws -> (
         store: SupraStore,
         queue: DocumentProcessingQueue,
