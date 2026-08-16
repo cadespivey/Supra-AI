@@ -478,6 +478,97 @@ public final class StructuredOutputController: ObservableObject {
         }
     }
 
+    /// Saves an owner edit as a new immutable version and immediately checks
+    /// every proposition/citation against the exact retained source packet from
+    /// the active version. The prior version remains unchanged and export stays
+    /// gated whenever the edited text is not fully supported.
+    @discardableResult
+    public func saveEditedVersion(
+        outputID: String,
+        contentMarkdown: String
+    ) -> Bool {
+        message = nil
+        guard !contentMarkdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            message = "Enter work-product text before saving a new version."
+            return false
+        }
+        guard let record = outputRecord(outputID),
+              let active = activeVersion(for: record)
+        else {
+            message = "Could not find the output version to edit."
+            return false
+        }
+        guard Self.assurance(for: active) != .stale else {
+            message = "A retained source changed. Open Documents and rebuild readiness before editing and checking a new version."
+            return false
+        }
+
+        do {
+            guard let sourceSet = try store.documentSources.fetchSourceSet(
+                structuredOutputVersionID: active.id
+            ), let packet = try persistedDocumentPacket(sourceSet: sourceSet) else {
+                message = "This version has no complete retained source packet. Regenerate it from fresh sources before editing."
+                return false
+            }
+            let verification = try DocumentSupportVerifier.verify(
+                answer: contentMarkdown,
+                sources: packet.supportSources,
+                scopeFullyIndexed: true
+            )
+            let missing = (try? JSONDecoder().decode(
+                [String].self,
+                from: Data(active.missingSectionsJSON.utf8)
+            )) ?? []
+            let required = (try? JSONDecoder().decode(
+                [String].self,
+                from: Data(active.requiredSectionsJSON.utf8)
+            )) ?? []
+            let present = (try? JSONDecoder().decode(
+                [String].self,
+                from: Data(active.presentSectionsJSON.utf8)
+            )) ?? []
+            let checkedContent = verification.requiresReview
+                ? verification.warningMarkdown + contentMarkdown
+                : contentMarkdown
+            let sourceSetID = try cloneDocumentSourceSet(packet)
+            let newVersion = try store.structuredOutputs.createVersion(
+                structuredOutputID: outputID,
+                contentMarkdown: checkedContent,
+                requiredSections: required,
+                presentSections: present,
+                missingSections: missing,
+                parentVersionID: active.id,
+                repairReason: "user_edit_and_source_check",
+                verificationStatus: verification.verificationStatus,
+                verificationVersion: DocumentSupportVerifier.version,
+                verificationResults: verification.results,
+                verificationDimensions: VerificationDimensionsMapper.dimensions(
+                    for: verification
+                ),
+                sourceSetID: sourceSetID,
+                outputStatus: verification.requiresReview || !missing.isEmpty
+                    ? .needsReview
+                    : .complete
+            )
+            _ = try? store.auditEvents.recordEvent(
+                matterID: matterID,
+                eventType: "structured_output_edited_and_checked",
+                actor: "user",
+                summary: "Saved an edited work-product version and checked its retained sources",
+                relatedTable: "structured_output_versions",
+                relatedID: newVersion.id
+            )
+            loadOutputs()
+            message = verification.requiresReview
+                ? "Saved a new version. Unsupported or unverifiable propositions still need review."
+                : "Saved a new immutable version and checked its retained sources."
+            return true
+        } catch {
+            message = "The edited version was not saved: \(error.localizedDescription)"
+            return false
+        }
+    }
+
     /// Governed creation router for ordinary, accepted-authority, and explicitly
     /// provisional work. Packet availability is resolved before the first model
     /// call; publication then uses the Store's one terminal aggregate boundary.

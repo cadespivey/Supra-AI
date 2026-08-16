@@ -37,6 +37,7 @@ struct OutputDetailView: View {
     @State private var routingMessage: String?
     @State private var sourcePreview: PreviewItem?
     @State private var pendingExportFormat: DocumentExportFormat?
+    @State private var editDraft: OutputEditDraft?
 
     private var router: ModelRouter { ModelRouter(configuration: .fromEnvironment()) }
 
@@ -127,6 +128,23 @@ struct OutputDetailView: View {
         .sheet(item: $sourcePreview) { item in
             DocumentPreviewView(model: item.model) { sourcePreview = nil }
         }
+        .sheet(item: $editDraft) { draft in
+            OutputEditAndCheckSheet(
+                title: outputTitle,
+                initialMarkdown: draft.markdown
+            ) { markdown in
+                guard controller.saveEditedVersion(
+                    outputID: outputID,
+                    contentMarkdown: markdown
+                ) else {
+                    return controller.message ?? "The edited version could not be saved."
+                }
+                selectedVersionID = controller.versions(forOutput: outputID)
+                    .first(where: \.isActive)?.id
+                editDraft = nil
+                return nil
+            }
+        }
     }
 
     @ViewBuilder
@@ -152,6 +170,18 @@ struct OutputDetailView: View {
             }
             Spacer()
             if let selected {
+                Button("Edit & Check Sources") {
+                    editDraft = OutputEditDraft(
+                        versionID: selected.id,
+                        markdown: selected.markdown
+                    )
+                }
+                .disabled(
+                    controller.sources(forVersion: selected.id).isEmpty
+                        || selected.assuranceState == .stale
+                )
+                .accessibilityIdentifier("output.editAndCheckSources")
+                .help("Edit this version, retain its exact sources, and check support before saving")
                 Menu {
                     Button("Open Notes & Time") {
                         onOpenNotesAndTime(
@@ -395,6 +425,71 @@ struct OutputDetailView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal)
         .padding(.bottom, 8)
+    }
+}
+
+private struct OutputEditDraft: Identifiable {
+    let versionID: String
+    let markdown: String
+
+    var id: String { versionID }
+}
+
+private struct OutputEditAndCheckSheet: View {
+    let title: String
+    let initialMarkdown: String
+    let onSave: (String) -> String?
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var markdown: String
+    @State private var errorMessage: String?
+
+    init(
+        title: String,
+        initialMarkdown: String,
+        onSave: @escaping (String) -> String?
+    ) {
+        self.title = title
+        self.initialMarkdown = initialMarkdown
+        self.onSave = onSave
+        _markdown = State(initialValue: initialMarkdown)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Edit & Check Sources")
+                .font(.supraTitle)
+            Text(title)
+                .font(.supraSubheadline)
+                .foregroundStyle(.secondary)
+            Text("Saving creates a new immutable version and checks the edited text against this version's exact retained sources. The current version is never overwritten.")
+                .font(.supraCaption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            TextEditor(text: $markdown)
+                .font(.body.monospaced())
+                .frame(minWidth: 640, minHeight: 420)
+                .accessibilityIdentifier("output.editAndCheckSources.editor")
+            if let errorMessage {
+                Text(errorMessage)
+                    .font(.supraCaption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Divider()
+            HStack {
+                Button("Cancel", role: .cancel) { dismiss() }
+                Spacer()
+                Button("Save New Version") {
+                    errorMessage = onSave(markdown)
+                    if errorMessage == nil { dismiss() }
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .accessibilityIdentifier("output.editAndCheckSources.save")
+            }
+        }
+        .padding()
     }
 }
 
