@@ -19,10 +19,16 @@ fi
 
 derived_data="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/SupraAI-XPC-${kind}-${$}"
 sanitizer_flag=()
+sanitizer_linker_flag=()
 case "$kind" in
   thread) sanitizer_flag=(-enableThreadSanitizer YES) ;;
   address) sanitizer_flag=(-enableAddressSanitizer YES) ;;
-  undefined) sanitizer_flag=(-enableUndefinedBehaviorSanitizer YES) ;;
+  undefined)
+    sanitizer_flag=(-enableUndefinedBehaviorSanitizer YES)
+    # Xcode 27 beta instruments C/C++ package objects for UBSAN but omits the
+    # UBSAN runtime from a Swift XPC executable's link command.
+    sanitizer_linker_flag=('OTHER_LDFLAGS=$(inherited) -fsanitize=undefined')
+    ;;
 esac
 
 DEVELOPER_DIR="$developer_dir" xcodebuild \
@@ -37,5 +43,6 @@ DEVELOPER_DIR="$developer_dir" xcodebuild \
   CODE_SIGN_IDENTITY=- \
   DEVELOPMENT_TEAM= \
   "${sanitizer_flag[@]}" \
+  "${sanitizer_linker_flag[@]}" \
   -only-testing:SupraAIUITests/RuntimeXPCIntegrationTests/testSanitizedHostedBoundaryLifecycle \
   test
