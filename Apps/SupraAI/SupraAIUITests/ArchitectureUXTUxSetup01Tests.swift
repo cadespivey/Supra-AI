@@ -181,10 +181,9 @@ final class ArchitectureUXTUxSetup01Tests: XCTestCase {
         XCTAssertTrue(returnAction.label.localizedCaseInsensitiveContains("documents"))
         returnAction.click()
 
-        XCTAssertTrue(
-            app.descendants(matching: .any)["matterTab.Documents"]
-                .waitForExistence(timeout: 10)
-        )
+        let documentsTab = app.descendants(matching: .any)["matterTab.Documents"]
+        XCTAssertTrue(documentsTab.waitForExistence(timeout: 10))
+        XCTAssertTrue(documentsTab.isSelected, "return must restore the Documents task, not default to Chat")
         XCTAssertTrue(
             app.descendants(matching: .any)["documents.importUnavailableWarning"]
                 .waitForExistence(timeout: 10)

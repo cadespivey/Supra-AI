@@ -368,6 +368,33 @@ final class ArchitectureUXTUiProjection01Tests: XCTestCase {
         }
     }
 
+    func testSetupReturnRestoresTheExactMatterTaskInsteadOfDefaultingToChat() throws {
+        let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent() // SupraSessionsTests
+            .deletingLastPathComponent() // Tests
+            .deletingLastPathComponent() // SupraSessions
+            .deletingLastPathComponent() // Packages
+            .deletingLastPathComponent() // repository
+        func source(_ relativePath: String) throws -> String {
+            try String(
+                contentsOf: repositoryRoot.appendingPathComponent(relativePath),
+                encoding: .utf8
+            )
+        }
+
+        let shell = try source("Apps/SupraAI/SupraAI/MainShellView.swift")
+        let workspace = try source("Apps/SupraAI/SupraAI/Matters/MatterWorkspaceView.swift")
+
+        XCTAssertTrue(shell.contains("@State private var pendingMatterReturnContext: WorkContext?"))
+        XCTAssertTrue(shell.contains("pendingMatterReturnContext = request.returnContext"))
+        XCTAssertTrue(shell.contains("returnContext: pendingMatterReturnContext"))
+        XCTAssertTrue(shell.contains("onReturnContextConsumed"))
+        XCTAssertTrue(workspace.contains("private func applyReturnContext()"))
+        XCTAssertTrue(workspace.contains("case .importDocuments: tab = .documents"))
+        XCTAssertTrue(workspace.contains("case .draftMotion: showDraftSheet = true"))
+        XCTAssertTrue(workspace.contains("onReturnContextConsumed(context)"))
+    }
+
     private func makeDocumentFixture() throws -> (
         store: SupraStore,
         queue: DocumentProcessingQueue,
