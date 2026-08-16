@@ -435,6 +435,34 @@ final class ArchitectureUXTUiProjection01Tests: XCTestCase {
         )
     }
 
+    // Journey 4 owner walkthrough RED (2026-08-16): a court-filing draft with
+    // incomplete structured identity names Edit Matter as the correction, but
+    // the sheet exposes only Close and leaves the owner to rediscover that route.
+    func testDraftIdentityBlockerOpensTheExactMatterEditor() throws {
+        let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent() // SupraSessionsTests
+            .deletingLastPathComponent() // Tests
+            .deletingLastPathComponent() // SupraSessions
+            .deletingLastPathComponent() // Packages
+            .deletingLastPathComponent() // repository
+        func source(_ relativePath: String) throws -> String {
+            try String(
+                contentsOf: repositoryRoot.appendingPathComponent(relativePath),
+                encoding: .utf8
+            )
+        }
+
+        let drafting = try source("Apps/SupraAI/SupraAI/Matters/MatterDraftingView.swift")
+        let workspace = try source("Apps/SupraAI/SupraAI/Matters/MatterWorkspaceView.swift")
+
+        XCTAssertTrue(drafting.contains("let onEditMatterIdentity: () -> Void"))
+        XCTAssertTrue(drafting.contains("Button(\"Edit Matter\", action: onEditMatterIdentity)"))
+        XCTAssertTrue(drafting.contains(".accessibilityIdentifier(\"drafting.identity.editMatter\")"))
+        XCTAssertTrue(workspace.contains("@State private var pendingDraftToMatterEditor = false"))
+        XCTAssertTrue(workspace.contains("pendingDraftToMatterEditor = true"))
+        XCTAssertTrue(workspace.contains("showEditor = true"))
+    }
+
     private func makeDocumentFixture() throws -> (
         store: SupraStore,
         queue: DocumentProcessingQueue,
