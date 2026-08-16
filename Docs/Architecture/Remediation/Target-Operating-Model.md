@@ -159,6 +159,12 @@ analysis. The reference remained an unsaved note draft until explicit submission
 
 ### 9. ScratchPad entries → matter tags → daily billing draft → edit
 
+Owner walkthrough: **approved by Cade Spivey on 2026-08-16** after the rebuilt app saved and
+edited multiple daily notes, resolved three exact matter tags while leaving one genuinely
+unassigned entry visible, generated a four-line billing draft with the installed Local Assistant,
+and preserved the owner's revised narrative and 0.3-hour value through regeneration. The daily
+total recomputed to 1.0 hour, export remained untouched, and nothing was billed automatically.
+
 | Contract | Definition |
 |---|---|
 | Authoritative aggregate | One dated `ScratchPadDayRecord`, its separately editable entries and exact matter mentions, plus the latest versioned billing draft and editable line items derived from that day's current evidence. |
