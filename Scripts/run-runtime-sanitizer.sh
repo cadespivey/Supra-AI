@@ -37,5 +37,5 @@ DEVELOPER_DIR="$developer_dir" xcodebuild \
   CODE_SIGN_IDENTITY=- \
   DEVELOPMENT_TEAM= \
   "${sanitizer_flag[@]}" \
-  -only-testing:SupraAIUITests/RuntimeXPCIntegrationTests/testHostedBoundaryLifecycle \
+  -only-testing:SupraAIUITests/RuntimeXPCIntegrationTests/testSanitizedHostedBoundaryLifecycle \
   test

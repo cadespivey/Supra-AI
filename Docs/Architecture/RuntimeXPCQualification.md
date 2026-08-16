@@ -90,11 +90,15 @@ DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer Scripts/run-runtim
 DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer Scripts/run-runtime-sanitizer.sh undefined
 ```
 
-The lifecycle harness reads `RUSAGE_SELF` inside the XPC service through runtime status and
-enforces at most 256 MiB XPC maximum-resident-set growth across its 20 content-free iterations.
-The controlled stream caps output at eight tokens and every held generation has a five-second
-fail-closed deadline. Actual model peak memory depends on the protected fixture and must be
-recorded per release candidate.
+The ordinary hosted lifecycle harness reads `RUSAGE_SELF` inside the XPC service through runtime
+status and enforces at most 256 MiB XPC maximum-resident-set growth across its 20 content-free
+iterations. Sanitizer runtimes change allocation, quarantine, and resident-memory accounting, so
+their explicit qualification profile records the same RSS measurement without claiming or
+relaxing that production envelope. A sanitizer pass still requires all 20 iterations and every
+behavioral boundary check, with the sanitizer runtime itself acting as the memory/undefined-
+behavior detector. The controlled stream caps output at eight tokens and every held generation
+has a five-second fail-closed deadline. Actual model peak memory depends on the protected fixture
+and must be recorded per release candidate.
 
 ## Local qualification record — 2026-07-13
 

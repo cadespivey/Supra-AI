@@ -8,9 +8,19 @@ import SupraRuntimeInterface
 import SupraSessions
 import SwiftUI
 
+enum RuntimeXPCIntegrationQualificationProfile: String {
+    case productionEnvelope = "production-envelope"
+    case sanitizerInstrumentation = "sanitizer-instrumentation"
+
+    var enforcesProductionResourceEnvelope: Bool {
+        self == .productionEnvelope
+    }
+}
+
 @MainActor
 struct RuntimeXPCIntegrationView: View {
     let scenario: String
+    let qualificationProfile: RuntimeXPCIntegrationQualificationProfile
 
     @State private var result = "RUNNING"
     @State private var detail = "Starting signed hosted-XPC checks."
@@ -59,7 +69,10 @@ struct RuntimeXPCIntegrationView: View {
                 .accessibilityLabel("Completed lifecycle iterations")
                 .accessibilityValue("\(completedIterations)/20")
 
-            ForEach(RuntimeXPCIntegrationRunner.checkIDs, id: \.self) { checkID in
+            ForEach(
+                RuntimeXPCIntegrationRunner.checkIDs(for: qualificationProfile),
+                id: \.self
+            ) { checkID in
                 Text(checks[checkID] == true ? "PASS" : "PENDING")
                     .accessibilityIdentifier("runtimeXPCIntegration.check.\(checkID)")
                     .accessibilityLabel("Lifecycle check \(checkID)")
@@ -68,7 +81,10 @@ struct RuntimeXPCIntegrationView: View {
         }
         .task {
             do {
-                let report = try await RuntimeXPCIntegrationRunner().run(iterations: 20) {
+                let report = try await RuntimeXPCIntegrationRunner().run(
+                    iterations: 20,
+                    qualificationProfile: qualificationProfile
+                ) {
                     completedIterations = $0
                 }
                 checks = report.checks
@@ -318,7 +334,7 @@ private enum RuntimeXPCIntegrationError: LocalizedError {
 }
 
 private struct RuntimeXPCIntegrationRunner {
-    static let checkIDs = [
+    private static let behavioralCheckIDs = [
         "statusRoundTrip",
         "nilBookmarkRejected",
         "invalidBookmarkRejected",
@@ -338,8 +354,15 @@ private struct RuntimeXPCIntegrationRunner {
         "clientTermination",
         "concurrentLoadUnload",
         "reconnect",
-        "resourceBound",
     ]
+
+    static func checkIDs(
+        for qualificationProfile: RuntimeXPCIntegrationQualificationProfile
+    ) -> [String] {
+        qualificationProfile.enforcesProductionResourceEnvelope
+            ? behavioralCheckIDs + ["resourceBound"]
+            : behavioralCheckIDs
+    }
 
     private static let markerName = ".supra-xpc-lifecycle-test-model"
     private static let markerData = Data("SUPRA-XPC-LIFECYCLE-V1\n".utf8)
@@ -351,6 +374,7 @@ private struct RuntimeXPCIntegrationRunner {
 
     func run(
         iterations: Int,
+        qualificationProfile: RuntimeXPCIntegrationQualificationProfile,
         progress: @MainActor (Int) -> Void
     ) async throws -> RuntimeXPCIntegrationReport {
         let fixture = try makeFixture()
@@ -359,7 +383,9 @@ private struct RuntimeXPCIntegrationRunner {
             try? FileManager.default.removeItem(at: fixture.base)
         }
 
-        var checks = Dictionary(uniqueKeysWithValues: Self.checkIDs.map { ($0, true) })
+        var checks = Dictionary(
+            uniqueKeysWithValues: Self.checkIDs(for: qualificationProfile).map { ($0, true) }
+        )
         let resourceProbe = RuntimeClient()
         try await resourceProbe.connect()
         let startingResidentMiB = try await resourceProbe.runtimeStatus().metrics?.peakMemoryMb
@@ -380,14 +406,23 @@ private struct RuntimeXPCIntegrationRunner {
         endingProbe.disconnect()
         try require(endingResidentMiB != nil, "XPC service did not report its final resident-memory peak")
         let residentGrowthMiB = max(0, endingResidentMiB! - startingResidentMiB!)
-        // The deterministic fixture contains no weights. Repeated connection,
-        // cancellation, and stream state must stay comfortably below this bound.
-        checks["resourceBound"] = residentGrowthMiB <= 256
+        let resourceDetail: String
+        if qualificationProfile.enforcesProductionResourceEnvelope {
+            // The deterministic fixture contains no weights. Repeated connection,
+            // cancellation, and stream state must stay comfortably below this bound.
+            checks["resourceBound"] = residentGrowthMiB <= 256
+            resourceDetail = "production 256 MiB envelope evaluated"
+        } else {
+            // Sanitizer runtimes change allocation, quarantine, and resident-memory
+            // accounting. Preserve the observation, but leave production resource
+            // qualification to the ordinary signed hosted gate.
+            resourceDetail = "production 256 MiB envelope not evaluated under sanitizer instrumentation"
+        }
 
         return RuntimeXPCIntegrationReport(
             iterations: iterations,
             checks: checks,
-            detail: "\(iterations)/\(iterations) lifecycle iterations; XPC max-RSS growth \(residentGrowthMiB) MiB; public code-signing requirement active."
+            detail: "\(iterations)/\(iterations) lifecycle iterations; XPC max-RSS growth \(residentGrowthMiB) MiB; \(resourceDetail); public code-signing requirement active."
         )
     }
 
@@ -937,7 +972,6 @@ private struct RuntimeXPCIntegrationRunner {
             "clientTermination": true,
             "concurrentLoadUnload": true,
             "reconnect": true,
-            "resourceBound": true,
         ]
     }
 

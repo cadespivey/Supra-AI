@@ -13,7 +13,10 @@ struct RootView: View {
     var body: some View {
 #if DEBUG
         if let scenario = Self.runtimeXPCIntegrationScenario {
-            RuntimeXPCIntegrationView(scenario: scenario)
+            RuntimeXPCIntegrationView(
+                scenario: scenario,
+                qualificationProfile: Self.runtimeXPCIntegrationQualificationProfile
+            )
         } else {
             applicationRoot
         }
@@ -95,6 +98,18 @@ struct RootView: View {
             return nil
         }
         return arguments[marker + 1]
+    }
+
+    private static var runtimeXPCIntegrationQualificationProfile: RuntimeXPCIntegrationQualificationProfile {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let marker = arguments.firstIndex(of: "-runtimeXPCQualificationProfile"),
+              arguments.indices.contains(marker + 1),
+              let profile = RuntimeXPCIntegrationQualificationProfile(
+                rawValue: arguments[marker + 1]
+              ) else {
+            return .productionEnvelope
+        }
+        return profile
     }
 #endif
 

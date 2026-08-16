@@ -5,12 +5,32 @@ import XCTest
 /// compact, accessibility-readable result to this out-of-process UI test.
 @MainActor
 final class RuntimeXPCIntegrationTests: XCTestCase {
+    private enum QualificationProfile: String {
+        case productionEnvelope = "production-envelope"
+        case sanitizerInstrumentation = "sanitizer-instrumentation"
+
+        var checksProductionResourceEnvelope: Bool {
+            self == .productionEnvelope
+        }
+    }
+
     override func setUp() {
         continueAfterFailure = false
     }
 
     func testHostedBoundaryLifecycle() {
-        let app = launchIntegrationApp(scenario: "lifecycle")
+        assertHostedBoundaryLifecycle(profile: .productionEnvelope)
+    }
+
+    func testSanitizedHostedBoundaryLifecycle() {
+        assertHostedBoundaryLifecycle(profile: .sanitizerInstrumentation)
+    }
+
+    private func assertHostedBoundaryLifecycle(profile: QualificationProfile) {
+        let app = launchIntegrationApp(
+            scenario: "lifecycle",
+            qualificationProfile: profile
+        )
 
         let result = app.staticTexts["runtimeXPCIntegration.result"]
         XCTAssertTrue(
@@ -24,7 +44,7 @@ final class RuntimeXPCIntegrationTests: XCTestCase {
         )
         XCTAssertEqual(app.staticTexts["runtimeXPCIntegration.iterations"].value as? String, "20/20")
 
-        for checkID in [
+        var checkIDs = [
             "statusRoundTrip",
             "nilBookmarkRejected",
             "invalidBookmarkRejected",
@@ -48,11 +68,30 @@ final class RuntimeXPCIntegrationTests: XCTestCase {
             "clientTermination",
             "concurrentLoadUnload",
             "reconnect",
-            "resourceBound",
-        ] {
+        ]
+        if profile.checksProductionResourceEnvelope {
+            checkIDs.append("resourceBound")
+        }
+
+        for checkID in checkIDs {
             let check = app.staticTexts["runtimeXPCIntegration.check.\(checkID)"]
             XCTAssertTrue(check.exists, "Missing lifecycle assertion \(checkID).")
             XCTAssertEqual(check.value as? String, "PASS", "Lifecycle assertion failed: \(checkID).")
+        }
+
+        let detail = app.staticTexts["runtimeXPCIntegration.detail"].value as? String ?? ""
+        if profile.checksProductionResourceEnvelope {
+            XCTAssertTrue(detail.contains("production 256 MiB envelope evaluated"))
+        } else {
+            XCTAssertTrue(
+                detail.contains(
+                    "production 256 MiB envelope not evaluated under sanitizer instrumentation"
+                )
+            )
+            XCTAssertFalse(
+                app.staticTexts["runtimeXPCIntegration.check.resourceBound"].exists,
+                "instrumented RSS must not be presented as production-envelope evidence"
+            )
         }
     }
 
@@ -126,12 +165,16 @@ final class RuntimeXPCIntegrationTests: XCTestCase {
         return parsed ?? Int.max
     }
 
-    private func launchIntegrationApp(scenario: String) -> XCUIApplication {
+    private func launchIntegrationApp(
+        scenario: String,
+        qualificationProfile: QualificationProfile = .productionEnvelope
+    ) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments += [
             "-ApplePersistenceIgnoreState", "YES",
             "-runtimeXPCIntegrationMode", "YES",
             "-runtimeXPCScenario", scenario,
+            "-runtimeXPCQualificationProfile", qualificationProfile.rawValue,
             "-uiTestEnsureFreshWindow", "YES",
         ]
         app.launch()
