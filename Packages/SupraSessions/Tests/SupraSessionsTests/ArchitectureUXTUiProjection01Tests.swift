@@ -273,6 +273,54 @@ final class ArchitectureUXTUiProjection01Tests: XCTestCase {
         XCTAssertTrue(detail.contains("contentMarkdown: nil"))
     }
 
+    func testResearchApprovalAndAuthorityScopeStayLiteralAndActionable() throws {
+        let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent() // SupraSessionsTests
+            .deletingLastPathComponent() // Tests
+            .deletingLastPathComponent() // SupraSessions
+            .deletingLastPathComponent() // Packages
+            .deletingLastPathComponent() // repository
+        func source(_ relativePath: String) throws -> String {
+            try String(
+                contentsOf: repositoryRoot.appendingPathComponent(relativePath),
+                encoding: .utf8
+            )
+        }
+
+        let researchDetail = try source(
+            "Apps/SupraAI/SupraAI/Research/ResearchSessionDetailView.swift"
+        )
+        let researchList = try source(
+            "Apps/SupraAI/SupraAI/Research/MatterResearchView.swift"
+        )
+        let workspace = try source(
+            "Apps/SupraAI/SupraAI/Matters/MatterWorkspaceView.swift"
+        )
+        let authorityDetail = try source(
+            "Apps/SupraAI/SupraAI/Authorities/AuthorityDetailView.swift"
+        )
+
+        XCTAssertTrue(researchDetail.contains(
+            "Text(controller.isRunning ? \"Searching CourtListener…\" : \"Search CourtListener\")"
+        ))
+        XCTAssertTrue(researchDetail.contains(
+            "The approved queries shown below stay on this Mac until you choose Search CourtListener. That action sends them to CourtListener."
+        ))
+        XCTAssertTrue(researchDetail.contains("if controller.requiresCourtSelection"))
+        XCTAssertTrue(researchDetail.contains("Button(\"Choose Court\", action: onChooseCourt)"))
+        XCTAssertTrue(researchDetail.contains(
+            ".accessibilityIdentifier(\"research.chooseCourt\")"
+        ))
+        XCTAssertTrue(researchList.contains("onChooseCourt: onChooseCourt"))
+        XCTAssertTrue(workspace.contains("onChooseCourt: { showEditor = true }"))
+
+        XCTAssertTrue(authorityDetail.contains("Section(\"Motion to dismiss support\")"))
+        XCTAssertTrue(authorityDetail.contains(
+            "Optional: record an exact supporting excerpt only when you intend to use this authority for a failure-to-state-a-claim motion."
+        ))
+        XCTAssertFalse(authorityDetail.contains("Section(\"Reviewed proposition\")"))
+    }
+
     private func makeDocumentFixture() throws -> (
         store: SupraStore,
         queue: DocumentProcessingQueue,

@@ -189,6 +189,10 @@ final class ArchitectureUXTDataIdentityResearchEnforcementTests: XCTestCase {
         )
         let message = try XCTUnwrap(controller.runMessage)
         XCTAssertTrue(message.localizedCaseInsensitiveContains("choose court"))
+        XCTAssertTrue(
+            controller.requiresCourtSelection,
+            "the UI needs a typed recovery state to open the exact Matter editor"
+        )
         XCTAssertFalse(message.contains(ArchitectureUXIdentityEnforcementWire.recognizableLegacyCourt))
         XCTAssertFalse(message.contains(ArchitectureUXIdentityEnforcementWire.forbiddenDefault))
     }
