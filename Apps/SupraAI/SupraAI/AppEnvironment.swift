@@ -162,6 +162,40 @@ private enum CanonicalReadinessSeed {
     static let demoCoverageName = "Insurance Coverage Letter.docx"
 }
 
+/// Demo mode advertises one intentionally synthetic, already-verified embedding
+/// model so the hermetic sample store never depends on a downloaded model. New
+/// demo imports still need to cross the same semantic-readiness boundary as the
+/// prebuilt sample documents, so this embedder supplies deterministic vectors for
+/// that exact synthetic model identity. App composition selects it only while
+/// `-demoMode` is active and only for `CanonicalReadinessSeed.embeddingModelID`.
+private struct CanonicalReadinessDemoEmbedder: TextEmbedder {
+    let modelID = CanonicalReadinessSeed.embeddingModelID
+    let modelRepoID = CanonicalReadinessSeed.embeddingModelRepoID
+    let modelDisplayName = CanonicalReadinessSeed.embeddingModelDisplayName
+    let modelRevision: String? = CanonicalReadinessSeed.embeddingModelRevision
+    let dimension = CanonicalReadinessSeed.embeddingDimension
+
+    func embed(_ texts: [String]) async throws -> [[Float]] {
+        texts.map { text in
+            var vector = [Float](repeating: 0, count: dimension)
+            for token in text.lowercased().components(
+                separatedBy: CharacterSet.alphanumerics.inverted
+            ) where token.count >= 2 {
+                vector[Self.bucket(token, dimension: dimension)] += 1
+            }
+            return vector
+        }
+    }
+
+    private static func bucket(_ token: String, dimension: Int) -> Int {
+        var hash: UInt64 = 1_469_598_103_934_665_603
+        for byte in token.utf8 {
+            hash = (hash ^ UInt64(byte)) &* 1_099_511_628_211
+        }
+        return Int(hash % UInt64(dimension))
+    }
+}
+
 private enum CanonicalReadinessSeedError: Error, LocalizedError {
     case selectedEmbeddingModelUnavailable
     case receiptNotReady(documentID: String, exclusions: [DocumentReadinessExclusionReason])
@@ -627,26 +661,27 @@ final class AppEnvironment: ObservableObject {
             )
         }
         let importService = DocumentImportService(store: store)
+        let makeDocumentTextEmbedder: @Sendable () -> (any TextEmbedder)? = {
+            guard let model = try? store.documentSettings.fetchSelectedEmbeddingModel() else {
+                return nil
+            }
+            if Self.isDemoMode, model.id == CanonicalReadinessSeed.embeddingModelID {
+                return CanonicalReadinessDemoEmbedder()
+            }
+            return RuntimeTextEmbedder(model: model, runtimeClient: modelExecutionCoordinator)
+        }
         self.quickAttachmentMatterHandoff = QuickAttachmentMatterHandoff(
             store: store,
             importService: importService,
             makeIndexingService: {
-                let model = try? store.documentSettings.fetchSelectedEmbeddingModel()
-                let embedder = model.flatMap {
-                    RuntimeTextEmbedder(model: $0, runtimeClient: modelExecutionCoordinator)
-                }
-                return DocumentIndexingService(store: store, embedder: embedder)
+                DocumentIndexingService(store: store, embedder: makeDocumentTextEmbedder())
             }
         )
         self.publicRecordsMatterHandoff = PublicRecordMatterHandoff(
             store: store,
             importService: importService,
             makeIndexingService: {
-                let model = try? store.documentSettings.fetchSelectedEmbeddingModel()
-                let embedder = model.flatMap {
-                    RuntimeTextEmbedder(model: $0, runtimeClient: modelExecutionCoordinator)
-                }
-                return DocumentIndexingService(store: store, embedder: embedder)
+                DocumentIndexingService(store: store, embedder: makeDocumentTextEmbedder())
             }
         )
         let queue = DocumentProcessingQueue(
@@ -655,11 +690,7 @@ final class AppEnvironment: ObservableObject {
             makeIndexingService: {
                 // Build a fresh indexing service per job using the currently
                 // selected embedding model (if any).
-                let model = try? store.documentSettings.fetchSelectedEmbeddingModel()
-                let embedder = model.flatMap {
-                    RuntimeTextEmbedder(model: $0, runtimeClient: modelExecutionCoordinator)
-                }
-                return DocumentIndexingService(store: store, embedder: embedder)
+                DocumentIndexingService(store: store, embedder: makeDocumentTextEmbedder())
             },
             // Suggests a taxonomy category for each imported document using the
             // assigned task model. Hermetic UI-test launches disable the service:
@@ -1445,7 +1476,7 @@ final class AppEnvironment: ObservableObject {
     /// tests, seeded with entirely FICTITIOUS demo data (fictional parties, clients,
     /// and documents; only the case law is real) for marketing screenshots. Never
     /// touches the user's real database.
-    static var isDemoMode: Bool {
+    nonisolated static var isDemoMode: Bool {
 #if DEBUG
         ProcessInfo.processInfo.arguments.contains("-demoMode")
 #else
