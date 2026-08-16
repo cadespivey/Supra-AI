@@ -37,16 +37,33 @@ mutate_fixture() {
 path, mode = ARGV
 data = YAML.safe_load(File.read(path), permitted_classes: [], permitted_symbols: [], aliases: false)
 approval = data.fetch("approval")
-approval["status"] = "approved"
-approval["approved_by"] = "synthetic-owner"
-approval["approved_at"] = "owner-approved-2026-08-15"
-if %w[satisfied-gates fully-approved].include?(mode)
-  acceptance = data.fetch("owner_acceptance")
+acceptance = data.fetch("owner_acceptance")
+rows = data.fetch("findings") + data.fetch("work_packages")
+if mode == "pending-approval"
+  approval["status"] = "pending_owner_approval"
+  approval["approved_by"] = nil
+  approval["approved_at"] = nil
+  acceptance["status"] = "pending"
+  acceptance.fetch("gates").first["status"] = "pending_owner_walkthrough"
+  rows.find { |row| row["id"] == "P-01" }["closure"] = "implementation_green_owner_gate_pending"
+else
+  approval["status"] = "approved"
+  approval["approved_by"] = "synthetic-owner"
+  approval["approved_at"] = "owner-approved-2026-08-15"
+end
+if mode == "pending-gates"
+  acceptance["status"] = "pending"
+  acceptance.fetch("gates").first["status"] = "pending_owner_walkthrough"
+end
+if %w[pending-closures fully-approved].include?(mode)
   acceptance["status"] = "satisfied"
   acceptance.fetch("gates").each { |gate| gate["status"] = "satisfied" }
 end
+if mode == "pending-closures"
+  rows.find { |row| row["id"] == "P-01" }["closure"] = "implementation_green_owner_gate_pending"
+end
 if mode == "fully-approved"
-  (data.fetch("findings") + data.fetch("work_packages")).each do |row|
+  rows.each do |row|
     row["closure"] = case row["closure"]
     when "implementation_green_owner_gate_pending"
       "implementation_green"
@@ -62,12 +79,18 @@ RUBY
 }
 
 if ! run_fixture "$repo_root" >/dev/null; then
-  fail 'pending repository ledger did not pass structural verification'
+  fail 'approved repository ledger did not pass structural verification'
 fi
+if ! run_fixture "$repo_root" --require-owner-approval >/dev/null; then
+  fail 'approved repository ledger did not pass the release-only owner gate'
+fi
+
+make_fixture pending-owner
+mutate_fixture pending-approval
 pending_output="${scratch}/pending-owner.log"
-if run_fixture "$repo_root" --require-owner-approval >"$pending_output" 2>&1 \
+if run_fixture "$FIXTURE_ROOT" --require-owner-approval >"$pending_output" 2>&1 \
     || ! grep -Fq 'release scope lacks repository-owner approval' "$pending_output"; then
-  fail 'pending repository ledger did not fail the release-only owner gate'
+  fail 'synthetic pending ledger did not fail the release-only owner gate'
 fi
 
 make_fixture pending-gates
@@ -79,7 +102,7 @@ if run_fixture "$FIXTURE_ROOT" --require-owner-approval >"$pending_gates_output"
 fi
 
 make_fixture pending-closures
-mutate_fixture satisfied-gates
+mutate_fixture pending-closures
 pending_closures_output="${scratch}/pending-closures.log"
 if run_fixture "$FIXTURE_ROOT" --require-owner-approval >"$pending_closures_output" 2>&1 \
     || ! grep -Fq 'approved scope retains owner-pending closures' "$pending_closures_output"; then
