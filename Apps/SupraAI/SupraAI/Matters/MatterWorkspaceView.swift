@@ -91,7 +91,7 @@ struct MatterWorkspaceView: View {
                 .frame(minWidth: 480, minHeight: 360)
             }
         }
-        .sheet(isPresented: $showDraftSheet) {
+        .sheet(isPresented: $showDraftSheet, onDismiss: finishDraftHandoff) {
             if let drafting = controller.draftingController {
                 MatterDraftingView(
                     controller: drafting,
@@ -108,18 +108,6 @@ struct MatterWorkspaceView: View {
                     }
                 )
             }
-        }
-        .onChange(of: showDraftSheet) { _, isPresented in
-            guard !isPresented else { return }
-            if pendingDraftToMatterEditor {
-                pendingDraftToMatterEditor = false
-                showEditor = true
-                return
-            }
-            guard pendingDraftToSavedWorkHandoff else { return }
-            pendingDraftToSavedWorkHandoff = false
-            tab = .outputs
-            showNewSavedWork = true
         }
         .onAppear { applyReturnContext() }
         .onChange(of: returnContext) { _, _ in applyReturnContext() }
@@ -166,6 +154,28 @@ struct MatterWorkspaceView: View {
         case .draftMotion: showDraftSheet = true
         }
         onReturnContextConsumed(context)
+    }
+
+    /// Runs only after SwiftUI has completed dismissing the Draft sheet. Using
+    /// the sheet boundary prevents a state-observation race from dropping the
+    /// exact corrective/editor destination while the old sheet is still active.
+    private func finishDraftHandoff() {
+        if pendingDraftToMatterEditor {
+            pendingDraftToMatterEditor = false
+            showEditor = true
+            return
+        }
+        guard pendingDraftToSavedWorkHandoff else { return }
+        pendingDraftToSavedWorkHandoff = false
+        tab = .outputs
+        Task { @MainActor in
+            // Let the Saved Work tab mount before asking its sheet modifier to
+            // present the editor. Setting both in one render transaction can
+            // drop the presentation because the destination view does not exist
+            // yet.
+            await Task.yield()
+            showNewSavedWork = true
+        }
     }
 
     private var header: some View {
