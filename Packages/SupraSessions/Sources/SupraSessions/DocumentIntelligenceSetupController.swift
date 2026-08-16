@@ -22,7 +22,7 @@ public final class DocumentIntelligenceSetupController: ObservableObject {
     @Published public private(set) var notificationStatus: DocumentNotificationAuthorizationStatus = .unknown
     @Published public private(set) var embeddingTestPassed = false
     /// True only while an embedding model is being auto-verified (loaded into the
-    /// runtime to confirm it works). Distinct from `isBusy` so the Models-tab verify
+    /// runtime to confirm it works). Distinct from `isBusy` so the AI Setup verify
     /// spinner doesn't couple to the broader Settings refresh state.
     @Published public private(set) var embeddingVerifyInFlight = false
     @Published public private(set) var isBusy = false
@@ -98,7 +98,7 @@ public final class DocumentIntelligenceSetupController: ObservableObject {
     /// Human-readable list of required steps still outstanding, for the setup UI.
     public var requiredOutstandingSteps: [String] {
         var steps: [String] = []
-        if !chatModelReady { steps.append("Load a runtime text model in the Models tab.") }
+        if !chatModelReady { steps.append("Load a runtime text model in AI Setup.") }
         if selectedEmbeddingModel == nil { steps.append("Download and select an embedding model.") }
         else if !embeddingTestPassed {
             steps.append(embeddingVerifyInFlight

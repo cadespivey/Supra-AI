@@ -231,9 +231,9 @@ public final class DocumentChronologyController: ObservableObject {
         let effectiveRoute = route ?? ModelRouter().route(forStructuredOutput: format.outputType)
         guard let modelID else {
             message = if let effectiveRoute {
-                "Assign a \(effectiveRoute.role.displayName) model in the Models tab to build a chronology."
+                "Assign a \(effectiveRoute.role.displayName) model in AI Setup to build a chronology."
             } else {
-                "Assign a task model in the Models tab to build a chronology."
+                "Assign a task model in AI Setup to build a chronology."
             }
             return nil
         }

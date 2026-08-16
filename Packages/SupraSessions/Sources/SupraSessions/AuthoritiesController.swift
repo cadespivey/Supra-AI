@@ -318,7 +318,7 @@ public final class AuthoritiesController: ObservableObject {
         )
         guard let raw = try? await modelExecutionGateway.collectGeneratedText(request),
               case let .answer(answer) = ReasoningContent.resolve(rawOutput: raw, thinkingEnabled: false) else {
-            return "The model didn't return a summary. Check that a model is loaded in the Models tab."
+            return "The model didn't return a summary. Check that a model is loaded in AI Setup."
         }
         let summary = Self.cappedSummary(answer)
         guard !summary.isEmpty else { return "The model returned an empty summary." }

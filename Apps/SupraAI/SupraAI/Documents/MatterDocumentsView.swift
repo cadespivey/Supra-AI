@@ -1519,7 +1519,7 @@ struct DocumentQASheet: View {
                     .foregroundStyle(.secondary)
                     .accessibilityIdentifier("documentQA.routeStatus")
             } else {
-                Text("Assign a \(route.role.displayName) model in Models to ask documents.")
+                Text("Assign a \(route.role.displayName) model in AI Setup to ask documents.")
                     .font(.supraCaption)
                     .foregroundStyle(.orange)
                     .accessibilityIdentifier("documentQA.routeStatus")
@@ -1528,7 +1528,7 @@ struct DocumentQASheet: View {
     }
 
     private var generateAccessibilityHint: String {
-        if routeModel == nil { return "Assign the routed model in Models first" }
+        if routeModel == nil { return "Assign the routed model in AI Setup first" }
         if questionIsEmpty { return "Enter a question first" }
         if sourceMode == .auto {
             guard let readiness = autoReadiness else {
@@ -1749,7 +1749,7 @@ struct DocumentChronologySheet: View {
                     .font(.supraCaption)
                     .foregroundStyle(.secondary)
             } else {
-                Text("Assign a \(route.role.displayName) model in Models to build a chronology.")
+                Text("Assign a \(route.role.displayName) model in AI Setup to build a chronology.")
                     .font(.supraCaption)
                     .foregroundStyle(.orange)
             }

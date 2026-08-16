@@ -323,7 +323,7 @@ public final class ResearchSessionController: ObservableObject {
                 addQuery()
             }
             planState = .incomplete(
-                "Assign a \(effectiveRoute.role.displayName) model in the Models tab to generate queries, or add them manually."
+                "Assign a \(effectiveRoute.role.displayName) model in AI Setup to generate queries, or add them manually."
             )
             return
         }

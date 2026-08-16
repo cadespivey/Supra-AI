@@ -109,7 +109,7 @@ public final class ModelLibrary: ObservableObject {
     @Published public private(set) var loadState: LoadState = .idle
     @Published public private(set) var roleAssignments: ModelRoleAssignments
     /// A user-pinned model that overrides per-route Autoselect for chat generation.
-    /// `nil` means Autoselect — resolve each request via the Models-tab role
+    /// `nil` means Autoselect — resolve each request via the AI Setup role
     /// preference. App-wide and persisted across launches.
     @Published public private(set) var forcedModelID: ModelID?
     /// Stable hardware snapshot used for fit presentation during this library's
@@ -609,7 +609,7 @@ public final class ModelLibrary: ObservableObject {
         hasPersistedRoleAssignments = true
         persistRoleAssignments()
         // Auto-load the just-assigned model so the user doesn't have to make a second
-        // trip to the Models tab to press "Load". We only auto-load when the runtime
+        // trip to AI Setup to press "Load". We only auto-load when the runtime
         // is idle or failed (never interrupt an in-flight load, and never silently
         // swap a model out from under an active generation): the common case is a
         // first-run user picking their model in Settings and expecting it to be ready.
@@ -724,7 +724,7 @@ public final class ModelLibrary: ObservableObject {
         ManagedModelStorage.isManaged(path: model.path, roots: managedModelRoots)
     }
 
-    /// Waits out a load another caller already started (a prewarm, the Models tab,
+    /// Waits out a load another caller already started (a prewarm, AI Setup,
     /// a concurrent feature) instead of failing because the runtime is busy. Every
     /// generation surface funnels through the ensure functions, and the user's
     /// expectation is "clicking Generate loads what it needs" — so an in-flight
@@ -760,7 +760,7 @@ public final class ModelLibrary: ObservableObject {
     ) async -> Bool {
         guard let status = try? await runtimeGateway.runtimeStatus() else { return false }
         if status.loadedModelID?.rawValue == uuid { return true }
-        // The cache lied — resynchronize it so status surfaces (Models tab, chat
+        // The cache lied — resynchronize it so status surfaces (AI Setup, chat
         // footer) stop reporting a model the runtime does not hold.
         if case .loaded = loadState { loadState = .idle }
         return false
@@ -996,14 +996,14 @@ public final class ModelLibrary: ObservableObject {
             scopedAccess = access
 
             guard access.hasAccess else {
-                loadState = .failed(message: "Could not access the model folder. Re-add it from the Models tab.")
+                loadState = .failed(message: "Could not access the model folder. Re-add it from AI Setup.")
                 return
             }
             // Staleness reported to the original app signer is authoritative,
             // unlike the signer-induced stale bit seen only in the XPC service.
             // Never silently reauthorize a replacement at the same path.
             guard !access.isStale else {
-                loadState = .failed(message: "The model folder moved or changed. Re-add it from the Models tab.")
+                loadState = .failed(message: "The model folder moved or changed. Re-add it from AI Setup.")
                 return
             }
             guard let authorization = access.makeTransferableAuthorization() else {
@@ -1017,7 +1017,7 @@ public final class ModelLibrary: ObservableObject {
             ManagedModelStorage.isManaged(path: record.path, roots: [$0])
         }) {
             // Managed installs already carry a revision-pinned manifest. Build
-            // the ordinary Models-tab request through the same byte-verified
+            // the ordinary AI Setup request through the same byte-verified
             // authorization used by protected loads; a managed model never
             // falls back to UUID/path-only runtime authority.
             let modelDirectory = URL(fileURLWithPath: record.path, isDirectory: true)

@@ -1160,7 +1160,7 @@ public final class GlobalChatController: ObservableObject {
             }
 
             guard let modelID = resolvedModelID else {
-                errorMessage = "Load or register a local MLX model in the Models tab."
+                errorMessage = "Load or register a local MLX model in AI Setup."
                 return
             }
 
@@ -1806,7 +1806,7 @@ public final class GlobalChatController: ObservableObject {
             }
             guard let modelID else {
                 return LegalWorkflowResult(
-                    output: "Load or register a local MLX model in the Models tab before running `/critique`.",
+                    output: "Load or register a local MLX model in AI Setup before running `/critique`.",
                     queryTerms: [],
                     authorities: [],
                     verification: nil,
@@ -1839,7 +1839,7 @@ public final class GlobalChatController: ObservableObject {
         case .drafting, .generalQA:
             guard let modelID else {
                 return LegalWorkflowResult(
-                    output: "Load or register a local MLX model in the Models tab.",
+                    output: "Load or register a local MLX model in AI Setup.",
                     queryTerms: [],
                     authorities: [],
                     verification: nil,
@@ -1973,7 +1973,7 @@ public final class GlobalChatController: ObservableObject {
         }
 
         guard let modelID else {
-            let message = "Load or register a local MLX model in the Models tab before running source-grounded legal research."
+            let message = "Load or register a local MLX model in AI Setup before running source-grounded legal research."
             return LegalWorkflowResult(output: message, queryTerms: [], authorities: [], verification: nil, researchSessionID: nil)
         }
 

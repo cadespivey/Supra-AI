@@ -1165,7 +1165,7 @@ struct GlobalChatsView: View {
         JurisdictionCatalog.shared.option(id: controller.jurisdictionOverrideID)?.system == .state
     }
 
-    /// The model readout doubles as a picker: Autoselect (per-route Models-tab
+    /// The model readout doubles as a picker: Autoselect (per-route AI Setup
     /// preference) by default, or force a specific model for every request. The choice
     /// is app-wide and shared by all chats; "Autoselect" is shown when nothing is pinned.
     /// Pins (or clears) the chat model and immediately warms the new choice, so the
@@ -1181,7 +1181,7 @@ struct GlobalChatsView: View {
                 forceModel(nil)
             } label: {
                 Label(
-                    "Autoselect (Models preferences)",
+                    "Autoselect (AI Setup preferences)",
                     systemImage: library.forcedModelID == nil ? "checkmark" : "wand.and.stars"
                 )
             }
@@ -1210,8 +1210,8 @@ struct GlobalChatsView: View {
         .menuIndicator(library.models.isEmpty ? .hidden : .visible)
         .fixedSize()
         .help(library.forcedModelID == nil
-            ? "Autoselect picks the model from your Models-tab preference for each request. Choose a model to force it for every request."
-            : "Forcing a specific model for every request. Choose Autoselect to return to your Models-tab preferences.")
+            ? "Autoselect picks the model from your AI Setup preference for each request. Choose a model to force it for every request."
+            : "Forcing a specific model for every request. Choose Autoselect to return to your AI Setup preferences.")
     }
 
     /// The selector's caption: the pinned model's name when forced, otherwise an

@@ -321,9 +321,9 @@ public final class DocumentQAController: ObservableObject {
         let effectiveRoute = route ?? ModelRouter().route(forStructuredOutput: mode.outputType)
         guard let modelID else {
             message = if let effectiveRoute {
-                "Assign a \(effectiveRoute.role.displayName) model in the Models tab to ask questions."
+                "Assign a \(effectiveRoute.role.displayName) model in AI Setup to ask questions."
             } else {
-                "Assign a task model in the Models tab to ask questions."
+                "Assign a task model in AI Setup to ask questions."
             }
             return nil
         }
@@ -790,9 +790,9 @@ public final class DocumentQAController: ObservableObject {
         let effectiveRoute = route ?? ModelRouter().route(forStructuredOutput: mode.outputType)
         guard let modelID else {
             message = if let effectiveRoute {
-                "Assign a \(effectiveRoute.role.displayName) model in the Models tab to regenerate."
+                "Assign a \(effectiveRoute.role.displayName) model in AI Setup to regenerate."
             } else {
-                "Assign a task model in the Models tab to regenerate."
+                "Assign a task model in AI Setup to regenerate."
             }
             return nil
         }

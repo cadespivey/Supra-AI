@@ -191,7 +191,7 @@ struct ResearchPlannerView: View {
                 } footer: {
                     Text(hasModel
                         ? "Generate + Save queries the assigned model proposes and returns you to Research to run later. Generate + Run runs them immediately and opens the results, where you can edit and re-run any query. No network request is made until a plan runs."
-                        : "No legal-research model is assigned — add queries manually below, or assign one in Models to have them generated for you.")
+                        : "No legal-research model is assigned — add queries manually below, or assign one in AI Setup to have them generated for you.")
                 }
 
                 if showsQuerySection {
@@ -406,7 +406,7 @@ struct ResearchPlannerView: View {
                 .font(.supraCaption)
                 .foregroundStyle(.secondary)
         } else {
-            Text("Assign a \(route.role.displayName) model in Models to generate a search plan, or add queries manually.")
+            Text("Assign a \(route.role.displayName) model in AI Setup to generate a search plan, or add queries manually.")
                 .font(.supraCaption)
                 .foregroundStyle(.orange)
         }

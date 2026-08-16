@@ -724,7 +724,7 @@ struct MatterDraftingView: View {
             Text("Uses \(draftRoute.role.displayName): \(routeModel.displayName)")
                 .font(.supraCaption).foregroundStyle(.secondary)
         } else {
-            Text("Assign a \(draftRoute.role.displayName) model in Models to generate a letter.")
+            Text("Assign a \(draftRoute.role.displayName) model in AI Setup to generate a letter.")
                 .font(.supraCaption).foregroundStyle(.orange)
         }
     }
@@ -922,7 +922,7 @@ struct MatterDraftingView: View {
             return currentMotionReadiness.blockingReasons.first
         case .kind(.letterDemand):
             return routeModel == nil
-                ? "Assign a drafting model in Models, then fill the recipient and claim."
+                ? "Assign a drafting model in AI Setup, then fill the recipient and claim."
                 : "Fill the recipient address and the claim."
         case .custom:
             return "Describe the work product to enable Generate."

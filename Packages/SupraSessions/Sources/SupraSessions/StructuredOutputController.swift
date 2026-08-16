@@ -539,7 +539,7 @@ public final class StructuredOutputController: ObservableObject {
         guard let modelID else {
             let result = Self.failedWorkProductResult(
                 request: request,
-                message: "Assign a task model in the Models tab before creating this work product."
+                message: "Assign a task model in AI Setup before creating this work product."
             )
             retainedWorkProductRequest = request
             message = result.failure?.userMessage
@@ -817,9 +817,9 @@ public final class StructuredOutputController: ObservableObject {
         }
         guard let modelID else {
             message = if let effectiveRoute {
-                "Assign a \(effectiveRoute.role.displayName) model in the Models tab to generate \(contract.title)."
+                "Assign a \(effectiveRoute.role.displayName) model in AI Setup to generate \(contract.title)."
             } else {
-                "Assign a task model in the Models tab to generate structured outputs."
+                "Assign a task model in AI Setup to generate structured outputs."
             }
             return false
         }
@@ -1088,9 +1088,9 @@ public final class StructuredOutputController: ObservableObject {
         }
         guard let modelID else {
             message = if let effectiveRoute {
-                "Assign a \(effectiveRoute.role.displayName) model in the Models tab to repair \(record.title)."
+                "Assign a \(effectiveRoute.role.displayName) model in AI Setup to repair \(record.title)."
             } else {
-                "Assign a task model in the Models tab to repair outputs."
+                "Assign a task model in AI Setup to repair outputs."
             }
             return false
         }
