@@ -507,8 +507,11 @@ final class ArchitectureUXTUiProjection01Tests: XCTestCase {
 
         XCTAssertTrue(detail.contains("Button(\"Edit & Check Sources\")"))
         XCTAssertTrue(detail.contains("controller.saveEditedVersion("))
+        XCTAssertTrue(detail.contains("baseVersionID: draft.versionID"))
         XCTAssertTrue(detail.contains(".accessibilityIdentifier(\"output.editAndCheckSources\")"))
         XCTAssertTrue(detail.contains("Saving creates a new immutable version"))
+        XCTAssertTrue(detail.contains("performExport(format: format, versionID: selected.id)"))
+        XCTAssertTrue(detail.contains("versionID: versionID"))
     }
 
     private func makeDocumentFixture() throws -> (

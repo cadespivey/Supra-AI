@@ -76,25 +76,59 @@ final class ExistingUserRevalidationTests: XCTestCase {
             assuranceState: .propositionSupported,
             outputStatus: .complete
         )
+        let blockedActive = try store.structuredOutputs.createVersion(
+            structuredOutputID: output.id,
+            contentMarkdown: "Unsupported active successor.",
+            requiredSections: [],
+            presentSections: [],
+            missingSections: [],
+            parentVersionID: original.id,
+            repairReason: "synthetic_review_required_successor",
+            verificationStatus: .legacyUnverified,
+            assuranceState: .supportNeedsReview,
+            outputStatus: .needsReview
+        )
+        var exportedVersionID: String?
         let controller = StructuredOutputController(
             store: store,
             runtimeClient: StubRuntimeClient { request in
                 .events([.event(request, 1, .generationCompleted)])
             },
-            matterID: matter.id
+            matterID: matter.id,
+            exportAction: { _, versionID, _ in
+                exportedVersionID = versionID
+                return FileManager.default.temporaryDirectory
+                    .appendingPathComponent("synthetic-selected-version.md")
+            }
         )
         let editedText = "Payment was due March 3, 2025 [S1].\n"
 
+        let export = controller.attemptExportOutput(
+            outputID: output.id,
+            versionID: original.id,
+            format: .markdown
+        )
+        XCTAssertTrue(export.didCommit)
+        XCTAssertEqual(exportedVersionID, original.id)
+
         XCTAssertTrue(
-            controller.saveEditedVersion(outputID: output.id, contentMarkdown: editedText),
+            controller.saveEditedVersion(
+                outputID: output.id,
+                baseVersionID: original.id,
+                contentMarkdown: editedText
+            ),
             controller.message ?? ""
         )
 
         let versions = try store.structuredOutputs.fetchVersions(
             structuredOutputID: output.id
         )
-        XCTAssertEqual(versions.count, 2)
+        XCTAssertEqual(versions.count, 3)
         XCTAssertEqual(versions.first { $0.id == original.id }?.contentMarkdown, originalText)
+        XCTAssertEqual(
+            versions.first { $0.id == blockedActive.id }?.contentMarkdown,
+            "Unsupported active successor."
+        )
         let refreshedOutput = try XCTUnwrap(
             try store.structuredOutputs.fetchOutputs(matterID: matter.id).first
         )
