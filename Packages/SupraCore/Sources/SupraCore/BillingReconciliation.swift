@@ -102,7 +102,11 @@ public enum BillingReconciliationEngine {
                 flags.append("Line \(index + 1): low confidence — confirm")
             }
             if line.lawFirmMatterID == nil && line.clientID == nil {
-                flags.append("Line \(index + 1): no matter assigned")
+                if line.matterDisplay == nil {
+                    flags.append("Line \(index + 1): no matter assigned")
+                } else {
+                    flags.append("Line \(index + 1): linked matter is missing billing IDs")
+                }
             }
         }
 

@@ -49,16 +49,19 @@ final class ScratchPadBillingExportTests: XCTestCase {
         XCTAssertEqual(hessington.amount, 360, accuracy: 0.001)
     }
 
-    func testReconcileFlagsNonMultipleLowConfidenceAndUnassigned() {
+    func testReconcileDistinguishesMissingBillingIDsFromUnassignedMatter() {
         let lines = [
             BillingLine(lawFirmMatterID: "12044-0007", narrative: "odd", hours: 0.15, workDate: "2026-06-22", confidence: .high),
             BillingLine(lawFirmMatterID: "12044-0007", narrative: "guess", hours: 0.3, workDate: "2026-06-22", confidence: .low),
+            BillingLine(matterDisplay: "Meridian Fabrication", narrative: "linked", hours: 0.2, workDate: "2026-06-22", confidence: .medium),
             BillingLine(narrative: "no matter", hours: 0.2, workDate: "2026-06-22", confidence: .medium)
         ]
         let result = BillingReconciliationEngine.reconcile(lines: lines, timekeeper: timekeeper, increment: 0.1)
         XCTAssertTrue(result.flags.contains { $0.contains("Line 1") && $0.contains("multiple") })
         XCTAssertTrue(result.flags.contains { $0.contains("Line 2") && $0.contains("low confidence") })
-        XCTAssertTrue(result.flags.contains { $0.contains("Line 3") && $0.contains("no matter") })
+        XCTAssertTrue(result.flags.contains { $0 == "Line 3: linked matter is missing billing IDs" })
+        XCTAssertTrue(result.flags.contains { $0 == "Line 4: no matter assigned" })
+        XCTAssertFalse(result.flags.contains { $0.contains("Line 3") && $0.contains("no matter assigned") })
     }
 
     func testLEDESStructureAndArithmetic() {

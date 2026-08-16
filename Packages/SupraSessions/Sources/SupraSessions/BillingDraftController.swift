@@ -166,7 +166,7 @@ public final class BillingDraftController: ObservableObject {
         } catch BillingDraftError.dayLocked {
             statusMessage = "This day is locked. Reopen it to regenerate the draft."
         } catch BillingDraftError.noModelAvailable {
-            statusMessage = "Load a model (Models tab) to generate a billing draft."
+            statusMessage = "Open AI Setup and load a Local Assistant model to generate a billing draft."
         } catch BillingDraftError.unparseable {
             statusMessage = "The model's output couldn't be parsed into entries — try again."
         } catch BillingDraftError.invalidEvidenceScope {

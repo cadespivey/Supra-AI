@@ -53,6 +53,25 @@ final class BillingDraftControllerTests: XCTestCase {
         XCTAssertEqual(controller.reconciliation?.totalAmount ?? 0, 765, accuracy: 0.001)
     }
 
+    func testNoModelRecoveryPointsToAISetup() async throws {
+        let (store, dayID) = try setUp()
+        let controller = BillingDraftController(
+            store: store,
+            service: BillingDraftService(store: store) { _, _ in
+                throw BillingDraftError.noModelAvailable
+            },
+            timekeeper: timekeeper
+        )
+        controller.bind(dayID: dayID)
+
+        await controller.generate(sensitivity: 0.6)
+
+        XCTAssertEqual(
+            controller.statusMessage,
+            "Open AI Setup and load a Local Assistant model to generate a billing draft."
+        )
+    }
+
     func testEditLineRecomputesAndMarksEdited() async throws {
         let (store, dayID) = try setUp()
         let controller = controller(store)
