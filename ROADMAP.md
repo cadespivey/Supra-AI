@@ -1,7 +1,7 @@
 # Roadmap
 
 This roadmap describes where Supra AI has been and where it may go next. It is
-forward-looking as of the **2.3.x** line — a plan, not a record of past commitments.
+forward-looking as of the **3.0.x** line — a plan, not a record of past commitments.
 Dated, completed history lives in [CHANGELOG.md](CHANGELOG.md) and the per-milestone
 plans in [`Docs/Milestones/`](Docs/Milestones/).
 
@@ -43,10 +43,10 @@ on Hugging Face (1.4.1).
   Shipped single-call with deterministic per-field validation (UTBMS codes, calendar dates,
   arithmetic); the spec's decomposed pipeline remains the fidelity-gated upgrade path.
 
-## On `main` for the next release after 2.3.4
+## Delivered in 3.0.0
 
-These capabilities are implemented and tested on `main`, but are not in the current v2.3.4
-download. They belong in [`Unreleased`](CHANGELOG.md#unreleased), not the future-work queue:
+These capabilities shipped in v3.0.0. See the
+[`3.0.0` changelog entry](CHANGELOG.md#300---2026-08-16) for the release record:
 
 - **Backup restore** — Settings inspects completed snapshots, blocks incompatible or damaged
   choices, stages a selected snapshot only after a verified safety copy, activates it on the next
@@ -63,13 +63,6 @@ download. They belong in [`Unreleased`](CHANGELOG.md#unreleased), not the future
   supported failure-to-state-a-claim motion from revision-bound fact excerpts and reviewed,
   proposition-specific authorities selected by the user, with pre-file and publication-recovery
   gates.
-
-## Near-term: qualify the unreleased restore workflow
-
-- **Synthetic restore drill.** Before restore ships, run and record the process-boundary drill in
-  [Backup and Restore](Docs/Backup-and-Restore.md): successful activation, forced activation failure
-  with verified safety rollback, rejection of an unsupported future schema, and confirmation that
-  the source backup remains unchanged. Use synthetic data only.
 
 ## Near-term: complete the ScratchPad follow-ups
 

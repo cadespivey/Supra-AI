@@ -20,7 +20,7 @@ claims:
     code_anchor: "Packages/SupraStore/Sources/SupraStore/Database/SupraMigrator.swift"
     verification: "Scripts/verify-migration-sequence.sh"
     ci_job: "macos-ci/inventory"
-    applicable_version: "Next release after 2.3.4"
+    applicable_version: "3.0.0 and later"
     last_reviewed: "2026-08-14"
     publication_anchor: "ARCHITECTURE.md"
     expected: "v078_govern_structured_work_publication"
@@ -32,7 +32,7 @@ claims:
     code_anchor: "Packages/SupraSessions/Sources/SupraSessions/LocalAIRecommendationPolicy.swift"
     verification: "Packages/SupraSessions/Tests/SupraSessionsTests/LocalAIRecommendationPolicyTests.swift"
     ci_job: "macos-ci/swift-packages"
-    applicable_version: "Next release after 2.3.4"
+    applicable_version: "3.0.0 and later"
     last_reviewed: "2026-08-11"
     publication_anchor: "ARCHITECTURE.md"
 
@@ -54,7 +54,7 @@ claims:
     code_anchor: "Packages/SupraStore/Sources/SupraStore/Repositories/DocumentSourceIntegrityValidator.swift"
     verification: "Packages/SupraStore/Tests/SupraStoreTests/AtomicSourcePublicationIntegrityTests.swift"
     ci_job: "macos-ci/swift-packages"
-    applicable_version: "Next release after 2.3.4"
+    applicable_version: "3.0.0 and later"
     last_reviewed: "2026-08-07"
     publication_anchor: "ARCHITECTURE.md"
 
@@ -65,7 +65,7 @@ claims:
     code_anchor: "Packages/SupraStore/Sources/SupraStore/Repositories/DocumentLibraryRepository.swift"
     verification: "Packages/SupraStore/Tests/SupraStoreTests/PermanentDeletionBoundaryIntegrityTests.swift"
     ci_job: "macos-ci/swift-packages"
-    applicable_version: "Next release after 2.3.4"
+    applicable_version: "3.0.0 and later"
     last_reviewed: "2026-08-07"
     publication_anchor: "ARCHITECTURE.md"
 
@@ -76,7 +76,7 @@ claims:
     code_anchor: "Packages/SupraStore/Sources/SupraStore/Repositories/DocumentLibraryRepository.swift"
     verification: "Packages/SupraSessions/Tests/SupraSessionsTests/DocumentMaintenanceTests.swift"
     ci_job: "macos-ci/swift-packages"
-    applicable_version: "Next release after 2.3.4"
+    applicable_version: "3.0.0 and later"
     last_reviewed: "2026-08-07"
     publication_anchor: "ARCHITECTURE.md"
 
@@ -120,7 +120,7 @@ claims:
     code_anchor: "Packages/SupraSessions/Sources/SupraSessions/CorpusAnalysisRequestDigest.swift"
     verification: "Packages/SupraSessions/Tests/SupraSessionsTests/ExhaustiveListTaskTests.swift"
     ci_job: "macos-ci/swift-packages"
-    applicable_version: "Next release after 2.3.4"
+    applicable_version: "3.0.0 and later"
     last_reviewed: "2026-08-07"
     publication_anchor: "ARCHITECTURE.md"
 
@@ -131,7 +131,7 @@ claims:
     code_anchor: "Packages/SupraSessions/Sources/SupraSessions/ExhaustiveListTask.swift"
     verification: "Packages/SupraSessions/Tests/SupraSessionsTests/ExhaustiveListTaskTests.swift"
     ci_job: "macos-ci/swift-packages"
-    applicable_version: "Next release after 2.3.4"
+    applicable_version: "3.0.0 and later"
     last_reviewed: "2026-08-07"
     publication_anchor: "ARCHITECTURE.md"
 
@@ -142,7 +142,7 @@ claims:
     code_anchor: "Packages/SupraStore/Sources/SupraStore/Database/SupraMigrationV072.swift"
     verification: "Packages/SupraStore/Tests/SupraStoreTests/CorpusIntegrityMigrationTests.swift"
     ci_job: "macos-ci/swift-packages"
-    applicable_version: "Next release after 2.3.4"
+    applicable_version: "3.0.0 and later"
     last_reviewed: "2026-08-07"
     publication_anchor: "ARCHITECTURE.md"
 
@@ -153,7 +153,7 @@ claims:
     code_anchor: "Packages/SupraStore/Sources/SupraStore/Database/SupraMigrationV072.swift"
     verification: "Packages/SupraStore/Tests/SupraStoreTests/CorpusIntegrityMigrationTests.swift"
     ci_job: "macos-ci/swift-packages"
-    applicable_version: "Next release after 2.3.4"
+    applicable_version: "3.0.0 and later"
     last_reviewed: "2026-08-07"
     publication_anchor: "ARCHITECTURE.md"
 
@@ -164,7 +164,7 @@ claims:
     code_anchor: "Packages/SupraStore/Sources/SupraStore/Database/SupraMigrationV072.swift"
     verification: "Packages/SupraSessions/Tests/SupraSessionsTests/DocumentExportTests.swift"
     ci_job: "macos-ci/swift-packages"
-    applicable_version: "Next release after 2.3.4"
+    applicable_version: "3.0.0 and later"
     last_reviewed: "2026-08-07"
     publication_anchor: "ARCHITECTURE.md"
 
@@ -205,15 +205,15 @@ claims:
 
   - id: "SECURITY-SUPPORTED-RELEASE-LINE"
     topic: "security-support-line"
-    wording: "The currently supported release line is 2.3.x."
+    wording: "The currently supported release line is 3.0.x."
     owner: "Security and release engineering"
     code_anchor: "Apps/SupraAI/SupraAI.xcodeproj/project.pbxproj"
     verification: "Scripts/verify-product-claims.sh"
     ci_job: "macos-ci/inventory"
-    applicable_version: "2.2.0 and later"
-    last_reviewed: "2026-07-15"
+    applicable_version: "3.0.0 and later"
+    last_reviewed: "2026-08-16"
     publication_anchor: "SECURITY.md"
-    expected: "2.3.x"
+    expected: "3.0.x"
 
   - id: "LOCAL-PROCESSING-BOUNDARY"
     topic: "on-device-processing"
@@ -244,7 +244,7 @@ claims:
     code_anchor: "Packages/SupraSessions/Sources/SupraSessions/GlobalChatController.swift"
     verification: "Packages/SupraSessions/Tests/SupraSessionsTests/R0LegalAuthorityContainmentTests.swift"
     ci_job: "macos-ci/swift-packages"
-    applicable_version: "Next release after 2.3.4"
+    applicable_version: "3.0.0 and later"
     last_reviewed: "2026-08-13"
     publication_anchor: "SECURITY.md"
 
@@ -255,7 +255,7 @@ claims:
     code_anchor: "Packages/SupraSessions/Sources/SupraSessions/StructuredOutputController.swift"
     verification: "Packages/SupraSessions/Tests/SupraSessionsTests/R0LegalAuthorityContainmentTests.swift"
     ci_job: "macos-ci/swift-packages"
-    applicable_version: "Next release after 2.3.4"
+    applicable_version: "3.0.0 and later"
     last_reviewed: "2026-08-13"
     publication_anchor: "README.md"
 
@@ -321,7 +321,7 @@ claims:
     code_anchor: "Apps/SupraAI/SupraAI/RootView.swift"
     verification: "Apps/SupraAI/SupraAIUITests/RestoreSettingsUITests.swift"
     ci_job: "macos-ci/app-smoke"
-    applicable_version: "Next release after 2.3.4"
+    applicable_version: "3.0.0 and later"
     last_reviewed: "2026-08-03"
     publication_anchor: "Docs/Backup-and-Restore.md"
 
@@ -332,7 +332,7 @@ claims:
     code_anchor: "Packages/SupraStore/Sources/SupraStore/Backup/RestoreService.swift"
     verification: "Packages/SupraStore/Tests/SupraStoreTests/RestoreServiceTests.swift"
     ci_job: "macos-ci/swift-packages"
-    applicable_version: "Next release after 2.3.4"
+    applicable_version: "3.0.0 and later"
     last_reviewed: "2026-08-03"
     publication_anchor: "Docs/Backup-and-Restore.md"
 
@@ -343,7 +343,7 @@ claims:
     code_anchor: "Packages/SupraStore/Sources/SupraStore/Backup/RestoreActivationService.swift"
     verification: "Packages/SupraStore/Tests/SupraStoreTests/RestoreActivationServiceTests.swift"
     ci_job: "macos-ci/swift-packages"
-    applicable_version: "Next release after 2.3.4"
+    applicable_version: "3.0.0 and later"
     last_reviewed: "2026-08-03"
     publication_anchor: "Docs/Backup-and-Restore.md"
 
@@ -354,7 +354,7 @@ claims:
     code_anchor: "Apps/SupraAI/SupraAI/AppEnvironment.swift"
     verification: "Tests/Scripts/test-backup-restore-documentation.sh"
     ci_job: "macos-ci/inventory"
-    applicable_version: "Next release after 2.3.4"
+    applicable_version: "3.0.0 and later"
     last_reviewed: "2026-08-03"
     publication_anchor: "Docs/Backup-and-Restore.md"
 
@@ -387,7 +387,7 @@ claims:
     code_anchor: "Packages/SupraSessions/Sources/SupraSessions/MatterDraftingController.swift"
     verification: "Apps/SupraAI/SupraAIUITests/ResearchAuthoritiesUITests.swift"
     ci_job: "macos-ci/app-smoke"
-    applicable_version: "Next release after 2.3.4"
+    applicable_version: "3.0.0 and later"
     last_reviewed: "2026-08-04"
     publication_anchor: "README.md"
 
@@ -398,7 +398,7 @@ claims:
     code_anchor: "Packages/SupraStore/Sources/SupraStore/Repositories/DraftArtifactIntentRepository.swift"
     verification: "Packages/SupraSessions/Tests/SupraSessionsTests/DraftArtifactReconciliationTests.swift"
     ci_job: "macos-ci/swift-packages"
-    applicable_version: "Next release after 2.3.4"
+    applicable_version: "3.0.0 and later"
     last_reviewed: "2026-08-03"
     publication_anchor: "ARCHITECTURE.md"
 

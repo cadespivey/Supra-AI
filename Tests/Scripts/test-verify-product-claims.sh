@@ -114,12 +114,12 @@ run_case \
     in_claim && /^    publication_anchor:/ { exit }
   ' "$claims"
 
-# Expected RED: motion-specific assurances were appended to the older generic
-# drafting claim while retaining its 2.2.0 version boundary.
+# The motion-specific assurance remains bound to the release in which the
+# supported vertical first ships.
 run_case \
-  "supported motion gate has a next-release controlled claim" \
+  "supported motion gate has a 3.0.0 controlled claim" \
   0 \
-  'applicable_version: "Next release after 2.3.4"' \
+  'applicable_version: "3.0.0 and later"' \
   awk '
     /^  - id: "MOTION-DISMISSAL-PREFILE-GATE"/ { in_claim = 1 }
     in_claim { print }
@@ -173,12 +173,12 @@ run_case \
   env SUPRA_CLAIMS_FILE="$hardcoded_release_version" bash "$verifier"
 
 stale_security_support="${temporary_dir}/stale-security-support.yml"
-awk '!changed && sub(/expected: "2.3.x"/, "expected: \"1.4.x\"") { changed = 1 } { print }' \
+awk '!changed && sub(/expected: "3.0.x"/, "expected: \"1.4.x\"") { changed = 1 } { print }' \
   "$claims" >"$stale_security_support"
 run_case \
   "a stale security support line fails closed" \
   1 \
-  "security support claim expected 1.4.x, project marketing version resolves to 2.3.x" \
+  "security support claim expected 1.4.x, project marketing version resolves to 3.0.x" \
   env SUPRA_CLAIMS_FILE="$stale_security_support" bash "$verifier"
 
 if (( failures != 0 )); then

@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-08-16
+
+Supra AI 3.0.0 consolidates ordinary work around one matter-centered workspace and a coherent
+single-window workflow. It retires the separate Case File Review surface and makes source identity,
+publication, recovery, local-model execution, and saved-output state explicit across Research,
+Ask the Documents, Drafting, and Outputs.
+
 ### Added
 
 - **Restore from a verified backup** — Settings can inspect completed snapshots, explain why a
