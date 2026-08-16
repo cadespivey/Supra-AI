@@ -12,6 +12,8 @@ struct MatterWorkspaceView: View {
     @ObservedObject var settings: SettingsController
     let matter: MatterSummary
     let onOpenImportSetup: () -> Void
+    let returnContext: WorkContext?
+    let onReturnContextConsumed: (WorkContext) -> Void
     let onOpenNotesAndTime: (SavedWorkNotesHandoff) -> Void
 
     @State private var tab: MatterTab = .chat
@@ -108,6 +110,8 @@ struct MatterWorkspaceView: View {
             tab = .outputs
             showNewSavedWork = true
         }
+        .onAppear { applyReturnContext() }
+        .onChange(of: returnContext) { _, _ in applyReturnContext() }
         .confirmationDialog(
             moveToRecycleBinPresentation.confirmationTitle,
             isPresented: $confirmingDelete,
@@ -140,6 +144,17 @@ struct MatterWorkspaceView: View {
             tab = target
         }
         #endif
+    }
+
+    /// Restores the exact task carried through AI Setup or Settings. A context
+    /// for another matter is rejected instead of substituting this workspace.
+    private func applyReturnContext() {
+        guard let context = returnContext, context.matterID == matter.id else { return }
+        switch context.intent {
+        case .importDocuments: tab = .documents
+        case .draftMotion: showDraftSheet = true
+        }
+        onReturnContextConsumed(context)
     }
 
     private var header: some View {

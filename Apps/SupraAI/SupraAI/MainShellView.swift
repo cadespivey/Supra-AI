@@ -7,6 +7,7 @@ struct MainShellView: View {
     @EnvironmentObject private var environment: AppEnvironment
     @State private var selection: SidebarSelection? = .route(.globalChats)
     @State private var setupNavigationRequest: SetupNavigationRequest?
+    @State private var pendingMatterReturnContext: WorkContext?
     @State private var pendingSavedWorkNotesHandoff: SavedWorkNotesHandoff?
     @State private var showNewMatter = false
     @State private var windowContentHeight: CGFloat = 720
@@ -282,6 +283,11 @@ struct MainShellView: View {
                 settings: environment.settingsController,
                 matterID: id,
                 onOpenImportSetup: { beginDocumentImportSetup(matterID: id) },
+                returnContext: pendingMatterReturnContext,
+                onReturnContextConsumed: { context in
+                    guard pendingMatterReturnContext == context else { return }
+                    pendingMatterReturnContext = nil
+                },
                 onOpenNotesAndTime: { handoff in
                     pendingSavedWorkNotesHandoff = handoff
                     selectRoute(.scratchpad)
@@ -543,6 +549,7 @@ struct MainShellView: View {
 #endif
         switch request.returnContext.returnDestination {
         case let .matterTask(matterID, _):
+            pendingMatterReturnContext = request.returnContext
             selectMatter(matterID)
         }
     }
@@ -865,6 +872,8 @@ private struct MatterDetailView: View {
     @ObservedObject var settings: SettingsController
     let matterID: String
     let onOpenImportSetup: () -> Void
+    let returnContext: WorkContext?
+    let onReturnContextConsumed: (WorkContext) -> Void
     let onOpenNotesAndTime: (SavedWorkNotesHandoff) -> Void
 
     var body: some View {
@@ -876,6 +885,8 @@ private struct MatterDetailView: View {
                 settings: settings,
                 matter: matter,
                 onOpenImportSetup: onOpenImportSetup,
+                returnContext: returnContext,
+                onReturnContextConsumed: onReturnContextConsumed,
                 onOpenNotesAndTime: onOpenNotesAndTime
             )
         } else {
