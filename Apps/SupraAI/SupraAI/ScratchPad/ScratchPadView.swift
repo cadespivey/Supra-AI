@@ -174,13 +174,19 @@ struct ScratchPadView: View {
     }
 
     private func insertSavedWorkReference(_ handoff: SavedWorkNotesHandoff) {
-        let reference = "[Saved Work: \(handoff.outputTitle) · v\(handoff.versionIndex) · \(handoff.outputID)@\(handoff.versionID)] @matter"
+        let matterHandle = Self.savedWorkMatterHandle(for: handoff.matterName)
+        let reference = "[Saved Work: Saved chat answer · v\(handoff.versionIndex) · \(handoff.outputID)@\(handoff.versionID)] @\(matterHandle)"
         let existing = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
         composerText = existing.isEmpty ? "\(reference) " : "\(existing)\n\(reference) "
-        pendingMentions["matter"] = handoff.matterID
+        pendingMentions[matterHandle] = handoff.matterID
         composerFocused = true
         pendingSavedWorkHandoff = nil
         onSavedWorkHandoffConsumed()
+    }
+
+    private static func savedWorkMatterHandle(for matterName: String) -> String {
+        let shortName = matterName.components(separatedBy: " v. ").first ?? matterName
+        return mentionHandle(for: shortName)
     }
 
     private var isSearching: Bool {

@@ -144,6 +144,10 @@ verification; `unknown` is recovery-required, not completed.
 
 ### 8. Saved Work → Notes & Time/Billing
 
+Owner walkthrough: **approved by Cade Spivey on 2026-08-16** after the rebuilt app inserted a
+neutral saved-work/version reference with the exact matter tag and no answer title or legal
+analysis. The reference remained an unsaved note draft until explicit submission.
+
 | Contract | Definition |
 |---|---|
 | Authoritative aggregate | Saved work-product/version remains immutable; Notes & Time/Billing owns its own entry/draft/profile records and explicit optional link back to matter/work identity. |

@@ -1644,8 +1644,13 @@ final class OwnerWalkthroughGroundedPromotionUITests: XCTestCase {
         let composer = app.textViews["scratchpad.composer"]
         XCTAssertTrue(composer.waitForExistence(timeout: 5))
         let draft = composer.value as? String ?? ""
-        XCTAssertTrue(draft.contains("Saved Work:"))
-        XCTAssertTrue(draft.contains("@matter"))
+        XCTAssertTrue(draft.contains("[Saved Work: Saved chat answer · v1 ·"))
+        XCTAssertTrue(draft.contains("@MeridianFabrication"))
+        XCTAssertFalse(draft.contains("@matter"))
+        XCTAssertFalse(
+            draft.localizedCaseInsensitiveContains("Under the Master Services Agreement"),
+            "The neutral reference must not copy the answer-derived Saved Work title"
+        )
         XCTAssertFalse(
             draft.localizedCaseInsensitiveContains("indemnity applies"),
             "A handoff may insert an exact reference but must not copy the saved legal analysis"

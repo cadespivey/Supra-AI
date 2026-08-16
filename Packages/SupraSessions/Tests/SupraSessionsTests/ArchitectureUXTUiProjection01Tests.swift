@@ -267,7 +267,9 @@ final class ArchitectureUXTUiProjection01Tests: XCTestCase {
         XCTAssertTrue(shell.contains("pendingSavedWorkNotesHandoff"))
         XCTAssertTrue(shell.contains("selectRoute(.scratchpad)"))
         XCTAssertTrue(scratchPad.contains("Button(\"Insert reference\")"))
-        XCTAssertTrue(scratchPad.contains("pendingMentions[\"matter\"] = handoff.matterID"))
+        XCTAssertTrue(scratchPad.contains("[Saved Work: Saved chat answer"))
+        XCTAssertTrue(scratchPad.contains("pendingMentions[matterHandle] = handoff.matterID"))
+        XCTAssertFalse(scratchPad.contains("[Saved Work: \\(handoff.outputTitle)"))
         XCTAssertTrue(detail.contains("contentMarkdown: nil"))
     }
 
