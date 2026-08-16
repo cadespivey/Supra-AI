@@ -44,7 +44,7 @@ final class DocumentExportTests: XCTestCase {
         XCTAssertTrue(md.contains("Payment was due March 3, 2024 [S1]."))
         XCTAssertTrue(md.contains("agreement.pdf"))
         XCTAssertTrue(md.contains("p. 3"))
-        XCTAssertTrue(md.contains("Assurance: Propositions supported — completeness not assessed"))
+        XCTAssertTrue(md.contains("Assurance: Supported by selected sources — not exhaustive"))
 
         // Export records persisted, and a single matter export audit exists.
         let exports = try store.documentSources.fetchExports(structuredOutputID: output.id)

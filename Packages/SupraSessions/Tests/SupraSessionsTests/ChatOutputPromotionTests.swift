@@ -109,7 +109,7 @@ final class ChatOutputPromotionTests: XCTestCase {
         )
         let markdown = try String(contentsOf: exportURL, encoding: .utf8)
 
-        XCTAssertTrue(markdown.contains("Assurance: Propositions supported — completeness not assessed"))
+        XCTAssertTrue(markdown.contains("Assurance: Supported by selected sources — not exhaustive"))
         XCTAssertTrue(markdown.contains("Verify every citation against the source before relying on or sharing this."))
         XCTAssertTrue(fixture.controller.availableArtifactActions(messageID: fixture.message.id).isEmpty)
     }

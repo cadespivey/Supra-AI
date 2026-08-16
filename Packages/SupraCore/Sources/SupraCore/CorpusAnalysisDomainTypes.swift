@@ -23,7 +23,7 @@ public enum OutputAssurancePresentation {
         case .supportNeedsReview:
             "Support needs review"
         case .propositionSupported:
-            "Propositions supported — completeness not assessed"
+            "Supported by selected sources — not exhaustive"
         case .corpusIncomplete:
             "Corpus incomplete — review gaps"
         case .corpusComplete:
