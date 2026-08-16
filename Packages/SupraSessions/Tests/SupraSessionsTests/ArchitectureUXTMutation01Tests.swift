@@ -467,10 +467,11 @@ final class ArchitectureUXTMutation01Tests: XCTestCase {
             store: store,
             runtimeClient: StubRuntimeClient(),
             matterID: Wire.exportMatterID,
-            exportAction: { outputID, format in
+            exportAction: { outputID, versionID, format in
                 try exporter.export(
                     matterID: Wire.exportMatterID,
                     structuredOutputID: outputID,
+                    structuredOutputVersionID: versionID,
                     format: format
                 )
             }

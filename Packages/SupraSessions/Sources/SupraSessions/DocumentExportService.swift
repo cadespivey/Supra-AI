@@ -30,6 +30,7 @@ public final class DocumentExportService: @unchecked Sendable {
     public enum ExportError: Error, LocalizedError {
         case outputNotFound
         case noActiveVersion
+        case selectedVersionUnavailable
         case assuranceBlocked(String)
         case completionRecordingFailed(String)
         case partialFailure(recording: String, compensation: String)
@@ -40,6 +41,7 @@ public final class DocumentExportService: @unchecked Sendable {
             switch self {
             case .outputNotFound: "The output to export was not found."
             case .noActiveVersion: "The output has no active version to export."
+            case .selectedVersionUnavailable: "The selected output version is unavailable."
             case let .assuranceBlocked(state):
                 "The output cannot be exported while its assurance state is \(state)."
             case let .completionRecordingFailed(detail):
@@ -57,19 +59,26 @@ public final class DocumentExportService: @unchecked Sendable {
     private static let reviewWarning = "Machine-generated from your local documents. Verify every citation against the source before relying on or sharing this."
 
     @discardableResult
-    public func export(matterID: String, structuredOutputID: String, format: DocumentExportFormat) throws -> URL {
+    public func export(
+        matterID: String,
+        structuredOutputID: String,
+        structuredOutputVersionID: String? = nil,
+        format: DocumentExportFormat
+    ) throws -> URL {
         guard let output = try store.structuredOutputs.fetchOutputs(matterID: matterID).first(where: { $0.id == structuredOutputID }) else {
             throw ExportError.outputNotFound
         }
         let versions = try store.structuredOutputs.fetchVersions(structuredOutputID: structuredOutputID)
-        guard let activeVersionID = output.activeVersionID,
-              let activeVersion = versions.first(where: { $0.id == activeVersionID }) else {
+        guard let requestedVersionID = structuredOutputVersionID ?? output.activeVersionID else {
             throw ExportError.noActiveVersion
         }
-        let verificationStatus = OutputVerificationStatus(rawValue: activeVersion.verificationStatus)
+        guard let selectedVersion = versions.first(where: { $0.id == requestedVersionID }) else {
+            throw ExportError.selectedVersionUnavailable
+        }
+        let verificationStatus = OutputVerificationStatus(rawValue: selectedVersion.verificationStatus)
             ?? .legacyUnverified
         let assurance = OutputAssurancePresentation.state(
-            rawValue: activeVersion.assuranceState,
+            rawValue: selectedVersion.assuranceState,
             verificationStatus: verificationStatus
         )
         guard verificationStatus == .allSupported,
@@ -77,11 +86,11 @@ public final class DocumentExportService: @unchecked Sendable {
             throw ExportError.assuranceBlocked(OutputAssurancePresentation.text(for: assurance))
         }
         if output.outputType == StructuredOutputType.documentExhaustiveList.rawValue {
-            guard let rawAssurance = activeVersion.assuranceState,
+            guard let rawAssurance = selectedVersion.assuranceState,
                   let exactAssurance = OutputAssuranceState(rawValue: rawAssurance),
                   let proofRun = try store.corpusAnalysis.fetchExactExportRun(
                       matterID: matterID,
-                      structuredOutputVersionID: activeVersion.id
+                      structuredOutputVersionID: selectedVersion.id
                   ),
                   proofRun.assuranceState == exactAssurance.rawValue else {
                 throw ExportError.assuranceBlocked(
@@ -90,7 +99,7 @@ public final class DocumentExportService: @unchecked Sendable {
             }
         }
 
-        let payload = try makePayload(output: output, version: activeVersion, matterID: matterID)
+        let payload = try makePayload(output: output, version: selectedVersion, matterID: matterID)
         let rendered = try DocumentExportBuilder.renderValidatedData(payload, format: format)
         let directory = storage.exportsDirectory(forMatterID: matterID)
         let sanitizedTitle = sanitize(output.title)
@@ -99,15 +108,15 @@ public final class DocumentExportService: @unchecked Sendable {
         for _ in 1...100 {
             try Task.checkCancellation()
             let intentID = UUID().uuidString.lowercased()
-            let fileName = "\(stem)-v\(activeVersion.versionIndex)-\(intentID).\(format.fileExtension)"
+            let fileName = "\(stem)-v\(selectedVersion.versionIndex)-\(intentID).\(format.fileExtension)"
             let url = directory.appendingPathComponent(fileName, isDirectory: false)
             let intent: DraftArtifactIntentRecord
             do {
                 intent = try store.draftArtifacts.prepareStructuredOutputExportIntent(
                     matterID: matterID,
                     structuredOutputID: structuredOutputID,
-                    structuredOutputVersionID: activeVersion.id,
-                    workProductVersion: activeVersion.versionIndex,
+                    structuredOutputVersionID: selectedVersion.id,
+                    workProductVersion: selectedVersion.versionIndex,
                     format: Self.intentFormat(format),
                     fileName: fileName,
                     output: rendered,

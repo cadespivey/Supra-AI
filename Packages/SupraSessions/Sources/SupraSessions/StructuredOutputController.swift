@@ -34,7 +34,7 @@ public enum ChatOutputPromotionError: Error, LocalizedError, Equatable, Sendable
 /// Structure repair (WO 29) and the Outputs tab UI (WO 30) build on this.
 @MainActor
 public final class StructuredOutputController: ObservableObject {
-    public typealias ExportAction = (String, DocumentExportFormat) throws -> URL
+    public typealias ExportAction = (String, String, DocumentExportFormat) throws -> URL
 
     public struct OutputItem: Identifiable, Sendable, Equatable {
         public let id: String
@@ -94,10 +94,11 @@ public final class StructuredOutputController: ObservableObject {
         self.retrieval = DocumentRetrievalService(store: store, embedder: embedder)
         self.matterID = matterID
         self.defaultSystemPrompt = defaultSystemPrompt
-        self.exportAction = exportAction ?? { outputID, format in
+        self.exportAction = exportAction ?? { outputID, versionID, format in
             try DocumentExportService(store: store).export(
                 matterID: matterID,
                 structuredOutputID: outputID,
+                structuredOutputVersionID: versionID,
                 format: format
             )
         }
@@ -288,12 +289,13 @@ public final class StructuredOutputController: ObservableObject {
 
     public func attemptExportOutput(
         outputID: String,
+        versionID: String? = nil,
         format: DocumentExportFormat
     ) -> UserMutationOutcome<URL> {
         guard let record = outputRecord(outputID),
-              let active = activeVersion(for: record),
-              active.verificationStatus == OutputVerificationStatus.allSupported.rawValue,
-              OutputAssurancePresentation.isExportEligible(Self.assurance(for: active))
+              let version = version(for: record, selectedID: versionID),
+              version.verificationStatus == OutputVerificationStatus.allSupported.rawValue,
+              OutputAssurancePresentation.isExportEligible(Self.assurance(for: version))
         else {
             return rejectExport(
                 "This output's assurance state does not permit export. Reverify or regenerate it from fresh sources.",
@@ -301,7 +303,7 @@ public final class StructuredOutputController: ObservableObject {
             )
         }
         do {
-            let destination = try exportAction(outputID, format)
+            let destination = try exportAction(outputID, version.id, format)
             message = nil
             lastMutationFailure = nil
             return .committed(destination)
@@ -480,11 +482,12 @@ public final class StructuredOutputController: ObservableObject {
 
     /// Saves an owner edit as a new immutable version and immediately checks
     /// every proposition/citation against the exact retained source packet from
-    /// the active version. The prior version remains unchanged and export stays
-    /// gated whenever the edited text is not fully supported.
+    /// the selected base version. The prior version remains unchanged and
+    /// export stays gated whenever the edited text is not fully supported.
     @discardableResult
     public func saveEditedVersion(
         outputID: String,
+        baseVersionID: String? = nil,
         contentMarkdown: String
     ) -> Bool {
         message = nil
@@ -493,19 +496,19 @@ public final class StructuredOutputController: ObservableObject {
             return false
         }
         guard let record = outputRecord(outputID),
-              let active = activeVersion(for: record)
+              let base = version(for: record, selectedID: baseVersionID)
         else {
             message = "Could not find the output version to edit."
             return false
         }
-        guard Self.assurance(for: active) != .stale else {
+        guard Self.assurance(for: base) != .stale else {
             message = "A retained source changed. Open Documents and rebuild readiness before editing and checking a new version."
             return false
         }
 
         do {
             guard let sourceSet = try store.documentSources.fetchSourceSet(
-                structuredOutputVersionID: active.id
+                structuredOutputVersionID: base.id
             ), let packet = try persistedDocumentPacket(sourceSet: sourceSet) else {
                 message = "This version has no complete retained source packet. Regenerate it from fresh sources before editing."
                 return false
@@ -517,15 +520,15 @@ public final class StructuredOutputController: ObservableObject {
             )
             let missing = (try? JSONDecoder().decode(
                 [String].self,
-                from: Data(active.missingSectionsJSON.utf8)
+                from: Data(base.missingSectionsJSON.utf8)
             )) ?? []
             let required = (try? JSONDecoder().decode(
                 [String].self,
-                from: Data(active.requiredSectionsJSON.utf8)
+                from: Data(base.requiredSectionsJSON.utf8)
             )) ?? []
             let present = (try? JSONDecoder().decode(
                 [String].self,
-                from: Data(active.presentSectionsJSON.utf8)
+                from: Data(base.presentSectionsJSON.utf8)
             )) ?? []
             let checkedContent = verification.requiresReview
                 ? verification.warningMarkdown + contentMarkdown
@@ -537,7 +540,7 @@ public final class StructuredOutputController: ObservableObject {
                 requiredSections: required,
                 presentSections: present,
                 missingSections: missing,
-                parentVersionID: active.id,
+                parentVersionID: base.id,
                 repairReason: "user_edit_and_source_check",
                 verificationStatus: verification.verificationStatus,
                 verificationVersion: DocumentSupportVerifier.version,
@@ -1387,6 +1390,16 @@ public final class StructuredOutputController: ObservableObject {
         let versions = (try? store.structuredOutputs.fetchVersions(structuredOutputID: record.id)) ?? []
         return versions.first { $0.id == record.activeVersionID }
             ?? versions.max(by: { $0.versionIndex < $1.versionIndex })
+    }
+
+    private func version(
+        for record: StructuredOutputRecord,
+        selectedID: String?
+    ) -> StructuredOutputVersionRecord? {
+        guard let selectedID else { return activeVersion(for: record) }
+        return ((try? store.structuredOutputs.fetchVersions(
+            structuredOutputID: record.id
+        )) ?? []).first { $0.id == selectedID }
     }
 
     private func missingCount(for record: StructuredOutputRecord) -> Int {

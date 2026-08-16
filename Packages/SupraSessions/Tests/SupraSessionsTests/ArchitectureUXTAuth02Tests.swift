@@ -1231,7 +1231,7 @@ private final class StructuredWorkExportProbe: @unchecked Sendable {
     var callCount: Int { lock.withLock { calls } }
 
     var action: StructuredOutputController.ExportAction {
-        { [self] _, _ in
+        { [self] _, _, _ in
             lock.withLock { calls += 1 }
             return URL(fileURLWithPath: "/tmp/T_AUTH_02_EXPORT_MUST_NOT_EXIST_1361.md")
         }

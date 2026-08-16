@@ -899,10 +899,12 @@ public final class DraftArtifactIntentRepository: @unchecked Sendable {
         record: DraftArtifactIntentRecord,
         db: Database
     ) throws {
+        // A selected historical version is a first-class immutable artifact.
+        // Revalidate that exact version and its owning output; a newer active
+        // successor must not silently revoke or replace the selected artifact.
         guard let output = try StructuredOutputRecord.fetchOne(db, key: lineage.structuredOutputID),
               output.deletedAt == nil,
               output.matterID == record.matterID,
-              output.activeVersionID == lineage.structuredOutputVersionID,
               let version = try StructuredOutputVersionRecord.fetchOne(
                   db,
                   key: lineage.structuredOutputVersionID

@@ -37,6 +37,7 @@ struct OutputDetailView: View {
     @State private var routingMessage: String?
     @State private var sourcePreview: PreviewItem?
     @State private var pendingExportFormat: DocumentExportFormat?
+    @State private var pendingExportVersionID: String?
     @State private var editDraft: OutputEditDraft?
 
     private var router: ModelRouter { ModelRouter(configuration: .fromEnvironment()) }
@@ -135,6 +136,7 @@ struct OutputDetailView: View {
             ) { markdown in
                 guard controller.saveEditedVersion(
                     outputID: outputID,
+                    baseVersionID: draft.versionID,
                     contentMarkdown: markdown
                 ) else {
                     return controller.message ?? "The edited version could not be saved."
@@ -217,7 +219,7 @@ struct OutputDetailView: View {
                     Section("Format") {
                         ForEach(DocumentExportFormat.allCases, id: \.self) { format in
                             Button(format.fileExtension.uppercased()) {
-                                performExport(format: format)
+                                performExport(format: format, versionID: selected.id)
                             }
                         }
                     }
@@ -372,21 +374,24 @@ struct OutputDetailView: View {
         _ = await controller.repairOutput(outputID, modelID: modelID, route: repairRoute)
     }
 
-    private func performExport(format: DocumentExportFormat) {
+    private func performExport(format: DocumentExportFormat, versionID: String) {
         pendingExportFormat = format
+        pendingExportVersionID = versionID
         let outcome = controller.attemptExportOutput(
             outputID: outputID,
+            versionID: versionID,
             format: format
         )
         guard outcome.allowsSuccessPresentation,
               let url = outcome.committedValue else { return }
         pendingExportFormat = nil
+        pendingExportVersionID = nil
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
     private func retryExport() {
-        guard let pendingExportFormat else { return }
-        performExport(format: pendingExportFormat)
+        guard let pendingExportFormat, let pendingExportVersionID else { return }
+        performExport(format: pendingExportFormat, versionID: pendingExportVersionID)
     }
 
     private func correctExport() {
