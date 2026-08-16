@@ -38,7 +38,7 @@ findings:
   - { id: A-02, disposition: must_implement_before_next_public_release, closure: implementation_green, evidence: "T-PUB-WORK-01" }
   - { id: A-03, disposition: must_implement_before_next_public_release, closure: implementation_green, evidence: "T-EGRESS-01 through T-EGRESS-05" }
   - { id: A-04, disposition: moot_through_review_retirement, closure: retired, evidence: "T-XPC-REVIEW-REMOVE-01" }
-  - { id: A-05, disposition: must_implement_before_next_public_release, closure: implementation_green_release_gate_pending, evidence: "WP-3.1 through WP-3.5 gates; installed-artifact fixed-hardware control at bbf03215 approved by owner; signed Release evidence pending" }
+  - { id: A-05, disposition: must_implement_before_next_public_release, closure: implementation_green_release_artifact_pending, evidence: "WP-3.1 through WP-3.5 gates; installed-artifact fixed-hardware control at bbf03215 approved by owner; signed Release evidence pending" }
   - { id: A-06, disposition: must_implement_before_next_public_release, closure: implementation_green, evidence: "T-ART-01 through T-ART-03" }
   - { id: A-07, disposition: must_implement_before_next_public_release, closure: implementation_green, evidence: "T-ATTACH-01 and T-ATTACH-02" }
   - { id: A-08, disposition: must_implement_before_next_public_release, closure: implementation_green, evidence: "T-AUTH-01 and T-AUTH-02" }
@@ -83,7 +83,7 @@ findings:
   - { id: UX-20, disposition: must_implement_before_next_public_release, closure: implementation_green, evidence: "T-TERMS-01 and T-PUBLIC-RECORDS-01" }
 
 work_packages:
-  - { id: WP-0.1, disposition: must_implement_before_next_public_release, closure: implementation_green_release_gates_pending, evidence: "Phase-0-Baseline-Receipt.md; installed-model identity, owner-approved fixed-hardware RAG control, owner-signed synthetic restore drill, and current-head app/XPC resources recorded; signed Release observations pending" }
+  - { id: WP-0.1, disposition: must_implement_before_next_public_release, closure: implementation_green_release_artifact_pending, evidence: "Phase-0-Baseline-Receipt.md; installed-model identity, owner-approved fixed-hardware RAG control, owner-signed synthetic restore drill, and current-head app/XPC resources recorded; signed Release observations pending" }
   - { id: WP-0.2, disposition: must_implement_before_next_public_release, closure: implementation_green, evidence: "migration receipts, fixed shipping fixtures, and owner-approved Synthetic-Restore-Drill-Receipt.md" }
   - { id: WP-0.3, disposition: must_implement_before_next_public_release, closure: implementation_green, evidence: "typed assurance and audit gates" }
   - { id: WP-0.4, disposition: must_implement_before_next_public_release, closure: implementation_green, evidence: "Architecture-UX-Test-Ledger.yml and owner-approved Native-RAG-Control.yml judgments and fixed-hardware control" }
@@ -104,7 +104,7 @@ work_packages:
   - { id: WP-3.2, disposition: must_implement_before_next_public_release, closure: implementation_green, evidence: "XPC, KV, switch, and stream budget gates" }
   - { id: WP-3.3, disposition: must_implement_before_next_public_release, closure: implementation_green, evidence: "bounded RAG scan/cache/receipt gates" }
   - { id: WP-3.4, disposition: must_implement_before_next_public_release, closure: implementation_green, evidence: "residency, pressure, reset, and method gates" }
-  - { id: WP-3.5, disposition: must_implement_before_next_public_release, closure: implementation_green_release_gate_pending, evidence: "Native-RAG-Control.yml; exact installed-model fixed-hardware control and resources at bbf03215 approved by owner; signed Release evidence pending" }
+  - { id: WP-3.5, disposition: must_implement_before_next_public_release, closure: implementation_green_release_artifact_pending, evidence: "Native-RAG-Control.yml; exact installed-model fixed-hardware control and resources at bbf03215 approved by owner; signed Release evidence pending" }
   - { id: WP-4.1, disposition: must_implement_before_next_public_release, closure: implementation_green, evidence: "T-PARITY-CHAT-01" }
   - { id: WP-4.2, disposition: must_implement_before_next_public_release, closure: implementation_green, evidence: "T-PARITY-ENV-01" }
   - { id: WP-4.3, disposition: must_implement_before_next_public_release, closure: implementation_green, evidence: "T-STORE-CAP-01" }
