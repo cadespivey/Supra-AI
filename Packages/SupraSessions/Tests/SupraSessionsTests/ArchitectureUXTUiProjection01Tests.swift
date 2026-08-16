@@ -321,6 +321,53 @@ final class ArchitectureUXTUiProjection01Tests: XCTestCase {
         XCTAssertFalse(authorityDetail.contains("Section(\"Reviewed proposition\")"))
     }
 
+    func testRecoveryCopyNamesAISetupInsteadOfTheRetiredModelsTab() throws {
+        let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent() // SupraSessionsTests
+            .deletingLastPathComponent() // Tests
+            .deletingLastPathComponent() // SupraSessions
+            .deletingLastPathComponent() // Packages
+            .deletingLastPathComponent() // repository
+        let relativePaths = [
+            "Apps/SupraAI/SupraAI/Documents/MatterDocumentsView.swift",
+            "Apps/SupraAI/SupraAI/GlobalChatsView.swift",
+            "Apps/SupraAI/SupraAI/Matters/MatterDraftingView.swift",
+            "Apps/SupraAI/SupraAI/Research/ResearchPlannerView.swift",
+            "Packages/SupraSessions/Sources/SupraSessions/AuthoritiesController.swift",
+            "Packages/SupraSessions/Sources/SupraSessions/DocumentChronologyController.swift",
+            "Packages/SupraSessions/Sources/SupraSessions/DocumentIntelligenceSetupController.swift",
+            "Packages/SupraSessions/Sources/SupraSessions/DocumentQAController.swift",
+            "Packages/SupraSessions/Sources/SupraSessions/GlobalChatController.swift",
+            "Packages/SupraSessions/Sources/SupraSessions/ModelLibrary.swift",
+            "Packages/SupraSessions/Sources/SupraSessions/ModelRoleAssignments.swift",
+            "Packages/SupraSessions/Sources/SupraSessions/ResearchSessionController.swift",
+            "Packages/SupraSessions/Sources/SupraSessions/StructuredOutputController.swift",
+        ]
+        let staleLabels = [
+            "Models tab",
+            "Models-tab",
+            "in Models to",
+            "Models preferences",
+        ]
+
+        for relativePath in relativePaths {
+            let source = try String(
+                contentsOf: repositoryRoot.appendingPathComponent(relativePath),
+                encoding: .utf8
+            )
+            XCTAssertTrue(
+                source.contains("AI Setup"),
+                "\(relativePath) must name the visible recovery destination"
+            )
+            for staleLabel in staleLabels {
+                XCTAssertFalse(
+                    source.contains(staleLabel),
+                    "\(relativePath) still points to the retired \(staleLabel) destination"
+                )
+            }
+        }
+    }
+
     private func makeDocumentFixture() throws -> (
         store: SupraStore,
         queue: DocumentProcessingQueue,

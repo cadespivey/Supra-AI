@@ -4086,7 +4086,7 @@ final class SupraSessionsTests: XCTestCase {
         let route = try XCTUnwrap(ModelRouter().route(forStructuredOutput: .draftingSkeleton))
         XCTAssertEqual(
             controller.message,
-            "Assign a \(route.role.displayName) model in the Models tab to generate Drafting Skeleton."
+            "Assign a \(route.role.displayName) model in AI Setup to generate Drafting Skeleton."
         )
     }
 
