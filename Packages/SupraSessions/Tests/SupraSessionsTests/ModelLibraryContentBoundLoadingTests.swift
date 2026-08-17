@@ -240,6 +240,128 @@ final class ModelLibraryContentBoundLoadingTests: XCTestCase {
         }
     }
 
+    func testSpeculativePrewarmReleasesLaneWhileStartupLoadIsAuthorizing() async throws {
+        // HOTFIX-LOAD-01 expected RED: ModelLibrary has no coordinator-safe
+        // prewarm entry point, so this test does not compile before the fix.
+        let fixture = try makeFixture(location: .managed)
+        let runtime = ContentBoundLoadingRuntimeStub(reply: .echoRequestFingerprint)
+        let probe = AuthorizationPhaseProbe(holding: .authorize)
+        let library = try makeLibrary(
+            fixture: fixture,
+            runtime: runtime,
+            authorizationExecutor: makeAuthorizationExecutor(probe: probe)
+        )
+        let startupLoad = Task { @MainActor in
+            await library.activateAndLoad(modelID: Self.modelIDString)
+        }
+        defer { probe.releaseHeldPhase() }
+
+        let authorizationStarted = await Task.detached {
+            probe.waitUntilHeldPhaseEntered()
+        }.value
+        XCTAssertTrue(authorizationStarted, "startup authorization never began")
+        XCTAssertEqual(library.loadState, .loading(modelID: Self.modelIDString))
+
+        // This call models the point after a speculative request acquired the
+        // shared coordinator permit. It must return immediately instead of
+        // waiting for the startup load that will need that permit next.
+        await library.executePrewarmUnlessLoadIsInFlight(
+            role: .legalReasoning,
+            configuration: .fromEnvironment(),
+            honorsForcedChatSelection: true,
+            runtimeGateway: runtime
+        )
+        XCTAssertTrue(
+            runtime.loadRequests.isEmpty,
+            "speculative prewarm must not issue or wait on a second load"
+        )
+
+        probe.releaseHeldPhase()
+        await startupLoad.value
+
+        XCTAssertEqual(runtime.loadRequests.count, 1)
+        XCTAssertEqual(library.loadState, .loaded(modelID: Self.modelIDString))
+    }
+
+    func testQueuedChatPrewarmCannotDeadlockStartupModelLoad() async throws {
+        // HOTFIX-LOAD-02 expected RED: the queued prewarm holds the shared
+        // execution lane while waiting for the startup load, so this test times
+        // out before the startup load can issue its only runtime request.
+        let fixture = try makeFixture(location: .managed)
+        let runtime = ContentBoundLoadingRuntimeStub(reply: .echoRequestFingerprint)
+        let coordinator = ModelExecutionCoordinator(
+            runtimeClient: RuntimeSafetyClient(base: runtime),
+            configuration: ModelExecutionConfiguration(
+                maximumQueuedTasks: 7,
+                agingIntervalTicks: 10
+            ),
+            monotonicNow: { 0 }
+        )
+        let probe = AuthorizationPhaseProbe(holding: .authorize)
+        let library = try makeLibrary(
+            fixture: fixture,
+            runtime: coordinator,
+            authorizationExecutor: makeAuthorizationExecutor(probe: probe)
+        )
+        let blockerGate = ArchitectureUXAsyncGate()
+        let blockerStarted = ArchitectureUXAsyncSignal()
+        let blockerRequest = ModelExecutionRequest(
+            taskID: ModelExecutionTaskID(rawValue: "startup-prewarm-blocker-394"),
+            operation: .generation,
+            priority: .foregroundInteractive,
+            modelBinding: nil,
+            duplicateKey: nil
+        )
+        let blocker = Task {
+            try await coordinator.execute(blockerRequest) { permit -> Void in
+                await permit.markRunning()
+                await blockerStarted.signal()
+                await blockerGate.wait()
+            }
+        }
+        defer {
+            probe.releaseHeldPhase()
+            Task { await blockerGate.open() }
+        }
+
+        await blockerStarted.wait()
+        library.prewarmChatModel()
+        try await waitForArchitectureUXRuntime("chat prewarm queued behind blocker") {
+            await coordinator.queuedTaskCount == 1
+        }
+
+        let startupLoad = Task { @MainActor in
+            await library.activateAndLoad(modelID: Self.modelIDString)
+        }
+        let authorizationStarted = await Task.detached {
+            probe.waitUntilHeldPhaseEntered()
+        }.value
+        XCTAssertTrue(authorizationStarted, "startup authorization never began")
+        XCTAssertEqual(library.loadState, .loading(modelID: Self.modelIDString))
+
+        await blockerGate.open()
+        try await blocker.value
+        try await waitForArchitectureUXRuntime("chat prewarm released shared lane") {
+            let active = await coordinator.runtimeResidencyActiveTaskCount
+            let queued = await coordinator.queuedTaskCount
+            return active == 0 && queued == 0
+        }
+        XCTAssertTrue(
+            runtime.loadRequests.isEmpty,
+            "prewarm must release the lane before startup authorization finishes"
+        )
+
+        probe.releaseHeldPhase()
+        await startupLoad.value
+
+        XCTAssertEqual(runtime.loadRequests.count, 1)
+        XCTAssertEqual(library.loadState, .loaded(modelID: Self.modelIDString))
+        let finalActiveTaskCount = await coordinator.runtimeResidencyActiveTaskCount
+        let finalQueuedTaskCount = await coordinator.queuedTaskCount
+        XCTAssertEqual(finalActiveTaskCount, 0)
+        XCTAssertEqual(finalQueuedTaskCount, 0)
+    }
+
     private static var pinnedModel: CorpusAnalysisPinnedModel {
         CorpusAnalysisPinnedModel(
             modelRepository: repositoryID,
@@ -271,7 +393,7 @@ final class ModelLibraryContentBoundLoadingTests: XCTestCase {
 
     private func makeLibrary(
         fixture: Fixture,
-        runtime: ContentBoundLoadingRuntimeStub,
+        runtime: any ModelExecutionGateway,
         authorizationExecutor: ContentBoundAuthorizationExecutor
     ) throws -> ModelLibrary {
         try fixture.store.models.upsertModel(ModelRecord(
