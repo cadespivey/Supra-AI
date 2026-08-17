@@ -90,6 +90,8 @@ fetch_api() {
   local destination="$2"
   local token="${PUBLIC_ASSET_GITHUB_TOKEN:-${GH_TOKEN:-${GITHUB_TOKEN:-}}}"
   local args
+  local attempt
+  local status=1
 
   args=(
     --fail
@@ -103,7 +105,19 @@ fetch_api() {
     args+=(--header "Authorization: Bearer ${token}")
   fi
 
-  curl "${args[@]}" --output "$destination" "$url"
+  for ((attempt = 1; attempt <= 5; attempt++)); do
+    if curl "${args[@]}" --output "$destination" "$url"; then
+      return 0
+    else
+      status=$?
+    fi
+    if (( attempt < 5 )); then
+      printf 'GitHub metadata read attempt %d/5 failed; retrying in 2 seconds.\n' \
+        "$attempt" >&2
+      sleep 2
+    fi
+  done
+  return "$status"
 }
 
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then

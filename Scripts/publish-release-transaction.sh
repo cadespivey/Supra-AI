@@ -56,6 +56,27 @@ draft_created=0
 release_public=0
 appcast_commit=''
 
+retry_read_only() {
+  local attempt
+  local status=1
+  local delay=2
+  [[ "${SUPRA_RELEASE_TESTING:-0}" == '1' ]] && delay=0
+
+  for ((attempt = 1; attempt <= 5; attempt++)); do
+    if "$@"; then
+      return 0
+    else
+      status=$?
+    fi
+    if (( attempt < 5 )); then
+      printf 'Remote verification read attempt %d/5 failed; retrying in %d seconds.\n' \
+        "$attempt" "$delay" >&2
+      sleep "$delay"
+    fi
+  done
+  return "$status"
+}
+
 record_incident() {
   local failure_status="$1"
   local rollback_status="$2"
@@ -165,7 +186,7 @@ draft_created=1
 
 uploaded_dir="${temporary_dir}/uploaded"
 mkdir -p "$uploaded_dir"
-"$gh_command" release download "$tag" --repo "$repository" \
+retry_read_only "$gh_command" release download "$tag" --repo "$repository" \
   --pattern "$(basename "$zip")" --dir "$uploaded_dir" --clobber
 uploaded_zip="${uploaded_dir}/$(basename "$zip")"
 [[ -f "$uploaded_zip" \
@@ -223,7 +244,7 @@ deploy_run_id="$(release_wait_for_deploy_run "$gh_command" "$repository" deploy-
   || release_die 'website deployment run was not created for appcast commit'
 "$gh_command" run watch "$deploy_run_id" --repo "$repository" --exit-status
 
-public_release_json="$("$gh_command" release view "$tag" --repo "$repository" \
+public_release_json="$(retry_read_only "$gh_command" release view "$tag" --repo "$repository" \
   --json tagName,targetCommitish,url,isDraft)"
 jq -e --arg tag "$tag" --arg source "$source_sha" \
   --arg url "https://github.com/${repository}/releases/tag/${tag}" '
@@ -239,15 +260,15 @@ public_dmg="${public_dir}/$(basename "$dmg")"
 public_appcast="${public_dir}/appcast.xml"
 public_manifest="${public_dir}/$(basename "$manifest")"
 public_manifest_signature="${public_dir}/$(basename "$manifest_signature")"
-"$curl_command" --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+retry_read_only "$curl_command" --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
   --output "$public_zip" "https://github.com/${repository}/releases/download/${tag}/$(basename "$zip")"
-"$curl_command" --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+retry_read_only "$curl_command" --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
   --output "$public_dmg" "https://github.com/${repository}/releases/download/${tag}/$(basename "$dmg")"
-"$curl_command" --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+retry_read_only "$curl_command" --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
   --output "$public_appcast" 'https://supralegal.ai/appcast.xml'
-"$curl_command" --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+retry_read_only "$curl_command" --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
   --output "$public_manifest" "https://github.com/${repository}/releases/download/${tag}/$(basename "$manifest")"
-"$curl_command" --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+retry_read_only "$curl_command" --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
   --output "$public_manifest_signature" "https://github.com/${repository}/releases/download/${tag}/$(basename "$manifest_signature")"
 
 [[ "$(release_sha256 "$public_zip")" == "$(manifest_artifact zip sha256)" \

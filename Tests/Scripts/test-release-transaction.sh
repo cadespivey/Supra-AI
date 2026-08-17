@@ -872,6 +872,48 @@ run_case \
   publish_transaction_late_deploy_run
 : >"$mock_log"
 
+# Release creation and upload can be visible before the read path converges or
+# while GitHub is returning a transient 5xx. Publication must retry the
+# read-only verification download before rolling back a valid draft. This is
+# the exact failure mode observed while cutting v3.0.1.
+# Expected RED reason: the transaction invokes `gh release download` once, so
+# the first synthetic transport failure triggers rollback.
+publish_transaction_transient_release_download() {
+  export MOCK_RELEASE_DOWNLOAD_FAIL_CALLS=2
+  export MOCK_RELEASE_DOWNLOAD_COUNT_FILE="${temporary_dir}/release-download-count-${RANDOM}"
+  local result=0
+  publish_transaction || result=$?
+  unset MOCK_RELEASE_DOWNLOAD_FAIL_CALLS MOCK_RELEASE_DOWNLOAD_COUNT_FILE
+  return "$result"
+}
+: >"$mock_log"
+run_case \
+  'publication retries a transient draft verification download' \
+  0 \
+  'Release transaction completed for v2.3.0' \
+  publish_transaction_transient_release_download
+: >"$mock_log"
+
+# The public asset and appcast checks are also read-only and can see the same
+# transient GitHub/CDN failures after the release becomes public. They must
+# retry before initiating the materially more disruptive public rollback.
+# Expected RED reason: each curl download currently runs once.
+publish_transaction_transient_public_download() {
+  export MOCK_CURL_FAIL_CALLS=2
+  export MOCK_CURL_COUNT_FILE="${temporary_dir}/public-download-count-${RANDOM}"
+  local result=0
+  publish_transaction || result=$?
+  unset MOCK_CURL_FAIL_CALLS MOCK_CURL_COUNT_FILE
+  return "$result"
+}
+: >"$mock_log"
+run_case \
+  'publication retries transient public verification downloads' \
+  0 \
+  'Release transaction completed for v2.3.0' \
+  publish_transaction_transient_public_download
+: >"$mock_log"
+
 assert_publish_smoke_rejected() {
   local name="$1"
   local altered_manifest="$2"

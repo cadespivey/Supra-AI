@@ -163,6 +163,86 @@ else
   failures=$((failures + 1))
 fi
 rm -f "$override_guard_output"
+
+# A transient GitHub 5xx must not abort a metadata-only protected audit when a
+# bounded retry can complete the exact same read. The fake curl fails the first
+# two tree requests and succeeds on the third; release metadata then succeeds.
+# Expected RED reason: fetch_api invokes curl once and exits 2 on the first
+# synthetic transport failure.
+retry_dir="$(mktemp -d)"
+retry_remote="${retry_dir}/remote.git"
+retry_source="${retry_dir}/source"
+retry_bin="${retry_dir}/bin"
+mkdir -p "$retry_source" "$retry_bin"
+git -C "$retry_source" init -q -b main
+git -C "$retry_source" config user.name 'Public Audit Test'
+git -C "$retry_source" config user.email 'public-audit@example.invalid'
+printf '%s\n' synthetic >"${retry_source}/fixture.txt"
+git -C "$retry_source" add fixture.txt
+git -C "$retry_source" commit -qm 'public audit retry fixture'
+git clone -q --bare "$retry_source" "$retry_remote"
+retry_count_file="${retry_dir}/tree-request-count"
+retry_output="${retry_dir}/output.log"
+cat >"${retry_bin}/curl" <<'FAKE_CURL'
+#!/usr/bin/env bash
+set -euo pipefail
+output=''
+url="${!#}"
+while (( $# > 0 )); do
+  if [[ "$1" == '--output' ]]; then
+    output="${2:-}"
+    shift 2
+  else
+    shift
+  fi
+done
+[[ -n "$output" ]]
+case "$url" in
+  */git/trees/*)
+    count="$(cat "${MOCK_TREE_REQUEST_COUNT_FILE}" 2>/dev/null || printf 0)"
+    count=$((count + 1))
+    printf '%s' "$count" >"${MOCK_TREE_REQUEST_COUNT_FILE}"
+    if (( count <= 2 )); then
+      printf '%s\n' 'curl: synthetic HTTP 504' >&2
+      exit 22
+    fi
+    printf '%s\n' '{"truncated":false,"tree":[]}' >"$output"
+    ;;
+  */releases\?*)
+    printf '%s\n' '[]' >"$output"
+    ;;
+  *)
+    printf 'unexpected URL: %s\n' "$url" >&2
+    exit 2
+    ;;
+esac
+FAKE_CURL
+cat >"${retry_bin}/sleep" <<'FAKE_SLEEP'
+#!/usr/bin/env bash
+exit 0
+FAKE_SLEEP
+chmod +x "${retry_bin}/curl" "${retry_bin}/sleep"
+if env \
+    PATH="${retry_bin}:$PATH" \
+    PUBLIC_ASSET_REMOTE_URL="$retry_remote" \
+    PUBLIC_ASSET_EXCEPTIONS_FILE=/dev/null \
+    MOCK_TREE_REQUEST_COUNT_FILE="$retry_count_file" \
+    bash "$verifier" example/synthetic >"$retry_output" 2>&1; then
+  retry_status=0
+else
+  retry_status=$?
+fi
+retry_count="$(cat "$retry_count_file" 2>/dev/null || printf 0)"
+if [[ "$retry_status" -eq 0 && "$retry_count" -eq 3 ]] \
+    && grep -Fq 'Public repository asset metadata check passed.' "$retry_output"; then
+  printf 'PASS: %s\n' 'transient GitHub tree request is retried'
+else
+  printf 'FAIL: %s: expected status 0 after 3 tree requests; got status %s after %s\n' \
+    'transient GitHub tree request is retried' "$retry_status" "$retry_count" >&2
+  sed 's/^/  | /' "$retry_output" >&2
+  failures=$((failures + 1))
+fi
+rm -rf "$retry_dir"
 rm -f "$known_exceptions" "$wrong_object_exceptions" "$branch_exceptions"
 
 if (( failures != 0 )); then
