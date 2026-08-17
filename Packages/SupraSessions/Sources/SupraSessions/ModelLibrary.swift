@@ -397,6 +397,12 @@ public final class ModelLibrary: ObservableObject {
         configuration: LegalModelConfiguration,
         honorsForcedChatSelection: Bool
     ) {
+        // A real load already owns the model transition. Speculative work must
+        // never wait on that transition while holding the shared execution lane,
+        // because the real load may still need the same lane after its off-main
+        // authorization pass completes.
+        if case .loading = loadState { return }
+
         guard let runtimeResidencyCoordinator else {
             scheduleExecutionPrewarm(
                 role: role,
@@ -439,11 +445,12 @@ public final class ModelLibrary: ObservableObject {
         guard let coordinator = modelExecutionCoordinator else {
             Task { [weak self] in
                 guard let self else { return }
-                if honorsForcedChatSelection {
-                    _ = await ensureLoadedChatModelID(for: role, configuration: configuration)
-                } else {
-                    _ = await ensureLoadedRoutedModelID(for: role, configuration: configuration)
-                }
+                await self.executePrewarmUnlessLoadIsInFlight(
+                    role: role,
+                    configuration: configuration,
+                    honorsForcedChatSelection: honorsForcedChatSelection,
+                    runtimeGateway: self.modelExecutionGateway
+                )
             }
             return
         }
@@ -462,20 +469,40 @@ public final class ModelLibrary: ObservableObject {
             guard let self else { return }
             _ = try? await coordinator.execute(request) { permit in
                 await permit.markRunning()
-                if honorsForcedChatSelection {
-                    _ = await self.ensureLoadedChatModelID(
-                        for: role,
-                        configuration: configuration,
-                        runtimeGateway: permit
-                    )
-                } else {
-                    _ = await self.ensureLoadedRoutedModelID(
-                        for: role,
-                        configuration: configuration,
-                        runtimeGateway: permit
-                    )
-                }
+                await self.executePrewarmUnlessLoadIsInFlight(
+                    role: role,
+                    configuration: configuration,
+                    honorsForcedChatSelection: honorsForcedChatSelection,
+                    runtimeGateway: permit
+                )
             }
+        }
+    }
+
+    /// Re-checks app-side load ownership only after a speculative request has
+    /// acquired its execution permit. The earlier scheduling guard is not enough:
+    /// startup can enter `.loading` during residency planning or queue admission.
+    /// Returning here releases the permit so that startup's real load can run.
+    func executePrewarmUnlessLoadIsInFlight(
+        role: ModelRole,
+        configuration: LegalModelConfiguration,
+        honorsForcedChatSelection: Bool,
+        runtimeGateway: any ModelExecutionGateway
+    ) async {
+        if case .loading = loadState { return }
+
+        if honorsForcedChatSelection {
+            _ = await ensureLoadedChatModelID(
+                for: role,
+                configuration: configuration,
+                runtimeGateway: runtimeGateway
+            )
+        } else {
+            _ = await ensureLoadedRoutedModelID(
+                for: role,
+                configuration: configuration,
+                runtimeGateway: runtimeGateway
+            )
         }
     }
 
