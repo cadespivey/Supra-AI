@@ -7,6 +7,15 @@
     <language>en</language>
     <!-- APPCAST_ITEMS: Scripts/release.sh prepends a new <item> here, newest first. -->
     <item>
+      <title>Supra AI 3.0.1</title>
+      <sparkle:releaseNotesLink>https://github.com/cadespivey/Supra-AI/releases/tag/v3.0.1</sparkle:releaseNotesLink>
+      <pubDate>Mon, 17 Aug 2026 17:06:28 +0000</pubDate>
+      <sparkle:version>395</sparkle:version>
+      <sparkle:shortVersionString>3.0.1</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+      <enclosure url="https://github.com/cadespivey/Supra-AI/releases/download/v3.0.1/SupraAI-3.0.1.zip" type="application/octet-stream" sparkle:edSignature="U+iNST5s98WFKlWAnyS0+6mQ2n14HYYCxZQYWU5xprZxUEUbj8uj3noJnMuWUvYbjrW030lbFzr6xF/YQtS7Dw==" length="33490166" />
+    </item>
+    <item>
       <title>Supra AI 3.0.0</title>
       <sparkle:releaseNotesLink>https://github.com/cadespivey/Supra-AI/releases/tag/v3.0.0</sparkle:releaseNotesLink>
       <pubDate>Mon, 17 Aug 2026 00:47:31 +0000</pubDate>
