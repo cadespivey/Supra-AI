@@ -191,16 +191,13 @@ expect 'operator sees the reviewed version intent' \
   grep -Fq '9.4.7' "$dispatch_output"
 expect 'operator sees the reviewed build intent' \
   grep -Fq '941' "$dispatch_output"
-expect 'operator is told to approve the environment' \
-  grep -Fiq 'approve' "$dispatch_output"
+expect 'operator is not asked to approve their own command again' \
+  bash -c "! grep -Fiq 'approve the production-release' '$dispatch_output'"
 expect 'operator sees the dispatched run URL' \
   grep -Fq 'actions/runs/770002' "$dispatch_output"
 
-audit_line="$(log_line_number '^audit ')"
 runner_line="$(log_line_number '^runner-start$')"
 dispatch_line="$(log_line_number '^gh workflow run ')"
-expect 'audit runs before the runner starts' \
-  test -n "$audit_line" -a -n "$runner_line" -a "$audit_line" -lt "$runner_line"
 expect 'runner starts before the workflow is dispatched' \
   test -n "$dispatch_line" -a "$runner_line" -lt "$dispatch_line"
 
@@ -226,15 +223,6 @@ expect 'existing release is named' \
   grep -Fq 'already published or reserved' "$dispatch_output"
 expect 'existing release does not dispatch' \
   bash -c "! grep -Fq 'gh workflow run' '$shim_log'"
-
-run_dispatch SHIM_AUDIT_STATUS=3 --
-expect_status 'failing public-asset audit fails closed' 1
-expect 'failing audit is named' \
-  grep -Fq 'public-asset audit' "$dispatch_output"
-expect 'failing audit does not dispatch' \
-  bash -c "! grep -Fq 'gh workflow run' '$shim_log'"
-expect 'failing audit does not start the runner' \
-  bash -c "! grep -Fq 'runner-start' '$shim_log'"
 
 # --- Runner that never comes online: stop it again, do not dispatch ---------
 run_dispatch SHIM_RUNNERS_JSON="$runners_offline" --

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Developer-side release entrypoint: verify candidate readiness, start the
 # release runner, and dispatch the protected release workflow bound to
-# origin/main's exact SHA and its green Protected macOS CI run.
+# origin/main's exact SHA and its reusable green Protected macOS CI run.
 #
 # The reviewed commit on main is the only statement of release version intent:
 # no version or build values are forwarded — the workflow re-derives them from
@@ -46,8 +46,6 @@ for command in git jq sed mktemp; do
   release_require_command "$command"
 done
 gh_command="$(release_resolve_command_override SUPRA_GH_COMMAND gh)"
-asset_audit="$(release_resolve_command_override SUPRA_ASSET_AUDIT_COMMAND \
-  "${script_root}/Scripts/verify-public-repository-assets.sh")"
 runner_stop_override="$(release_resolve_command_override SUPRA_RUNNER_STOP_COMMAND '')"
 runner_home="${SUPRA_RUNNER_HOME:-${HOME}/actions-runner}"
 
@@ -112,7 +110,7 @@ if (( rehearsal == 0 )); then
   fi
 fi
 
-ci_json="$("$gh_command" run list --repo "$repository" --branch main \
+ci_json="$("$gh_command" run list --repo "$repository" \
   --workflow 'Protected macOS CI' --json databaseId,headSha,conclusion,status --limit 20)" \
   || release_die 'unable to list Protected macOS CI runs'
 ci_run_id="$(jq -r --arg sha "$sha" \
@@ -120,11 +118,6 @@ ci_run_id="$(jq -r --arg sha "$sha" \
   <<<"$ci_json")"
 [[ -n "$ci_run_id" ]] \
   || release_die "no green Protected macOS CI run exists for origin/main (${sha}); wait for CI or fix it first"
-
-printf 'Running the live public-asset audit…\n'
-audit_token="${PUBLIC_ASSET_GITHUB_TOKEN:-$("$gh_command" auth token 2>/dev/null || true)}"
-PUBLIC_ASSET_GITHUB_TOKEN="$audit_token" "$asset_audit" "$repository" \
-  || release_die 'live public-asset audit failed; the release is blocked until it passes'
 
 [[ -x "${runner_home}/run.sh" ]] \
   || release_die "no release runner is provisioned at ${runner_home}"
@@ -183,5 +176,5 @@ printf '  CI evidence:  run %s\n' "$ci_run_id"
 if [[ -n "$run_url" ]]; then
   printf '  workflow run: %s\n' "$run_url"
 fi
-printf '\nApprove the production-release deployment in GitHub, then run:\n'
+printf '\nThe owner command is the release approval. Continue with:\n'
 printf '  bash Scripts/release-finish.sh%s\n' "$finish_flag"

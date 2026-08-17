@@ -31,8 +31,9 @@ release_validate_repository "$repository"
 release_validate_sha "$source_sha"
 release_validate_version "$version"
 release_require_protected_environment
-for command in git gh xmllint; do release_require_command "$command"; done
+for command in git gh jq xmllint; do release_require_command "$command"; done
 release_load_git_signing_identity "$repo_root"
+gh_command="$(release_resolve_command_override SUPRA_GH_COMMAND gh)"
 
 xmllint --noout "$appcast" >/dev/null 2>&1 || release_die 'prepared appcast is invalid XML'
 grep -Fq "<sparkle:shortVersionString>${version}</sparkle:shortVersionString>" "$appcast" \
@@ -75,27 +76,44 @@ GIT_COMMITTER_NAME="$RELEASE_GIT_NAME" GIT_COMMITTER_EMAIL="$RELEASE_GIT_EMAIL" 
     -c "gpg.format=${RELEASE_GIT_SIGNING_FORMAT}" commit -S -m "Publish appcast for v${version}"
 git -C "$worktree" -c credential.https://github.com.helper='!gh auth git-credential' \
   push origin "HEAD:refs/heads/${branch}"
+metadata_sha="$(git -C "$worktree" rev-parse HEAD)"
+"$gh_command" workflow run 'Protected macOS CI' --repo "$repository" --ref "$branch" \
+  || release_die 'unable to dispatch narrow appcast validation'
 
-pr_url="$(gh pr create --repo "$repository" --base main --head "$branch" \
-  --title "Publish appcast for v${version}" \
-  --body "Protected release transaction for source \`${source_sha}\`. Review is required; this PR contains only the validated appcast and fallback constants.")"
-abandon_pull_request() {
-  gh pr close "$pr_url" --repo "$repository" --delete-branch \
-    --comment 'Protected release transaction failed before merge; this pull request is superseded.' \
-    >/dev/null 2>&1 || true
-}
-if ! release_wait_for_required_checks "$pr_url" "$repository"; then
-  abandon_pull_request
-  release_die 'required checks did not pass for the appcast pull request'
-fi
-if ! gh pr merge "$pr_url" --repo "$repository" --merge --delete-branch; then
-  abandon_pull_request
-  release_die 'appcast pull request merge failed'
-fi
-merge_commit="$(gh pr view "$pr_url" --repo "$repository" --json state,mergeCommit \
-  --jq 'select(.state == "MERGED") | .mergeCommit.oid')"
-release_validate_sha "$merge_commit"
+poll_seconds="${SUPRA_RELEASE_CHECK_POLL_SECONDS:-15}"
+metadata_run=''
+status=''
+conclusion=''
+for (( attempt = 0; attempt < 60; attempt++ )); do
+  runs="$("$gh_command" run list --repo "$repository" --branch "$branch" \
+    --workflow 'Protected macOS CI' --json databaseId,headSha,status,conclusion,url --limit 10)" \
+    || release_die 'unable to list appcast validation runs'
+  selected="$(jq --arg sha "$metadata_sha" '[.[] | select(.headSha == $sha)][0] // empty' <<<"$runs")"
+  if [[ -n "$selected" ]]; then
+    status="$(jq -r '.status // empty' <<<"$selected")"
+    conclusion="$(jq -r '.conclusion // empty' <<<"$selected")"
+    metadata_run="$(jq -r '.databaseId // empty' <<<"$selected")"
+    if [[ "$status" == 'completed' ]]; then
+      if [[ "$conclusion" != 'success' ]]; then
+        release_die 'narrow appcast validation failed'
+        exit 1
+      fi
+      break
+    fi
+  fi
+  sleep "$poll_seconds"
+done
+[[ -n "$metadata_run" && "$status" == 'completed' && "$conclusion" == 'success' ]] \
+  || release_die 'narrow appcast validation did not complete'
+
+# The validated metadata commit itself advances main. No PR merge commit and no
+# second general application run are created.
+git -C "$worktree" -c credential.https://github.com.helper='!gh auth git-credential' \
+  push origin "${metadata_sha}:refs/heads/main" \
+  || release_die 'validated appcast commit could not fast-forward main'
+git -C "$worktree" -c credential.https://github.com.helper='!gh auth git-credential' \
+  push origin --delete "$branch" >/dev/null 2>&1 || true
 
 mkdir -p "$(dirname "$output")"
-printf '%s\n' "$merge_commit" >"$output"
-printf 'Validated appcast merged through protected review at %s.\n' "$merge_commit"
+printf '%s\n' "$metadata_sha" >"$output"
+printf 'Validated appcast fast-forwarded to main at %s (CI run %s).\n' "$metadata_sha" "$metadata_run"

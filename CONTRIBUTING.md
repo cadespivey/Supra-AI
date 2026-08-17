@@ -1,14 +1,13 @@
 # Contributing to Supra AI
 
 Thanks for your interest in Supra AI. This document covers how the project is built,
-tested, and organized so you can get productive quickly. It reflects how the project is
-actually developed — milestone plans up front, focused PRs, and a validation suite per
-milestone.
+tested, and organized so you can get productive quickly. It reflects a single-maintainer
+workflow: a lightweight plan, focused implementation, and one proportionate final validation.
 
 > ⚖️ Supra AI is a tool for legal professionals but is **not legal advice** and produces
 > output that must be independently verified. Contributions that weaken the citation
 > verification, source-grounding, or privacy guarantees will not be accepted. See the
-> guardrails in each milestone plan and in [SECURITY.md](SECURITY.md).
+> durable guardrails in [SECURITY.md](SECURITY.md) and the relevant architecture documents.
 
 ## Prerequisites
 
@@ -51,7 +50,7 @@ xcodebuild -workspace SupraAI.xcworkspace -scheme SupraAI -destination 'platform
 # Test an individual package
 cd Packages/SupraSessions && swift test
 
-# Verify inventory/security facts and test the exact 14-package set
+# Optional broad checks when the change actually spans the repository
 bash Scripts/verify-repo-facts.sh
 bash Scripts/verify-product-claims.sh
 bash Scripts/test-all-packages.sh
@@ -65,8 +64,9 @@ DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer xcodebuild ...
 DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer swift test   # from a package dir
 ```
 
-The package test suite runs **with zero failures across all packages.** Keep it that way:
-a change should not merge with a red suite.
+Run the affected package tests while developing. A full package sweep is for cross-package,
+dependency, migration, build-system, or release-infrastructure changes; it is not a routine
+prerequisite for an isolated fix.
 
 Product, security, support, and privacy wording is an executable interface. Update
 [`Docs/Verified-Product-Claims.yml`](Docs/Verified-Product-Claims.yml) with its code anchor,
@@ -78,8 +78,8 @@ requires the approved sentence to remain present at its publication anchor.
 ```
 Apps/SupraAI/           SwiftUI app (SupraAI) + sandboxed runtime service + UI tests
 Packages/               14 local Swift packages (see ARCHITECTURE.md for the graph)
-Docs/Milestones/        Per-milestone plans, work orders, acceptance criteria, progress logs
-Docs/Architecture/      Dependency pins, runtime file-access design
+Docs/                   Durable product, process, release, and architecture documentation
+Docs/Architecture/      Dependency pins and runtime design
 Resources/              Prompt templates (chat, research, structured outputs)
 TestData/               Synthetic seed corpus + validation plan (no real client data)
 FutureModules/          Reserved package namespaces for planned work
@@ -91,17 +91,15 @@ network I/O) are intentional and enforced by the boundaries.
 
 ## How work is organized
 
-Substantial features are planned as **milestones** before implementation. A milestone plan
-in `Docs/Milestones/` lists numbered **work orders**, each with explicit acceptance criteria,
-plus a definition of done and a validation suite. The M3 plan also keeps a **progress log**
-with per-work-order status and any deviations from the literal plan (and why). If you take on
-a milestone-sized change, follow the same pattern: write the plan, then implement against it.
+For substantial work, keep one short working plan with the outcome, scope, tasks, and finish
+criteria. The plan is done when the implementation and durable documentation are complete and
+one impact-appropriate validation pass is green. Do not create separate specification, test
+plan, work-order, sign-off, or progress-ledger documents unless the work's risk genuinely
+needs them.
 
-Tests are written **before** the code they gate, and are designed so they cannot pass without
-exercising their target — wire-proofs with non-default values, frozen goldens, recorded RED
-reasons, no silent skips. The full discipline (and why each rule exists) is in
-[`Docs/Test-First-Methodology.md`](Docs/Test-First-Methodology.md); follow it for any change
-that adds or modifies behavior.
+Tests should prove changed behavior and fail loudly. They may be developed alongside the code
+and committed with it. See [`Docs/Test-First-Methodology.md`](Docs/Test-First-Methodology.md)
+for the proportionate validation policy.
 
 ## Branching, commits, and pull requests
 
@@ -111,8 +109,9 @@ that adds or modifies behavior.
 - **Commit messages** are imperative and scoped, e.g.
   `Add file/image attachments to global chat (OCR-to-text, up to 10)` or
   `Audit fixes: generation-failure handling, dead code, data race`.
-- **Open a PR into `main`.** Keep PRs focused (one feature/fix area). Describe what changed,
-  why, and how you verified it. Note any deviation from a milestone plan.
+- **Open a PR into `main` when useful.** With one maintainer, a PR is a CI and change-summary
+  surface, not a second-person approval ceremony. A branch with the same required green CI
+  receipt may be fast-forwarded under the repository rules.
 - **Protected release controls remain owner-controlled.** Changes to workflows, release scripts,
   security claims, `SECURITY.md`, or public privacy copy follow
   [`Docs/Release-Protection.md`](Docs/Release-Protection.md); do not use an administrator
@@ -121,9 +120,13 @@ that adds or modifies behavior.
   deterministic package tests; model-dependent behavior is exercised by the Diagnostics
   validation suites.
 
-Release artifacts are built from a clean, recorded commit SHA and become publishable only after deterministic preflight, signature, notarization, isolated signed app/XPC model smoke, appcast, and rollback checks complete.
-Use the release rehearsal/dry-run path before a real release; a rehearsal must not create a tag,
-GitHub release, appcast publication, or upload.
+Finishing a plan should leave its exact commit ready to become a release candidate. Reuse its
+final green CI receipt; do not rerun the same suite on the branch, merged `main`, and a metadata-
+only release commit. Routine releases go directly to the protected production transaction.
+A signed rehearsal is reserved for changes to signing, packaging, notarization, publishing,
+entitlements, or the release environment.
+
+Release artifacts are built from one recorded commit SHA and become publishable only after signing, notarization, one signed app/XPC model smoke, transactional metadata publication, rollback protection, and public digest verification complete.
 
 The git history is a good reference for scope and message style.
 

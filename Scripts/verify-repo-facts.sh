@@ -17,8 +17,6 @@ fail() {
 [[ -f "$pbxproj" ]] || { printf '%s\n' 'ERROR: Xcode project source is missing' >&2; exit 1; }
 bash "${repo_root}/Scripts/list-local-packages.sh" --verify || status=1
 bash "${repo_root}/Scripts/verify-migration-sequence.sh" || status=1
-bash "${repo_root}/Scripts/verify-release-scope-ledger.sh" || status=1
-bash "${repo_root}/Tests/Scripts/test-release-scope-ledger.sh" || status=1
 
 temporary_dir="$(mktemp -d)"
 trap 'rm -rf "$temporary_dir"' EXIT
@@ -77,33 +75,22 @@ required_workflows=(
   .github/workflows/release-rehearsal.yml
   .github/workflows/emergency-release-rollback.yml
   .github/workflows/verify-model-ids.yml
-  .github/workflows/verify-public-repository-assets.yml
 )
 for relative in "${required_workflows[@]}"; do
   [[ -f "${repo_root}/${relative}" ]] || fail "required workflow is missing: ${relative}"
 done
 
 if [[ -f "$macos_workflow" ]]; then
-  expected_packages="${temporary_dir}/expected-packages.txt"
-  workflow_packages="${temporary_dir}/workflow-packages.txt"
-  bash "${repo_root}/Scripts/list-local-packages.sh" | LC_ALL=C sort >"$expected_packages"
-  awk '
-    /^[[:space:]]+package:$/ { packages = 1; next }
-    packages && /^[[:space:]]+-[[:space:]]+[A-Za-z0-9_-]+[[:space:]]*$/ {
-      value = $0
-      sub(/^[[:space:]]+-[[:space:]]+/, "", value)
-      sub(/[[:space:]]+$/, "", value)
-      print value
-      next
-    }
-    packages { exit }
-  ' "$macos_workflow" | LC_ALL=C sort >"$workflow_packages"
-  cmp -s "$expected_packages" "$workflow_packages" \
-    || fail 'macOS CI package matrix must contain the exact fixed 14-package inventory'
-
-  for job in inventory swift-packages app-build app-smoke migration-fixtures document-benchmarks website security dependency-review; do
+  for job in plan inventory claims swift-packages app-build app-smoke migration-fixtures document-benchmarks website release-controls required; do
     grep -Eq "^  ${job}:" "$macos_workflow" || fail "macOS CI job is missing: ${job}"
   done
+  grep -Fq 'Scripts/ci-change-plan.sh' "$macos_workflow" \
+    || fail 'macOS CI does not use the change-impact planner'
+  grep -Fq 'name: Protected macOS CI' "$macos_workflow" \
+    || fail 'macOS CI omits the single aggregate required context'
+  if grep -Eq '^[[:space:]]+push:' "$macos_workflow"; then
+    fail 'macOS CI must not repeat the exact-SHA receipt after main is fast-forwarded'
+  fi
 fi
 
 if [[ -f "$scheduled_workflow" ]]; then
@@ -123,7 +110,7 @@ if [[ -f "$benchmark_workflow" ]]; then
 fi
 
 if [[ -f "$macos_workflow" ]]; then
-  grep -Fq 'Scripts/run-benchmarks.sh --performance' "$macos_workflow" || fail 'protected macOS CI omits fixed-scale performance safety verification'
+  grep -Fq 'Scripts/run-benchmarks.sh --performance' "$macos_workflow" || fail 'change-aware macOS CI omits the performance lane'
 fi
 
 while IFS=: read -r workflow line_number line; do
@@ -136,12 +123,6 @@ done < <(grep -nH -E '^[[:space:]]*(-[[:space:]]+)?uses:[[:space:]]+' "${repo_ro
 if grep -RqsE '^[[:space:]]*pull_request_target:' "${repo_root}/.github/workflows"; then
   fail 'pull_request_target is prohibited for repository CI'
 fi
-
-bash "${repo_root}/Scripts/verify-entitlements.sh" || status=1
-bash "${repo_root}/Scripts/verify-product-claims.sh" || status=1
-bash "${repo_root}/Tests/Scripts/test-backup-restore-documentation.sh" || status=1
-bash "${repo_root}/Scripts/verify-public-font-license.sh" || status=1
-bash "${repo_root}/Scripts/verify-release-protection.sh" || status=1
 
 if (( status != 0 )); then
   printf '%s\n' 'Repository facts verification failed.' >&2

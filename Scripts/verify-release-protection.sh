@@ -92,9 +92,13 @@ fi
 
 macos_workflow="${repo_root}/.github/workflows/macos-ci.yml"
 if [[ -f "$macos_workflow" ]]; then
-  for job in inventory swift-packages app-build app-smoke migration-fixtures document-benchmarks website security dependency-review; do
-    grep -Eq "^  ${job}:" "$macos_workflow" || fail "required main protection job is missing: ${job}"
+  for job in plan inventory claims swift-packages app-build app-smoke migration-fixtures document-benchmarks website release-controls required; do
+    grep -Eq "^  ${job}:" "$macos_workflow" || fail "change-aware CI job is missing: ${job}"
   done
+  grep -Eq '^  required:' "$macos_workflow" \
+    || fail 'aggregate protected CI result is missing'
+  grep -Fq 'name: Protected macOS CI' "$macos_workflow" \
+    || fail 'aggregate protected CI context has drifted'
 fi
 
 scheduled="${repo_root}/.github/workflows/security-scheduled.yml"

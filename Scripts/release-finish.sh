@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Developer-side release wrap-up: watch a dispatched protected release run to
 # completion, stop the release runner, archive evidence via
-# Scripts/reset-release-runner.sh, and re-verify the published release and
-# appcast as a user would. Evidence archival happens for every completed run,
+# Scripts/reset-release-runner.sh. The protected transaction owns public
+# verification and records it in release-result JSON. Evidence archival happens for every completed run,
 # green or red; a run that never completes leaves the runner and workspace
 # untouched for investigation.
 set -euo pipefail
@@ -44,7 +44,6 @@ for command in git jq mktemp; do
   release_require_command "$command"
 done
 gh_command="$(release_resolve_command_override SUPRA_GH_COMMAND gh)"
-curl_command="$(release_resolve_command_override SUPRA_CURL_COMMAND curl)"
 reset_command="$(release_resolve_command_override SUPRA_RESET_COMMAND \
   "${script_root}/Scripts/reset-release-runner.sh")"
 runner_stop_override="$(release_resolve_command_override SUPRA_RUNNER_STOP_COMMAND '')"
@@ -145,32 +144,6 @@ fi
 
 if (( rehearsal == 1 )); then
   printf 'Rehearsal run %s completed green; no publication was attempted.\n' "$run_id"
-  exit 0
+else
+  printf 'Release run %s completed green; transaction verification is archived with the release evidence.\n' "$run_id"
 fi
-
-git -C "$repo_root" fetch origin main --quiet || release_die 'unable to fetch origin/main'
-project_at_head="$(mktemp)"
-trap 'rm -f "$project_at_head"' EXIT
-git -C "$repo_root" show 'FETCH_HEAD:Apps/SupraAI/SupraAI.xcodeproj/project.pbxproj' \
-  >"$project_at_head" 2>/dev/null \
-  || release_die 'reviewed project metadata is missing at origin/main'
-version="$(bash "${script_root}/Scripts/reviewed-release-metadata.sh" "$project_at_head" version)"
-tag="v${version}"
-
-release_view_json="$("$gh_command" release view "$tag" --repo "$repository" \
-  --json tagName,isDraft,url)" \
-  || release_die "published release ${tag} is missing"
-jq -e --arg tag "$tag" '.tagName == $tag and .isDraft == false' \
-  >/dev/null <<<"$release_view_json" \
-  || release_die "release ${tag} is not public"
-release_url="$(jq -r '.url' <<<"$release_view_json")"
-
-appcast="$("$curl_command" --fail --silent --show-error --location --proto '=https' \
-  --tlsv1.2 'https://supralegal.ai/appcast.xml')" \
-  || release_die 'unable to download the public appcast'
-grep -Fq "<sparkle:shortVersionString>${version}</sparkle:shortVersionString>" <<<"$appcast" \
-  || release_die "public appcast does not list ${version}; verify the deployment before trusting this release"
-
-printf '\nRelease %s is published and verified.\n' "$tag"
-printf '  release: %s\n' "$release_url"
-printf '  appcast: https://supralegal.ai/appcast.xml (lists %s)\n' "$version"

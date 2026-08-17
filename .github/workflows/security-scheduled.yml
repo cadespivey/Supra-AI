@@ -20,6 +20,11 @@ jobs:
       - name: Verify repository facts and security scans
         run: |
           bash Scripts/verify-repo-facts.sh
+          bash Scripts/verify-product-claims.sh
+          bash Scripts/verify-entitlements.sh
+          bash Tests/Scripts/test-backup-restore-documentation.sh
+          bash Scripts/verify-public-font-license.sh
+          bash Scripts/verify-release-protection.sh
           bash Scripts/verify-secrets.sh
           bash Scripts/verify-prohibited-artifacts.sh
 

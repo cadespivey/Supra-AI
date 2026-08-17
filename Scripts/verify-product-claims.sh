@@ -206,8 +206,6 @@ supported_expected="$(claim_expected SECURITY-SUPPORTED-RELEASE-LINE)"
 [[ "$supported_expected" == "$supported_actual" ]] \
   || fail "security support claim expected ${supported_expected}, project marketing version resolves to ${supported_actual}"
 
-bash "${repo_root}/Scripts/verify-entitlements.sh" >/dev/null || status=1
-
 if git -C "$repo_root" grep --untracked -qE \
     'TelemetryDeck|SentrySDK|FirebaseAnalytics|AmplitudeSwift|Mixpanel|PostHog|SegmentAnalytics' \
     -- Apps Packages; then
