@@ -19,7 +19,7 @@ temporary_dir="$(mktemp -d)"
 trap 'rm -rf "$temporary_dir"' EXIT
 mock_bin="${temporary_dir}/bin"
 mkdir -p "$mock_bin"
-for command in credential-gate font-gate release-gate scope-gate website-gate signed-smoke gh sign_update codesign xcrun spctl hdiutil security appcast-publish appcast-rollback curl; do
+for command in credential-gate font-gate release-gate scope-gate signed-smoke gh sign_update codesign xcrun spctl hdiutil security appcast-publish appcast-rollback curl; do
   ln -s "$fixture_command" "${mock_bin}/${command}"
 done
 mock_log="${temporary_dir}/release-commands.log"
@@ -263,51 +263,6 @@ run_case \
     --service "$resolved_xpc_entitlements" \
     --bundle-id ai.evil.Other
 
-# GitHub takes several seconds to spawn a new pull request's check runs, and
-# `gh pr checks` errors with "no checks reported" instead of waiting when
-# queried in that window (observed live: the production transaction created
-# the appcast PR and died two seconds later). The checks wait must poll until
-# checks exist, then defer to --watch, and fail closed when they never appear.
-# Expected RED reason: release_wait_for_required_checks does not exist in
-# Scripts/lib/release-common.sh, so the probe exits 127.
-checks_mock_bin="${temporary_dir}/checks-bin"
-mkdir -p "$checks_mock_bin"
-cat >"${checks_mock_bin}/gh" <<'MOCK'
-#!/usr/bin/env bash
-count_file="${MOCK_CHECKS_COUNT_FILE:?}"
-count="$(cat "$count_file" 2>/dev/null || printf 0)"
-count=$((count + 1))
-printf '%s' "$count" >"$count_file"
-if (( count <= ${MOCK_CHECKS_ABSENT_CALLS:-0} )); then
-  printf "no checks reported on the 'synthetic' branch\n" >&2
-  exit 1
-fi
-printf 'all checks passed\n'
-MOCK
-chmod +x "${checks_mock_bin}/gh"
-
-wait_for_checks_probe() {
-  local absent_calls="$1"
-  env \
-    PATH="${checks_mock_bin}:$PATH" \
-    MOCK_CHECKS_COUNT_FILE="${temporary_dir}/checks-count-${RANDOM}" \
-    MOCK_CHECKS_ABSENT_CALLS="$absent_calls" \
-    SUPRA_RELEASE_TESTING=1 \
-    SUPRA_RELEASE_CHECK_POLL_SECONDS=0 \
-    bash -c 'source "$1/Scripts/lib/release-common.sh" && release_wait_for_required_checks https://example.invalid/pull/1 example/supra' \
-    _ "$repo_root"
-}
-run_case \
-  'required-checks wait survives late check registration' \
-  0 \
-  'all checks passed' \
-  wait_for_checks_probe 2
-run_case \
-  'required-checks wait fails closed when checks never appear' \
-  2 \
-  'never appeared' \
-  wait_for_checks_probe 999
-
 # GitHub spawns push-triggered workflow runs asynchronously as well: v2.2.1
 # production run 29343058641 merged the appcast PR and immediately queried
 # `gh run list` for the deploy-website.yml run, which had not been created
@@ -426,36 +381,6 @@ if [[ "$ci_status" -ne 1 ]] || ! grep -Fq 'protected CI run is not successful' "
   fail 'failed protected CI gate did not block release'
 else
   printf '%s\n' 'PASS: failed protected CI gate blocks release'
-fi
-
-make_source_repo font-fail
-font_output="${temporary_dir}/font-failure.log"
-font_status=0
-MOCK_FONT_FAIL=1 preflight "$SOURCE_REPO" "$SOURCE_SHA" "${temporary_dir}/font.json" >"$font_output" 2>&1 || font_status=$?
-if [[ "$font_status" -ne 1 ]] || ! grep -Fq 'public font gate failed' "$font_output"; then
-  fail 'missing or failed font gate did not block release'
-else
-  printf '%s\n' 'PASS: missing or failed font gate blocks release'
-fi
-
-make_source_repo release-gate-fail
-release_gate_output="${temporary_dir}/release-gate-failure.log"
-release_gate_status=0
-MOCK_RELEASE_GATE_FAIL=1 preflight "$SOURCE_REPO" "$SOURCE_SHA" "${temporary_dir}/release-gate.json" >"$release_gate_output" 2>&1 || release_gate_status=$?
-if [[ "$release_gate_status" -ne 1 ]] || ! grep -Fq 'release integration gate failed' "$release_gate_output"; then
-  fail 'failed package/integration release gate did not block release'
-else
-  printf '%s\n' 'PASS: failed package/integration release gate blocks release'
-fi
-
-make_source_repo scope-gate-fail
-scope_gate_output="${temporary_dir}/scope-gate-failure.log"
-scope_gate_status=0
-MOCK_SCOPE_GATE_FAIL=1 preflight "$SOURCE_REPO" "$SOURCE_SHA" "${temporary_dir}/scope-gate.json" >"$scope_gate_output" 2>&1 || scope_gate_status=$?
-if [[ "$scope_gate_status" -ne 1 ]] || ! grep -Fq 'owner-approved release scope gate failed' "$scope_gate_output"; then
-  fail 'missing owner-approved release scope gate did not block release'
-else
-  printf '%s\n' 'PASS: missing owner-approved release scope gate blocks release'
 fi
 
 make_source_repo credential-fail
@@ -774,7 +699,6 @@ publish_transaction() {
     SUPRA_RELEASE_TESTING=1 \
     SUPRA_GH_COMMAND="${mock_bin}/gh" \
     SUPRA_CURL_COMMAND="${mock_bin}/curl" \
-    SUPRA_WEBSITE_GATE_COMMAND="${mock_bin}/website-gate" \
     SUPRA_APPCAST_PUBLISH_COMMAND="${mock_bin}/appcast-publish" \
     SUPRA_APPCAST_ROLLBACK_COMMAND="${mock_bin}/appcast-rollback" \
     MOCK_RELEASE_LOG="$mock_log" \
@@ -800,18 +724,12 @@ run_case \
 successful_publish_log="${temporary_dir}/successful-publish.log"
 cp "$mock_log" "$successful_publish_log"
 
-# The staged website gate must run WITHOUT the npm dependency audit
-# (SUPRA_SKIP_DEP_AUDIT=1): the site is a static export whose build-time deps
-# never execute for a visitor, and a freshly disclosed transitive advisory
-# blocked a fully signed release three times (v2.3.3 round 1 was the third —
-# after notarization had already succeeded). Supply-chain coverage stays with
-# the scoped per-PR audit and the weekly scheduled audit. Owner decision,
-# 2026-07-24. Expected RED reason: the transaction invokes the gate with the
-# variable unset, so the recorded env line reads "unset".
-if grep -Fq 'website-gate-env SUPRA_SKIP_DEP_AUDIT=1' "$successful_publish_log"; then
-  printf '%s\n' 'PASS: staged website gate runs with the dependency audit skipped'
+# Pages owns the one full static-site build. The transaction validates only
+# the prepared publication metadata before it is committed and deployed.
+if grep -Fq 'website-gate' "$successful_publish_log"; then
+  fail 'release transaction still repeats the website build'
 else
-  fail 'staged website gate still couples the release to the npm advisory feed'
+  printf '%s\n' 'PASS: release transaction leaves the full website build to Pages'
 fi
 
 # The production defaults for the transaction's gh and curl commands are bare
@@ -824,7 +742,6 @@ publish_transaction_default_commands() {
   env \
     PATH="${mock_bin}:$PATH" \
     SUPRA_RELEASE_TESTING=1 \
-    SUPRA_WEBSITE_GATE_COMMAND="${mock_bin}/website-gate" \
     SUPRA_APPCAST_PUBLISH_COMMAND="${mock_bin}/appcast-publish" \
     SUPRA_APPCAST_ROLLBACK_COMMAND="${mock_bin}/appcast-rollback" \
     MOCK_RELEASE_LOG="$mock_log" \
@@ -977,7 +894,6 @@ assert_prepublication_failure() {
 }
 
 assert_prepublication_failure upload-failure MOCK_UPLOAD_FAIL
-assert_prepublication_failure website-failure MOCK_WEBSITE_FAIL
 
 # The verdict must come from PROBING GitHub for what actually exists, not from
 # the rollback's own exit codes: in v2.3.3 round 1 the draft delete's tag
@@ -990,7 +906,7 @@ assert_prepublication_failure website-failure MOCK_WEBSITE_FAIL
 : >"$mock_log"
 honest_output="${temporary_dir}/honest-clean-failure.log"
 honest_status=0
-MOCK_WEBSITE_FAIL=1 MOCK_DELETE_FAIL=1 publish_transaction >"$honest_output" 2>&1 || honest_status=$?
+MOCK_UPLOAD_FAIL=1 MOCK_DELETE_FAIL=1 publish_transaction >"$honest_output" 2>&1 || honest_status=$?
 if [[ "$honest_status" -ne 1 ]]; then
   fail 'honest end state: expected the transaction to fail'
 elif grep -Fiq 'emergency rollback' "$honest_output" || grep -Fq 'CRITICAL' "$honest_output"; then
@@ -1278,6 +1194,17 @@ run_case \
   1 \
   'release workflow is not bound to production-release' \
   bash "${scripts}/verify-release-protection.sh" "$protection_fixture"
+
+for metadata_script in publish-release-appcast.sh rollback-release-appcast.sh; do
+  metadata_path="${scripts}/${metadata_script}"
+  if grep -Fq "workflow run 'Protected macOS CI'" "$metadata_path" \
+      && grep -Fq 'refs/heads/main' "$metadata_path" \
+      && ! grep -Eq 'gh pr (create|merge)|\$gh_command pr (create|merge)' "$metadata_path"; then
+    printf 'PASS: %s uses narrow exact-SHA validation without a publication PR\n' "$metadata_script"
+  else
+    fail "${metadata_script} does not use the narrow fast-forward publication path"
+  fi
+done
 
 if (( failures != 0 )); then
   printf 'Release transaction tests failed: %d\n' "$failures" >&2

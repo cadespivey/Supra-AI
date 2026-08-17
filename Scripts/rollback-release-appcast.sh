@@ -32,8 +32,9 @@ release_validate_sha "$commit"
 release_validate_sha "$source_sha"
 release_validate_version "$version"
 release_require_protected_environment
-for command_path in git gh; do release_require_command "$command_path"; done
+for command_path in git gh jq; do release_require_command "$command_path"; done
 release_load_git_signing_identity "$repo_root"
+gh_command="$(release_resolve_command_override SUPRA_GH_COMMAND gh)"
 
 git -C "$repo_root" fetch --no-tags origin main
 git -C "$repo_root" merge-base --is-ancestor "$commit" origin/main \
@@ -62,28 +63,39 @@ GIT_COMMITTER_NAME="$RELEASE_GIT_NAME" GIT_COMMITTER_EMAIL="$RELEASE_GIT_EMAIL" 
     -c "gpg.format=${RELEASE_GIT_SIGNING_FORMAT}" revert -S --no-edit "$commit"
 git -C "$worktree" -c credential.https://github.com.helper='!gh auth git-credential' \
   push origin "HEAD:refs/heads/${branch}"
-
-pr_url="$(gh pr create --repo "$repository" --base main --head "$branch" \
-  --title "Withdraw appcast for v${version}" \
-  --body "Emergency rollback for source \`${source_sha}\`. Reason: ${reason}. The release was returned to draft before this protected revert was requested.")"
-abandon_pull_request() {
-  gh pr close "$pr_url" --repo "$repository" --delete-branch \
-    --comment 'Appcast rollback attempt failed before merge; this pull request is superseded.' \
-    >/dev/null 2>&1 || true
-}
-if ! release_wait_for_required_checks "$pr_url" "$repository"; then
-  abandon_pull_request
-  release_die 'required checks did not pass for the rollback pull request'
-fi
-if ! gh pr merge "$pr_url" --repo "$repository" --merge --delete-branch; then
-  abandon_pull_request
-  release_die 'rollback pull request merge failed'
-fi
-merge_commit="$(gh pr view "$pr_url" --repo "$repository" --json state,mergeCommit \
-  --jq 'select(.state == "MERGED") | .mergeCommit.oid')"
-release_validate_sha "$merge_commit"
+rollback_sha="$(git -C "$worktree" rev-parse HEAD)"
+"$gh_command" workflow run 'Protected macOS CI' --repo "$repository" --ref "$branch" \
+  || release_die 'unable to dispatch narrow rollback validation'
+poll_seconds="${SUPRA_RELEASE_CHECK_POLL_SECONDS:-15}"
+status=''; conclusion=''; rollback_run=''
+for (( attempt = 0; attempt < 60; attempt++ )); do
+  runs="$("$gh_command" run list --repo "$repository" --branch "$branch" \
+    --workflow 'Protected macOS CI' --json databaseId,headSha,status,conclusion,url --limit 10)" \
+    || release_die 'unable to list rollback validation runs'
+  selected="$(jq --arg sha "$rollback_sha" '[.[] | select(.headSha == $sha)][0] // empty' <<<"$runs")"
+  if [[ -n "$selected" ]]; then
+    status="$(jq -r '.status // empty' <<<"$selected")"
+    conclusion="$(jq -r '.conclusion // empty' <<<"$selected")"
+    rollback_run="$(jq -r '.databaseId // empty' <<<"$selected")"
+    if [[ "$status" == 'completed' ]]; then
+      if [[ "$conclusion" != 'success' ]]; then
+        release_die 'narrow rollback validation failed'
+        exit 1
+      fi
+      break
+    fi
+  fi
+  sleep "$poll_seconds"
+done
+[[ -n "$rollback_run" && "$status" == 'completed' && "$conclusion" == 'success' ]] \
+  || release_die 'narrow rollback validation did not complete'
+git -C "$worktree" -c credential.https://github.com.helper='!gh auth git-credential' \
+  push origin "${rollback_sha}:refs/heads/main" \
+  || release_die 'validated rollback could not fast-forward main'
+git -C "$worktree" -c credential.https://github.com.helper='!gh auth git-credential' \
+  push origin --delete "$branch" >/dev/null 2>&1 || true
 if [[ -n "$output" ]]; then
   mkdir -p "$(dirname "$output")"
-  printf '%s\n' "$merge_commit" >"$output"
+  printf '%s\n' "$rollback_sha" >"$output"
 fi
-printf 'Appcast rollback merged through protected review for v%s at %s.\n' "$version" "$merge_commit"
+printf 'Appcast rollback fast-forwarded for v%s at %s (CI run %s).\n' "$version" "$rollback_sha" "$rollback_run"

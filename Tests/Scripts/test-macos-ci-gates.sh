@@ -1063,7 +1063,7 @@ fi
 # Expected RED before the release-transaction harness was wired into CI: the
 # RELEASE-PROVENANCE claim in Docs/Verified-Product-Claims.yml names
 # Tests/Scripts/test-release-transaction.sh as its verifying test with ci_job
-# "macos-ci/inventory", and Docs/Release-Runbook.md leans on it as standing
+# "macos-ci/release-controls", and Docs/Release-Runbook.md leans on it as standing
 # coverage — but macos-ci.yml's release ceremony step never executed it, so the
 # ~1200-line hermetic transaction suite could rot undetected on main. A gate
 # that is never executed is not a gate. Match an active run-block command, not

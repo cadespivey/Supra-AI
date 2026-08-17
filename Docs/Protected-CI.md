@@ -1,76 +1,51 @@
 # Protected CI policy
 
-`Protected macOS CI` is the deterministic pull-request gate for application changes. It
-runs on a trusted GitHub-hosted macOS runner without release, signing, model-provider, or
-API credentials. Signing and notarization belong only in the protected release environment.
+Protected CI should answer one question: is this exact commit safe to merge and eligible to
+become a release candidate? It is not a sequence of independent review ceremonies.
 
-As verified against the live `main-protection` ruleset on 2026-08-05, branch protection requires
-21 check contexts:
+## One required result
 
-- Repository inventory and gate tests
-- all 14 `Swift package - <name>` matrix entries
-- unsigned Debug and Release app/XPC builds
-- App UI and hosted XPC smoke
-- Shipping migration fixtures
-- Website lint, build, audit, and asset guards
-- Secrets, entitlements, artifacts, models, and public metadata
+Branch protection should require one stable aggregate context, `Protected macOS CI`, for the
+exact commit. The workflow may fan out internally, but change selection and aggregation belong
+inside the workflow rather than in a long ruleset of per-package and smoke-test contexts.
 
-The workflow runs two additional jobs that are not currently required by the live ruleset:
+Every change runs an Ubuntu changed-file safety check for whitespace errors, newly introduced
+secrets, and prohibited artifact paths. The workflow then selects work from changed paths and
+dependency impact:
 
-- Document benchmark deterministic gates
-- Dependency review for pull requests
+- affected Swift packages and their dependents, sequentially on one macOS runner;
+- one app build when app composition changed;
+- focused UI/XPC checks only when their surface changed;
+- migration fixtures only for schema, migration, import, or persistence changes;
+- full website checks only for website changes, with narrow XML/version validation for the
+  two-file appcast publication commit; and
+- benchmarks only for ingestion, indexing, retrieval, or performance-sensitive changes.
 
-That makes 23 hosted workflow jobs after matrix expansion, of which 21 are branch-required. The
-benchmark remains a deterministic pull-request and scheduled safety check; dependency review remains
-a pull-request check. Neither should be described as a live branch-protection requirement.
+Claims, entitlements, and CI-policy meta-tests run only when their inputs change. Full-tree
+secret, artifact, font, entitlement, claims, and protection sweeps run weekly for drift detection.
 
-The inventory is intentionally duplicated in `Scripts/list-local-packages.sh` and the
-workflow matrix. `Scripts/verify-repo-facts.sh` compares them, so adding or removing a
-package requires an explicit review of both. The migration verifier derives the latest
-registered version and enforces a contiguous sequence; it does not pin a stale migration
-number.
+A broad full-package, Debug/Release, UI/XPC, migration, website, and benchmark sweep is reserved
+for cross-cutting changes or an explicit diagnostic run. It is not the default for every PR.
 
-Live Hugging Face and public GitHub metadata checks are read-only and run on the scheduled
-security workflow. Pull requests run their offline or synthetic counterparts so an
-unrelated provider outage—or GitHub Support work on an existing hidden ref—cannot bypass or
-silently weaken the preventive gates. No workflow may fetch a prohibited public blob.
+## Reuse the receipt
 
-Document-ingestion quality has a separate credential-free scheduled workflow,
-`.github/workflows/benchmarks.yml`, plus the pull-request
-`Document benchmark deterministic gates` job. Both run the SHA-frozen deterministic
-baseline and the fixed 10/50/200-document performance protocol on `macos-15`. The
-deterministic pass imports and indexes the synthetic corpus, exercises retrieval and
-matter-isolation probes, validates the baseline/threshold ledger, and fails if the canonical
-report drifts after removing only the run timestamp and current checkout SHA. The performance
-pass records fast/deep retrieval, exhaustive-ledger and structure-write p50/p95, import/index
-throughput, peak RSS, and one-document incremental rows/bytes/work. It immediately fails when
-incremental work touches any unaffected document.
+A green aggregate result is bound to the commit SHA and records which lanes ran or were skipped
+by policy. The same receipt may authorize merge and release preflight. Do not rerun unchanged
+work merely because the commit moved from a branch to `main` or because release metadata is being
+published. A new receipt is required only when the source SHA or relevant validation inputs
+change.
 
-The repo owner approved the fixed-hardware B-PERF envelope on July 18, 2026: a 10% latency
-regression ceiling, a 10% throughput regression floor, a 48 MiB peak-RSS ceiling, a 25%
-incremental wall-time regression ceiling, and zero unaffected documents touched.
-`Scripts/run-benchmarks.sh --performance-release-gate` enforces that complete envelope.
-Comparisons are valid only when hardware identifier, macOS, Xcode, Swift, thermal state, and
-protocol exactly match the recorded baseline. GitHub-hosted runs therefore remain safety gates
-unless they match the approved release-candidate environment.
+Transient infrastructure failures may rerun only the failed lane. Product failures require a
+fix and a new result. Scheduled security and benchmark workflows provide drift detection; they
+do not block unrelated daily work. Pages owns the one full website build for an appcast
+publication.
 
-## Third-party Action pins and licenses
+## Ruleset migration
 
-Every `uses:` reference is pinned to the full commit SHA reviewed on 2026-07-13. All listed
-actions are published under the MIT License. Renovation requires reviewing the upstream diff and
-license, updating this table and the SHA references together, and passing
-`Scripts/verify-repo-facts.sh`.
+The workflow now emits the single aggregate result and selects internal lanes by change impact.
+The historical live ruleset required 21 individual contexts; update it to require only the
+aggregate `Protected macOS CI` job. Until that GitHub setting changes, the old contexts can still
+block merges even though the repository automation no longer treats them as independent gates.
 
-| Action | Reviewed revision | Upstream tag | License |
-| --- | --- | --- | --- |
-| `actions/checkout` | `34e114876b0b11c390a56381ad16ebd13914f8d5` | `v4` | MIT |
-| `actions/setup-node` | `49933ea5288caeca8642d1e84afbd3f7d6820020` | `v4` | MIT |
-| `actions/configure-pages` | `983d7736d9b0ae728b81ab479565c72886d7745b` | `v5` | MIT |
-| `actions/upload-pages-artifact` | `7b1f4a764d45c48632c6b24a0339c27f5614fb0b` | `v4` | MIT |
-| `actions/deploy-pages` | `d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e` | `v4` | MIT |
-| `actions/dependency-review-action` | `2031cfc080254a8a887f58cffee85186f0e49e48` | `v4.9.0` | MIT |
-
-Release, signed-rehearsal, tag, and emergency-withdrawal controls are documented in
-[`Release-Protection.md`](Release-Protection.md). Run
-`Scripts/verify-release-protection.sh` to verify that the repository-owned half of those
-controls has not drifted; attach live GitHub ruleset and environment evidence separately.
+Third-party Actions remain pinned to reviewed full SHAs. Release signing and notarization run
+only in the protected release environment, never in pull-request CI.

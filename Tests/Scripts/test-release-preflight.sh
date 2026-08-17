@@ -143,14 +143,11 @@ if [[ -f "$prune_manifest" ]]; then
   jq -e --arg sha "$SOURCE_SHA" '
     .source.sha == $sha and .release.version == "9.4.7" and
     .release.build == "941" and .ciRuns[0].id == "73" and
-    .gates.releaseScope == "owner-approved"
+    .gates.sourceValidation == "reused-exact-sha-ci"
   ' "$prune_manifest" >/dev/null \
     || fail 'prune-pass manifest did not bind SHA/version/build/CI'
 else
   fail 'prune pass did not create its manifest'
-fi
-if ! grep -Fq 'scope-gate --require-owner-approval' "$mock_log"; then
-  fail 'release preflight did not require owner-approved release scope'
 fi
 
 # --- Case 2: ambiguous release lookup fails closed before pruning ------------
@@ -246,20 +243,6 @@ if [[ "$origin_only_status" -ne 1 ]] \
   sed 's/^/  | /' "$origin_only_output" >&2
 else
   printf '%s\n' 'PASS: origin-only tag stays fatal'
-fi
-
-# --- Case 7: owner scope approval is a release-only fail-closed gate ---------
-make_source_repo scope-approval-denied
-scope_output="${temporary_dir}/scope-approval-denied.log"
-scope_status=0
-MOCK_SCOPE_GATE_FAIL=1 preflight "$SOURCE_REPO" "$SOURCE_SHA" \
-  "${temporary_dir}/scope-approval-denied.json" >"$scope_output" 2>&1 || scope_status=$?
-if [[ "$scope_status" -ne 1 ]] \
-  || ! grep -Fq 'owner-approved release scope gate failed' "$scope_output"; then
-  fail 'missing owner scope approval did not fail release preflight closed'
-  sed 's/^/  | /' "$scope_output" >&2
-else
-  printf '%s\n' 'PASS: missing owner scope approval fails release preflight closed'
 fi
 
 if (( failures != 0 )); then

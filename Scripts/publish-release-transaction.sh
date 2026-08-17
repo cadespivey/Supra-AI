@@ -43,10 +43,9 @@ for command in jq shasum security xmllint; do release_require_command "$command"
 
 gh_command="$(release_resolve_command_override SUPRA_GH_COMMAND gh)"
 curl_command="$(release_resolve_command_override SUPRA_CURL_COMMAND curl)"
-website_gate="$(release_resolve_command_override SUPRA_WEBSITE_GATE_COMMAND "${root}/Scripts/test-website.sh")"
 appcast_publish="$(release_resolve_command_override SUPRA_APPCAST_PUBLISH_COMMAND "${root}/Scripts/publish-release-appcast.sh")"
 appcast_rollback="$(release_resolve_command_override SUPRA_APPCAST_ROLLBACK_COMMAND "${root}/Scripts/rollback-release-appcast.sh")"
-for command_path in "$gh_command" "$curl_command" "$website_gate" "$appcast_publish" "$appcast_rollback"; do
+for command_path in "$gh_command" "$curl_command" "$appcast_publish" "$appcast_rollback"; do
   release_require_resolvable_command "$command_path" 'release transaction'
 done
 
@@ -202,32 +201,12 @@ bash "${root}/Scripts/prepare-release-appcast.sh" \
   --zip "$uploaded_zip" --version "$version" --build "$build" \
   --repository "$repository" --sign-update "$sign_update"
 
-website_stage="${temporary_dir}/website"
-mkdir -p "$website_stage"
-cp -R "${repo_root}/website/." "$website_stage/"
-cp "$prepared_appcast" "${website_stage}/public/appcast.xml"
-cp "$prepared_constants" "${website_stage}/lib/constants.ts"
-bash "${root}/Scripts/verify-release-artifact-contents.sh" "$website_stage" >/dev/null \
-  || release_die 'staged website artifact policy failed'
-# The staged gate proves the appcast merge deploys: lint, typecheck, static
-# build, and the font guard. The npm dependency audit is deliberately EXCLUDED
-# from the release transaction — the site is a static export whose build-time
-# dependencies never execute for a visitor, and a freshly disclosed transitive
-# advisory blocked a fully notarized release three times (v2.3.3 round 1 was
-# the third). Supply-chain coverage stays with the scoped per-PR audit and the
-# weekly scheduled audit (security-scheduled.yml). Owner decision, 2026-07-24.
-SUPRA_SKIP_DEP_AUDIT=1 "$website_gate" "$website_stage" >/dev/null \
-  || release_die 'staged website release gate failed'
-built_website="${website_stage}/out"
-if [[ ! -d "$built_website" ]]; then
-  if [[ "${SUPRA_RELEASE_TESTING:-0}" == '1' ]]; then
-    built_website="$website_stage"
-  else
-    release_die 'staged website gate did not produce a static Pages artifact'
-  fi
-fi
-bash "${root}/Scripts/verify-release-artifact-contents.sh" "$built_website" >/dev/null \
-  || release_die 'built Pages artifact policy failed'
+xmllint --noout "$prepared_appcast" >/dev/null 2>&1 \
+  || release_die 'prepared appcast is invalid XML'
+grep -Fq "<sparkle:version>${build}</sparkle:version>" "$prepared_appcast" \
+  || release_die 'prepared appcast build mismatch'
+grep -Fq "releases/download/${tag}/$(basename "$zip")" "$prepared_appcast" \
+  || release_die 'prepared appcast URL mismatch'
 
 "$gh_command" release edit "$tag" --repo "$repository" --draft=false --latest
 release_public=1

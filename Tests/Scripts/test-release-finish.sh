@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # Hermetic gating tests for Scripts/release-finish.sh — the developer-side
 # command that watches a dispatched protected release run to completion, stops
-# the release runner, archives evidence via the reset script, and re-verifies
-# the published release and appcast as a user would.
+# the release runner, and archives the transaction's evidence via the reset script.
 #
 # All GitHub, network, runner, and reset interactions go through command shims
 # recorded in a log. Nothing contacts the network.
@@ -11,10 +10,7 @@
 # case exits with bash's missing-file status (127) instead of the expected
 # behavior.
 #
-# Fixtures use non-default values (9.4.7 / 941, run id 770002). The public
-# verification is wire-proofed with a stale-appcast case: a successful run
-# whose appcast does not list the reviewed version must fail, so the check
-# cannot pass by ignoring appcast content.
+# Fixtures use non-default values (9.4.7 / 941, run id 770002).
 set -euo pipefail
 
 repo_root="$(git rev-parse --show-toplevel)"
@@ -206,12 +202,10 @@ expect 'evidence is archived via the reset script' \
   grep -Fxq 'reset' "$shim_log"
 expect 'operator sees the evidence archive location' \
   grep -Fq '/fixture/evidence/20990101T000000Z' "$finish_output"
-expect 'published release is re-checked' \
-  grep -Fq 'gh release view' "$shim_log"
-expect 'public appcast is re-checked' \
-  grep -Fq 'curl' "$shim_log"
-expect 'operator sees the published release URL' \
-  grep -Fq 'releases/tag/v9.4.7' "$finish_output"
+expect 'finish trusts the transaction public verification' \
+  bash -c "! grep -Fq 'gh release view' '$shim_log' && ! grep -Fq 'curl' '$shim_log'"
+expect 'operator is pointed to archived transaction verification' \
+  grep -Fq 'transaction verification is archived' "$finish_output"
 
 stop_line="$(log_line_number '^runner-stop$')"
 reset_line="$(log_line_number '^reset$')"
@@ -302,14 +296,6 @@ expect 'rehearsal skips release verification' \
   bash -c "! grep -Fq 'gh release view' '$shim_log'"
 expect 'rehearsal skips appcast verification' \
   bash -c "! grep -Fq 'curl' '$shim_log'"
-
-# --- Stale appcast: public verification must read real content --------------
-run_finish SHIM_APPCAST="$appcast_stale" -- --run 770002
-expect_status 'stale public appcast fails verification' 1
-expect 'stale appcast is named' \
-  grep -Fiq 'appcast' "$finish_output"
-expect 'stale appcast still archived evidence first' \
-  grep -Fxq 'reset' "$shim_log"
 
 if (( failures > 0 )); then
   printf '%s\n' 'Release finish tests failed.' >&2

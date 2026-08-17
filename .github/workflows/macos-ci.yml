@@ -1,8 +1,6 @@
 name: Protected macOS CI
 
 on:
-  push:
-    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -14,108 +12,133 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  plan:
+    name: Select validation by change impact
+    runs-on: ubuntu-latest
+    outputs:
+      packages: ${{ steps.plan.outputs.packages }}
+      app: ${{ steps.plan.outputs.app }}
+      ui: ${{ steps.plan.outputs.ui }}
+      migrations: ${{ steps.plan.outputs.migrations }}
+      website: ${{ steps.plan.outputs.website }}
+      benchmarks: ${{ steps.plan.outputs.benchmarks }}
+      release: ${{ steps.plan.outputs.release }}
+      governance: ${{ steps.plan.outputs.governance }}
+      claims: ${{ steps.plan.outputs.claims }}
+      entitlements: ${{ steps.plan.outputs.entitlements }}
+      publication_metadata: ${{ steps.plan.outputs.publicationMetadata }}
+    steps:
+      - name: Checkout history
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Check changed files and compute validation plan
+        id: plan
+        env:
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
+        run: |
+          bash Scripts/verify-changed-files.sh "${BASE_SHA:-}" HEAD
+          plan="$(bash Scripts/ci-change-plan.sh "${BASE_SHA:-}" HEAD)"
+          jq -r 'to_entries[] | "\(.key)=\(.value | if type == "array" then tojson else tostring end)"' <<<"$plan" >> "$GITHUB_OUTPUT"
+          jq . <<<"$plan"
+
   inventory:
-    name: Repository inventory and gate tests
+    name: Changed CI governance
+    if: needs.plan.outputs.governance == 'true'
+    needs: plan
     runs-on: macos-15
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           persist-credentials: false
-      - name: Test CI failure gates
+      - name: Test CI policy and repository structure
         run: |
+          bash Tests/Scripts/test-ci-change-plan.sh
+          bash Tests/Scripts/test-verify-changed-files.sh
           bash Tests/Scripts/test-macos-ci-gates.sh
-          bash Tests/Scripts/test-website-audit-governance.sh
           bash Tests/Scripts/test-verify-product-claims.sh
           bash Tests/Scripts/test-headless-probe-glue.sh
-      - name: Test SupraSessions Swift 6 portability guards
-        run: bash Tests/Scripts/test-supra-sessions-swift6-portability.sh
-      - name: Test release ceremony gates
-        run: |
-          bash Tests/Scripts/test-reviewed-release-metadata.sh
-          bash Tests/Scripts/test-release-workflow-dispatch-inputs.sh
-          bash Tests/Scripts/test-release-dispatch.sh
-          bash Tests/Scripts/test-release-finish.sh
-          bash Tests/Scripts/test-cut-release.sh
-          bash Tests/Scripts/test-release-preflight.sh
-          bash Tests/Scripts/test-release-rehearsal-required.sh
-          bash Tests/Scripts/test-release-transaction.sh
-      - name: Verify repository facts
-        run: bash Scripts/verify-repo-facts.sh
+          bash Scripts/verify-repo-facts.sh
+
+  claims:
+    name: Changed product claims
+    if: needs.plan.outputs.claims == 'true'
+    needs: plan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - name: Verify affected claims
+        run: bash Scripts/verify-product-claims.sh
 
   swift-packages:
-    name: Swift package - ${{ matrix.package }}
-    needs: inventory
+    name: Affected Swift packages
+    if: needs.plan.outputs.packages != '[]'
+    needs: plan
     runs-on: macos-15
-    strategy:
-      fail-fast: false
-      matrix:
-        package:
-          - SupraCore
-          - SupraDesignSystem
-          - SupraDiagnostics
-          - SupraDocuments
-          - SupraDrafting
-          - SupraDraftingCore
-          - SupraExports
-          - SupraNetworking
-          - SupraResearch
-          - SupraRuntimeClient
-          - SupraRuntimeInterface
-          - SupraSessions
-          - SupraStore
-          - SupraTestKit
+    env:
+      PACKAGES: ${{ needs.plan.outputs.packages }}
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           persist-credentials: false
-      - name: Test fixed package
-        run: bash Scripts/test-all-packages.sh "${{ matrix.package }}"
+      - name: Test affected packages on one runner
+        run: |
+          jq -r '.[]' <<<"$PACKAGES" | while IFS= read -r package; do
+            bash Scripts/test-all-packages.sh "$package"
+          done
 
   app-build:
-    name: Unsigned ${{ matrix.configuration }} app and XPC
-    needs: inventory
+    name: Relevant Release app and XPC build
+    if: needs.plan.outputs.app == 'true'
+    needs: plan
     runs-on: macos-15
-    strategy:
-      fail-fast: false
-      matrix:
-        configuration: [Debug, Release]
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           persist-credentials: false
-      - name: Build app and embedded XPC with zero project warnings
-        run: bash Scripts/build-macos-app.sh "${{ matrix.configuration }}"
+      - name: Build release app and embedded XPC
+        run: bash Scripts/build-macos-app.sh Release
+      - name: Verify changed signing boundaries
+        if: needs.plan.outputs.entitlements == 'true'
+        run: bash Scripts/verify-entitlements.sh
 
   app-smoke:
-    name: App UI and hosted XPC smoke
-    needs: app-build
+    name: Focused app UI and hosted XPC smoke
+    if: needs.plan.outputs.ui == 'true'
+    needs: plan
     runs-on: macos-15
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           persist-credentials: false
-      - name: Run hermetic UI smoke and real hosted XPC integration
+      - name: Run focused UI and hosted XPC smoke
         run: bash Scripts/run-app-smoke-tests.sh
 
   migration-fixtures:
-    name: Shipping migration fixtures
-    needs: inventory
+    name: Changed migration fixtures
+    if: needs.plan.outputs.migrations == 'true'
+    needs: plan
     runs-on: macos-15
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           persist-credentials: false
-      - name: Upgrade every supported shipping fixture
+      - name: Upgrade supported shipping fixtures
         run: bash Scripts/run-shipping-migration-fixtures.sh
 
   document-benchmarks:
-    name: Document benchmark deterministic gates
-    needs: inventory
+    name: Changed document benchmark gates
+    if: needs.plan.outputs.benchmarks == 'true'
+    needs: plan
     runs-on: macos-15
     timeout-minutes: 20
     steps:
@@ -123,89 +146,63 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           persist-credentials: false
-      - name: Verify deterministic report, baseline, and matter isolation
-        run: bash Scripts/run-benchmarks.sh --verify-baseline
-      - name: Verify fixed-scale performance safety
-        run: bash Scripts/run-benchmarks.sh --performance
+      - name: Verify deterministic and performance baselines
+        run: |
+          bash Scripts/run-benchmarks.sh --verify-baseline
+          bash Scripts/run-benchmarks.sh --performance
 
   website:
-    name: Website lint, build, audit, and asset guards
-    needs: inventory
+    name: Changed website and published metadata
+    if: needs.plan.outputs.website == 'true'
+    needs: plan
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           persist-credentials: false
-          # Needed to diff against the base commit below.
-          fetch-depth: 0
+      - name: Validate publication metadata only
+        if: needs.plan.outputs.publication_metadata == 'true'
+        run: |
+          xmllint --noout website/public/appcast.xml
+          bash Scripts/verify-release-version-state.sh
       - name: Setup Node
+        if: needs.plan.outputs.publication_metadata != 'true'
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22.13.0
           cache: npm
           cache-dependency-path: website/package-lock.json
-      # Lint, typecheck, build, and the font guard always run. The dependency audit
-      # also runs when website content OR any input controlling that audit changes.
-      # The shared scope script is executable policy with hermetic tests; an
-      # unresolvable comparison fails closed to auditing.
-      - name: Detect website changes
-        id: website_changes
-        env:
-          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
-        run: |
-          set -euo pipefail
-          changed="$(bash Scripts/website-dependency-audit-required.sh "${BASE_SHA:-}" HEAD)"
-          if [ "$changed" = 'true' ]; then
-            echo 'website audit input changed; auditing'
-          else
-            echo 'website audit inputs unchanged; skipping dependency audit'
-          fi
-          echo "changed=${changed}" >> "$GITHUB_OUTPUT"
-      - name: Run deterministic website gates
-        env:
-          SUPRA_SKIP_DEP_AUDIT: ${{ steps.website_changes.outputs.changed == 'true' && '0' || '1' }}
+      - name: Run website checks
+        if: needs.plan.outputs.publication_metadata != 'true'
         run: bash Scripts/test-website.sh
 
-  security:
-    name: Secrets, entitlements, artifacts, models, and public metadata
-    needs: inventory
+  release-controls:
+    name: Changed release controls
+    if: needs.plan.outputs.release == 'true'
+    needs: plan
     runs-on: macos-15
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           persist-credentials: false
-      - name: Scan secrets without printing matches
-        run: bash Scripts/verify-secrets.sh
-      - name: Verify entitlement expectations
-        run: bash Scripts/verify-entitlements.sh
-      - name: Reject prohibited repository artifacts
-        run: bash Scripts/verify-prohibited-artifacts.sh
-      - name: Verify public font invariant
-        run: bash Scripts/verify-public-font-license.sh
-      - name: Verify model catalog structure offline
-        run: bash Scripts/verify-model-ids.sh --offline
-      - name: Test metadata-only public-ref verifier
-        run: bash Tests/Scripts/test-verify-public-repository-assets.sh
-      - name: Verify dependency lock revisions
+      - name: Test release orchestration and transaction
         run: |
-          find . -name Package.resolved -not -path '*/.build/*' -print0 |
-            while IFS= read -r -d '' lock; do
-              jq -e '.pins | all(.[]; .state.revision | test("^[0-9a-f]{40}$"))' "$lock" >/dev/null
-            done
+          bash Tests/Scripts/test-cut-release.sh
+          bash Tests/Scripts/test-release-dispatch.sh
+          bash Tests/Scripts/test-release-preflight.sh
+          bash Tests/Scripts/test-release-transaction.sh
+          bash Scripts/verify-release-protection.sh
 
-  dependency-review:
-    name: Dependency review
-    if: github.event_name == 'pull_request'
-    needs: inventory
+  required:
+    name: Protected macOS CI
+    if: always()
+    needs: [plan, inventory, claims, swift-packages, app-build, app-smoke, migration-fixtures, document-benchmarks, website, release-controls]
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-        with:
-          persist-credentials: false
-      - name: Reject vulnerable dependency changes
-        uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4.9.0
-        with:
-          fail-on-severity: high
+      - name: Require every selected lane to pass
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          jq -e 'all(.[]; .result == "success" or .result == "skipped")' <<<"$RESULTS"
