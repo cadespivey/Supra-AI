@@ -105,6 +105,36 @@ final class MatterChatGroundingTests: XCTestCase {
         )
     }
 
+    func testMatterCounselLookupLoadsModelBeforeJurisdictionGate() throws {
+        // HOTFIX-GROUND-01 expected RED: requiresRuntimeModel evaluates the
+        // legal-jurisdiction gate before matter-document ownership and returns
+        // false, so the exact counsel question never reaches local grounding.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic Counsel Lookup")
+        let runtime = StubRuntimeClient { request in
+            .events([.event(request, 1, .generationCompleted)])
+        }
+        let legalConfiguration = LegalModelConfiguration(jurisdictionRequired: true)
+        let controller = makeGlobalChatController(
+            store: store,
+            runtimeClient: runtime,
+            scope: .matter(id: matter.id),
+            embedder: nil,
+            legalConfiguration: legalConfiguration
+        )
+        controller.loadChats()
+
+        let routed = ModelRouter(configuration: legalConfiguration)
+            .routePrompt("who are the attorneys for Northstar Retail in this matter?")
+
+        XCTAssertEqual(routed.route.mode, .legalQA, "precondition: raw legal vocabulary reaches the gated route")
+        XCTAssertTrue(routed.route.requiresJurisdiction, "precondition: this reproduces the jurisdiction gate")
+        XCTAssertTrue(
+            controller.requiresRuntimeModel(for: routed),
+            "matter-fact document grounding must own the prompt before the legal-authority gate"
+        )
+    }
+
     func testOrdinaryEmailRequestIsNotGrounded() {
         // "rewrite this email" mentions email but is not a contact question — must NOT be
         // pulled into document retrieval.
@@ -448,6 +478,61 @@ final class MatterChatGroundingTests: XCTestCase {
         let prompt = try XCTUnwrap(capture.lastPrompt)
         XCTAssertFalse(prompt.contains("DOCUMENT INVENTORY"), "a general legal question must not be document-grounded")
         XCTAssertEqual(prompt, "What is the standard for summary judgment in Florida?")
+    }
+
+    func testMatterIdentitySuggestionIsSourceBackedAndDoesNotPersist() async throws {
+        // HOTFIX-GROUND-02 expected RED: Matter Details has no transient,
+        // source-attributed document suggestion contract, so this test does not
+        // compile before the implementation exists.
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Synthetic Identity Suggestion")
+        try await indexDocument(
+            store,
+            matterID: matter.id,
+            name: "synthetic-caption.txt",
+            text: "Defendant Northstar Retail LLC is represented by attorney Avery Synthetic "
+                + "of Northstar Legal Group.",
+            canonicalReady: true
+        )
+
+        let capture = RequestCapture()
+        let stub = StubRuntimeClient { request in
+            capture.record(request)
+            return .events([
+                .event(
+                    request,
+                    1,
+                    .token,
+                    token: "Defendant Northstar Retail LLC is represented by attorney Avery Synthetic "
+                        + "of Northstar Legal Group [S1]."
+                ),
+                .event(request, 2, .generationCompleted),
+            ])
+        }
+        let controller = makeGlobalChatController(
+            store: store,
+            runtimeClient: stub,
+            scope: .matter(id: matter.id),
+            embedder: nil
+        )
+        controller.loadChats()
+
+        let outcome = await controller.suggestMatterIdentityFromDocuments(modelID: ModelID())
+
+        guard case let .suggestion(suggestion) = outcome else {
+            return XCTFail("expected a source-backed suggestion, got \(outcome)")
+        }
+        XCTAssertTrue(suggestion.markdown.contains("Avery Synthetic"))
+        XCTAssertEqual(suggestion.sources.count, 1)
+        XCTAssertEqual(suggestion.sources.first?.documentName, "synthetic-caption.txt")
+        XCTAssertFalse(suggestion.requiresReview, suggestion.markdown)
+        XCTAssertTrue(try XCTUnwrap(capture.lastPrompt).contains("BEGIN_UNTRUSTED_SOURCE_DATA"))
+        XCTAssertTrue(controller.chats.isEmpty, "a Matter Details suggestion must not create chat history")
+        XCTAssertTrue(controller.messages.isEmpty, "a Matter Details suggestion must not add chat messages")
+        XCTAssertTrue(
+            try store.structuredOutputs.fetchOutputs(matterID: matter.id).isEmpty,
+            "a suggestion remains review-only until the user explicitly edits and saves identity"
+        )
     }
 
     func testInstructionBearingSourceAndUnsupportedClaimReceiveSupportWarning() async throws {

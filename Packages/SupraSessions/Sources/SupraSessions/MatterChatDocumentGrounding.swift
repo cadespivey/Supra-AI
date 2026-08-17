@@ -420,16 +420,7 @@ final class MatterChatDocumentGrounding {
         guard !trimmed.isEmpty else { return nil }
 
         let folders = (try? store.documentLibrary.fetchFolders(matterID: matterID)) ?? []
-        // Party anchors come from one canonical identity snapshot. If that graph is
-        // unavailable, fail closed with no party-derived anchor instead of treating
-        // migrated matter-name/client strings as resolved legal identity.
-        let snapshot = (try? store.matterIdentity.fetchSnapshot(matterID: matterID)) ?? nil
-        let partyAnchors: [String] = snapshot
-            .map { snapshot in MatterChatDocumentIntent.partyAnchors(parties: snapshot.parties) }
-            ?? []
-        let intent = MatterChatDocumentIntent.classify(
-            trimmed, folderNames: folders.map(\.name), partyAnchors: partyAnchors
-        )
+        let intent = deterministicIntent(forQuestion: trimmed, folders: folders)
 
         // Phase 2 (retrieve-before-route): assess corpus coverage once (only when shadow logging or
         // additive routing needs it), log the keyword-vs-coverage divergence, and let strong
@@ -452,6 +443,36 @@ final class MatterChatDocumentGrounding {
                 options: options
             )
         }
+    }
+
+    /// Whether the prompt is deterministically owned by the matter's exposed data
+    /// rather than legal-authority research. This check intentionally runs before
+    /// model resolution: party, counsel, contact, and stored-document questions need
+    /// a local model even when the legal router would otherwise return an immediate
+    /// jurisdiction refusal without loading one.
+    func hasDeterministicGroundingIntent(forQuestion question: String) -> Bool {
+        let trimmed = question.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        let folders = (try? store.documentLibrary.fetchFolders(matterID: matterID)) ?? []
+        return deterministicIntent(forQuestion: trimmed, folders: folders) != .none
+    }
+
+    private func deterministicIntent(
+        forQuestion question: String,
+        folders: [DocumentFolderRecord]
+    ) -> MatterChatDocumentIntent {
+        // Party anchors come from one canonical identity snapshot. If that graph is
+        // unavailable, fail closed with no party-derived anchor instead of treating
+        // migrated matter-name/client strings as resolved legal identity.
+        let snapshot = (try? store.matterIdentity.fetchSnapshot(matterID: matterID)) ?? nil
+        let partyAnchors: [String] = snapshot
+            .map { snapshot in MatterChatDocumentIntent.partyAnchors(parties: snapshot.parties) }
+            ?? []
+        return MatterChatDocumentIntent.classify(
+            question,
+            folderNames: folders.map(\.name),
+            partyAnchors: partyAnchors
+        )
     }
 
     /// Phase 2 (retrieve-before-route). Assesses corpus coverage at most once — only when shadow

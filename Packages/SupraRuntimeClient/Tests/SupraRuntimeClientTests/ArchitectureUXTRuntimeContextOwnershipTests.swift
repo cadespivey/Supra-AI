@@ -37,7 +37,7 @@ final class ArchitectureUXTRuntimeContextOwnershipTests: XCTestCase {
             "CorpusAnalysisQueueRunner.swift": 1,
             "SignedReleaseSmokeRunner.swift": 1,
             "TypedProseABProbe.swift": 1,
-            "GlobalChatController.swift": 7,
+            "GlobalChatController.swift": 8,
         ]
 
         for (fileName, expectedCount) in expectedCalls.sorted(by: { $0.key < $1.key }) {

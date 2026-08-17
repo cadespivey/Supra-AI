@@ -8,6 +8,48 @@ import SupraRuntimeClient
 import SupraRuntimeInterface
 import SupraStore
 
+/// A review-only, source-attributed identity finding generated from a matter's
+/// uploaded documents. It never mutates the canonical party/representation graph;
+/// Matter Details presents it beside the editable fields for attorney review.
+public struct MatterIdentityDocumentSuggestion: Sendable, Equatable {
+    public struct Source: Identifiable, Sendable, Equatable {
+        public let id: String
+        public let label: String
+        public let documentName: String
+        public let locator: String
+        public let excerpt: String
+
+        public init(
+            id: String,
+            label: String,
+            documentName: String,
+            locator: String,
+            excerpt: String
+        ) {
+            self.id = id
+            self.label = label
+            self.documentName = documentName
+            self.locator = locator
+            self.excerpt = excerpt
+        }
+    }
+
+    public let markdown: String
+    public let sources: [Source]
+    public let requiresReview: Bool
+
+    public init(markdown: String, sources: [Source], requiresReview: Bool) {
+        self.markdown = markdown
+        self.sources = sources
+        self.requiresReview = requiresReview
+    }
+}
+
+public enum MatterIdentityDocumentSuggestionOutcome: Sendable, Equatable {
+    case suggestion(MatterIdentityDocumentSuggestion)
+    case unavailable(message: String)
+}
+
 /// Drives the first persisted global chat flow: it owns the list of global
 /// chats, the messages of the selected chat, and the send/stream/cancel
 /// lifecycle on top of the MLX-backed runtime service.
@@ -715,6 +757,17 @@ public final class GlobalChatController: ObservableObject {
     }
 
     public func requiresRuntimeModel(for routed: RoutedPrompt) -> Bool {
+        // Matter facts are a local-data task even when the vocabulary ("attorneys",
+        // "counsel", "parties") also looks legal to the general router. Resolve the
+        // model before evaluating the legal jurisdiction gate so performSend can let
+        // document grounding take its intended precedence over CourtListener research.
+        if routed.route.mode != .legalVerify,
+           documentGrounding?.hasDeterministicGroundingIntent(
+               forQuestion: routed.prompt
+           ) == true {
+            return true
+        }
+
         switch routed.route.mode {
         case .legalVerify:
             return false
@@ -734,6 +787,99 @@ public final class GlobalChatController: ObservableObject {
             return !(routed.route.requiresJurisdiction && classification.needsJurisdictionForAuthority)
         case .legalCritique, .drafting, .generalQA:
             return true
+        }
+    }
+
+    /// Produces a transient, document-grounded identity suggestion for Matter
+    /// Details. The answer and source packet stay outside chat history and Saved
+    /// Work; accepting or editing canonical identity remains an explicit user act.
+    public func suggestMatterIdentityFromDocuments(
+        modelID: ModelID?
+    ) async -> MatterIdentityDocumentSuggestionOutcome {
+        guard scopedMatterID != nil, let documentGrounding else {
+            return .unavailable(message: "Document suggestions are available only inside a matter.")
+        }
+        guard !isGenerating else {
+            return .unavailable(message: "Wait for the current chat answer to finish, then try again.")
+        }
+        guard let modelID else {
+            return .unavailable(message: "Load a local model before reviewing document suggestions.")
+        }
+
+        let question = """
+        Identify the parties and each attorney or law firm representing them in this matter. Include service contact information only when the uploaded documents state it. Do not infer missing names, roles, firms, addresses, or email addresses.
+        """
+        let options = Self.groundedOptions(storedDefaultOptions())
+        guard let context = await documentGrounding.groundedContext(
+            forQuestion: question,
+            depth: .fast,
+            modelID: modelID,
+            options: options
+        ), !context.sources.isEmpty else {
+            return .unavailable(
+                message: "No indexed party or counsel evidence was found in this matter’s uploaded documents."
+            )
+        }
+
+        let generationID = GenerationID()
+        let request = GenerateRequest(
+            generationID: generationID,
+            modelID: modelID,
+            prompt: context.modelPrompt,
+            systemPrompt: context.systemPrompt,
+            contextWorkload: .groundedExactEvidence,
+            options: options
+        )
+        do {
+            try Task.checkCancellation()
+            let raw = try await modelExecutionGateway.collectGeneratedText(request)
+            try Task.checkCancellation()
+            let answer = CitationNormalizer.normalize(
+                ReasoningContent.answer(from: raw)
+            ).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !answer.isEmpty,
+                  !DocumentQAPromptBuilder.isUnsupportedAnswerReply(answer) else {
+                return .unavailable(
+                    message: "The retrieved documents did not support a party or counsel suggestion."
+                )
+            }
+
+            let verificationSources = context.sources.map { source in
+                DocumentSupportSource(
+                    sourceID: source.sourceID,
+                    label: source.label,
+                    locator: source.locator.displayString,
+                    text: source.supportText,
+                    lowConfidence: source.lowConfidence
+                )
+            }
+            let report = try DocumentSupportVerifier.verify(
+                answer: answer,
+                sources: verificationSources,
+                scopeFullyIndexed: context.scopeFullyIndexed
+            )
+            let markdown = report.warningMarkdown + answer
+            let sources = context.sources.map { source in
+                MatterIdentityDocumentSuggestion.Source(
+                    id: source.sourceID,
+                    label: source.label,
+                    documentName: source.documentName,
+                    locator: source.locator.displayString,
+                    excerpt: source.excerpt
+                )
+            }
+            return .suggestion(MatterIdentityDocumentSuggestion(
+                markdown: markdown,
+                sources: sources,
+                requiresReview: report.requiresReview
+            ))
+        } catch is CancellationError {
+            _ = try? await modelExecutionGateway.cancelGeneration(generationID)
+            return .unavailable(message: "Document suggestion cancelled.")
+        } catch {
+            return .unavailable(
+                message: "Could not review the uploaded documents. \(error.localizedDescription)"
+            )
         }
     }
 
