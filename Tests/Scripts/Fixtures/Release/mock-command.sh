@@ -109,6 +109,15 @@ case "$name" in
         [[ "${MOCK_UPLOAD_FAIL:-0}" != "1" ]]
         ;;
       "release download")
+        if [[ -n "${MOCK_RELEASE_DOWNLOAD_COUNT_FILE:-}" ]]; then
+          count="$(cat "$MOCK_RELEASE_DOWNLOAD_COUNT_FILE" 2>/dev/null || printf 0)"
+          count=$((count + 1))
+          printf '%s' "$count" >"$MOCK_RELEASE_DOWNLOAD_COUNT_FILE"
+          if (( count <= ${MOCK_RELEASE_DOWNLOAD_FAIL_CALLS:-0} )); then
+            printf '%s\n' 'synthetic transient release download failure' >&2
+            exit 1
+          fi
+        fi
         destination="$(argument_value --dir "$@")"
         mkdir -p "$destination"
         cp "${MOCK_ZIP_SOURCE}" "${destination}/$(basename "${MOCK_ZIP_SOURCE}")"
@@ -179,6 +188,15 @@ case "$name" in
     [[ "${MOCK_ROLLBACK_FAIL:-0}" != "1" ]]
     ;;
   curl)
+    if [[ -n "${MOCK_CURL_COUNT_FILE:-}" ]]; then
+      count="$(cat "$MOCK_CURL_COUNT_FILE" 2>/dev/null || printf 0)"
+      count=$((count + 1))
+      printf '%s' "$count" >"$MOCK_CURL_COUNT_FILE"
+      if (( count <= ${MOCK_CURL_FAIL_CALLS:-0} )); then
+        printf '%s\n' 'synthetic transient public download failure' >&2
+        exit 22
+      fi
+    fi
     output="$(argument_value --output "$@" || argument_value -o "$@")"
     url="${!#}"
     case "$url" in
