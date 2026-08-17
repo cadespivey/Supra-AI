@@ -10,11 +10,21 @@ struct SidebarView: View {
     @State private var recycleBinHovering = false
     @State private var retryMutation: (() -> Void)?
     @State private var correctMutation: (() -> Void)?
+    private let categoryHeaderFont: Font = .supraBody
 
     var body: some View {
         List(selection: $selection) {
+            Section {
+                ForEach(AppRoute.workRoutes) { route in
+                    routeRow(route)
+                }
+            } header: {
+                Text("Work")
+                    .font(categoryHeaderFont)
+            }
+
             // All matters live directly in the primary sidebar (no inner column).
-            // Keep them first because they are the main unit of legal work.
+            // Keep them directly below Work because they are the context for it.
             Section {
                 if isGroupedSortMode {
                     // Grouped modes (client / practice area): a non-selectable
@@ -48,6 +58,7 @@ struct SidebarView: View {
                 // the + scaled to visually match the sort arrows' glyph.
                 HStack {
                     Text("Matters")
+                        .font(categoryHeaderFont)
                     Spacer()
                     Menu {
                         Picker("Sort By", selection: sortModeBinding) {
@@ -75,16 +86,13 @@ struct SidebarView: View {
                 .font(.supraBody)
             }
 
-            Section("Work") {
-                ForEach(AppRoute.workRoutes) { route in
-                    routeRow(route)
-                }
-            }
-
-            Section("Utilities") {
+            Section {
                 ForEach(AppRoute.utilityRoutes) { route in
                     routeRow(route)
                 }
+            } header: {
+                Text("Utilities")
+                    .font(categoryHeaderFont)
             }
         }
         .navigationTitle("Supra AI")
