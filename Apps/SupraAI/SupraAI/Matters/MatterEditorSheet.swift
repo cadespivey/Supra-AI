@@ -38,6 +38,8 @@ struct MatterEditorSheet: View {
     /// Known practice areas from existing matters; recommends an existing
     /// spelling as one is typed.
     private let practiceAreaDirectory: PracticeAreaDirectory
+    private let onSuggestFromDocuments:
+        (@MainActor () async -> MatterIdentityDocumentSuggestionOutcome)?
     private let onSave: (MatterIdentityEditorSubmission) -> UserMutationOutcome<String>
 
     @Environment(\.dismiss) private var dismiss
@@ -45,11 +47,17 @@ struct MatterEditorSheet: View {
     @State private var selectedCourtID: String
     @State private var lastMutationFailure: UserMutationFailure?
     @State private var focusChain = SupraFocusChain()
+    @State private var identitySuggestion: MatterIdentityDocumentSuggestion?
+    @State private var identitySuggestionMessage: String?
+    @State private var isLoadingIdentitySuggestion = false
+    @State private var identitySuggestionTask: Task<Void, Never>?
 
     init(
         mode: Mode,
         submission: MatterIdentityEditorSubmission,
         practiceAreaDirectory: PracticeAreaDirectory = .empty,
+        onSuggestFromDocuments:
+            (@MainActor () async -> MatterIdentityDocumentSuggestionOutcome)? = nil,
         onSave: @escaping (MatterIdentityEditorSubmission) -> UserMutationOutcome<String>
     ) {
         self.mode = mode
@@ -67,6 +75,7 @@ struct MatterEditorSheet: View {
                 ?? submission.canonicalJurisdictionID?.rawValue
                 ?? ""
         )
+        self.onSuggestFromDocuments = onSuggestFromDocuments
         self.onSave = onSave
     }
 
@@ -99,6 +108,10 @@ struct MatterEditorSheet: View {
                 .accessibilityIdentifier("matter.editor.commit")
         }
         .frame(minWidth: 480, idealWidth: 600, maxWidth: .infinity, minHeight: 520, idealHeight: 640, maxHeight: .infinity)
+        .onDisappear {
+            identitySuggestionTask?.cancel()
+            identitySuggestionTask = nil
+        }
     }
 
     private var editorForm: some View {
@@ -125,6 +138,7 @@ struct MatterEditorSheet: View {
                     )
                 }
 
+                documentIdentitySuggestionsSection
                 structuredPartiesSection
                 structuredRepresentationsSection
                 legacyIdentityEvidenceSection
@@ -164,6 +178,91 @@ struct MatterEditorSheet: View {
                 }
             }
             .formStyle(.grouped)
+    }
+
+    @ViewBuilder
+    private var documentIdentitySuggestionsSection: some View {
+        if let onSuggestFromDocuments, case .edit = mode {
+            Section {
+                Button {
+                    loadIdentitySuggestion(using: onSuggestFromDocuments)
+                } label: {
+                    Label(
+                        identitySuggestion == nil
+                            ? "Suggest from uploaded documents"
+                            : "Refresh document suggestions",
+                        systemImage: "doc.text.magnifyingglass"
+                    )
+                }
+                .buttonStyle(.plain)
+                .disabled(isLoadingIdentitySuggestion)
+                .accessibilityIdentifier("matter.identity.suggestions.load")
+
+                if isLoadingIdentitySuggestion {
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text("Reviewing indexed matter documents…")
+                            .foregroundStyle(.secondary)
+                    }
+                    .accessibilityIdentifier("matter.identity.suggestions.loading")
+                }
+
+                if let identitySuggestionMessage {
+                    Text(identitySuggestionMessage)
+                        .font(.supraCaption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("matter.identity.suggestions.message")
+                }
+
+                if let identitySuggestion {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label(
+                            identitySuggestion.requiresReview
+                                ? "Document suggestion — review required"
+                                : "Document-backed suggestion",
+                            systemImage: identitySuggestion.requiresReview
+                                ? "exclamationmark.triangle"
+                                : "checkmark.seal"
+                        )
+                        .font(.supraHeadline)
+                        .foregroundStyle(
+                            identitySuggestion.requiresReview ? Color.orange : Color.secondary
+                        )
+
+                        Text(markdownAttributedString(identitySuggestion.markdown))
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        DisclosureGroup("Sources (\(identitySuggestion.sources.count))") {
+                            VStack(alignment: .leading, spacing: 8) {
+                                ForEach(identitySuggestion.sources) { source in
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("[\(source.label)] \(source.documentName) — \(source.locator)")
+                                            .font(.supraCaption.weight(.semibold))
+                                        if !source.excerpt.isEmpty {
+                                            Text(source.excerpt)
+                                                .font(.supraCaption)
+                                                .foregroundStyle(.secondary)
+                                                .lineLimit(4)
+                                                .textSelection(.enabled)
+                                        }
+                                    }
+                                }
+                            }
+                            .padding(.top, 4)
+                        }
+                        .font(.supraCaption)
+                    }
+                    .padding(.vertical, 4)
+                    .accessibilityIdentifier("matter.identity.suggestions.result")
+                }
+            } header: {
+                Text("Suggestions from documents")
+            } footer: {
+                Text("Suggestions are evidence leads, not saved matter identity. Review the cited passages, then add or edit the structured party and counsel fields below before saving.")
+            }
+        }
     }
 
     private var structuredPartiesSection: some View {
@@ -592,6 +691,31 @@ struct MatterEditorSheet: View {
 
     private func identityLabel(_ rawValue: String) -> String {
         rawValue.replacingOccurrences(of: "_", with: " ").capitalized
+    }
+
+    private func loadIdentitySuggestion(
+        using provider: @escaping @MainActor () async -> MatterIdentityDocumentSuggestionOutcome
+    ) {
+        identitySuggestionTask?.cancel()
+        identitySuggestion = nil
+        identitySuggestionMessage = nil
+        isLoadingIdentitySuggestion = true
+        identitySuggestionTask = Task { @MainActor in
+            let outcome = await provider()
+            guard !Task.isCancelled else { return }
+            isLoadingIdentitySuggestion = false
+            identitySuggestionTask = nil
+            switch outcome {
+            case let .suggestion(suggestion):
+                identitySuggestion = suggestion
+            case let .unavailable(message):
+                identitySuggestionMessage = message
+            }
+        }
+    }
+
+    private func markdownAttributedString(_ markdown: String) -> AttributedString {
+        (try? AttributedString(markdown: markdown)) ?? AttributedString(markdown)
     }
 
     private var nameInvalid: Bool {

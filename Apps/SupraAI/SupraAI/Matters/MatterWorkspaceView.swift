@@ -74,7 +74,25 @@ struct MatterWorkspaceView: View {
                 MatterEditorSheet(
                     mode: .edit,
                     submission: mutationEditorSubmission(from: submission),
-                    practiceAreaDirectory: controller.practiceAreaDirectory()
+                    practiceAreaDirectory: controller.practiceAreaDirectory(),
+                    onSuggestFromDocuments: {
+                        guard let chatController = controller.chatController else {
+                            return .unavailable(
+                                message: "Matter document suggestions are unavailable in this session."
+                            )
+                        }
+                        switch await library.ensureLoadedChatModelID(
+                            for: .legalReasoning,
+                            configuration: .fromEnvironment()
+                        ) {
+                        case let .success(modelID):
+                            return await chatController.suggestMatterIdentityFromDocuments(
+                                modelID: modelID
+                            )
+                        case let .failure(issue):
+                            return .unavailable(message: issue.message)
+                        }
+                    }
                 ) { submission in
                     let outcome = controller.attemptUpdateMatter(identity: submission)
                     if outcome.allowsSuccessPresentation {
