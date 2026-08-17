@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.1] - 2026-08-17
+
+### Fixed
+
+- Prevented startup model prewarming from deadlocking the shared runtime lane and leaving the model stuck loading.
+- Grounded matter-specific party and counsel questions in uploaded matter documents before applying legal-authority jurisdiction gates.
+- Added source-attributed, review-only party and counsel suggestions to Matter Details.
+- Moved Matters below Work in the sidebar and aligned category typography.
+
+
 ## [3.0.0] - 2026-08-16
 
 Supra AI 3.0.0 consolidates ordinary work around one matter-centered workspace and a coherent
