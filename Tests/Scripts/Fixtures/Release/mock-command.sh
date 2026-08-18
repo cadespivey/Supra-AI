@@ -24,9 +24,6 @@ case "$name" in
   credential-gate)
     [[ "${MOCK_CREDENTIAL_FAIL:-0}" != "1" ]]
     ;;
-  font-gate)
-    [[ "${MOCK_FONT_FAIL:-0}" != "1" ]]
-    ;;
   release-gate)
     [[ "${MOCK_RELEASE_GATE_FAIL:-0}" != "1" ]]
     ;;

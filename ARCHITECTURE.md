@@ -3,8 +3,7 @@
 Supra AI is a SwiftUI macOS app plus a sandboxed MLX runtime XPC service, layered over a
 set of focused local Swift packages. This document describes how those pieces fit together
 and why. For dependency pins and runtime file-access details, see
-[`Docs/Architecture/`](Docs/Architecture/); for the full per-milestone design and work
-orders, see [`Docs/Milestones/`](Docs/Milestones/).
+[`Docs/Architecture/`](Docs/Architecture/).
 
 ## Goals that shaped the design
 
@@ -441,8 +440,6 @@ runtime telemetry.
 
 ## Where to go next
 
-- Per-milestone plans, work orders, acceptance criteria, and progress logs:
-  [`Docs/Milestones/`](Docs/Milestones/)
 - Pinned dependencies and the extraction/embedding stack:
   [`Docs/Architecture/Dependencies.md`](Docs/Architecture/Dependencies.md)
 - Cross-process model file access:

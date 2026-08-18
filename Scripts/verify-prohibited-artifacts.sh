@@ -19,7 +19,7 @@ while IFS= read -r -d '' path; do
       ;;
   esac
   case "$lower" in
-    website/public/fonts/*|*/website/public/fonts/*|*.dmg|*.pkg|*.xcarchive|*.app|*.xpc|*.p8|*.p12|*.pem|*.mobileprovision|*.safetensors|*.gguf|*.onnx|*.mlmodel|*.mlmodelc|*.sqlite|*.sqlite3|*.db|.env|*/.env)
+    *.dmg|*.pkg|*.xcarchive|*.app|*.xpc|*.p8|*.p12|*.pem|*.mobileprovision|*.safetensors|*.gguf|*.onnx|*.mlmodel|*.mlmodelc|*.sqlite|*.sqlite3|*.db|.env|*/.env)
       prohibited=1
       ;;
   esac

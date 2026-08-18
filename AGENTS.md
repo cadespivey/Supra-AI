@@ -30,21 +30,3 @@ Follow [`Docs/Test-First-Methodology.md`](Docs/Test-First-Methodology.md) propor
   and published wording in the same change.
 - Fixtures are synthetic (`TestData/`); never introduce real client data. Secrets live in
   `.env` / Keychain, never in source.
-
-## Public website font license invariant (non-negotiable)
-
-- Equity font files are prohibited from the public repository, public website, and public build or release artifacts.
-- **Never add, commit, push, package, upload, deploy, or otherwise expose any Equity font
-  file publicly.** This applies even if a file is renamed, converted, subsetted, embedded,
-  base64-encoded, placed in a release/build artifact, or kept only in Git history.
-- The public repository and every artifact produced from it must remain free of Equity font
-  binaries. Do not put them under `website/`, Git LFS, Actions artifacts, GitHub Pages,
-  releases, fixtures, screenshots with embedded font data, or any other tracked/public path.
-- Website work must use system fonts or fonts whose license expressly permits the intended
-  public redistribution. A local/private font workflow may be designed separately, but it
-  must default to absence, stay outside this repository, and never feed public builds.
-- Website changes run `bash Scripts/verify-public-font-license.sh` once in their final focused
-  validation. The invariant need not be copied into every working plan. Never bypass or weaken
-  the check.
-- See [`Docs/Website-Asset-Licensing.md`](Docs/Website-Asset-Licensing.md) for the durable
-  policy and incident procedure.

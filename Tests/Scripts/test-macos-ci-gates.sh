@@ -965,7 +965,7 @@ run_case \
   "a website command failure blocks the gate" \
   23 \
   "Website gate failed: typecheck" \
-  env SUPRA_NPM="$npm_stub" SUPRA_FONT_GUARD=/usr/bin/true \
+  env SUPRA_NPM="$npm_stub" \
     bash "${scripts}/test-website.sh" "$repo_root/website"
 
 # Expected RED before the runner-portability fix: the source guard invokes

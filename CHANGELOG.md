@@ -5,9 +5,8 @@ All notable changes to Supra AI are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-> Development history is tracked in detail in [`Docs/Milestones/`](Docs/Milestones/)
-> (per-milestone implementation plans, work orders, and progress logs) and in the
-> git history. This file summarizes user-facing changes per release.
+> Development history is tracked in git history. This file summarizes user-facing
+> changes per release.
 
 ## [Unreleased]
 
@@ -1097,9 +1096,8 @@ First public release. Supra AI is a local, MLX-powered macOS research and drafti
 assistant for legal work — on-device generation, source-grounded legal research, and
 matter document intelligence, with citation verification built in.
 
-v1.0.0 is the sum of three planned milestones (M1 → M2 → M3). Each was specified
-up front in [`Docs/Milestones/`](Docs/Milestones/) and delivered against explicit
-acceptance criteria and a validation suite.
+v1.0.0 is the sum of three planned milestones (M1 → M2 → M3), delivered against
+explicit acceptance criteria and a validation suite.
 
 ### Added — Milestone 1: Local MLX runtime vertical slice
 

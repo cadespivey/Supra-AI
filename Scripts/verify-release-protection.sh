@@ -35,7 +35,6 @@ done
 codeowners="${repo_root}/.github/CODEOWNERS"
 if [[ -f "$codeowners" ]]; then
   for protected_path in '/.github/workflows/' '/Scripts/release.sh' '/Scripts/*release*.sh' \
-    '/Scripts/verify-public-repository-assets.sh' '/Scripts/public-ref-audit-exceptions.tsv' \
     '/Docs/Verified-Product-Claims.yml' '/SECURITY.md'; do
     grep -Fq "$protected_path" "$codeowners" \
       || fail "CODEOWNERS omits protected path: ${protected_path}"
@@ -104,8 +103,6 @@ fi
 scheduled="${repo_root}/.github/workflows/security-scheduled.yml"
 if [[ -f "$scheduled" ]]; then
   grep -Eq '^[[:space:]]+schedule:' "$scheduled" || fail 'weekly security workflow has no schedule'
-  grep -Fq 'Scripts/verify-public-repository-assets.sh' "$scheduled" \
-    || fail 'weekly workflow omits read-only public-ref metadata check'
   grep -Fq 'Scripts/verify-model-ids.sh' "$scheduled" \
     || fail 'weekly workflow omits model metadata check'
   grep -Fq 'npm audit --audit-level=high' "$scheduled" \

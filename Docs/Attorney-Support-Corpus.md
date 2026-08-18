@@ -17,8 +17,7 @@ injection.
 
 The checked-in corpus is `attorney_reviewed`. The repository owner and attorney
 approved the current fixture expectations and rationales on July 31, 2026; the
-fixture metadata and tests pin the reviewer, date, and cases-only digest. See
-[`Docs/Assurance-Closure.md`](Assurance-Closure.md).
+fixture metadata and tests pin the reviewer, date, and cases-only digest.
 
 Code owners must not change an expected result merely to make a verifier pass.
 Any later fixture or expectation change returns the changed corpus to
