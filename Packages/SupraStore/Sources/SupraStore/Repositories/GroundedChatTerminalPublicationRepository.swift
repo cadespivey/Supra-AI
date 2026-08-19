@@ -447,9 +447,9 @@ private extension GroundedChatTerminalPublicationRepository {
                 )
             }
         }
-        guard citationLabels(in: command.terminalContent) == Set(
-            command.citations.map(\.label)
-        ) else {
+        let retainedTerminalLabels = citationLabels(in: command.terminalContent)
+            .filter { sourceByLabel[$0] != nil }
+        guard retainedTerminalLabels == Set(command.citations.map(\.label)) else {
             throw GroundedChatTerminalPublicationError.invalidCommand(
                 "terminal citation labels"
             )

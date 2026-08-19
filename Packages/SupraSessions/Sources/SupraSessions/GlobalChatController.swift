@@ -166,15 +166,6 @@ public final class GlobalChatController: ObservableObject {
     static let jurisdictionOverrideKey = "globalChat.jurisdictionOverride"
     static let includeRelatedFederalKey = "globalChat.includeRelatedFederal"
 
-    /// Phase 1 gate switch (P1-T4): when true, a matter-document CONTENT question is answered
-    /// by typed generation (an AnswerDraft validated exactly by AttributionValidator, rendered
-    /// to [S#]-prose) instead of the prose Q&A path, with a clean fallback to prose streaming
-    /// when the model can't hold the schema. Default off; toggled in Diagnostics.
-    public static let typedGroundedGenerationKey = "reasoning.typedGroundedGeneration.enabled"
-
-    private var typedGroundedGenerationEnabled: Bool {
-        (try? store.appSettings.getSetting(Self.typedGroundedGenerationKey, as: Bool.self)) ?? false
-    }
 
     public init(
         store: SupraStore,
@@ -383,8 +374,55 @@ public final class GlobalChatController: ObservableObject {
                 message.citations = citations.map(MessageCitation.init)
                 message.assuranceState = groundedAssurance(messageID: message.id)
             }
+            if message.role == .assistant, message.status == .completed {
+                hydrateMatterQuoteCheck(&message)
+            }
             return message
         }
+    }
+
+    /// Reconstructs the final persisted document packet without creating inline
+    /// citations or changing assurance. Duplicate retained identities share one
+    /// navigation target; the earliest rank remains the representative row.
+    private func providedSources(messageID: String) -> [ProvidedDocumentSource] {
+        guard let sourceSet = try? store.documentSources.fetchSourceSet(messageID: messageID),
+              let rows = try? store.documentSources.fetchSources(sourceSetID: sourceSet.id)
+        else { return [] }
+
+        var seen = Set<String>()
+        return rows.compactMap { row in
+            let locator = row.locatorJSON.data(using: .utf8).flatMap {
+                try? JSONDecoder().decode(DocumentSourceLocator.self, from: $0)
+            }
+            let identity = [row.documentID ?? "", row.revisionID ?? "", row.chunkID ?? "", row.locatorJSON]
+                .joined(separator: "\u{1F}")
+            guard seen.insert(identity).inserted else { return nil }
+            let document = row.documentID.flatMap { try? store.documentLibrary.fetchDocument(id: $0) }
+            let name = (document?.deletedAt == nil ? document?.displayName : nil) ?? "Document unavailable"
+            return ProvidedDocumentSource(
+                id: row.id,
+                label: row.citationLabel,
+                documentID: row.documentID,
+                documentName: name,
+                locator: locator,
+                excerpt: row.excerpt
+            )
+        }
+    }
+
+    /// The quote checker receives exactly the body shown by `MessageRow`: hidden
+    /// reasoning, the folded preamble, and trailing support notices are excluded.
+    /// This is used for both live completion and reload so the advisory is stable.
+    private func hydrateMatterQuoteCheck(_ message: inout ChatMessage) {
+        guard case .matter = scope else { return }
+        message.providedSources = providedSources(messageID: message.id)
+        let visibleAnswer = FinalAnswerContent.split(
+            SupportNoticeContent.split(ReasoningContent.answer(from: message.content)).body
+        ).answer
+        message.quoteWarnings = MatterChatQuoteChecker.warnings(
+            in: visibleAnswer,
+            providedSources: message.providedSources
+        )
     }
 
     /// Opens a fresh, blank chat: deselects the current chat (clearing the message
@@ -453,6 +491,22 @@ public final class GlobalChatController: ObservableObject {
         DocumentPreviewLoader(store: store).load(
             documentID: documentID, locator: locator, matchText: matchText
         )
+    }
+
+    /// Opens a row from the retained packet through its stable Store identity.
+    /// This deliberately does not reuse the inline-citation path: output-source
+    /// rows bind a historical revision and retained excerpt.
+    public func providedSourcePreview(outputSourceID: String) -> DocumentPreviewModel {
+        guard let outputSource = try? store.documentSources.fetchSource(id: outputSourceID) else {
+            return DocumentPreviewModel(
+                documentName: "Document",
+                locatorDisplay: DocumentSourceLocator(sourceKind: .text).displayString,
+                warnings: [],
+                revisionNotice: nil,
+                kind: .unavailable(reason: "Provided source unavailable.", fallbackText: "")
+            )
+        }
+        return DocumentPreviewLoader(store: store).load(outputSource: outputSource)
     }
 
     public func exportTranscriptMarkdown(chatID: String, title: String) -> String {
@@ -676,6 +730,7 @@ public final class GlobalChatController: ObservableObject {
         displayPrompt: String? = nil,
         documentDepth: RetrievalDepth = .fast,
         researchDepth: RetrievalDepth = .fast,
+        isExplicitCommand: Bool = false,
         modelResolver: (@MainActor () async -> ModelResolution)? = nil
     ) {
         let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -710,6 +765,7 @@ public final class GlobalChatController: ObservableObject {
                 displayPrompt: displayPrompt,
                 documentDepth: documentDepth,
                 researchDepth: researchDepth,
+                isExplicitCommand: isExplicitCommand,
                 modelResolver: modelResolver
             )
         }
@@ -731,6 +787,11 @@ public final class GlobalChatController: ObservableObject {
     /// classifies confidently `.legal`, so no committed recall rides on the
     /// uncertain band.
     public func effectiveRoutedPrompt(_ routed: RoutedPrompt) -> RoutedPrompt {
+        if case .matter = scope, routed.command == nil {
+            var local = routed
+            local.route = router.route(for: .generalQA)
+            return local
+        }
         guard routed.command == nil,
               routed.route.mode == .legalQA,
               routed.inferredIntent == .uncertain,
@@ -1058,125 +1119,6 @@ public final class GlobalChatController: ObservableObject {
         Task { _ = try? await modelExecutionGateway.cancelGeneration(activeGenerationID) }
     }
 
-    /// Phase 1 gate switch (P1-T4): generate a typed AnswerDraft for a matter-document CONTENT
-    /// question, render it to `[S#]`-prose, and finalize it through the SAME persistence and
-    /// verification as the streamed path (reusing the existing helpers). Returns true when it
-    /// produced an answer; false on a clean fallback (the caller then uses the prose streaming
-    /// path, unchanged). The exact `AttributionValidator` has already gated the draft; the
-    /// extractive `DocumentSupportVerifier` still runs here as the versioned trust check, and
-    /// every out-of-band banner (entity, support) is appended exactly as on the streamed path.
-    private func finalizeTypedGroundedContentAnswer(
-        question: String,
-        grounded: GroundedChatContext,
-        groundingSources: [GroundedSourceRef],
-        groundingSourceTexts: [String],
-        groundingTrailer: String?,
-        groundingScopeFullyIndexed: Bool,
-        modelID: ModelID,
-        options: GenerationOptions,
-        systemPrompt: String?,
-        chatID: String,
-        assistant: MessageRecord,
-        variant: MessageVariantRecord,
-        session: GenerationSessionRecord
-    ) async -> Bool {
-        let spans = groundingSources.map {
-            GroundedSpanInput(label: $0.label, sourceID: $0.sourceID, text: $0.supportText, lowConfidence: $0.lowConfidence)
-        }
-        let outcome = await TypedGroundedGenerator.generate(
-            question: question, spans: spans, modelID: modelID,
-            options: options, systemPrompt: systemPrompt, runtimeClient: runtimeClient
-        )
-        // A Cancel pressed during the (bounded) typed generation can't reach its untracked
-        // generations; honor it here by discarding the result and marking the turn cancelled
-        // rather than committing a completed answer.
-        if cancelRequested || groundedPublicationCancellation.isCancellationRequested {
-            resolveGroundedPublicationFailure(
-                GroundedChatTerminalPublicationError.cancelled,
-                assistant: assistant,
-                variant: variant,
-                session: session,
-                metrics: StoredRuntimeMetrics()
-            )
-            reloadMessages()
-            return true
-        }
-        // A clean fallback: let the caller run the prose streaming path. Nothing was persisted.
-        guard case let .generated(result) = outcome else { return false }
-
-        let labelForSpanID = Dictionary(
-            spans.map { (SpanID($0.sourceID), $0.label) }, uniquingKeysWith: { first, _ in first }
-        )
-        let answerText = AnswerDraftRenderer.render(result.draft, labelForSpanID: labelForSpanID)
-        // Defense in depth (the generator already prevents this): an empty non-refusal render
-        // is not a usable answer — fall back to the prose streaming path rather than persist a
-        // blank completed message.
-        if result.draft.refusal == nil, answerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return false
-        }
-        var content = answerText
-
-        // Source-key trailer, entity-grounding banner, and support-verification banner are
-        // assembled in memory. None may reach the pending owner before the atomic Store command.
-        if let groundingTrailer, !groundingTrailer.isEmpty {
-            content += groundingTrailer
-        }
-        if !groundingSourceTexts.isEmpty {
-            let entityIssues = LegalCitationVerifier.verifyGroundedEntities(
-                answer: answerText, sourceTexts: groundingSourceTexts
-            )
-            if let banner = Self.entityGroundingBanner(entityIssues) {
-                content += banner
-            }
-        }
-        let verification = try? DocumentSupportVerifier.verify(
-            answer: answerText,
-            sources: groundingSources.map {
-                DocumentSupportSource(
-                    sourceID: $0.sourceID, label: $0.label, locator: $0.locator.encodedJSON(),
-                    text: $0.supportText, lowConfidence: $0.lowConfidence
-                )
-            },
-            scopeFullyIndexed: groundingScopeFullyIndexed
-        )
-        let banner = verification.flatMap(Self.documentSupportBanner)
-            ?? Self.verificationUnavailableBanner
-        if verification == nil || verification?.requiresReview == true {
-            content += banner
-        }
-
-        do {
-            let publication = try publishGroundedTerminalAnswer(
-                question: question,
-                answerText: answerText,
-                terminalContent: content,
-                context: grounded,
-                verification: verification,
-                chatID: chatID,
-                assistant: assistant,
-                variant: variant,
-                session: session,
-                metrics: StoredRuntimeMetrics()
-            )
-            updateMessage(id: assistant.id, content: content, status: .completed)
-            updateMessageAssurance(id: assistant.id, state: publication.receipt.assuranceState)
-            attachCitations(publication.citations, toMessage: assistant.id)
-            if grounded.depth == .fast, !groundingSources.isEmpty {
-                deeperSearchOffer = DeeperSearchOffer(kind: .documents, chatID: chatID, question: question)
-            }
-        } catch {
-            resolveGroundedPublicationFailure(
-                error,
-                assistant: assistant,
-                variant: variant,
-                session: session,
-                metrics: StoredRuntimeMetrics()
-            )
-        }
-        reloadMessages()
-        return true
-    }
-
     /// The full persist-and-stream flow. Internal so tests can await it directly.
     func performSend(
         prompt: String,
@@ -1188,6 +1130,7 @@ public final class GlobalChatController: ObservableObject {
         displayPrompt: String? = nil,
         documentDepth: RetrievalDepth = .fast,
         researchDepth: RetrievalDepth = .fast,
+        isExplicitCommand: Bool = false,
         modelResolver: (@MainActor () async -> ModelResolution)? = nil
     ) async {
         isGenerating = true
@@ -1280,14 +1223,24 @@ public final class GlobalChatController: ObservableObject {
             // files inline (those are the grounding) or for non-document questions.
             // Gated on a loaded model so a no-model send doesn't pay for retrieval it
             // will discard at the guard below.
-            let grounded: GroundedChatContext? = (attachments.isEmpty && resolvedModelID != nil)
+            let ordinaryMatterChat = scopedMatterID != nil && !isExplicitCommand
+            var grounded: GroundedChatContext? = (attachments.isEmpty && resolvedModelID != nil)
                 ? await documentGrounding?.groundedContext(
                     forQuestion: prompt,
                     depth: documentDepth,
                     modelID: resolvedModelID,
-                    options: options
+                    options: options,
+                    naturalMatterChat: ordinaryMatterChat
                 )
                 : nil
+
+            let naturalMatterRequest: (modelPrompt: String, systemPrompt: String?)? = ordinaryMatterChat
+                ? documentGrounding?.naturalConversationRequest(forPrompt: modelPrompt)
+                : nil
+            if ordinaryMatterChat,
+               grounded?.naturalSourceFreeDisposition == .fallbackToGenericConversation {
+                grounded = nil
+            }
 
             if grounded == nil, let route, route.usesOneShotLegalWorkflow {
                 try await performLegalOneShotSend(
@@ -1310,7 +1263,7 @@ public final class GlobalChatController: ObservableObject {
                 return
             }
 
-            let history = grounded == nil ? fullHistory : []
+            let history = ordinaryMatterChat ? fullHistory : (grounded == nil ? fullHistory : [])
 
             let assistant = try store.chats.createAssistantMessageShell(chatID: chatID)
             recordQuickAttachments(quickAttachments, forMessageID: assistant.id)
@@ -1331,9 +1284,13 @@ public final class GlobalChatController: ObservableObject {
                 // Grounded answers must stay faithful to the supplied sources, so decode
                 // greedily (mirroring the Documents-tab Q&A route) rather than with the
                 // chat's creative sampling.
-                let effectiveModelPrompt = context?.modelPrompt ?? modelPrompt
-                let effectiveSystemPrompt = context.map { $0.systemPrompt } ?? systemPrompt
-                let effectiveOptions = context == nil ? options : Self.groundedOptions(options)
+                let effectiveModelPrompt = context?.modelPrompt ?? naturalMatterRequest?.modelPrompt ?? modelPrompt
+                let effectiveSystemPrompt = context.map { $0.systemPrompt }
+                    ?? naturalMatterRequest?.systemPrompt
+                    ?? systemPrompt
+                let effectiveOptions = (context == nil || ordinaryMatterChat)
+                    ? options
+                    : Self.groundedOptions(options)
                 let groundingTrailer = context?.trailer
                 let groundingSourceTexts = context?.sourceTexts ?? []
                 let groundingSources = context?.sources ?? []
@@ -1367,6 +1324,11 @@ public final class GlobalChatController: ObservableObject {
                 reloadMessages()
 
                 if context?.packingReport?.canPack == false {
+                    if ordinaryMatterChat {
+                        try store.generation.completeGeneration(generationID: session.id)
+                        context = nil
+                        continue groundedPasses
+                    }
                     try store.chats.appendToken(
                         to: activeVariant.id,
                         token: Self.groundedContextOverflowRefusal
@@ -1382,22 +1344,6 @@ public final class GlobalChatController: ObservableObject {
                     return
                 }
 
-                // Phase 1 gate switch: a matter-document CONTENT question (grounded with packed
-                // [S#] sources) may be answered by typed generation — an AnswerDraft validated
-                // exactly and rendered to [S#]-prose — when enabled. A clean fallback drops
-                // through to the prose streaming path below (no regression). Inventory / no-source
-                // contexts and the flag-off case stream as before. Runs per grounding pass, so an
-                // escalated deep pass gets the same typed attempt with its richer sources.
-                if typedGroundedGenerationEnabled, let grounded, !groundingSources.isEmpty {
-                    let handled = await finalizeTypedGroundedContentAnswer(
-                        question: prompt, grounded: grounded, groundingSources: groundingSources,
-                        groundingSourceTexts: groundingSourceTexts, groundingTrailer: groundingTrailer,
-                        groundingScopeFullyIndexed: groundingScopeFullyIndexed,
-                        modelID: modelID, options: effectiveOptions, systemPrompt: effectiveSystemPrompt,
-                        chatID: chatID, assistant: assistant, variant: activeVariant, session: session
-                    )
-                    if handled { return }
-                }
 
                 let request = GenerateRequest(
                     generationID: generationID,
@@ -1405,7 +1351,7 @@ public final class GlobalChatController: ObservableObject {
                     prompt: effectiveModelPrompt,
                     systemPrompt: effectiveSystemPrompt,
                     history: history,
-                    contextWorkload: context == nil
+                    contextWorkload: (context == nil || ordinaryMatterChat)
                         ? .ordinaryConversation
                         : .groundedExactEvidence,
                     options: effectiveOptions
@@ -1441,7 +1387,16 @@ public final class GlobalChatController: ObservableObject {
                     case .generationCompleted:
                         sawTerminal = true
                         finalMetrics = event.metrics ?? finalMetrics
-                        if let context, finalMetrics?.contextOverflowed == true {
+                        if finalMetrics?.contextOverflowed == true {
+                            if ordinaryMatterChat, context != nil {
+                                try store.generation.completeGeneration(
+                                    generationID: session.id,
+                                    metrics: storedMetrics(from: finalMetrics)
+                                )
+                                context = nil
+                                continue groundedPasses
+                            }
+                            if let context {
                             streamedContent = Self.groundedContextOverflowRefusal
                             if context.sources.isEmpty {
                                 // Inventory/no-source grounding owns no provenance packet, so it
@@ -1500,13 +1455,14 @@ public final class GlobalChatController: ObservableObject {
                             }
                             logGenerationTiming(finalMetrics, generationID: session.id)
                             break generationEvents
+                            }
                         }
                         // Normalize the model's citation-marker variants ([CITE: S1, S8], [S1, S8],
                         // [Source S1]) to canonical [S#] so they render as clickable links and
                         // register with the verifier instead of showing as literal text and bogus
                         // uncited propositions. Applied to the whole content (display + persistence);
                         // it only touches recognizable citation brackets.
-                        if context != nil {
+                        if context != nil, !ordinaryMatterChat {
                             streamedContent = CitationNormalizer.normalize(streamedContent)
                         }
                         // The model's answer, before the source trailer — what the entity-grounding
@@ -1520,7 +1476,7 @@ public final class GlobalChatController: ObservableObject {
                         // same message. Only when a genuinely different deeper packet
                         // exists (more/other sources than the fast one); otherwise the
                         // fast refusal stands. A deep refusal never re-escalates.
-                        if !didEscalate, let fast = context, fast.depth == .fast,
+                        if !ordinaryMatterChat, !didEscalate, let fast = context, fast.depth == .fast,
                            DocumentQAPromptBuilder.isUnsupportedAnswerReply(answerText) {
                             // May run an LLM rerank (several seconds) under its own
                             // untracked generation ID — hold the await outside the
@@ -1555,7 +1511,7 @@ public final class GlobalChatController: ObservableObject {
                         }
                         // Assemble the terminal value in memory. For source-bearing grounding,
                         // none of it may reach the message owner before the atomic Store command.
-                        if finalMetrics?.contextTrimmed == true {
+                        if !ordinaryMatterChat, finalMetrics?.contextTrimmed == true {
                             streamedContent += Self.contextTrimmedNotice
                         }
                         if let groundingTrailer, !groundingTrailer.isEmpty {
@@ -1565,7 +1521,7 @@ public final class GlobalChatController: ObservableObject {
                         // answer asserts that is absent from the cited sources (e.g. a full
                         // name reconstructed from an email prefix). Surfaced as a warning,
                         // never suppressed — the reader sees both the answer and the caveat.
-                        if !groundingSourceTexts.isEmpty {
+                        if !ordinaryMatterChat, !groundingSourceTexts.isEmpty {
                             let entityIssues = LegalCitationVerifier.verifyGroundedEntities(
                                 answer: answerText,
                                 sourceTexts: groundingSourceTexts
@@ -1577,7 +1533,7 @@ public final class GlobalChatController: ObservableObject {
                         // Proposition support check — resolved labels are structural only.
                         // The warning is appended and persisted out-of-band so source text
                         // cannot instruct the model to suppress it.
-                        if !groundingSources.isEmpty {
+                        if !ordinaryMatterChat, !groundingSources.isEmpty {
                             let report = try? DocumentSupportVerifier.verify(
                                 answer: answerText,
                                 sources: groundingSources.map { source in
@@ -1636,7 +1592,8 @@ public final class GlobalChatController: ObservableObject {
                                     state: publication.receipt.assuranceState
                                 )
                                 attachCitations(publication.citations, toMessage: assistant.id)
-                                if context.depth == .fast {
+                                attachProvidedSources(toMessage: assistant.id)
+                                if !ordinaryMatterChat, context.depth == .fast {
                                     deeperSearchOffer = DeeperSearchOffer(
                                         kind: .documents,
                                         chatID: chatID,
@@ -1657,7 +1614,7 @@ public final class GlobalChatController: ObservableObject {
                             // no document packet and retain the existing terminal writes.
                             if context != nil, !streamedContent.isEmpty {
                                 try store.chats.appendToken(to: activeVariant.id, token: streamedContent)
-                            } else if finalMetrics?.contextTrimmed == true {
+                            } else if !ordinaryMatterChat, finalMetrics?.contextTrimmed == true {
                                 // Ordinary chat tokens were already persisted as they streamed;
                                 // only the terminal truncation notice remains to append.
                                 try store.chats.appendToken(
@@ -4264,6 +4221,13 @@ public final class GlobalChatController: ObservableObject {
         guard !citations.isEmpty,
               let index = messages.firstIndex(where: { $0.id == id }) else { return }
         messages[index].citations = citations
+    }
+
+    /// Attaches the just-persisted final packet without reloading the chat or
+    /// changing citation/assurance behavior for the live completion.
+    private func attachProvidedSources(toMessage id: String) {
+        guard let index = messages.firstIndex(where: { $0.id == id }) else { return }
+        hydrateMatterQuoteCheck(&messages[index])
     }
 
     private func updateMessageAssurance(id: String, state: OutputAssuranceState) {

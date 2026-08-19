@@ -45,7 +45,10 @@ final class ArchitectureUXTParityChat01Tests: XCTestCase {
         let useCase = GroundedChatTerminalPublicationUseCase(store: fixture.store)
 
         let first = try useCase.publish(request)
+        let duplicate = try useCase.publish(request)
 
+        XCTAssertEqual(first.receipt, duplicate.receipt)
+        XCTAssertEqual(first.citations, duplicate.citations)
         XCTAssertEqual(first.receipt.messageID, Wire.recordID)
         XCTAssertEqual(first.receipt.assuranceState, .preliminary)
         XCTAssertEqual(first.receipt.aggregateDigestSHA256.count, 64)
@@ -53,6 +56,7 @@ final class ArchitectureUXTParityChat01Tests: XCTestCase {
         XCTAssertFalse(first.receipt.idempotencyKey.contains(Wire.terminalContent))
         XCTAssertFalse(first.receipt.idempotencyKey.contains(Wire.forbiddenDefault))
         XCTAssertEqual(first.citations.map(\.label), ["S7", "S4"])
+        XCTAssertTrue(first.receipt.verificationDimensions.results.allSatisfy { $0.status == .notRun })
         XCTAssertEqual(first.citations.map(\.kind), [.source, .source])
         XCTAssertTrue(first.receipt.verificationDimensions.isComplete)
 
@@ -166,7 +170,7 @@ private enum Wire {
     static let wire = "T_PARITY_CHAT_01_WIRE_731"
     static let question = "What does the exact T_PARITY_CHAT_01_WIRE_731 packet establish?"
     static let answer = "The exact packet is retained in its original order [S7] [S4]."
-    static let terminalContent = answer + "\n\nT_PARITY_CHAT_01_TERMINAL_739"
+    static let terminalContent = answer + " [S99] [A9]\n\nT_PARITY_CHAT_01_TERMINAL_739"
     static let sevenSourceOrder = ["S7", "S1", "S6", "S2", "S5", "S3", "S4"]
     static let timestamp = Date(timeIntervalSince1970: 1_946_254_731)
     static let metrics = StoredRuntimeMetrics(

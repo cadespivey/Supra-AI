@@ -533,6 +533,11 @@ struct GlobalChatsView: View {
                                 )
                                 authorityReader = nil
                                 citationPreview = PreviewItem(model: model)
+                            },
+                            onOpenProvidedSource: { source in
+                                let model = controller.providedSourcePreview(outputSourceID: source.id)
+                                authorityReader = nil
+                                citationPreview = PreviewItem(model: model)
                             }
                         )
                         .id(message.id)
@@ -989,6 +994,7 @@ struct GlobalChatsView: View {
             options: controller.activeChatOptions,
             route: routed.route,
             displayPrompt: rawPrompt,
+            isExplicitCommand: routed.command != nil,
             modelResolver: modelResolver
         )
     }
@@ -1071,6 +1077,7 @@ struct GlobalChatsView: View {
             displayPrompt: offer.question,
             documentDepth: offer.kind == .documents ? .deep : .fast,
             researchDepth: offer.kind == .research ? .deep : .fast,
+            isExplicitCommand: true,
             modelResolver: modelResolver
         )
     }
@@ -1337,6 +1344,8 @@ private struct MessageRow: View {
     var onOpenAuthority: (MessageCitation) -> Void = { _ in }
     /// Opens a tapped `[S#]` matter-document citation in the trailing slide-over preview.
     var onOpenSource: (MessageCitation) -> Void = { _ in }
+    /// Opens one retained packet row by its stable output-source ID.
+    var onOpenProvidedSource: (ProvidedDocumentSource) -> Void = { _ in }
     /// nil until the user toggles. Until then the reasoning section auto-expands
     /// only while the response is still generating, and stays collapsed for
     /// completed/reloaded messages so chat history isn't a wall of reasoning.
@@ -1344,6 +1353,9 @@ private struct MessageRow: View {
     /// The verification notice is always collapsed by default — it exists only on
     /// completed answers and must not dwarf the answer it qualifies.
     @State private var supportNoticeExpanded = false
+    /// The quote check is advisory and collapsed by default, separate from the
+    /// proposition-support notice and retained-source disclosure.
+    @State private var quoteCheckExpanded = false
     @State private var isHovered = false
     @State private var targetPickerAttachmentID: String?
 
@@ -1517,6 +1529,25 @@ private struct MessageRow: View {
                 .tint(.secondary)
                 .accessibilityIdentifier("chat.message.supportNotice.\(message.id)")
             }
+            if !message.quoteWarnings.isEmpty {
+                DisclosureGroup(isExpanded: $quoteCheckExpanded) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(message.quoteWarnings) { warning in
+                            Text(warning.message)
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                        }
+                    }
+                    .padding(.top, 2)
+                } label: {
+                    Label("Quote check", systemImage: "quote.bubble")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                }
+                .tint(.secondary)
+                .accessibilityIdentifier("chat.message.quoteCheck.\(message.id)")
+            }
             SupraMarkdownView(
                 text: displayContent,
                 presentation: .assistantResponse,
@@ -1538,8 +1569,11 @@ private struct MessageRow: View {
             // citations stay independently actionable via the sources block below.
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(Text(displayContent))
-            if !message.citations.isEmpty {
+            if !displayedCitations.isEmpty {
                 sourcesBlock
+            }
+            if !message.providedSources.isEmpty {
+                providedSourcesBlock
             }
             if showsCopy {
                 HStack(spacing: 10) {
@@ -1613,6 +1647,17 @@ private struct MessageRow: View {
         Set(message.citations.map(\.label))
     }
 
+    /// Inline citations retain their own semantics. Source citations already
+    /// represented by the final retained packet are not repeated as navigation rows.
+    private var displayedCitations: [MessageCitation] {
+        message.citations.filter { citation in
+            guard citation.kind == .source else { return true }
+            return !message.providedSources.contains {
+                $0.documentID == citation.documentID && $0.locator == citation.locator
+            }
+        }
+    }
+
     /// Routes a tapped citation (inline marker or sources-block row) to its action:
     /// authorities open their CourtListener page, sources open the preview at a page.
     private func handleCitationTap(_ label: String) {
@@ -1632,7 +1677,7 @@ private struct MessageRow: View {
         // is a link that opens the source preview at the cited chunk (with a snippet
         // highlight where the format supports it), mirroring the inline `[S#]` marker.
         VStack(alignment: .leading, spacing: 2) {
-            ForEach(message.citations) { citation in
+            ForEach(displayedCitations) { citation in
                 Button {
                     handleCitationTap(citation.label)
                 } label: {
@@ -1664,6 +1709,32 @@ private struct MessageRow: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    /// Quiet disclosure of the retained packet supplied to the model. It does not
+    /// characterize a row as cited or used by the response.
+    private var providedSourcesBlock: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("Sources provided to the model")
+                .font(.caption.weight(.medium))
+            ForEach(message.providedSources) { source in
+                Button {
+                    onOpenProvidedSource(source)
+                } label: {
+                    Text(providedSourceLine(source))
+                        .font(.caption)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .buttonStyle(.plain)
+                .help("Open the provided source")
+                .accessibilityIdentifier("message.providedSource.\(source.id)")
+            }
+        }
+        .foregroundStyle(.tertiary)
+        .padding(.leading, 32)
+        .padding(.top, 2)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     /// "[A1] Doe v. Smith" or "[S1] agreement.pdf — p. 3".
     private func sourceLine(_ citation: MessageCitation) -> String {
         let name = citation.displayName ?? (citation.kind == .authority ? "Authority" : "Document")
@@ -1671,6 +1742,12 @@ private struct MessageRow: View {
         if citation.kind == .source, let display = citation.locator?.displayString, !display.isEmpty {
             line += " — \(display)"
         }
+        return line
+    }
+
+    private func providedSourceLine(_ source: ProvidedDocumentSource) -> String {
+        var line = "[\(source.label)] \(source.documentName)"
+        if let display = source.locator?.displayString, !display.isEmpty { line += " — \(display)" }
         return line
     }
 

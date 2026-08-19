@@ -123,6 +123,60 @@ final class JurisdictionlessUncertainRoutingTests: XCTestCase {
         XCTAssertEqual(controller.effectiveRoutedPrompt(legal).route.mode, .legalQA)
     }
 
+    /// Ordinary matter chat is a local conversational surface even when intent
+    /// inference confidently recognizes legal language. Only an explicit command
+    /// may select the strict legal workflow from this surface.
+    @MainActor
+    func testConfidentInferredLegalMatterPromptUsesLocalConversationRoute() throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Local Matter")
+        let controller = makeGlobalChatController(
+            store: store,
+            runtimeClient: StubRuntimeClient(),
+            scope: .matter(id: matter.id)
+        )
+        controller.loadChats()
+
+        let legal = routed("What is the deadline to file an answer?", classifier: .legal)
+        XCTAssertEqual(legal.route.mode, .legalQA, "precondition: inference selected legal QA")
+        let effective = controller.effectiveRoutedPrompt(legal)
+        XCTAssertEqual(effective.route.mode, .generalQA)
+        XCTAssertFalse(effective.route.requiresCourtListener)
+    }
+
+    @MainActor
+    func testCitationLookingMatterPromptIsLocalButExplicitLegalAndResearchStayStrict() throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Local Matter")
+        let controller = makeGlobalChatController(
+            store: store,
+            runtimeClient: StubRuntimeClient(),
+            scope: .matter(id: matter.id)
+        )
+        controller.loadChats()
+
+        let inferred = routed("How does Smith v. Jones affect our next step?", classifier: .legal)
+        XCTAssertEqual(controller.effectiveRoutedPrompt(inferred).route.mode, .generalQA)
+
+        for prompt in ["/legal is this clause enforceable", "/research cases about this issue"] {
+            let explicit = routed(prompt, classifier: .general)
+            let effective = controller.effectiveRoutedPrompt(explicit)
+            XCTAssertNotNil(explicit.command)
+            XCTAssertEqual(effective.route.mode, explicit.route.mode)
+            XCTAssertEqual(effective.route.requiresCourtListener, explicit.route.requiresCourtListener)
+        }
+    }
+
+    @MainActor
+    func testConfidentInferredLegalGlobalPromptRemainsStrict() throws {
+        let store = try makeStore()
+        let controller = makeController(store: store)
+        controller.loadChats()
+
+        let legal = routed("What is the deadline to file an answer?", classifier: .legal)
+        XCTAssertEqual(controller.effectiveRoutedPrompt(legal).route.mode, .legalQA)
+    }
+
     /// T-JLU-04. Explicit slash commands are the user's own routing decision and
     /// are never overridden.
     @MainActor
