@@ -122,10 +122,9 @@ public final class GlobalChatController: ObservableObject {
     /// A lock-backed cancellation signal that the synchronous Store transaction
     /// may inspect without crossing the controller's MainActor isolation.
     private let groundedPublicationCancellation = GroundedPublicationCancellationSignal()
-    /// Set by `cancel()`, checked cooperatively where in-flight work runs under its own
-    /// untracked generation ID that `cancelGeneration(activeGenerationID)` can't reach: the
-    /// fast→deep escalation boundary (a deep-retrieval LLM rerank) and the typed-generation
-    /// boundary (P1-T4, TypedGroundedGenerator's own untracked generations). Reset at the start
+    /// Set by `cancel()`, checked cooperatively while in-flight work has no registered
+    /// generation ID that `cancelGeneration(activeGenerationID)` can reach, including a
+    /// fast→deep escalation boundary and its deep-retrieval LLM rerank. Reset at the start
     /// of every send.
     private var cancelRequested = false
 
@@ -1110,8 +1109,7 @@ public final class GlobalChatController: ObservableObject {
     /// `generationCancelled` event which the stream loop persists.
     public func cancel() {
         // Record the request even when no runtime generation is registered yet (during a
-        // retrieval/escalation await or typed generation), so the escalation and
-        // typed-generation boundaries can honor it.
+        // retrieval/escalation await), so those boundaries can honor it.
         cancelRequested = true
         groundedPublicationCancellation.requestCancellation()
         guard let activeGenerationID else { return }

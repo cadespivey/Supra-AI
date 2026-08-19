@@ -1,5 +1,6 @@
 import Foundation
 import SupraCore
+import SupraResearch
 import SupraRuntimeInterface
 @testable import SupraSessions
 import SupraStore
@@ -31,6 +32,27 @@ import XCTest
 /// jurisdiction-availability rule, which kept context-gated conversation on the
 /// legal route.)
 final class JurisdictionlessUncertainRoutingTests: XCTestCase {
+
+    private final class CourtListenerRecorder: CourtListenerClientProtocol, @unchecked Sendable {
+        private let lock = NSLock()
+        private var recordedRequests: [CourtListenerSearchRequest] = []
+
+        var requests: [CourtListenerSearchRequest] {
+            lock.withLock { recordedRequests }
+        }
+
+        func searchOpinions(
+            _ request: CourtListenerSearchRequest,
+            relatedResearchSessionID: String?
+        ) async throws -> CourtListenerSearchResponse {
+            lock.withLock { recordedRequests.append(request) }
+            return CourtListenerSearchResponse(count: 0, results: [])
+        }
+
+        func fetchOpinion(id: Int) async throws -> CourtListenerOpinionDetailDTO {
+            CourtListenerOpinionDetailDTO(id: id, plainText: "")
+        }
+    }
 
     private struct FixedClassifier: PromptIntentClassifying {
         let result: PromptIntentClassification
@@ -165,6 +187,36 @@ final class JurisdictionlessUncertainRoutingTests: XCTestCase {
             XCTAssertEqual(effective.route.mode, explicit.route.mode)
             XCTAssertEqual(effective.route.requiresCourtListener, explicit.route.requiresCourtListener)
         }
+    }
+
+    /// A deliberate Research UI action supplies the explicit-origin signal separately
+    /// from slash-command parsing. It must retain the strict route and its permitted
+    /// deterministic citation lookup rather than becoming ordinary local matter chat.
+    @MainActor
+    func testExplicitResearchUIOriginPreservesStrictMatterEgress() async throws {
+        let store = try makeStore()
+        let matter = try store.matters.createMatter(name: "Local Matter", jurisdiction: "Florida")
+        let court = CourtListenerRecorder()
+        let controller = makeGlobalChatController(
+            store: store,
+            runtimeClient: StubRuntimeClient { _ in .events([]) },
+            scope: .matter(id: matter.id),
+            courtListenerClient: court
+        )
+        controller.loadChats()
+        let route = ModelRouter().route(for: .legalResearch)
+
+        await controller.performSend(
+            prompt: "What did Peacock v. Thomas, 516 U.S. 349 hold?",
+            modelID: ModelID(),
+            systemPrompt: route.systemPrompt,
+            options: route.options,
+            route: route,
+            isExplicitCommand: true
+        )
+
+        XCTAssertEqual(court.requests.count, 1)
+        XCTAssertEqual(court.requests.first?.citation, "516 U.S. 349")
     }
 
     @MainActor

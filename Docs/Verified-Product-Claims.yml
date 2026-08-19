@@ -239,13 +239,13 @@ claims:
 
   - id: "MATTER-CHAT-EGRESS-CONTAINMENT"
     topic: "matter-chat-egress"
-    wording: "Automatic matter-chat legal-data egress is limited to one deterministic public reporter citation query; broader matter-derived and unknown queries are blocked before provider transport and directed to Research for exact-query review."
+    wording: "Ordinary matter chat routes inferred legal intent to local general conversation and sends no automatic legal-data request; explicit legal and Research actions retain their strict workflows and egress controls."
     owner: "Security engineering"
     code_anchor: "Packages/SupraSessions/Sources/SupraSessions/GlobalChatController.swift"
-    verification: "Packages/SupraSessions/Tests/SupraSessionsTests/R0LegalAuthorityContainmentTests.swift"
+    verification: "Packages/SupraSessions/Tests/SupraSessionsTests/JurisdictionlessUncertainRoutingTests.swift"
     ci_job: "macos-ci/swift-packages"
     applicable_version: "3.0.0 and later"
-    last_reviewed: "2026-08-13"
+    last_reviewed: "2026-08-19"
     publication_anchor: "SECURITY.md"
 
   - id: "AUTHORITY-WORK-PRODUCT-CONTAINMENT"
