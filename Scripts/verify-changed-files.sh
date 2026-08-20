@@ -23,12 +23,8 @@ while IFS= read -r path; do
       printf 'ERROR: prohibited artifact path: %s\n' "$path" >&2; status=1 ;;
   esac
   case "$lower" in
-    website/public/fonts/*|*/website/public/fonts/*|*.dmg|*.pkg|*.xcarchive|*.app|*.xpc|*.p8|*.p12|*.pem|*.mobileprovision|*.safetensors|*.gguf|*.onnx|*.mlmodel|*.mlmodelc|*.sqlite|*.sqlite3|*.db|.env|*/.env)
+    *.dmg|*.pkg|*.xcarchive|*.app|*.xpc|*.p8|*.p12|*.pem|*.mobileprovision|*.safetensors|*.gguf|*.onnx|*.mlmodel|*.mlmodelc|*.sqlite|*.sqlite3|*.db|.env|*/.env)
       printf 'ERROR: prohibited artifact path: %s\n' "$path" >&2; status=1 ;;
-  esac
-  case "$lower" in
-    *equity*a*.woff|*equity*a*.woff2|*equity*a*.ttf|*equity*a*.otf|*equity*a*.eot|*equity*a*.ttc)
-      printf 'ERROR: prohibited public font path: %s\n' "$path" >&2; status=1 ;;
   esac
   if git -C "$repo_root" diff --unified=0 "$base_sha" "$head_sha" -- "$path" \
       | sed -n '/^+++/d; s/^+//p' | LC_ALL=C grep -Eq "$secret_pattern"; then

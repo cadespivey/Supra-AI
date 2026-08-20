@@ -44,5 +44,5 @@ and model/tool success are evidence inputs only. They cannot complete or repair 
 Owners: `SupraStore` repositories for atomic records and `SupraSessions` feature use cases for
 policy/orchestration; file installation is owned by the durable publication boundary.
 
-Required gates: `T-PUB-CHAT-01/02`, `T-PUB-WORK-01`, `T-RESEARCH-PACKET-01/02`,
-`T-OUTCOME-01`, and `T-ART-01/02/03` in the architecture/UX test ledger.
+The executable publication, research-packet, terminal-outcome, and artifact tests in
+`SupraStoreTests` and `SupraSessionsTests` enforce these boundaries.

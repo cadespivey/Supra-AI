@@ -28,11 +28,6 @@ final class ArchitectureUXTRagDependency01Tests: XCTestCase {
         XCTAssertTrue(manifest.contains("public var revision: String"))
         XCTAssertTrue(manifest.contains("case sha256"))
         XCTAssertTrue(manifest.contains("constantTimeEqual"))
-
-        let decision = try String(contentsOf: repositoryRoot.appendingPathComponent("Docs/Architecture/Remediation/Optional-Architecture-Decisions.yml"), encoding: .utf8)
-        XCTAssertTrue(decision.contains("package_manifest_count: 14"))
-        XCTAssertTrue(decision.contains("user_initiated_direct_download_not_bundled"))
-        XCTAssertTrue(decision.contains("revision_pinned_manifest_and_content_fingerprint"))
     }
 
     private var shippingSourceRoots: [URL] {

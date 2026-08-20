@@ -92,8 +92,7 @@ Do not remove the service sandbox or add broad file entitlements as a workaround
 
 ## Recurring real-device release verification
 
-The carried-forward assurance work was closed on July 31, 2026; see
-[`Docs/Assurance-Closure.md`](../Assurance-Closure.md). The hosted integration gate exercises
+The carried-forward assurance work was closed on July 31, 2026. The hosted integration gate exercises
 bookmark transfer through the embedded, ad-hoc-signed service with no service file-access
 entitlement. Future release qualification continues to:
 

@@ -58,6 +58,8 @@ public struct DocumentSourceLocator: Codable, Sendable, Equatable {
     }
 
     public func encodedJSON() -> String {
-        (try? JSONEncoder().encode(self)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        return (try? encoder.encode(self)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
     }
 }

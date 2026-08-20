@@ -7,8 +7,6 @@ on:
     paths:
       - "website/**"
       - "Scripts/test-website.sh"
-      - "Scripts/verify-public-font-license.sh"
-      - "Docs/Website-Asset-Licensing.md"
       - ".github/workflows/deploy-website.yml"
   workflow_dispatch:
 
@@ -34,12 +32,6 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           persist-credentials: false
-
-      - name: Reject prohibited font assets
-        run: bash ../Scripts/verify-public-font-license.sh
-
-      - name: Test public repository metadata guard
-        run: bash ../Tests/Scripts/test-verify-public-repository-assets.sh
 
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4

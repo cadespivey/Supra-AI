@@ -90,6 +90,34 @@ public struct MessageCitation: Identifiable, Sendable, Equatable {
     }
 }
 
+/// A retained document packet row supplied to a completed matter-chat request.
+/// This deliberately remains distinct from `MessageCitation`: presence means the
+/// source was provided in the final packet, not that the model cited or used it.
+public struct ProvidedDocumentSource: Identifiable, Sendable, Equatable {
+    public let id: String
+    public let label: String
+    public let documentID: String?
+    public let documentName: String
+    public let locator: DocumentSourceLocator?
+    public let excerpt: String
+
+    public init(
+        id: String,
+        label: String,
+        documentID: String?,
+        documentName: String,
+        locator: DocumentSourceLocator?,
+        excerpt: String
+    ) {
+        self.id = id
+        self.label = label
+        self.documentID = documentID
+        self.documentName = documentName
+        self.locator = locator
+        self.excerpt = excerpt
+    }
+}
+
 /// A view-facing snapshot of a single chat message.
 public struct ChatMessage: Identifiable, Sendable, Equatable {
     public let id: String
@@ -98,6 +126,13 @@ public struct ChatMessage: Identifiable, Sendable, Equatable {
     public var status: MessageStatus
     /// Inline citations resolved for a completed assistant message (empty otherwise).
     public var citations: [MessageCitation]
+    /// Final retained document packet supplied to a completed matter-chat message.
+    /// It is not evidence that the response used or cited a particular row.
+    public var providedSources: [ProvidedDocumentSource]
+    /// Advisory, in-memory results from comparing explicit quoted `[S#]` passages
+    /// with the retained packet. They are derived on completion and reload, never
+    /// persisted or used to alter the answer, citations, or assurance state.
+    public var quoteWarnings: [MatterChatQuoteWarning]
     /// Present for grounded document answers whose persisted packet establishes
     /// an assurance state. Ordinary chat turns remain nil.
     public var assuranceState: OutputAssuranceState?
@@ -108,6 +143,8 @@ public struct ChatMessage: Identifiable, Sendable, Equatable {
         content: String,
         status: MessageStatus,
         citations: [MessageCitation] = [],
+        providedSources: [ProvidedDocumentSource] = [],
+        quoteWarnings: [MatterChatQuoteWarning] = [],
         assuranceState: OutputAssuranceState? = nil
     ) {
         self.id = id
@@ -115,6 +152,8 @@ public struct ChatMessage: Identifiable, Sendable, Equatable {
         self.content = content
         self.status = status
         self.citations = citations
+        self.providedSources = providedSources
+        self.quoteWarnings = quoteWarnings
         self.assuranceState = assuranceState
     }
 

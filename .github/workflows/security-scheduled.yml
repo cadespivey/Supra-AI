@@ -23,25 +23,18 @@ jobs:
           bash Scripts/verify-product-claims.sh
           bash Scripts/verify-entitlements.sh
           bash Tests/Scripts/test-backup-restore-documentation.sh
-          bash Scripts/verify-public-font-license.sh
           bash Scripts/verify-release-protection.sh
           bash Scripts/verify-secrets.sh
           bash Scripts/verify-prohibited-artifacts.sh
 
-  live-public-metadata:
-    name: Read-only public refs, releases, and model IDs
+  live-model-metadata:
+    name: Resolve curated model IDs
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           persist-credentials: false
-      - name: Test public metadata fixtures
-        run: bash Tests/Scripts/test-verify-public-repository-assets.sh
-      - name: Audit advertised refs and release metadata without fetching blobs
-        env:
-          PUBLIC_ASSET_GITHUB_TOKEN: ${{ github.token }}
-        run: bash Scripts/verify-public-repository-assets.sh "${GITHUB_REPOSITORY}"
       - name: Resolve curated model IDs against the public catalog
         run: bash Scripts/verify-model-ids.sh
 

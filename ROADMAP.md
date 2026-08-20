@@ -2,8 +2,7 @@
 
 This roadmap describes where Supra AI has been and where it may go next. It is
 forward-looking as of the **3.0.x** line — a plan, not a record of past commitments.
-Dated, completed history lives in [CHANGELOG.md](CHANGELOG.md) and the per-milestone
-plans in [`Docs/Milestones/`](Docs/Milestones/).
+Dated, completed history lives in [CHANGELOG.md](CHANGELOG.md) and Git history.
 
 Future items are intentionally **undated**. They are grouped by confidence, not by a
 schedule, and may change. Nothing below is a promise.

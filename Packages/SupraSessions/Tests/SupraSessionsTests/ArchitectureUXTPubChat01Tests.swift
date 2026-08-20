@@ -377,7 +377,8 @@ func performArchitectureUXPubChatSend(_ controller: GlobalChatController) async 
         prompt: ArchitectureUXPubChatWire.question,
         modelID: ModelID(),
         systemPrompt: "T_PUB_CHAT_SYSTEM_761",
-        options: GenerationOptions(maxContextTokens: 2_047, maxOutputTokens: 127)
+        options: GenerationOptions(maxContextTokens: 2_047, maxOutputTokens: 127),
+        isExplicitCommand: true
     )
 }
 

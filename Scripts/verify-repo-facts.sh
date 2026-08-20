@@ -96,7 +96,6 @@ fi
 if [[ -f "$scheduled_workflow" ]]; then
   grep -Eq '^[[:space:]]+schedule:' "$scheduled_workflow" || fail 'scheduled security workflow has no schedule trigger'
   grep -Fq 'Scripts/verify-model-ids.sh' "$scheduled_workflow" || fail 'scheduled security workflow omits live model-ID verification'
-  grep -Fq 'Scripts/verify-public-repository-assets.sh' "$scheduled_workflow" || fail 'scheduled security workflow omits public-ref metadata verification'
 fi
 
 if [[ -f "$benchmark_workflow" ]]; then

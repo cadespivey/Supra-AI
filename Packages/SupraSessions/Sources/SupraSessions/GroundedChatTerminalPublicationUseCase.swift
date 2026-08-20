@@ -133,12 +133,10 @@ struct GroundedChatTerminalPublicationUseCase: Sendable {
         }
 
         let answerLabels = Self.citationLabels(in: request.answerText)
+        // Text markers are citations only when they name a retained source. Unknown [S#]
+        // and [A#] sequences are ordinary model text and must survive publication unchanged.
         let terminalLabels = Self.citationLabels(in: request.terminalContent)
-        guard terminalLabels.allSatisfy({ rowByLabel[$0] != nil }) else {
-            throw GroundedChatTerminalPublicationError.invalidCommand(
-                "terminal citation labels"
-            )
-        }
+            .filter { rowByLabel[$0] != nil }
         let citationRecords = rows.compactMap { row -> MessageCitationRecord? in
             guard terminalLabels.contains(row.citationLabel),
                   let source = context.sources.first(where: {
@@ -164,13 +162,14 @@ struct GroundedChatTerminalPublicationUseCase: Sendable {
         let unresolvedLabels = request.verification?.unresolvedLabels ?? usedLabels.filter {
             rowByLabel[$0] == nil
         }
-        let mappedDimensions = VerificationDimensionsMapper.dimensions(
-            verificationResults: normalizedResults,
-            usedLabels: usedLabels,
-            unresolvedLabels: unresolvedLabels,
-            warnings: request.verification?.warnings
-                ?? ["Grounded verification did not complete."]
-        )
+        let mappedDimensions = request.verification.map {
+            VerificationDimensionsMapper.dimensions(
+                verificationResults: normalizedResults,
+                usedLabels: usedLabels,
+                unresolvedLabels: unresolvedLabels,
+                warnings: $0.warnings
+            )
+        } ?? .allNotRun
         let exactDimensions = try VerificationDimensions(
             schemaVersion: mappedDimensions.schemaVersion,
             results: mappedDimensions.results.map { result in
@@ -192,15 +191,6 @@ struct GroundedChatTerminalPublicationUseCase: Sendable {
                 let evidence = Array(Set(exactEvidence)).sorted {
                     ($0.sourceLabel ?? "", $0.sourceID)
                         < ($1.sourceLabel ?? "", $1.sourceID)
-                }
-                if result.dimension == .criticalValueFidelity,
-                   result.status == .notRun {
-                    return VerificationDimensionResult(
-                        dimension: result.dimension,
-                        status: .failed,
-                        reason: "Critical-value fidelity was not established.",
-                        evidence: evidence
-                    )
                 }
                 return VerificationDimensionResult(
                     dimension: result.dimension,

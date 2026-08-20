@@ -117,8 +117,7 @@ Toolchain: Xcode beta `27A5194q`, macOS arm64.
 
 The repository owner closed the carried-forward runtime assurance work on July 31, 2026 after
 the applicable working-app and separate-process checks were completed. This dated local record
-still reports only what ran on July 13; it is not retroactively relabeled. See
-[`Docs/Assurance-Closure.md`](../Assurance-Closure.md) for current status.
+still reports only what ran on July 13; it is not retroactively relabeled.
 
 Record unsupported sanitizer/runtime combinations as exclusions; do not relabel an omitted
 run as coverage. Any reproducible sanitizer or resource defect becomes its own RED-first

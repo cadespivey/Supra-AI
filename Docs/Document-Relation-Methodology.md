@@ -65,4 +65,4 @@ The test contract is split across:
 - B-VER-01: precision, recall, and F1 overall and by relation kind against `TestData/Benchmarks/document-relation-keys.json`.
 - B-VER-02: reviewed operative-state accuracy plus the blocked-when-unreviewed rate for owner-designated ambiguous families in the same key file.
 
-The checked-in key set is synthetic. B-VER-02's deterministic safety gate requires every designated ambiguous family to block a clean result. The repository owner and attorney closed the applicable designated legal-fidelity review on July 31, 2026, as recorded in [Assurance Closure](Assurance-Closure.md). Deterministic matter isolation and false-clean failures remain recurring, non-waivable gates.
+The checked-in key set is synthetic. B-VER-02's deterministic safety gate requires every designated ambiguous family to block a clean result. The repository owner and attorney closed the applicable designated legal-fidelity review on July 31, 2026. Deterministic matter isolation and false-clean failures remain recurring, non-waivable gates.

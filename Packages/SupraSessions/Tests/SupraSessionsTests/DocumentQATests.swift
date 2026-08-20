@@ -1204,7 +1204,8 @@ final class DocumentQATests: XCTestCase {
         // A fast (default) grounded answer offers the deep pass for the same question.
         await controller.performSend(
             prompt: "What do my documents say about the agreement?",
-            modelID: ModelID(), systemPrompt: route.systemPrompt, options: route.options, route: route
+            modelID: ModelID(), systemPrompt: route.systemPrompt, options: route.options, route: route,
+            isExplicitCommand: true
         )
         let offer = try XCTUnwrap(controller.deeperSearchOffer)
         XCTAssertEqual(offer.question, "What do my documents say about the agreement?")

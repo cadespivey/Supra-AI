@@ -8,7 +8,26 @@ import SupraStore
 /// not apply to a deterministic chronology or exhaustive task remain nil rather
 /// than being assigned a fabricated retrieval value.
 struct DocumentRetrievalConfiguration: Codable, Equatable, Sendable {
-    var schemaVersion: Int = 1
+    struct Operation: Codable, Equatable, Sendable {
+        var role: String
+        var depth: String
+        var candidateLimit: Int
+        var semanticFloor: Double
+        var scopeDocumentIDs: [String]
+        var querySHA256: String?
+        var outcome: String
+
+        private enum CodingKeys: String, CodingKey {
+            case role, depth
+            case candidateLimit = "candidate_limit"
+            case semanticFloor = "semantic_floor"
+            case scopeDocumentIDs = "scope_document_ids"
+            case querySHA256 = "query_sha256"
+            case outcome
+        }
+    }
+
+    var schemaVersion: Int = 2
     var mode: String
     var depth: String?
     var candidateLimit: Int?
@@ -17,6 +36,7 @@ struct DocumentRetrievalConfiguration: Codable, Equatable, Sendable {
     var semanticFloor: Double?
     var rrfK: Double?
     var characterBudget: Int?
+    var operations: [Operation]? = nil
 
     private enum CodingKeys: String, CodingKey {
         case schemaVersion = "schema_version"
@@ -28,6 +48,7 @@ struct DocumentRetrievalConfiguration: Codable, Equatable, Sendable {
         case semanticFloor = "semantic_floor"
         case rrfK = "rrf_k"
         case characterBudget = "character_budget"
+        case operations
     }
 }
 

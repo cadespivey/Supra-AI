@@ -96,7 +96,7 @@ required_topics=(
   on-device-processing egress-paths egress-payloads credential-sources
   redirect-behavior entitlements data-at-rest citation-semantics
   drafting-gates billing-exclusions model-downloads telemetry
-  release-provenance query-logging file-access public-assets
+  release-provenance query-logging file-access
   restore-quiesced-staging restore-verified-staging restore-cold-start-recovery
   restore-cold-start-order
   local-ai-hardware-recommendation

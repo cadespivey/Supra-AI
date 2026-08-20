@@ -3,8 +3,7 @@
 Supra AI is a SwiftUI macOS app plus a sandboxed MLX runtime XPC service, layered over a
 set of focused local Swift packages. This document describes how those pieces fit together
 and why. For dependency pins and runtime file-access details, see
-[`Docs/Architecture/`](Docs/Architecture/); for the full per-milestone design and work
-orders, see [`Docs/Milestones/`](Docs/Milestones/).
+[`Docs/Architecture/`](Docs/Architecture/).
 
 ## Goals that shaped the design
 
@@ -378,6 +377,17 @@ existing convention where a repository owns several related tables.
    Guided regeneration instead resolves and reuses the exact saved source revisions or fails
    closed without changing that source set.
 
+### Ordinary matter chat
+
+Ordinary matter chat is a matter-only, free-form local-model conversation. Canonical allowlisted
+Store facts and any retained document excerpts are bounded, labeled context; they are data rather
+than instructions. Missing evidence does not block an answer. “Sources provided to the model”
+describes that packet context, not an inline citation and not a claim that the model used a source.
+Ordinary prose makes no proposition-level verification or assurance claim. Its narrow quote check
+only compares a labeled displayed quotation with the retained excerpt; it is advisory, non-mutating,
+and warning-only. Inferred legal intent stays local. Explicit legal and Research actions preserve
+their strict workflows and egress controls. Global chat and Documents Q&A remain unchanged.
+
 ### Supported motion drafting
 
 1. The user selects the Florida state trial-court motion to dismiss for failure to state a claim,
@@ -441,8 +451,6 @@ runtime telemetry.
 
 ## Where to go next
 
-- Per-milestone plans, work orders, acceptance criteria, and progress logs:
-  [`Docs/Milestones/`](Docs/Milestones/)
 - Pinned dependencies and the extraction/embedding stack:
   [`Docs/Architecture/Dependencies.md`](Docs/Architecture/Dependencies.md)
 - Cross-process model file access:

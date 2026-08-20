@@ -2,15 +2,6 @@
 
 Repository build, focused validation, release, and maintenance automation lives here.
 
-Public asset gates:
-
-- `verify-public-font-license.sh` scans the checkout and local build outputs for prohibited
-  paths, names, and known font binary hashes.
-- `verify-public-repository-assets.sh` performs a metadata-only audit of advertised public
-  Git/GitHub refs, trees, and release asset names. It never fetches repository blobs or
-  release assets. Run `Tests/Scripts/test-verify-public-repository-assets.sh` for the synthetic
-  fixture suite.
-
 Protected CI building blocks:
 
 - `list-local-packages.sh --verify` owns the fixed 14-package inventory;
@@ -34,8 +25,8 @@ Protected CI building blocks:
 - `build-macos-app.sh`, `run-app-smoke-tests.sh`, and
   `run-shipping-migration-fixtures.sh` are the macOS build, hosted-XPC, UI, and upgrade
   hooks used by `.github/workflows/macos-ci.yml`.
-- `test-website.sh` runs locked installation, lint, typecheck, static build, dependency
-  audit, and the font guard before and after the website build.
+- `test-website.sh` runs locked installation, lint, typecheck, static build, and dependency
+  audit.
 
 Run `Tests/Scripts/test-macos-ci-gates.sh` and
 `Tests/Scripts/test-verify-product-claims.sh` to exercise deliberate failure fixtures.

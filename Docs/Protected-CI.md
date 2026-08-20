@@ -22,7 +22,7 @@ dependency impact:
 - benchmarks only for ingestion, indexing, retrieval, or performance-sensitive changes.
 
 Claims, entitlements, and CI-policy meta-tests run only when their inputs change. Full-tree
-secret, artifact, font, entitlement, claims, and protection sweeps run weekly for drift detection.
+secret, artifact, entitlement, claims, and protection sweeps run weekly for drift detection.
 
 A broad full-package, Debug/Release, UI/XPC, migration, website, and benchmark sweep is reserved
 for cross-cutting changes or an explicit diagnostic run. It is not the default for every PR.

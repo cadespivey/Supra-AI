@@ -114,6 +114,88 @@ final class ChatOutputPromotionTests: XCTestCase {
         XCTAssertTrue(fixture.controller.availableArtifactActions(messageID: fixture.message.id).isEmpty)
     }
 
+    func testReloadHydratesProvidedSourcesSeparatelyFromInlineCitations() throws {
+        let fixture = try makeFixture(depth: .fast)
+        defer { try? FileManager.default.removeItem(at: fixture.storageRoot.deletingLastPathComponent()) }
+
+        let reloaded = fixture.controller.messages.first { $0.id == fixture.message.id }
+        let message = try XCTUnwrap(reloaded)
+        XCTAssertEqual(message.providedSources.count, 1)
+        let source = try XCTUnwrap(message.providedSources.first)
+
+        XCTAssertFalse(source.id.isEmpty, "the retained source-row ID is stable and view-facing")
+        XCTAssertEqual(source.label, "S1")
+        XCTAssertEqual(source.documentID, fixture.documentID)
+        XCTAssertEqual(source.documentName, "notice-agreement.txt")
+        XCTAssertEqual(source.locator?.charStart, 0)
+        XCTAssertEqual(source.locator?.charEnd, fixture.revision.text.count)
+        XCTAssertEqual(source.excerpt, fixture.revision.text)
+        XCTAssertTrue(message.citations.isEmpty, "an uncited retained packet must not synthesize inline citations")
+    }
+
+    func testReloadLeavesProvidedSourcesEmptyWithoutAPacketAndFallsBackForDeletedDocument() throws {
+        let fixture = try makeFixture(depth: .fast)
+        defer { try? FileManager.default.removeItem(at: fixture.storageRoot.deletingLastPathComponent()) }
+        let uncited = try completedAssistantMessage(store: fixture.store, chatID: fixture.chat.id, content: "No packet.")
+        try fixture.store.documentSources.addOutputSource(DocumentOutputSourceRecord(
+            sourceSetID: fixture.sourceSet.id,
+            documentID: nil,
+            citationLabel: "S2",
+            locatorJSON: "not valid locator JSON",
+            excerpt: "Retained fallback excerpt.",
+            rank: 1
+        ))
+        try fixture.store.database.writer.write { db in
+            try db.execute(
+                sql: "UPDATE matter_documents SET deleted_at = ? WHERE id = ?",
+                arguments: [Date(), fixture.documentID]
+            )
+        }
+
+        fixture.controller.loadChats()
+
+        let packetMessage = try XCTUnwrap(fixture.controller.messages.first { $0.id == fixture.message.id })
+        let missingPacket = try XCTUnwrap(fixture.controller.messages.first { $0.id == uncited.id })
+        XCTAssertEqual(packetMessage.providedSources.map(\.label), ["S1", "S2"])
+        XCTAssertEqual(packetMessage.providedSources.first?.documentName, "Document unavailable")
+        XCTAssertEqual(packetMessage.providedSources.last?.documentName, "Document unavailable")
+        XCTAssertNil(packetMessage.providedSources.last?.documentID)
+        XCTAssertNil(packetMessage.providedSources.last?.locator)
+        XCTAssertEqual(packetMessage.providedSources.last?.excerpt, "Retained fallback excerpt.")
+        XCTAssertTrue(missingPacket.providedSources.isEmpty)
+        XCTAssertTrue(missingPacket.citations.isEmpty)
+    }
+
+    func testProvidedSourcePreviewUsesTheRecordedRevisionRatherThanCurrentDocumentState() throws {
+        let fixture = try makeFixture(depth: .fast)
+        defer { try? FileManager.default.removeItem(at: fixture.storageRoot.deletingLastPathComponent()) }
+        try fixture.store.documentIndex.replaceParts(documentID: fixture.documentID, parts: [
+            DocumentPagePartRecord(
+                documentID: fixture.documentID,
+                partIndex: 0,
+                sourceKind: DocumentSourceKind.text.rawValue,
+                normalizedText: "CURRENT CORRECTED NOTICE TEXT",
+                charCount: 29
+            ),
+        ])
+        let source = try XCTUnwrap(fixture.controller.messages.first?.providedSources.first)
+
+        let preview = fixture.controller.providedSourcePreview(outputSourceID: source.id)
+
+        XCTAssertEqual(preview.revisionID, fixture.revision.id)
+        if case let .text(content, _, _) = preview.kind {
+            XCTAssertEqual(content, fixture.revision.text)
+            XCTAssertFalse(content.contains("CURRENT CORRECTED"))
+        } else {
+            XCTFail("expected the recorded source revision, got \(preview.kind)")
+        }
+
+        let unavailable = fixture.controller.providedSourcePreview(outputSourceID: "missing-source-row")
+        if case .unavailable = unavailable.kind {} else {
+            XCTFail("missing retained source row should be gracefully unavailable")
+        }
+    }
+
     private struct Fixture {
         let store: SupraStore
         let storageRoot: URL
@@ -121,6 +203,7 @@ final class ChatOutputPromotionTests: XCTestCase {
         let chat: ChatRecord
         let message: MessageRecord
         let sourceSet: DocumentSourceSetRecord
+        let documentID: String
         let revision: DocumentPartRevisionRecord
         let verificationJSON: String
         let controller: GlobalChatController
@@ -202,6 +285,7 @@ final class ChatOutputPromotionTests: XCTestCase {
             chat: chat,
             message: message,
             sourceSet: sourceSet,
+            documentID: document.record.id,
             revision: document.revision,
             verificationJSON: verificationJSON,
             controller: controller

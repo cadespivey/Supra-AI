@@ -4,7 +4,7 @@
 # dispatches the protected release workflow bound to origin/main's exact SHA
 # and its green Protected macOS CI run.
 #
-# All GitHub, audit, and runner interactions go through command shims recorded
+# All GitHub and runner interactions go through command shims recorded
 # in a log; the git origin is a local fixture repository. Nothing contacts the
 # network.
 #
@@ -64,12 +64,6 @@ esac
 exit 0
 SHIM
 
-cat >"${bin}/asset-audit" <<'SHIM'
-#!/usr/bin/env bash
-printf 'audit %s\n' "$*" >>"${SHIM_LOG:?}"
-exit "${SHIM_AUDIT_STATUS:-0}"
-SHIM
-
 cat >"${bin}/runner-stop" <<'SHIM'
 #!/usr/bin/env bash
 printf 'runner-stop\n' >>"${SHIM_LOG:?}"
@@ -84,7 +78,7 @@ printf 'runner-start\n' >>"${SHIM_LOG:?}"
 printf 'fixture listener online\n'
 exit 0
 SHIM
-chmod +x "${bin}/gh" "${bin}/asset-audit" "${bin}/runner-stop" "${runner_home}/run.sh"
+chmod +x "${bin}/gh" "${bin}/runner-stop" "${runner_home}/run.sh"
 
 # Fixture origin repository whose reviewed metadata says 9.4.7 (build 941).
 seed="${workdir}/seed"
@@ -132,7 +126,6 @@ run_dispatch() {
     cd "$clone" && env \
       SUPRA_RELEASE_TESTING=1 \
       SUPRA_GH_COMMAND="${bin}/gh" \
-      SUPRA_ASSET_AUDIT_COMMAND="${bin}/asset-audit" \
       SUPRA_RUNNER_STOP_COMMAND="${bin}/runner-stop" \
       SUPRA_RUNNER_HOME="$runner_home" \
       SUPRA_RELEASE_CHECK_POLL_SECONDS=0 \
