@@ -168,10 +168,44 @@ final class MatterChatQuoteCheckerTests: XCTestCase {
     }
 
     private func indexDocument(_ store: SupraStore, matterID: String, text: String) async throws {
+        let embedder = QuoteCheckerEmbedder()
+        let testedAt = Date(timeIntervalSince1970: 1_946_252_949)
+        _ = try store.documentSettings.loadSettings()
+        try store.documentSettings.upsertEmbeddingModel(
+            DocumentEmbeddingModelRecord(
+                id: embedder.modelID,
+                repoID: embedder.modelRepoID,
+                displayName: embedder.modelDisplayName,
+                dimension: embedder.dimension,
+                runtimeFamily: "quote-check-readiness",
+                revision: embedder.modelRevision,
+                isSelected: false,
+                lastTestLoadAt: testedAt,
+                lastTestLoadResult: "passed"
+            )
+        )
+        try store.documentSettings.selectEmbeddingModel(id: embedder.modelID)
+        try store.documentSettings.updateSettings {
+            $0.embeddingModelLastTestedAt = testedAt
+            $0.chunkerVersion = 2
+        }
         let document = try store.documentLibrary.insertDocument(MatterDocumentRecord(matterID: matterID, blobID: try store.documentLibrary.upsertBlob(DocumentBlobRecord(sha256: UUID().uuidString, byteSize: 1, originalExtension: "txt", managedRelativePath: "blobs/quote-check.txt")).blob.id, displayName: "notice.txt", status: MatterDocumentStatus.indexing.rawValue, extractionStatus: DocumentExtractionStatus.extracted.rawValue, sourceKind: DocumentSourceKind.text.rawValue, extractionMethod: "synthetic", extractedTextChecksum: "quote-check", pagePartCount: 1))
         let revision = DocumentPartRevisionRecord(documentID: document.id, partIndex: 0, derivationKey: "quote-check-\(document.id)", origin: "parser", method: "synthetic", text: text, charCount: text.count, toolchainVersion: "quote-check")
         let selection = DocumentPartSelectionRecord(documentID: document.id, partIndex: 0, selectedRevisionID: revision.id, selectionKey: "quote-check-\(document.id)", selectedBy: "system", policyVersion: 1, decisionJSON: #"{"rule":"synthetic"}"#)
         _ = try store.documentRevisions.replacePartsAndPersistLineage(documentID: document.id, parts: [DocumentPagePartRecord(documentID: document.id, partIndex: 0, sourceKind: DocumentSourceKind.text.rawValue, normalizedText: text, charCount: text.count)], revisions: [revision], selections: [selection])
-        _ = try await DocumentIndexingService(store: store, embedder: nil).indexDocument(documentID: document.id)
+        _ = try await DocumentIndexingService(store: store, embedder: embedder).indexDocument(documentID: document.id)
+        XCTAssertTrue(try store.documentReadiness.fetchReceipt(documentID: document.id).isBaseReady)
+    }
+}
+
+private struct QuoteCheckerEmbedder: TextEmbedder {
+    let modelID = "matter-chat-quote-check-model"
+    let modelRepoID = "synthetic/matter-chat-quote-check-model"
+    let modelDisplayName = "Matter Chat Quote Check Model"
+    let modelRevision: String? = "quote-check-revision-1"
+    let dimension = 8
+
+    func embed(_ texts: [String]) async throws -> [[Float]] {
+        texts.map { _ in [1, 0, 0, 0, 0, 0, 0, 0] }
     }
 }

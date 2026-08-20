@@ -24,6 +24,11 @@ Follow [`Docs/Test-First-Methodology.md`](Docs/Test-First-Methodology.md) propor
   -scheme SupraAI`; per-package `swift test` from `Packages/<Name>/`). Use affected package
   tests and a relevant app build while developing. The final change-aware CI result is the
   merge/release-readiness receipt; do not require a blanket local all-package run as well.
+- On Cade's current machine, bare `swift test` resolves CommandLineTools and fails because
+  XCTest is unavailable. Run package tests as
+  `DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer swift test`; `xcode-select`
+  does not currently select the full Xcode developer directory for this command. `swift build`
+  works without the override.
 - Product/security wording is controlled by
   [`Docs/Verified-Product-Claims.yml`](Docs/Verified-Product-Claims.yml). A change to covered
   behavior must update its owner, anchors, verifying test/job, applicable version, review date,

@@ -1222,7 +1222,7 @@ public final class GlobalChatController: ObservableObject {
             // Gated on a loaded model so a no-model send doesn't pay for retrieval it
             // will discard at the guard below.
             let ordinaryMatterChat = scopedMatterID != nil && !isExplicitCommand
-            var grounded: GroundedChatContext? = (attachments.isEmpty && resolvedModelID != nil)
+            let grounded: GroundedChatContext? = (attachments.isEmpty && resolvedModelID != nil)
                 ? await documentGrounding?.groundedContext(
                     forQuestion: prompt,
                     depth: documentDepth,
@@ -1235,10 +1235,6 @@ public final class GlobalChatController: ObservableObject {
             let naturalMatterRequest: (modelPrompt: String, systemPrompt: String?)? = ordinaryMatterChat
                 ? documentGrounding?.naturalConversationRequest(forPrompt: modelPrompt)
                 : nil
-            if ordinaryMatterChat,
-               grounded?.naturalSourceFreeDisposition == .fallbackToGenericConversation {
-                grounded = nil
-            }
 
             if grounded == nil, let route, route.usesOneShotLegalWorkflow {
                 try await performLegalOneShotSend(
@@ -1322,11 +1318,6 @@ public final class GlobalChatController: ObservableObject {
                 reloadMessages()
 
                 if context?.packingReport?.canPack == false {
-                    if ordinaryMatterChat {
-                        try store.generation.completeGeneration(generationID: session.id)
-                        context = nil
-                        continue groundedPasses
-                    }
                     try store.chats.appendToken(
                         to: activeVariant.id,
                         token: Self.groundedContextOverflowRefusal
@@ -1386,14 +1377,6 @@ public final class GlobalChatController: ObservableObject {
                         sawTerminal = true
                         finalMetrics = event.metrics ?? finalMetrics
                         if finalMetrics?.contextOverflowed == true {
-                            if ordinaryMatterChat, context != nil {
-                                try store.generation.completeGeneration(
-                                    generationID: session.id,
-                                    metrics: storedMetrics(from: finalMetrics)
-                                )
-                                context = nil
-                                continue groundedPasses
-                            }
                             if let context {
                             streamedContent = Self.groundedContextOverflowRefusal
                             if context.sources.isEmpty {
