@@ -804,6 +804,8 @@ final class AppEnvironment: ObservableObject {
             Task { await self.runTypedProseABProbeIfRequested() }
         case .single(.nativeRAGControl):
             Task { await self.runNativeRAGControlIfRequested() }
+        case .single(.scratchPadBillingFidelity):
+            Task { await self.runScratchPadBillingFidelityProbeIfRequested() }
         }
     }
 
@@ -1302,6 +1304,156 @@ final class AppEnvironment: ObservableObject {
         print("===CAPABILITY_PROBE_REPORT_BEGIN===")
         print(json)
         print("===CAPABILITY_PROBE_REPORT_END===")
+        terminateAfterHeadlessProbe()
+    }
+
+    /// Runs the documented ScratchPad §6.1 hard gate against the drafting-suitable
+    /// model discovered from verified on-disk manifests. The launch already owns a
+    /// throwaway store, so assigning the recommended drafting model cannot read or
+    /// alter the user's role assignments or matter data.
+    private func runScratchPadBillingFidelityProbeIfRequested() async {
+        guard case .single(.scratchPadBillingFidelity) = Self.headlessProbeResolution else { return }
+        let invocation: ScratchPadBillingFidelityInvocation
+        do {
+            invocation = try ScratchPadBillingFidelityInvocation.resolve()
+        } catch {
+            emitScratchPadBillingFidelityPayload(
+                Self.headlessFailureJSON(status: "invalid_invocation", detail: error.localizedDescription),
+                invocation: nil
+            )
+            return
+        }
+
+        let managedModelsRoot = ManagedModelStorage.modelsDirectory()
+        let applicationSupportRoot = managedModelsRoot
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        guard let modelBinding = DiskModelRegistrar.registerVerifiedModelBinding(
+            into: modelLibrary,
+            root: managedModelsRoot,
+            repositoryID: invocation.chatRepositoryID,
+            confinedTo: applicationSupportRoot
+        ) else {
+            emitScratchPadBillingFidelityPayload(
+                Self.headlessFailureJSON(
+                    status: "exact_drafting_model_unavailable",
+                    detail: "The manifest-verified model bound by SUPRA_BILLING_CHAT_REPOSITORY was unavailable."
+                ),
+                invocation: invocation
+            )
+            return
+        }
+
+        let model = modelBinding.model
+        let pinnedModel = CorpusAnalysisPinnedModel(
+            modelRepository: modelBinding.repositoryID,
+            modelRevision: modelBinding.revision,
+            contentBindingAlgorithm: modelBinding.contentBindingAlgorithm,
+            contentBindingSchemaVersion: modelBinding.contentBindingSchemaVersion,
+            artifactFingerprintSHA256: modelBinding.artifactFingerprintSHA256
+        )
+        let modelID: ModelID
+        do {
+            modelID = try await ScratchPadBillingFidelityTimeout.value(after: .seconds(300)) {
+                try await self.modelLibrary.loadContentBoundModel(matching: pinnedModel)
+            }
+        } catch ScratchPadBillingFidelityTimeoutError.timedOut {
+            emitScratchPadBillingFidelityPayload(
+                Self.headlessFailureJSON(
+                    status: "model_load_timed_out",
+                    detail: "Exact content-bound model authorization/load exceeded 300 seconds."
+                ),
+                invocation: invocation
+            )
+            return
+        } catch {
+            emitScratchPadBillingFidelityPayload(
+                Self.headlessFailureJSON(status: "model_load_failed", detail: error.localizedDescription),
+                invocation: invocation
+            )
+            return
+        }
+
+        guard DiskModelRegistrar.bindingStillVerified(
+            modelBinding,
+            root: managedModelsRoot,
+            confinedTo: applicationSupportRoot
+        ) else {
+            emitScratchPadBillingFidelityPayload(
+                Self.headlessFailureJSON(
+                    status: "model_binding_failed",
+                    detail: "Verified model manifest or artifact binding changed before execution."
+                ),
+                invocation: invocation
+            )
+            return
+        }
+
+        let record: ScratchPadBillingFidelityRunRecord
+        do {
+            record = try await ScratchPadBillingFidelityTimeout.value(after: .seconds(1_200)) {
+                await ScratchPadBillingFidelityHarness.run(
+                    modelID: modelID,
+                    modelName: model.displayName,
+                    modelRepositoryID: modelBinding.repositoryID,
+                    modelRevision: modelBinding.revision,
+                    modelManifestSHA256: modelBinding.manifestSHA256,
+                    modelContentBindingAlgorithm: modelBinding.contentBindingAlgorithm,
+                    modelContentBindingSchemaVersion: modelBinding.contentBindingSchemaVersion,
+                    modelArtifactFingerprintSHA256: modelBinding.artifactFingerprintSHA256,
+                    sourceCommitSHA: invocation.sourceCommitSHA,
+                    modelExecutionGateway: self.modelExecutionCoordinator
+                )
+            }
+        } catch ScratchPadBillingFidelityTimeoutError.timedOut {
+            emitScratchPadBillingFidelityPayload(
+                Self.headlessFailureJSON(
+                    status: "generation_timed_out",
+                    detail: "The 20-fixture billing fidelity run exceeded 1200 seconds."
+                ),
+                invocation: invocation
+            )
+            return
+        } catch {
+            emitScratchPadBillingFidelityPayload(
+                Self.headlessFailureJSON(status: "generation_failed", detail: error.localizedDescription),
+                invocation: invocation
+            )
+            return
+        }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        encoder.dateEncodingStrategy = .iso8601
+        let json = (try? encoder.encode(record))
+            .flatMap { String(data: $0, encoding: .utf8) }
+            ?? Self.headlessFailureJSON(
+                status: "encoding_failed",
+                detail: "The completed fidelity record could not be encoded."
+            )
+        emitScratchPadBillingFidelityPayload(json, invocation: invocation)
+    }
+
+    private func emitScratchPadBillingFidelityPayload(
+        _ json: String,
+        invocation: ScratchPadBillingFidelityInvocation?
+    ) {
+        var emittedJSON = json
+        if let invocation {
+            do {
+                try invocation.writeReport(Data(json.utf8))
+            } catch {
+                emittedJSON = Self.headlessFailureJSON(
+                    status: "report_write_failed",
+                    detail: error.localizedDescription
+                )
+            }
+        }
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString("===SCRATCHPAD_BILLING_FIDELITY_REPORT===\n\(emittedJSON)", forType: .string)
+        print("===SCRATCHPAD_BILLING_FIDELITY_REPORT_BEGIN===")
+        print(emittedJSON)
+        print("===SCRATCHPAD_BILLING_FIDELITY_REPORT_END===")
         terminateAfterHeadlessProbe()
     }
 

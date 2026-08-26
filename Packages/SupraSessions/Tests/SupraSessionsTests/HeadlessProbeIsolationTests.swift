@@ -56,6 +56,10 @@ final class HeadlessProbeIsolationTests: XCTestCase {
             ]),
             .single(.nativeRAGControl)
         )
+        XCTAssertEqual(
+            HeadlessProbeMode.resolve(arguments: ["SupraAI", "-runScratchPadBillingFidelityProbe"]),
+            .single(.scratchPadBillingFidelity)
+        )
     }
 
     /// T-PROBE-03. Probe modes are mutually exclusive: several probe flags resolve to
@@ -68,9 +72,9 @@ final class HeadlessProbeIsolationTests: XCTestCase {
         XCTAssertEqual(
             HeadlessProbeMode.resolve(arguments: [
                 "SupraAI", "-runCoverageShadowProbe", "-runCapabilityProbe", "-runTypedProseABProbe",
-                "-runNativeRAGControl",
+                "-runNativeRAGControl", "-runScratchPadBillingFidelityProbe",
             ]),
-            .conflict([.coverageShadow, .capability, .typedProseAB, .nativeRAGControl])
+            .conflict([.coverageShadow, .capability, .typedProseAB, .nativeRAGControl, .scratchPadBillingFidelity])
         )
     }
 
@@ -81,6 +85,7 @@ final class HeadlessProbeIsolationTests: XCTestCase {
         XCTAssertTrue(HeadlessProbeMode.capability.requiresIsolatedStore)
         XCTAssertTrue(HeadlessProbeMode.typedProseAB.requiresIsolatedStore)
         XCTAssertTrue(HeadlessProbeMode.nativeRAGControl.requiresIsolatedStore)
+        XCTAssertTrue(HeadlessProbeMode.scratchPadBillingFidelity.requiresIsolatedStore)
         XCTAssertFalse(HeadlessProbeMode.coverageShadow.requiresIsolatedStore)
     }
 
@@ -97,6 +102,7 @@ final class HeadlessProbeIsolationTests: XCTestCase {
         XCTAssertFalse(HeadlessProbeMode.Resolution.single(.capability).permitsNormalBootstrap)
         XCTAssertFalse(HeadlessProbeMode.Resolution.single(.typedProseAB).permitsNormalBootstrap)
         XCTAssertFalse(HeadlessProbeMode.Resolution.single(.nativeRAGControl).permitsNormalBootstrap)
+        XCTAssertFalse(HeadlessProbeMode.Resolution.single(.scratchPadBillingFidelity).permitsNormalBootstrap)
         XCTAssertFalse(
             HeadlessProbeMode.Resolution.conflict([.coverageShadow, .capability]).permitsNormalBootstrap
         )
@@ -111,6 +117,7 @@ final class HeadlessProbeIsolationTests: XCTestCase {
         XCTAssertFalse(HeadlessProbeMode.Resolution.single(.capability).permitsUserStoreOpen)
         XCTAssertFalse(HeadlessProbeMode.Resolution.single(.typedProseAB).permitsUserStoreOpen)
         XCTAssertFalse(HeadlessProbeMode.Resolution.single(.nativeRAGControl).permitsUserStoreOpen)
+        XCTAssertFalse(HeadlessProbeMode.Resolution.single(.scratchPadBillingFidelity).permitsUserStoreOpen)
         XCTAssertFalse(
             HeadlessProbeMode.Resolution.conflict([.coverageShadow, .typedProseAB]).permitsUserStoreOpen
         )
@@ -284,6 +291,401 @@ final class HeadlessProbeIsolationTests: XCTestCase {
             )
         }
         XCTAssertTrue(try store.documentSettings.fetchEmbeddingModels().isEmpty)
+    }
+
+    @MainActor
+    func testExactChatModelRegistrationRejectsFolderNameManifestMismatch() throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let requested = "synthetic/requested-model"
+        try writeVerifiedModelFolder(
+            named: ManagedModelStorage.folderName(forRepoID: requested),
+            under: root,
+            repositoryID: "synthetic/different-model"
+        )
+        let library = try makeIsolatedLibrary()
+
+        let model = DiskModelRegistrar.registerVerifiedModel(
+            into: library,
+            root: root,
+            repositoryID: requested
+        )
+
+        XCTAssertNil(model)
+        XCTAssertTrue(library.models.isEmpty)
+    }
+
+    @MainActor
+    func testExactChatModelRegistrationReturnsVerifiedArtifactBinding() throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let repositoryID = "synthetic/bound-model"
+        let folderName = ManagedModelStorage.folderName(forRepoID: repositoryID)
+        try writeVerifiedModelFolder(
+            named: folderName,
+            under: root,
+            repositoryID: repositoryID
+        )
+        let folder = root.appendingPathComponent(folderName, isDirectory: true)
+        let manifest = try ManagedModelStorage.loadVerifiedManifest(at: folder)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        let expectedDigest = ModelArtifactIntegrity.sha256Hex(try encoder.encode(manifest.canonicalized()))
+        let expectedContentBinding = try SignedReleaseModelAuthorization.inspectContentBinding(
+            modelDirectory: folder,
+            managedRoot: root
+        )
+        let library = try makeIsolatedLibrary()
+
+        let binding = DiskModelRegistrar.registerVerifiedModelBinding(
+            into: library,
+            root: root,
+            repositoryID: repositoryID
+        )
+
+        XCTAssertEqual(
+            binding.map { URL(fileURLWithPath: $0.model.path).lastPathComponent },
+            folder.lastPathComponent
+        )
+        XCTAssertEqual(binding?.repositoryID, repositoryID)
+        XCTAssertEqual(binding?.revision, String(repeating: "a", count: 40))
+        XCTAssertEqual(binding?.manifestSHA256, expectedDigest)
+        XCTAssertEqual(
+            binding?.artifactFingerprintSHA256,
+            expectedContentBinding.fingerprintSHA256
+        )
+        XCTAssertEqual(binding?.contentBindingAlgorithm, expectedContentBinding.algorithm)
+        XCTAssertEqual(
+            binding?.contentBindingSchemaVersion,
+            expectedContentBinding.schemaVersion
+        )
+    }
+
+    @MainActor
+    func testExactChatModelBindingMustStillVerifyImmediatelyBeforeExecution() throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let repositoryID = "synthetic/reverified-model"
+        let folderName = ManagedModelStorage.folderName(forRepoID: repositoryID)
+        try writeVerifiedModelFolder(
+            named: folderName,
+            under: root,
+            repositoryID: repositoryID
+        )
+        let folder = root.appendingPathComponent(folderName, isDirectory: true)
+        let library = try makeIsolatedLibrary()
+        let binding = try XCTUnwrap(DiskModelRegistrar.registerVerifiedModelBinding(
+            into: library,
+            root: root,
+            repositoryID: repositoryID
+        ))
+
+        XCTAssertTrue(DiskModelRegistrar.bindingStillVerified(
+            binding,
+            root: root
+        ))
+        try Data("{}".utf8).write(to: ManagedModelStorage.manifestURL(in: folder))
+        XCTAssertFalse(DiskModelRegistrar.bindingStillVerified(
+            binding,
+            root: root
+        ))
+    }
+
+    @MainActor
+    func testExactChatModelRegistrationRejectsRootOutsideConfinement() throws {
+        let confinement = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: confinement) }
+        let outside = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: outside) }
+        let repositoryID = "synthetic/outside-model"
+        try writeVerifiedModelFolder(
+            named: ManagedModelStorage.folderName(forRepoID: repositoryID),
+            under: outside,
+            repositoryID: repositoryID
+        )
+        let linkedRoot = confinement.appendingPathComponent("Models", isDirectory: true)
+        try FileManager.default.createSymbolicLink(at: linkedRoot, withDestinationURL: outside)
+        let library = try makeIsolatedLibrary()
+
+        let binding = DiskModelRegistrar.registerVerifiedModelBinding(
+            into: library,
+            root: linkedRoot,
+            repositoryID: repositoryID,
+            confinedTo: confinement
+        )
+
+        XCTAssertNil(binding)
+        XCTAssertTrue(library.models.isEmpty)
+    }
+
+    func testBillingReportWriterRefusesFinalSymlinkRace() throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let outside = root.deletingLastPathComponent()
+            .appendingPathComponent("outside-report-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: outside) }
+        let output = root.appendingPathComponent("billing-report.json")
+        let invocation = try ScratchPadBillingFidelityInvocation.resolve(
+            arguments: ["SupraAI", "-scratchPadBillingFidelityOutput", output.path],
+            environment: [
+                "SUPRA_BILLING_CHAT_REPOSITORY": "synthetic/model",
+                "SUPRA_BILLING_SOURCE_SHA": String(repeating: "a", count: 40),
+            ],
+            temporaryDirectory: root,
+            compiledSourceCommitSHA: String(repeating: "a", count: 40)
+        )
+        try FileManager.default.createSymbolicLink(at: output, withDestinationURL: outside)
+
+        XCTAssertThrowsError(try invocation.writeReport(Data("{}".utf8)))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: outside.path))
+    }
+
+    func testBillingReportWriterRefusesParentDirectorySwapRace() throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let parent = root.appendingPathComponent("reports", isDirectory: true)
+        try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+        let outside = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: outside) }
+        let output = parent.appendingPathComponent("billing-report.json")
+        let invocation = try ScratchPadBillingFidelityInvocation.resolve(
+            arguments: ["SupraAI", "-scratchPadBillingFidelityOutput", output.path],
+            environment: [
+                "SUPRA_BILLING_CHAT_REPOSITORY": "synthetic/model",
+                "SUPRA_BILLING_SOURCE_SHA": String(repeating: "a", count: 40),
+            ],
+            temporaryDirectory: root,
+            compiledSourceCommitSHA: String(repeating: "a", count: 40)
+        )
+        try FileManager.default.removeItem(at: parent)
+        try FileManager.default.createSymbolicLink(at: parent, withDestinationURL: outside)
+
+        XCTAssertThrowsError(try invocation.writeReport(Data("{}".utf8)))
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: outside.appendingPathComponent("billing-report.json").path
+            )
+        )
+    }
+
+    func testBillingReportWriterRefusesIntermediateDirectorySwapRace() throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let reports = root.appendingPathComponent("reports", isDirectory: true)
+        let parent = reports.appendingPathComponent("nested", isDirectory: true)
+        try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+        let outside = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: outside) }
+        try FileManager.default.createDirectory(
+            at: outside.appendingPathComponent("nested", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        let output = parent.appendingPathComponent("billing-report.json")
+        let invocation = try ScratchPadBillingFidelityInvocation.resolve(
+            arguments: ["SupraAI", "-scratchPadBillingFidelityOutput", output.path],
+            environment: [
+                "SUPRA_BILLING_CHAT_REPOSITORY": "synthetic/model",
+                "SUPRA_BILLING_SOURCE_SHA": String(repeating: "a", count: 40),
+            ],
+            temporaryDirectory: root,
+            compiledSourceCommitSHA: String(repeating: "a", count: 40)
+        )
+        try FileManager.default.removeItem(at: reports)
+        try FileManager.default.createSymbolicLink(at: reports, withDestinationURL: outside)
+
+        XCTAssertThrowsError(try invocation.writeReport(Data("{}".utf8)))
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: outside.appendingPathComponent("nested/billing-report.json").path
+            )
+        )
+    }
+
+    func testBillingReportWriterRejectsRootRenameBeforeFileCreation() throws {
+        let root = try makeTemporaryDirectory()
+        let outside = try makeTemporaryDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: outside)
+        }
+        let moved = outside.appendingPathComponent("moved-root", isDirectory: true)
+
+        XCTAssertThrowsError(try ScratchPadBillingFidelityReportWriter.write(
+            Data("{}".utf8),
+            rootURL: root,
+            expectedRootIdentity: ScratchPadBillingFidelityReportWriter.rootIdentity(at: root),
+            relativeParentComponents: [],
+            fileName: "billing-report.json",
+            beforeFileCreation: {
+                try FileManager.default.moveItem(at: root, to: moved)
+            }
+        ))
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: moved.appendingPathComponent("billing-report.json").path
+        ))
+    }
+
+    func testBillingReportWriterRejectsParentRenameBeforeFileCreation() throws {
+        let root = try makeTemporaryDirectory()
+        let outside = try makeTemporaryDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: outside)
+        }
+        let reports = root.appendingPathComponent("reports", isDirectory: true)
+        let nested = reports.appendingPathComponent("nested", isDirectory: true)
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        let moved = outside.appendingPathComponent("moved", isDirectory: true)
+
+        XCTAssertThrowsError(try ScratchPadBillingFidelityReportWriter.write(
+            Data("{}".utf8),
+            rootURL: root,
+            expectedRootIdentity: ScratchPadBillingFidelityReportWriter.rootIdentity(at: root),
+            relativeParentComponents: ["reports", "nested"],
+            fileName: "billing-report.json",
+            beforeFileCreation: {
+                try FileManager.default.moveItem(at: reports, to: moved)
+            }
+        ))
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: moved.appendingPathComponent("nested/billing-report.json").path
+        ))
+    }
+
+    func testBillingReportWriterCleansFileAfterParentRenameFollowingCreation() throws {
+        let root = try makeTemporaryDirectory()
+        let outside = try makeTemporaryDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: outside)
+        }
+        let reports = root.appendingPathComponent("reports", isDirectory: true)
+        let nested = reports.appendingPathComponent("nested", isDirectory: true)
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        let moved = outside.appendingPathComponent("moved", isDirectory: true)
+
+        XCTAssertThrowsError(try ScratchPadBillingFidelityReportWriter.write(
+            Data("{}".utf8),
+            rootURL: root,
+            expectedRootIdentity: ScratchPadBillingFidelityReportWriter.rootIdentity(at: root),
+            relativeParentComponents: ["reports", "nested"],
+            fileName: "billing-report.json",
+            afterFileCreation: {
+                try FileManager.default.moveItem(at: reports, to: moved)
+            }
+        ))
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: moved.appendingPathComponent("nested/billing-report.json").path
+        ))
+    }
+
+    func testScratchPadBillingInvocationBindsCommitModelAndTemporaryOutput() throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let output = root.appendingPathComponent("billing-report.json")
+        let sha = String(repeating: "a", count: 40)
+
+        let invocation = try ScratchPadBillingFidelityInvocation.resolve(
+            arguments: ["SupraAI", "-scratchPadBillingFidelityOutput", output.path],
+            environment: [
+                "SUPRA_BILLING_SOURCE_SHA": sha,
+                "SUPRA_BILLING_CHAT_REPOSITORY": "synthetic/drafting-model",
+            ],
+            temporaryDirectory: root,
+            compiledSourceCommitSHA: String(repeating: "a", count: 40)
+        )
+
+        XCTAssertEqual(invocation.outputURL, output.standardizedFileURL)
+        XCTAssertEqual(invocation.sourceCommitSHA, sha)
+        XCTAssertEqual(invocation.chatRepositoryID, "synthetic/drafting-model")
+
+        let outside = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: outside) }
+        let escape = root.appendingPathComponent("escape", isDirectory: true)
+        try FileManager.default.createSymbolicLink(at: escape, withDestinationURL: outside)
+        XCTAssertThrowsError(try ScratchPadBillingFidelityInvocation.resolve(
+            arguments: ["SupraAI", "-scratchPadBillingFidelityOutput", escape.appendingPathComponent("report.json").path],
+            environment: [
+                "SUPRA_BILLING_SOURCE_SHA": sha,
+                "SUPRA_BILLING_CHAT_REPOSITORY": "synthetic/drafting-model",
+            ],
+            temporaryDirectory: root,
+            compiledSourceCommitSHA: String(repeating: "a", count: 40)
+        ))
+
+        try Data().write(to: output)
+        XCTAssertThrowsError(try ScratchPadBillingFidelityInvocation.resolve(
+            arguments: ["SupraAI", "-scratchPadBillingFidelityOutput", output.path],
+            environment: [
+                "SUPRA_BILLING_SOURCE_SHA": sha,
+                "SUPRA_BILLING_CHAT_REPOSITORY": "synthetic/drafting-model",
+            ],
+            temporaryDirectory: root,
+            compiledSourceCommitSHA: String(repeating: "a", count: 40)
+        ))
+
+        XCTAssertThrowsError(try ScratchPadBillingFidelityInvocation.resolve(
+            arguments: ["SupraAI", "-scratchPadBillingFidelityOutput", "/private/outside.json"],
+            environment: [
+                "SUPRA_BILLING_SOURCE_SHA": sha,
+                "SUPRA_BILLING_CHAT_REPOSITORY": "synthetic/drafting-model",
+            ],
+            temporaryDirectory: root,
+            compiledSourceCommitSHA: String(repeating: "a", count: 40)
+        ))
+    }
+
+    func testScratchPadBillingInvocationRejectsMissingOrMismatchedSignedSourceSHA() throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let output = root.appendingPathComponent("billing-report.json")
+        let requested = String(repeating: "a", count: 40)
+        let environment = [
+            "SUPRA_BILLING_SOURCE_SHA": requested,
+            "SUPRA_BILLING_CHAT_REPOSITORY": "synthetic/drafting-model",
+        ]
+        let arguments = ["SupraAI", "-scratchPadBillingFidelityOutput", output.path]
+
+        XCTAssertThrowsError(try ScratchPadBillingFidelityInvocation.resolve(
+            arguments: arguments,
+            environment: environment,
+            temporaryDirectory: root,
+            compiledSourceCommitSHA: nil
+        ))
+        XCTAssertThrowsError(try ScratchPadBillingFidelityInvocation.resolve(
+            arguments: arguments,
+            environment: environment,
+            temporaryDirectory: root,
+            compiledSourceCommitSHA: String(repeating: "b", count: 40)
+        )) { error in
+            XCTAssertEqual(
+                error as? ScratchPadBillingFidelityInvocationError,
+                .sourceCommitMismatch(
+                    requested: requested,
+                    compiled: String(repeating: "b", count: 40)
+                )
+            )
+        }
+    }
+
+    func testScratchPadBillingInvocationCannotOverwriteOutputCreatedAfterResolution() throws {
+        let root = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let output = root.appendingPathComponent("billing-report.json")
+        let invocation = try ScratchPadBillingFidelityInvocation.resolve(
+            arguments: ["SupraAI", "-scratchPadBillingFidelityOutput", output.path],
+            environment: [
+                "SUPRA_BILLING_SOURCE_SHA": String(repeating: "a", count: 40),
+                "SUPRA_BILLING_CHAT_REPOSITORY": "synthetic/drafting-model",
+            ],
+            temporaryDirectory: root,
+            compiledSourceCommitSHA: String(repeating: "a", count: 40)
+        )
+        let existing = Data("existing".utf8)
+        try existing.write(to: output)
+
+        XCTAssertThrowsError(try invocation.writeReport(Data("replacement".utf8)))
+        XCTAssertEqual(try Data(contentsOf: output), existing)
     }
 
     // MARK: - Fixtures

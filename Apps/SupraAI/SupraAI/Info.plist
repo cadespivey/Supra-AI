@@ -15,5 +15,8 @@
          "check for updates?" permission prompt. -->
     <key>SUEnableAutomaticChecks</key>
     <true/>
+    <!-- Binds isolated fidelity-probe evidence to the exact signed source snapshot. -->
+    <key>SupraSourceCommitSHA</key>
+    <string>$(SUPRA_SOURCE_COMMIT_SHA)</string>
 </dict>
 </plist>

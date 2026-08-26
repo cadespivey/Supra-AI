@@ -33,6 +33,9 @@ public enum HeadlessProbeMode: String, CaseIterable, Sendable, Equatable {
     /// Runs the fixed synthetic legal corpus through the installed embedding and
     /// chat artifacts, emitting a re-scorable raw RAG control record.
     case nativeRAGControl = "-runNativeRAGControl"
+    /// Runs synthetic ScratchPad days through the installed drafting model and
+    /// emits raw generations plus deterministic §6.1 fidelity scores.
+    case scratchPadBillingFidelity = "-runScratchPadBillingFidelityProbe"
 
     /// The outcome of resolving a launch-argument list.
     public enum Resolution: Equatable, Sendable {
@@ -61,7 +64,8 @@ public enum HeadlessProbeMode: String, CaseIterable, Sendable, Equatable {
             switch self {
             case .none, .single(.coverageShadow): return true
             case .single(.capability), .single(.typedProseAB),
-                 .single(.nativeRAGControl), .conflict: return false
+                 .single(.nativeRAGControl), .single(.scratchPadBillingFidelity),
+                 .conflict: return false
             }
         }
     }
@@ -81,7 +85,8 @@ public enum HeadlessProbeMode: String, CaseIterable, Sendable, Equatable {
     public var requiresIsolatedStore: Bool {
         switch self {
         case .coverageShadow: return false
-        case .capability, .typedProseAB, .nativeRAGControl: return true
+        case .capability, .typedProseAB, .nativeRAGControl,
+             .scratchPadBillingFidelity: return true
         }
     }
 

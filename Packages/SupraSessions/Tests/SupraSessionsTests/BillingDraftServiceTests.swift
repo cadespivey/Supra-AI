@@ -259,6 +259,58 @@ final class BillingDraftServiceTests: XCTestCase {
             dayID: dayID, sensitivity: 0.5, timekeeper: timekeeper, invoiceDate: "2026-06-22", autoCoding: false
         )
         XCTAssertTrue(capturedUserPrompt.contains("UTBMS coding is OFF"))
+        XCTAssertTrue(capturedUserPrompt.contains("leave taskCode and activityCode null"))
+        XCTAssertFalse(capturedUserPrompt.contains("L350 — Discovery Motions"))
+        XCTAssertFalse(capturedUserPrompt.contains("A103 — Draft/revise"))
+    }
+
+    func testAutoCodingOffDeterministicallyDropsModelSuppliedCodes() async throws {
+        let (store, matterID, dayID) = try makeStoreWithMatterAndDay()
+        let json = """
+        {"lineItems":[
+          {"matterID":"\(matterID)","narrative":"Drafted opposition.","hours":1.0,"taskCode":"L350","activityCode":"A103","sourceEntryIDs":["e1"]}
+        ]}
+        """
+
+        let result = try await service(store, returning: json).generateDraft(
+            dayID: dayID,
+            sensitivity: 0.5,
+            timekeeper: timekeeper,
+            invoiceDate: "2026-06-22",
+            autoCoding: false
+        )
+        let line = try XCTUnwrap(store.billing.lineItems(draftID: result.draftID).first)
+
+        XCTAssertNil(line.utbmsTaskCode)
+        XCTAssertNil(line.utbmsActivityCode)
+    }
+
+    func testAutoCodingOnSuppliesCanonicalCatalogAndGroundsSelectionInNarrativeAndEvidence() async throws {
+        let (store, _, dayID) = try makeStoreWithMatterAndDay()
+        var capturedUserPrompt = ""
+        _ = try? await BillingDraftService(store: store, generate: { _, user in
+            capturedUserPrompt = user
+            return "{\"lineItems\":[]}"
+        }).generateDraft(
+            dayID: dayID,
+            sensitivity: 0.5,
+            timekeeper: timekeeper,
+            invoiceDate: "2026-06-22",
+            autoCoding: true
+        )
+
+        XCTAssertTrue(capturedUserPrompt.contains("L350 — Discovery Motions"))
+        XCTAssertTrue(capturedUserPrompt.contains("A103 — Draft/revise"))
+        XCTAssertTrue(capturedUserPrompt.contains("generated narrative and its cited note or attachment evidence"))
+        XCTAssertTrue(capturedUserPrompt.contains("If no listed code is a reasonable interpretation"))
+        XCTAssertTrue(capturedUserPrompt.contains("codeNote"))
+        for item in UTBMSCodes.litigationTask + UTBMSCodes.activity {
+            XCTAssertEqual(
+                capturedUserPrompt.components(separatedBy: "- \(item.code) — \(item.title)").count,
+                2,
+                "Expected every canonical code/title to appear exactly once: \(item.code)"
+            )
+        }
     }
 
     func testAutoTimestampTogglesTimeEvidenceClauseInThePrompt() async throws {

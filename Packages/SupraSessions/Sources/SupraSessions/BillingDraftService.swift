@@ -145,6 +145,7 @@ public final class BillingDraftService {
                 timekeeper: timekeeper,
                 dayDate: dayDate,
                 increment: increment,
+                autoCoding: autoCoding,
                 evidenceScope: evidenceScope
             )
         } catch let violation as BillingEvidenceScopeViolation {
@@ -233,6 +234,7 @@ public final class BillingDraftService {
         timekeeper: BillingTimekeeper,
         dayDate: String,
         increment: Double,
+        autoCoding: Bool = true,
         evidenceScope: BillingEvidenceScope
     ) throws -> [BillingLineItemInput] {
         var inputs: [BillingLineItemInput] = []
@@ -258,8 +260,12 @@ public final class BillingDraftService {
                 // UTBMS codes are validated against the matter's code set; an invalid
                 // or out-of-set code is dropped (→ nil) so the validator flags it for
                 // a manual pick rather than letting a bad code reach LEDES.
-                utbmsTaskCode: UTBMSCodes.normalizedTaskCode(dto.taskCode, codeSet: codeSet),
-                utbmsActivityCode: UTBMSCodes.normalizedActivityCode(dto.activityCode),
+                utbmsTaskCode: autoCoding
+                    ? UTBMSCodes.normalizedTaskCode(dto.taskCode, codeSet: codeSet)
+                    : nil,
+                utbmsActivityCode: autoCoding
+                    ? UTBMSCodes.normalizedActivityCode(dto.activityCode)
+                    : nil,
                 timekeeperID: timekeeper.id,
                 // nil = inherit the configured timekeeper's rate at compute/export
                 // time (single-timekeeper scope), so reconfiguring the rate in

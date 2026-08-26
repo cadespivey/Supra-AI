@@ -876,6 +876,7 @@
 				INFOPLIST_FILE = SupraAI/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Supra AI";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_SupraSourceCommitSHA = "$(SUPRA_SOURCE_COMMIT_SHA)";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -903,6 +904,7 @@
 				INFOPLIST_FILE = SupraAI/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Supra AI";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_SupraSourceCommitSHA = "$(SUPRA_SOURCE_COMMIT_SHA)";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",

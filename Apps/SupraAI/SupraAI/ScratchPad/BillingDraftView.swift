@@ -204,6 +204,10 @@ struct BillingDraftView: View {
         } else {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
+                    Label("Suggested codes require attorney review. Nothing is billed automatically.", systemImage: "checkmark.shield")
+                        .font(.supraCaption)
+                        .foregroundStyle(.secondary)
+                        .padding(.vertical, 8)
                     ForEach(groups, id: \.key) { group in
                         matterHeader(group)
                         ForEach(group.lines, id: \.id) { line in
@@ -232,12 +236,18 @@ struct BillingDraftView: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(line.narrative).font(.supraBody)
                 HStack(spacing: 6) {
-                    codeChip(line.utbmsTaskCode, fallback: "—")
-                    codeChip(line.utbmsActivityCode, fallback: "A—")
+                    codeChip(line.utbmsTaskCode, fallback: "Task —", catalog: UTBMSCodes.litigationTask)
+                    codeChip(line.utbmsActivityCode, fallback: "Activity —", catalog: UTBMSCodes.activity)
                     confidencePill(line.confidence)
                     if line.userEdited {
                         Label("edited", systemImage: "pencil").font(.supraCaption).foregroundStyle(goldAccent)
                     }
+                }
+                if let note = codeReviewNote(for: line) {
+                    Label(note, systemImage: "info.circle")
+                        .font(.supraCaption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
             Spacer(minLength: 8)
@@ -276,12 +286,28 @@ struct BillingDraftView: View {
         .accessibilityLabel("Line actions")
     }
 
-    private func codeChip(_ code: String?, fallback: String) -> some View {
-        Text(code ?? fallback)
-            .font(.caption2.monospaced())
+    private func codeChip(_ code: String?, fallback: String, catalog: [UTBMSCode]) -> some View {
+        let title = code.flatMap { value in catalog.first { $0.code == value }?.title }
+        let label = code.map { value in title.map { "\(value) · \($0)" } ?? value } ?? fallback
+        return Text(label)
+            .font(.caption2)
             .foregroundStyle(code == nil ? .tertiary : .secondary)
             .padding(.horizontal, 6).padding(.vertical, 2)
             .background(RoundedRectangle(cornerRadius: 5).fill(Color.secondary.opacity(0.12)))
+            .help(code.map { value in
+                title.map { "\(value): \($0). Suggested code—review before billing." }
+                    ?? "\(value). Suggested code—review before billing."
+            } ?? "No suggested code. Review before billing.")
+    }
+
+    private func codeReviewNote(for line: BillingLineView) -> String? {
+        if let note = line.codeNote?.trimmingCharacters(in: .whitespacesAndNewlines), !note.isEmpty {
+            return note
+        }
+        if line.utbmsTaskCode == nil || line.utbmsActivityCode == nil {
+            return "Coding is incomplete; review the evidence and select a supported code if appropriate."
+        }
+        return nil
     }
 
     private func confidencePill(_ raw: String) -> some View {

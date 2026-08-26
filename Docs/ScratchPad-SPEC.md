@@ -281,16 +281,17 @@ Each call is small, cacheable, retryable, and independently checkable.
   guess. Rounding increment default 0.1h, overridable by the instructions.
 ```
 
-> **Implementation note (1.5.0 — drift-control §14).** The engine ships as a **single constrained
-> generation** with deterministic per-field validation — NOT yet the §5.1 multi-call decomposition.
-> Deterministic guards now in force: UTBMS codes validated against `UTBMSCodes` (litigation L-set +
-> universal A-set; out-of-set/invalid codes dropped to nil so the validator flags them); work dates
-> validated as real calendar dates clamped to ≤ the log day; hours rounded to the increment; matter
-> resolved to one of the day's matters or null; rate inherits the configured timekeeper. The model is
-> also given each note's `id=` so it can cite real `sourceEntryIDs` for edit-preservation. **Deferred to
-> the decomposition (fidelity-gated):** per-segment hour caps against timestamp gaps, a model repair-retry
-> pass, and grammar-constrained sampling. The §6.1 golden-fixture gate against the real local model is the
-> trigger to decompose if single-call fidelity falls short; it has not yet been measured.
+> **Implementation note (billing-fidelity v2 — drift-control §14).** The engine ships as a **single
+> constrained generation** with deterministic per-field validation — NOT yet the §5.1 multi-call
+> decomposition. When automatic coding is enabled, the prompt renders the canonical litigation-task
+> and universal-activity catalogs directly from `UTBMSCodes`, including code titles. It requires each
+> selection to follow the generated narrative and cited note/document evidence, permits null when no
+> listed code is reasonably supported, and requests a concise `codeNote`. When automatic coding is
+> disabled, the catalogs are omitted and task/activity fields must remain null. Production guards
+> validate codes against `UTBMSCodes`, drop invalid/out-of-set codes to nil, validate dates, round hours,
+> constrain matters to the included evidence scope, and persist cited `sourceEntryIDs`. **Deferred and
+> fidelity-gated:** per-segment hour caps, grammar-constrained sampling, and a narrow coding-only second
+> pass. The second pass may be added only if the signed prompt-only benchmark misses §6.1's code gates.
 
 ---
 
@@ -325,9 +326,41 @@ attorney's own approved work, and measure against golden fixtures.
                                * inferred durations within ±0.1h of expected on the golden set
                                * every inferred/adjusted time flagged + attorney-confirmed before export
 - JSON validity              ≥ 95% first pass (repair recovers the remainder)
+- UTBMS canonical validity   100% canonical-valid-or-explicitly-authorized-blank after normalization
+- Litigation task coding     ≥ 80% semantically reasonable against fixture-authored acceptable sets
+- Activity coding            ≥ 80% semantically reasonable against fixture-authored acceptable sets
+- Non-litigation task        100% blank where the matter has no supported task-code set
+- Reviewable blanks/drops     100% include a codeNote of at least 12 characters and 3 words
+- Unexpected output lines     0; duplicate or unmatched raw/normalized lines fail the gate
 ```
 
-Phase 4 does not pass until the real local model clears these against the golden-fixture corpus.
+Strict JSON-object-only validity and production-parser acceptance are reported independently. Preferred
+single-code accuracy is diagnostic rather than a hard gate because more than one canonical code can be
+defensible. Canonical validity and semantic reasonableness are also separate: a catalog code can be valid
+yet unreasonable for the cited work. Canonical-rate denominators include every expected line; an unauthorized
+blank is non-canonical, while a fixture-authorized blank remains valid. The report records the exact raw model
+text, raw parser line count, every persisted production-normalized output line with its expectation match, and
+the complete scoring oracle for each line (narrative term groups, billing code set, acceptable codes, blank
+permissions, time basis, expected values, and rationale). Raw duplicates or extras remain independently
+re-scorable from the raw text and fail the gate by count even when persistence rejects them.
+
+A Phase 4 result is authoritative only when the Developer-ID-signed Release probe emits a complete report whose
+repository, revision, canonical full-manifest digest, and content fingerprint bind the exact verified model
+artifact. The runtime content-bound load enforces that fingerprint, and the manifest/fingerprint tuple is
+re-verified after load and before fixture execution. The Release build embeds `SupraSourceCommitSHA`; probe
+resolution rejects a missing, malformed, or requested `SUPRA_BILLING_SOURCE_SHA` mismatch. External verification
+must still confirm the app/XPC signatures and that the embedded SHA names the reviewed source snapshot. A GUI
+launcher's process status (including `open -W`) is not a benchmark result: only a newly created, complete report
+with `status == "completed"` and its recorded hard-gate summary is authoritative. An unavailable or unloadable
+model, interrupted run, stale build, failure payload, or missing report does not pass the phase. A coding-only
+second pass may be added only when an authoritative first-pass report demonstrates that the documented coding
+gates require it.
+
+On 2026-08-26, the signed Release probe found the exact manifest-verified
+`mlx-community/Qwen2.5-14B-Instruct-4bit` artifact, but macOS RunningBoard terminated the app during creation of
+the approximately 8.7 GiB immutable model snapshot (`0xBADDD15C`, CacheDeleteAppContainerCaches), including an
+attempt made with approximately 16.7 GiB free. No complete benchmark report was produced, Phase 4 remains
+unpassed, and no coding-only second pass was added. The launcher returning zero did not change that result.
 
 ---
 
@@ -344,6 +377,8 @@ Phase 4 does not pass until the real local model clears these against the golden
 - Lock/finalize: a day can be locked after export (locked_at); locked days are read-only unless
   explicitly reopened (§0.2d).
 - "Nothing billed automatically" is always visible.
+- Suggested task/activity chips show the canonical title, expose a review tooltip, and surface the
+  model's `codeNote`; blank suggestions are explicitly marked incomplete for attorney selection.
 ```
 
 ---
@@ -451,11 +486,36 @@ existing screen — a different risk profile that must not enlarge this feature'
 - Deterministic layer (SwiftPM): data round-trips & migration; tag resolution; attachment
   extract/classify/associate (incl. .msg graceful rejection); LEDES byte-level golden file;
   reconciliation math; edit-preservation on re-generation; export validators.
-- Golden-fixture layer (run against the loaded local chat model): representative days → expected
-  line items, scored against the §6.1 bar (matter accuracy, narrative subject, time tolerance, JSON
-  validity). This is what turns "typical, not aspirational" into a measured number.
-- Fixtures contain no real client data; deterministic text; known matters/dates/amounts; at least one
-  transactional (blank-task-code) matter and one untagged-inferred segment.
+- Golden-fixture layer (run through the signed app and production `BillingDraftService`): 20 independent
+  synthetic days / approximately 30 expected lines. Each call records exact prompts, raw model output,
+  parser and strict-JSON status, normalized persisted line fields, per-line expectations and rationales,
+  and aggregate §6.1 metrics so the JSON artifact can be independently inspected and re-scored.
+- Fixtures contain no real client data and cover explicit/inferred time, auto-timestamp on/off, tagged and
+  untagged matter resolution, multi-matter days, litigation/transactional/advisory coding, defensible code
+  alternatives, required ambiguity/abstention, controlling matter instructions, attachment-grounded work,
+  and `#Note` plus linked-attachment canaries.
+- The permanent `-runScratchPadBillingFidelityProbe` mode bypasses normal bootstrap, uses throwaway Stores,
+  binds the selected model to its exact verified repository, 40-character revision, canonical SHA-256 of
+  the complete artifact manifest, and runtime content fingerprint. The content-bound load path repeats
+  authorization, pins model-directory identity, supplies the complete binding to XPC, and requires the
+  runtime to return the exact verified fingerprint before generation. Report output is restricted to the
+  app's temporary container; the probe emits an explicit passed/failed status and terminates normally.
+- `sourceCommitSHA` is a validated 40-character invocation label. Release qualification separately verifies
+  the signed app artifact against the reviewed source snapshot; the report does not claim executable-derived
+  source identity.
+- Report creation records the resolved temporary-root device/inode, verifies that identity again at write
+  time, opens each relative parent component via descriptor-relative `openat` with no-follow semantics,
+  and creates the leaf with no-follow/exclusive semantics and mode 0600. This prevents root, intermediate-
+  parent, immediate-parent, and leaf swap races between invocation validation and report creation.
+- Exact-model discovery canonicalizes its managed-model root and requires that root to remain beneath an
+  independently derived Application Support confinement root. The subsequent content-bound authorization
+  and XPC load enforce the exact complete-tree fingerprint rather than trusting discovery path state.
+- The general-pasteboard mirror is restricted to this hard-coded synthetic corpus and exists so an invoking
+  shell can retrieve a sandboxed signed-app report. Real client data, user-provided fixtures, and ordinary
+  ScratchPad generation must never use this channel.
+- The app enforces a 300-second authorization/load watchdog and a 1200-second full-corpus watchdog. A timeout
+  emits an explicit failure report and terminates normally; the invoking runner should retain a larger outer
+  timeout as defense in depth.
 ```
 
 ---
