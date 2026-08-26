@@ -552,7 +552,7 @@ final class HeadlessProbeIsolationTests: XCTestCase {
         ))
     }
 
-    func testBillingReportWriterCleansFileAfterParentRenameFollowingCreation() throws {
+    func testBillingReportWriterTruncatesFileAfterParentRenameFollowingCreation() throws {
         let root = try makeTemporaryDirectory()
         let outside = try makeTemporaryDirectory()
         defer {
@@ -574,9 +574,10 @@ final class HeadlessProbeIsolationTests: XCTestCase {
                 try FileManager.default.moveItem(at: reports, to: moved)
             }
         ))
-        XCTAssertFalse(FileManager.default.fileExists(
-            atPath: moved.appendingPathComponent("nested/billing-report.json").path
-        ))
+        XCTAssertEqual(
+            try Data(contentsOf: moved.appendingPathComponent("nested/billing-report.json")),
+            Data()
+        )
     }
 
     func testBillingReportWriterRejectsLeafRenameBeforeWritingAndPreservesReplacement() throws {

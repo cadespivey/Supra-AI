@@ -16,10 +16,12 @@ private final class ScratchPadBillingFidelityTimeoutGate<Value: Sendable> {
         self.continuation = continuation
     }
 
-    func resolve(_ result: Result<Value, any Error>) {
-        guard let continuation else { return }
+    @discardableResult
+    func resolve(_ result: Result<Value, any Error>) -> Bool {
+        guard let continuation else { return false }
         self.continuation = nil
         continuation.resume(with: result)
+        return true
     }
 }
 
@@ -31,20 +33,33 @@ public enum ScratchPadBillingFidelityTimeout {
     ) async throws -> Value {
         try await withCheckedThrowingContinuation { continuation in
             let gate = ScratchPadBillingFidelityTimeoutGate(continuation)
+            let operationTask = Task { @MainActor in
+                try await operation()
+            }
+            let timeoutTask = Task { @MainActor in
+                try await Task.sleep(for: duration)
+            }
             Task { @MainActor in
                 do {
-                    gate.resolve(.success(try await operation()))
+                    let value = try await operationTask.value
+                    if gate.resolve(.success(value)) {
+                        timeoutTask.cancel()
+                    }
                 } catch {
-                    gate.resolve(.failure(error))
+                    if gate.resolve(.failure(error)) {
+                        timeoutTask.cancel()
+                    }
                 }
             }
             Task { @MainActor in
                 do {
-                    try await Task.sleep(for: duration)
+                    try await timeoutTask.value
                 } catch {
                     return
                 }
-                gate.resolve(.failure(ScratchPadBillingFidelityTimeoutError.timedOut))
+                if gate.resolve(.failure(ScratchPadBillingFidelityTimeoutError.timedOut)) {
+                    operationTask.cancel()
+                }
             }
         }
     }

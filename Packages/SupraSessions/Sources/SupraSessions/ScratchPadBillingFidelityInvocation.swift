@@ -82,15 +82,6 @@ public enum ScratchPadBillingFidelityReportWriter {
             if shouldRemoveFile {
                 _ = Darwin.ftruncate(fileFD, 0)
                 _ = Darwin.fsync(fileFD)
-                if leafMatches(
-                    expectedIdentity: expectedFileIdentity,
-                    directoryFD: directoryFD,
-                    fileName: fileName
-                ) {
-                    _ = fileName.withCString { name in
-                        Darwin.unlinkat(directoryFD, name, 0)
-                    }
-                }
             }
         }
 

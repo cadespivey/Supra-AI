@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import CryptoKit
+import Darwin
 import Foundation
 import SupraCore
 import SupraDocuments
@@ -11,6 +12,62 @@ import SupraRuntimeClient
 import SupraRuntimeInterface
 import SupraSessions
 import SupraStore
+
+private final class ScratchPadBillingFidelityWatchdog: @unchecked Sendable {
+    private let lock = NSLock()
+    private let queue = DispatchQueue(
+        label: "ai.supra.scratchpad-billing-fidelity-watchdog",
+        qos: .utility
+    )
+    private var generation = 0
+    private var finished = false
+    private var workItem: DispatchWorkItem?
+
+    func arm(after seconds: TimeInterval, action: @escaping @Sendable () -> Void) {
+        let item: DispatchWorkItem
+        lock.lock()
+        guard !finished else {
+            lock.unlock()
+            return
+        }
+        generation += 1
+        let armedGeneration = generation
+        workItem?.cancel()
+        item = DispatchWorkItem { [weak self] in
+            guard let self, self.claim(generation: armedGeneration) else { return }
+            action()
+        }
+        workItem = item
+        lock.unlock()
+        queue.asyncAfter(deadline: .now() + max(0, seconds), execute: item)
+    }
+
+    @discardableResult
+    func finish() -> Bool {
+        let item: DispatchWorkItem?
+        lock.lock()
+        guard !finished else {
+            lock.unlock()
+            return false
+        }
+        finished = true
+        generation += 1
+        item = workItem
+        workItem = nil
+        lock.unlock()
+        item?.cancel()
+        return true
+    }
+
+    private func claim(generation armedGeneration: Int) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !finished, generation == armedGeneration else { return false }
+        finished = true
+        workItem = nil
+        return true
+    }
+}
 
 struct DatabaseRecoveryState: Sendable {
     enum Failure: Sendable {
@@ -1324,6 +1381,26 @@ final class AppEnvironment: ObservableObject {
             return
         }
 
+        let watchdog = ScratchPadBillingFidelityWatchdog()
+        func armWatchdog(after seconds: TimeInterval, status: String, detail: String) {
+            let payload = Self.headlessFailureJSON(status: status, detail: detail)
+            watchdog.arm(after: seconds) {
+                Self.hardExitScratchPadBillingFidelityProbe(
+                    payload: payload,
+                    invocation: invocation
+                )
+            }
+        }
+        func finishAndEmit(_ payload: String) {
+            guard watchdog.finish() else { return }
+            emitScratchPadBillingFidelityPayload(payload, invocation: invocation)
+        }
+
+        armWatchdog(
+            after: 300,
+            status: "model_registration_timed_out",
+            detail: "Exact model manifest verification and artifact fingerprinting exceeded 300 seconds."
+        )
         let managedModelsRoot = ManagedModelStorage.modelsDirectory()
         let applicationSupportRoot = managedModelsRoot
             .deletingLastPathComponent()
@@ -1334,16 +1411,18 @@ final class AppEnvironment: ObservableObject {
             repositoryID: invocation.chatRepositoryID,
             confinedTo: applicationSupportRoot
         ) else {
-            emitScratchPadBillingFidelityPayload(
-                Self.headlessFailureJSON(
-                    status: "exact_drafting_model_unavailable",
-                    detail: "The manifest-verified model bound by SUPRA_BILLING_CHAT_REPOSITORY was unavailable."
-                ),
-                invocation: invocation
-            )
+            finishAndEmit(Self.headlessFailureJSON(
+                status: "exact_drafting_model_unavailable",
+                detail: "The manifest-verified model bound by SUPRA_BILLING_CHAT_REPOSITORY was unavailable."
+            ))
             return
         }
 
+        armWatchdog(
+            after: 300,
+            status: "model_load_timed_out",
+            detail: "Exact content-bound model authorization/load exceeded 300 seconds."
+        )
         let model = modelBinding.model
         let pinnedModel = CorpusAnalysisPinnedModel(
             modelRepository: modelBinding.repositoryID,
@@ -1358,37 +1437,41 @@ final class AppEnvironment: ObservableObject {
                 try await self.modelLibrary.loadContentBoundModel(matching: pinnedModel)
             }
         } catch ScratchPadBillingFidelityTimeoutError.timedOut {
-            emitScratchPadBillingFidelityPayload(
-                Self.headlessFailureJSON(
-                    status: "model_load_timed_out",
-                    detail: "Exact content-bound model authorization/load exceeded 300 seconds."
-                ),
-                invocation: invocation
-            )
+            finishAndEmit(Self.headlessFailureJSON(
+                status: "model_load_timed_out",
+                detail: "Exact content-bound model authorization/load exceeded 300 seconds."
+            ))
             return
         } catch {
-            emitScratchPadBillingFidelityPayload(
-                Self.headlessFailureJSON(status: "model_load_failed", detail: error.localizedDescription),
-                invocation: invocation
-            )
+            finishAndEmit(Self.headlessFailureJSON(
+                status: "model_load_failed",
+                detail: error.localizedDescription
+            ))
             return
         }
 
+        armWatchdog(
+            after: 300,
+            status: "model_binding_reverification_timed_out",
+            detail: "Immediate model manifest and artifact re-verification exceeded 300 seconds."
+        )
         guard DiskModelRegistrar.bindingStillVerified(
             modelBinding,
             root: managedModelsRoot,
             confinedTo: applicationSupportRoot
         ) else {
-            emitScratchPadBillingFidelityPayload(
-                Self.headlessFailureJSON(
-                    status: "model_binding_failed",
-                    detail: "Verified model manifest or artifact binding changed before execution."
-                ),
-                invocation: invocation
-            )
+            finishAndEmit(Self.headlessFailureJSON(
+                status: "model_binding_failed",
+                detail: "Verified model manifest or artifact binding changed before execution."
+            ))
             return
         }
 
+        armWatchdog(
+            after: 1_200,
+            status: "generation_timed_out",
+            detail: "The 20-fixture billing fidelity run exceeded 1200 seconds."
+        )
         let record: ScratchPadBillingFidelityRunRecord
         do {
             record = try await ScratchPadBillingFidelityTimeout.value(after: .seconds(1_200)) {
@@ -1406,19 +1489,16 @@ final class AppEnvironment: ObservableObject {
                 )
             }
         } catch ScratchPadBillingFidelityTimeoutError.timedOut {
-            emitScratchPadBillingFidelityPayload(
-                Self.headlessFailureJSON(
-                    status: "generation_timed_out",
-                    detail: "The 20-fixture billing fidelity run exceeded 1200 seconds."
-                ),
-                invocation: invocation
-            )
+            finishAndEmit(Self.headlessFailureJSON(
+                status: "generation_timed_out",
+                detail: "The 20-fixture billing fidelity run exceeded 1200 seconds."
+            ))
             return
         } catch {
-            emitScratchPadBillingFidelityPayload(
-                Self.headlessFailureJSON(status: "generation_failed", detail: error.localizedDescription),
-                invocation: invocation
-            )
+            finishAndEmit(Self.headlessFailureJSON(
+                status: "generation_failed",
+                detail: error.localizedDescription
+            ))
             return
         }
         let encoder = JSONEncoder()
@@ -1430,7 +1510,52 @@ final class AppEnvironment: ObservableObject {
                 status: "encoding_failed",
                 detail: "The completed fidelity record could not be encoded."
             )
-        emitScratchPadBillingFidelityPayload(json, invocation: invocation)
+        finishAndEmit(json)
+    }
+
+    nonisolated private static func hardExitScratchPadBillingFidelityProbe(
+        payload: String,
+        invocation: ScratchPadBillingFidelityInvocation
+    ) -> Never {
+        var writeFailure: String?
+        do {
+            try invocation.writeReport(Data(payload.utf8))
+        } catch {
+            writeFailure = "ScratchPad billing fidelity report write failed: \(error.localizedDescription)\n"
+        }
+
+        let framed = """
+        ===SCRATCHPAD_BILLING_FIDELITY_REPORT_BEGIN===
+        \(payload)
+        ===SCRATCHPAD_BILLING_FIDELITY_REPORT_END===
+
+        """
+        writeAll(Data(framed.utf8), to: STDOUT_FILENO)
+        if let writeFailure {
+            writeAll(Data(writeFailure.utf8), to: STDERR_FILENO)
+        }
+        Darwin._exit(124)
+    }
+
+    nonisolated private static func writeAll(_ data: Data, to descriptor: Int32) {
+        data.withUnsafeBytes { bytes in
+            guard let baseAddress = bytes.baseAddress else { return }
+            var offset = 0
+            while offset < bytes.count {
+                let result = Darwin.write(
+                    descriptor,
+                    baseAddress.advanced(by: offset),
+                    bytes.count - offset
+                )
+                if result > 0 {
+                    offset += result
+                } else if result < 0, errno == EINTR {
+                    continue
+                } else {
+                    return
+                }
+            }
+        }
     }
 
     private func emitScratchPadBillingFidelityPayload(
