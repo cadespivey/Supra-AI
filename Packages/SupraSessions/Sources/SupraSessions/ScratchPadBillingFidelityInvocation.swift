@@ -24,7 +24,8 @@ public enum ScratchPadBillingFidelityReportWriter {
         relativeParentComponents: [String],
         fileName: String,
         beforeFileCreation: () throws -> Void = {},
-        afterFileCreation: () throws -> Void = {}
+        afterFileCreation: () throws -> Void = {},
+        afterDataWrite: () throws -> Void = {}
     ) throws {
         let rootFD = Darwin.open(
             rootURL.path,
@@ -75,11 +76,20 @@ public enum ScratchPadBillingFidelityReportWriter {
         }
         guard fileFD >= 0 else { throw posixError() }
         defer { Darwin.close(fileFD) }
+        let expectedFileIdentity = try identity(of: fileFD)
         var shouldRemoveFile = true
         defer {
             if shouldRemoveFile {
-                _ = fileName.withCString { name in
-                    Darwin.unlinkat(directoryFD, name, 0)
+                _ = Darwin.ftruncate(fileFD, 0)
+                _ = Darwin.fsync(fileFD)
+                if leafMatches(
+                    expectedIdentity: expectedFileIdentity,
+                    directoryFD: directoryFD,
+                    fileName: fileName
+                ) {
+                    _ = fileName.withCString { name in
+                        Darwin.unlinkat(directoryFD, name, 0)
+                    }
                 }
             }
         }
@@ -90,6 +100,10 @@ public enum ScratchPadBillingFidelityReportWriter {
             expectedRootIdentity: expectedRootIdentity,
             components: relativeParentComponents,
             expectedDescriptors: directoryDescriptors
+        ), leafMatches(
+            expectedIdentity: expectedFileIdentity,
+            directoryFD: directoryFD,
+            fileName: fileName
         ) else {
             throw posixError(code: ESTALE)
         }
@@ -112,11 +126,16 @@ public enum ScratchPadBillingFidelityReportWriter {
             }
         }
         guard Darwin.fsync(fileFD) == 0 else { throw posixError() }
+        try afterDataWrite()
         guard directoryChainMatches(
             rootURL: rootURL,
             expectedRootIdentity: expectedRootIdentity,
             components: relativeParentComponents,
             expectedDescriptors: directoryDescriptors
+        ), leafMatches(
+            expectedIdentity: expectedFileIdentity,
+            directoryFD: directoryFD,
+            fileName: fileName
         ) else {
             throw posixError(code: ESTALE)
         }
@@ -166,6 +185,25 @@ public enum ScratchPadBillingFidelityReportWriter {
             directoryFD = nextFD
         }
         return true
+    }
+
+    private static func leafMatches(
+        expectedIdentity: ScratchPadBillingFidelityDirectoryIdentity,
+        directoryFD: Int32,
+        fileName: String
+    ) -> Bool {
+        var value = stat()
+        let result = fileName.withCString { name in
+            Darwin.fstatat(directoryFD, name, &value, AT_SYMLINK_NOFOLLOW)
+        }
+        guard result == 0,
+              (value.st_mode & S_IFMT) == S_IFREG else {
+            return false
+        }
+        return ScratchPadBillingFidelityDirectoryIdentity(
+            device: UInt64(value.st_dev),
+            inode: UInt64(value.st_ino)
+        ) == expectedIdentity
     }
 
     private static func identity(

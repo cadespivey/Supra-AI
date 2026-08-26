@@ -338,7 +338,8 @@ Strict JSON-object-only validity and production-parser acceptance are reported i
 single-code accuracy is diagnostic rather than a hard gate because more than one canonical code can be
 defensible. Canonical validity and semantic reasonableness are also separate: a catalog code can be valid
 yet unreasonable for the cited work. Canonical-rate denominators include every expected line; an unauthorized
-blank is non-canonical, while a fixture-authorized blank remains valid. The report records the exact raw model
+blank or raw invalid code normalized to blank is non-canonical, while a fixture-authorized raw blank remains
+valid. The report records the exact raw model
 text, raw parser line count, every persisted production-normalized output line with its expectation match, and
 the complete scoring oracle for each line (narrative term groups, billing code set, acceptable codes, blank
 permissions, time basis, expected values, and rationale). Raw duplicates or extras remain independently
@@ -351,8 +352,9 @@ re-verified after load and before fixture execution. The Release build embeds `S
 resolution rejects a missing, malformed, or requested `SUPRA_BILLING_SOURCE_SHA` mismatch. External verification
 must still confirm the app/XPC signatures and that the embedded SHA names the reviewed source snapshot. A GUI
 launcher's process status (including `open -W`) is not a benchmark result: only a newly created, complete report
-with `status == "completed"` and its recorded hard-gate summary is authoritative. An unavailable or unloadable
-model, interrupted run, stale build, failure payload, or missing report does not pass the phase. A coding-only
+with `status` equal to `"passed"` or `"failed"` and its recorded hard-gate summary is authoritative evidence.
+Only `"passed"` passes the phase. An unavailable or unloadable model, interrupted run, stale build, failure
+payload, or missing report does not pass the phase. A coding-only
 second pass may be added only when an authoritative first-pass report demonstrates that the documented coding
 gates require it.
 

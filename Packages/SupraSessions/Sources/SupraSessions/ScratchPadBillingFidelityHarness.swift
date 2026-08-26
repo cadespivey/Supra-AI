@@ -314,6 +314,24 @@ enum ScratchPadBillingFidelityScorer {
                 unused.remove(candidate.index)
                 matchedExpectationsByOutput[candidate.index] = expectation.id
             }
+            let rawOutput = parserPayload?.lineItems
+                .enumerated()
+                .filter { Set($0.element.sourceEntryIDs ?? []) == expectedSources }
+                .sorted { lhs, rhs in
+                    let lhsMatter = lhs.element.matterID == expectation.expectedMatterID
+                    let rhsMatter = rhs.element.matterID == expectation.expectedMatterID
+                    if lhsMatter != rhsMatter { return lhsMatter && !rhsMatter }
+                    let lhsTerms = expectation.narrativeTermGroups.filter { alternatives in
+                        alternatives.contains { term in lhs.element.narrative.localizedCaseInsensitiveContains(term) }
+                    }.count
+                    let rhsTerms = expectation.narrativeTermGroups.filter { alternatives in
+                        alternatives.contains { term in rhs.element.narrative.localizedCaseInsensitiveContains(term) }
+                    }.count
+                    if lhsTerms != rhsTerms { return lhsTerms > rhsTerms }
+                    return lhs.offset < rhs.offset
+                }
+                .first?
+                .element
             let actualSources = output?.sourceEntryIDs ?? []
             let sourceCorrect = expectedSources == Set(actualSources)
             let actualNarrative = output?.narrative.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -326,21 +344,25 @@ enum ScratchPadBillingFidelityScorer {
             let tolerance = expectation.timeBasis == .explicitWritten ? 0.000_1 : 0.100_1
             let timeCorrect = sourceCorrect
                 && actualHours.map { abs($0 - expectation.expectedHours) <= tolerance } == true
+            let rawTaskCode = Self.normalized(rawOutput?.taskCode)
             let actualTaskCode = Self.normalized(output?.taskCode)
             let expectedTaskCode = Self.normalized(expectation.expectedTaskCode)
+            let rawActivityCode = Self.normalized(rawOutput?.activityCode)
             let actualActivityCode = Self.normalized(output?.activityCode)
             let expectedActivityCode = Self.normalized(expectation.expectedActivityCode)
             let codeSet = fixture.matterRules.first { $0.matterID == expectation.expectedMatterID }?.codeSet ?? .none
-            let taskCodeCanonical = actualTaskCode.map {
+            let taskCodeDropped = rawTaskCode != nil && actualTaskCode == nil
+            let activityCodeDropped = rawActivityCode != nil && actualActivityCode == nil
+            let taskCodeCanonical = !taskCodeDropped && (actualTaskCode.map {
                 UTBMSCodes.normalizedTaskCode($0, codeSet: codeSet) == $0
-            } ?? expectation.allowsBlankTaskCode
-            let activityCodeCanonical = actualActivityCode.map {
+            } ?? expectation.allowsBlankTaskCode)
+            let activityCodeCanonical = !activityCodeDropped && (actualActivityCode.map {
                 UTBMSCodes.normalizedActivityCode($0) == $0
-            } ?? expectation.allowsBlankActivityCode
-            let taskCodeReasonable = actualTaskCode.map(expectation.acceptableTaskCodes.contains)
-                ?? expectation.allowsBlankTaskCode
-            let activityCodeReasonable = actualActivityCode.map(expectation.acceptableActivityCodes.contains)
-                ?? expectation.allowsBlankActivityCode
+            } ?? expectation.allowsBlankActivityCode)
+            let taskCodeReasonable = !taskCodeDropped && (actualTaskCode.map(expectation.acceptableTaskCodes.contains)
+                ?? expectation.allowsBlankTaskCode)
+            let activityCodeReasonable = !activityCodeDropped && (actualActivityCode.map(expectation.acceptableActivityCodes.contains)
+                ?? expectation.allowsBlankActivityCode)
             let codeNote = output?.codeNote?.trimmingCharacters(in: .whitespacesAndNewlines)
             let usefulCodeNote = codeNote.map {
                 $0.count >= 12 && $0.split(whereSeparator: \.isWhitespace).count >= 3

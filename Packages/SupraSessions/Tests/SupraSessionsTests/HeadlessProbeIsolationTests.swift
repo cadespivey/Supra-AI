@@ -579,6 +579,60 @@ final class HeadlessProbeIsolationTests: XCTestCase {
         ))
     }
 
+    func testBillingReportWriterRejectsLeafRenameBeforeWritingAndPreservesReplacement() throws {
+        let root = try makeTemporaryDirectory()
+        let outside = try makeTemporaryDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: outside)
+        }
+        let fileName = "billing-report.json"
+        let output = root.appendingPathComponent(fileName)
+        let moved = outside.appendingPathComponent("moved-report.json")
+        let replacement = Data("attacker replacement".utf8)
+
+        XCTAssertThrowsError(try ScratchPadBillingFidelityReportWriter.write(
+            Data("confidential report".utf8),
+            rootURL: root,
+            expectedRootIdentity: ScratchPadBillingFidelityReportWriter.rootIdentity(at: root),
+            relativeParentComponents: [],
+            fileName: fileName,
+            afterFileCreation: {
+                try FileManager.default.moveItem(at: output, to: moved)
+                try replacement.write(to: output)
+            }
+        ))
+        XCTAssertEqual(try Data(contentsOf: moved), Data())
+        XCTAssertEqual(try Data(contentsOf: output), replacement)
+    }
+
+    func testBillingReportWriterTruncatesRenamedLeafAfterWriteAndPreservesReplacement() throws {
+        let root = try makeTemporaryDirectory()
+        let outside = try makeTemporaryDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: outside)
+        }
+        let fileName = "billing-report.json"
+        let output = root.appendingPathComponent(fileName)
+        let moved = outside.appendingPathComponent("moved-report.json")
+        let replacement = Data("attacker replacement".utf8)
+
+        XCTAssertThrowsError(try ScratchPadBillingFidelityReportWriter.write(
+            Data("confidential report".utf8),
+            rootURL: root,
+            expectedRootIdentity: ScratchPadBillingFidelityReportWriter.rootIdentity(at: root),
+            relativeParentComponents: [],
+            fileName: fileName,
+            afterDataWrite: {
+                try FileManager.default.moveItem(at: output, to: moved)
+                try replacement.write(to: output)
+            }
+        ))
+        XCTAssertEqual(try Data(contentsOf: moved), Data())
+        XCTAssertEqual(try Data(contentsOf: output), replacement)
+    }
+
     func testScratchPadBillingInvocationBindsCommitModelAndTemporaryOutput() throws {
         let root = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }

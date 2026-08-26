@@ -151,6 +151,29 @@ final class ScratchPadBillingFidelityHarnessTests: XCTestCase {
     }
 
     @MainActor
+    func testInvalidRawCodeDroppedToAllowedBlankStillFailsCanonicalGate() async throws {
+        let fixture = ScratchPadBillingFidelityHarness.standardFixtures()[6]
+        let invalidTaskCode = ScratchPadBillingFidelityHarness.canonicalJSON(for: fixture)
+            .replacingOccurrences(of: "\"taskCode\":null", with: "\"taskCode\":\"L999\"")
+        let outcome = await ScratchPadBillingFidelityHarness.runFixture(
+            fixture,
+            timekeeper: BillingTimekeeper(
+                id: "synthetic-tk",
+                name: "Synthetic Timekeeper",
+                classification: "PARTNER",
+                defaultRate: 500,
+                lawFirmID: "synthetic-firm"
+            )
+        ) { _, _ in invalidTaskCode }
+
+        XCTAssertNil(outcome.lineScores[0].actualTaskCode)
+        XCTAssertTrue(outcome.lineScores[0].allowsBlankTaskCode)
+        XCTAssertFalse(outcome.lineScores[0].taskCodeCanonical)
+        XCTAssertFalse(outcome.lineScores[0].taskCodeReasonable)
+        XCTAssertFalse(ScratchPadBillingFidelitySummary(outcomes: [outcome]).passesHardGates)
+    }
+
+    @MainActor
     func testProductionPathPromptExcludesNoteCanaryAndItsAttachment() async throws {
         let fixture = ScratchPadBillingFidelityHarness.standardFixtures().first { !$0.attachments.isEmpty }!
         var capturedPrompt = ""
@@ -299,16 +322,22 @@ final class ScratchPadBillingFidelityHarnessTests: XCTestCase {
     }
 
     @MainActor
-    func testProbeTimeoutReturnsBeforeSuspendedOperationCompletes() async {
+    func testProbeTimeoutReturnsBeforeSuspendedOperationCompletesAndCancelsIt() async {
         let clock = ContinuousClock()
         let started = clock.now
+        var operationWasCancelled = false
 
         do {
             let _: String = try await ScratchPadBillingFidelityTimeout.value(
                 after: .milliseconds(20)
             ) {
-                try await Task.sleep(for: .seconds(10))
-                return "late"
+                do {
+                    try await Task.sleep(for: .seconds(10))
+                    return "late"
+                } catch {
+                    operationWasCancelled = Task.isCancelled
+                    throw error
+                }
             }
             XCTFail("Expected timeout")
         } catch {
@@ -316,6 +345,8 @@ final class ScratchPadBillingFidelityHarnessTests: XCTestCase {
         }
 
         XCTAssertLessThan(started.duration(to: clock.now), .milliseconds(500))
+        await Task.yield()
+        XCTAssertTrue(operationWasCancelled)
     }
 
     @MainActor
