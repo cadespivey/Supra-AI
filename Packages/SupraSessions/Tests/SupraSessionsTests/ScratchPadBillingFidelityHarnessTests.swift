@@ -303,7 +303,8 @@ final class ScratchPadBillingFidelityHarnessTests: XCTestCase {
             fixture: fixture,
             rawModelText: canonical,
             normalizedModelText: #"{"lineItems":[]}"#,
-            generationError: "invalidEvidenceScope(matterNotAllowed)"
+            generationError: "localized authorization failure",
+            authorizationRejected: true
         )
         let encoded = try JSONEncoder().encode(outcome)
         let report = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
@@ -312,6 +313,51 @@ final class ScratchPadBillingFidelityHarnessTests: XCTestCase {
         XCTAssertEqual(rawScores.first?["matterCorrect"] as? Bool, true)
         XCTAssertEqual(outcome.lineScores.first?.matterCorrect, false)
         XCTAssertEqual(report["authorizationRejected"] as? Bool, true)
+    }
+
+    @MainActor
+    func testLegacyV2OutcomeAndSummaryDecodeWithRawMetricDefaults() throws {
+        let fixture = ScratchPadBillingFidelityHarness.standardFixtures()[0]
+        let outcome = ScratchPadBillingFidelityScorer.score(
+            fixture: fixture,
+            rawModelText: ScratchPadBillingFidelityHarness.canonicalJSON(for: fixture)
+        )
+        var outcomeObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(outcome)) as? [String: Any]
+        )
+        outcomeObject.removeValue(forKey: "rawModelLineScores")
+        outcomeObject.removeValue(forKey: "authorizationRejected")
+        let legacyOutcome = try JSONDecoder().decode(
+            ScratchPadBillingFidelityOutcome.self,
+            from: JSONSerialization.data(withJSONObject: outcomeObject, options: [.sortedKeys])
+        )
+
+        XCTAssertEqual(legacyOutcome.rawModelLineScores.count, legacyOutcome.lineScores.count)
+        XCTAssertFalse(legacyOutcome.authorizationRejected)
+
+        let summary = ScratchPadBillingFidelitySummary(outcomes: [outcome])
+        var summaryObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(summary)) as? [String: Any]
+        )
+        for key in [
+            "rawModelMatterAccuracyRate",
+            "rawModelSourceAttributionRate",
+            "rawModelReasonableTaskCodeRate",
+            "rawModelReasonableActivityCodeRate",
+            "authorizationRejectedFixtureCount",
+        ] {
+            summaryObject.removeValue(forKey: key)
+        }
+        let legacySummary = try JSONDecoder().decode(
+            ScratchPadBillingFidelitySummary.self,
+            from: JSONSerialization.data(withJSONObject: summaryObject, options: [.sortedKeys])
+        )
+
+        XCTAssertEqual(legacySummary.rawModelMatterAccuracyRate, legacySummary.matterAccuracyRate)
+        XCTAssertEqual(legacySummary.rawModelSourceAttributionRate, legacySummary.sourceAttributionRate)
+        XCTAssertEqual(legacySummary.rawModelReasonableTaskCodeRate, legacySummary.reasonableTaskCodeRate)
+        XCTAssertEqual(legacySummary.rawModelReasonableActivityCodeRate, legacySummary.reasonableActivityCodeRate)
+        XCTAssertEqual(legacySummary.authorizationRejectedFixtureCount, 0)
     }
 
     @MainActor

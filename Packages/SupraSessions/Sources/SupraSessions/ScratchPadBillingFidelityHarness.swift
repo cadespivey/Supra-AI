@@ -172,6 +172,83 @@ public struct ScratchPadBillingFidelityOutcome: Codable, Sendable {
     public let rawModelLineScores: [ScratchPadBillingFidelityLineScore]
     public let lineScores: [ScratchPadBillingFidelityLineScore]
     public let authorizationRejected: Bool
+
+    private enum CodingKeys: String, CodingKey {
+        case fixtureID
+        case systemPrompt
+        case userPrompt
+        case rawModelText
+        case firstPassJSONValid
+        case strictJSONObjectOnly
+        case generationError
+        case durationSeconds
+        case rawOutputLineCount
+        case outputLineCount
+        case unexpectedOutputLineCount
+        case normalizedOutputLines
+        case rawModelLineScores
+        case lineScores
+        case authorizationRejected
+    }
+
+    public init(
+        fixtureID: String,
+        systemPrompt: String,
+        userPrompt: String,
+        rawModelText: String,
+        firstPassJSONValid: Bool,
+        strictJSONObjectOnly: Bool,
+        generationError: String?,
+        durationSeconds: Double,
+        rawOutputLineCount: Int,
+        outputLineCount: Int,
+        unexpectedOutputLineCount: Int,
+        normalizedOutputLines: [ScratchPadBillingFidelityOutputLine],
+        rawModelLineScores: [ScratchPadBillingFidelityLineScore],
+        lineScores: [ScratchPadBillingFidelityLineScore],
+        authorizationRejected: Bool
+    ) {
+        self.fixtureID = fixtureID
+        self.systemPrompt = systemPrompt
+        self.userPrompt = userPrompt
+        self.rawModelText = rawModelText
+        self.firstPassJSONValid = firstPassJSONValid
+        self.strictJSONObjectOnly = strictJSONObjectOnly
+        self.generationError = generationError
+        self.durationSeconds = durationSeconds
+        self.rawOutputLineCount = rawOutputLineCount
+        self.outputLineCount = outputLineCount
+        self.unexpectedOutputLineCount = unexpectedOutputLineCount
+        self.normalizedOutputLines = normalizedOutputLines
+        self.rawModelLineScores = rawModelLineScores
+        self.lineScores = lineScores
+        self.authorizationRejected = authorizationRejected
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        fixtureID = try container.decode(String.self, forKey: .fixtureID)
+        systemPrompt = try container.decode(String.self, forKey: .systemPrompt)
+        userPrompt = try container.decode(String.self, forKey: .userPrompt)
+        rawModelText = try container.decode(String.self, forKey: .rawModelText)
+        firstPassJSONValid = try container.decode(Bool.self, forKey: .firstPassJSONValid)
+        strictJSONObjectOnly = try container.decode(Bool.self, forKey: .strictJSONObjectOnly)
+        generationError = try container.decodeIfPresent(String.self, forKey: .generationError)
+        durationSeconds = try container.decode(Double.self, forKey: .durationSeconds)
+        rawOutputLineCount = try container.decode(Int.self, forKey: .rawOutputLineCount)
+        outputLineCount = try container.decode(Int.self, forKey: .outputLineCount)
+        unexpectedOutputLineCount = try container.decode(Int.self, forKey: .unexpectedOutputLineCount)
+        normalizedOutputLines = try container.decode(
+            [ScratchPadBillingFidelityOutputLine].self,
+            forKey: .normalizedOutputLines
+        )
+        lineScores = try container.decode([ScratchPadBillingFidelityLineScore].self, forKey: .lineScores)
+        rawModelLineScores = try container.decodeIfPresent(
+            [ScratchPadBillingFidelityLineScore].self,
+            forKey: .rawModelLineScores
+        ) ?? lineScores
+        authorizationRejected = try container.decodeIfPresent(Bool.self, forKey: .authorizationRejected) ?? false
+    }
 }
 
 public struct ScratchPadBillingFidelitySummary: Codable, Sendable {
@@ -202,6 +279,82 @@ public struct ScratchPadBillingFidelitySummary: Codable, Sendable {
     public let rawModelReasonableActivityCodeRate: Double
     public let authorizationRejectedFixtureCount: Int
     public let passesHardGates: Bool
+
+    private enum CodingKeys: String, CodingKey {
+        case fixtureCount
+        case expectedLineCount
+        case firstPassJSONValidityRate
+        case parserAcceptanceRate
+        case matterAccuracyRate
+        case taggedMatterAccuracyRate
+        case untaggedMatterAccuracyRate
+        case narrativeSubjectRate
+        case explicitTimeAccuracyRate
+        case inferredTimeToleranceRate
+        case sourceAttributionRate
+        case taskCodeAccuracyRate
+        case activityCodeAccuracyRate
+        case canonicalTaskCodeRate
+        case canonicalActivityCodeRate
+        case reasonableTaskCodeRate
+        case reasonableActivityCodeRate
+        case nonLitigationBlankTaskRate
+        case justifiedAbstentionRate
+        case inferredTimeEvidenceRate
+        case unexpectedOutputLineCount
+        case rawModelMatterAccuracyRate
+        case rawModelSourceAttributionRate
+        case rawModelReasonableTaskCodeRate
+        case rawModelReasonableActivityCodeRate
+        case authorizationRejectedFixtureCount
+        case passesHardGates
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        fixtureCount = try container.decode(Int.self, forKey: .fixtureCount)
+        expectedLineCount = try container.decode(Int.self, forKey: .expectedLineCount)
+        firstPassJSONValidityRate = try container.decode(Double.self, forKey: .firstPassJSONValidityRate)
+        parserAcceptanceRate = try container.decode(Double.self, forKey: .parserAcceptanceRate)
+        matterAccuracyRate = try container.decode(Double.self, forKey: .matterAccuracyRate)
+        taggedMatterAccuracyRate = try container.decode(Double.self, forKey: .taggedMatterAccuracyRate)
+        untaggedMatterAccuracyRate = try container.decode(Double.self, forKey: .untaggedMatterAccuracyRate)
+        narrativeSubjectRate = try container.decode(Double.self, forKey: .narrativeSubjectRate)
+        explicitTimeAccuracyRate = try container.decode(Double.self, forKey: .explicitTimeAccuracyRate)
+        inferredTimeToleranceRate = try container.decode(Double.self, forKey: .inferredTimeToleranceRate)
+        sourceAttributionRate = try container.decode(Double.self, forKey: .sourceAttributionRate)
+        taskCodeAccuracyRate = try container.decode(Double.self, forKey: .taskCodeAccuracyRate)
+        activityCodeAccuracyRate = try container.decode(Double.self, forKey: .activityCodeAccuracyRate)
+        canonicalTaskCodeRate = try container.decode(Double.self, forKey: .canonicalTaskCodeRate)
+        canonicalActivityCodeRate = try container.decode(Double.self, forKey: .canonicalActivityCodeRate)
+        reasonableTaskCodeRate = try container.decode(Double.self, forKey: .reasonableTaskCodeRate)
+        reasonableActivityCodeRate = try container.decode(Double.self, forKey: .reasonableActivityCodeRate)
+        nonLitigationBlankTaskRate = try container.decode(Double.self, forKey: .nonLitigationBlankTaskRate)
+        justifiedAbstentionRate = try container.decode(Double.self, forKey: .justifiedAbstentionRate)
+        inferredTimeEvidenceRate = try container.decode(Double.self, forKey: .inferredTimeEvidenceRate)
+        unexpectedOutputLineCount = try container.decode(Int.self, forKey: .unexpectedOutputLineCount)
+        rawModelMatterAccuracyRate = try container.decodeIfPresent(
+            Double.self,
+            forKey: .rawModelMatterAccuracyRate
+        ) ?? matterAccuracyRate
+        rawModelSourceAttributionRate = try container.decodeIfPresent(
+            Double.self,
+            forKey: .rawModelSourceAttributionRate
+        ) ?? sourceAttributionRate
+        rawModelReasonableTaskCodeRate = try container.decodeIfPresent(
+            Double.self,
+            forKey: .rawModelReasonableTaskCodeRate
+        ) ?? reasonableTaskCodeRate
+        rawModelReasonableActivityCodeRate = try container.decodeIfPresent(
+            Double.self,
+            forKey: .rawModelReasonableActivityCodeRate
+        ) ?? reasonableActivityCodeRate
+        authorizationRejectedFixtureCount = try container.decodeIfPresent(
+            Int.self,
+            forKey: .authorizationRejectedFixtureCount
+        ) ?? 0
+        passesHardGates = try container.decode(Bool.self, forKey: .passesHardGates)
+    }
 
     init(outcomes: [ScratchPadBillingFidelityOutcome]) {
         let lines = outcomes.flatMap(\.lineScores)
@@ -296,6 +449,7 @@ enum ScratchPadBillingFidelityScorer {
         userPrompt: String? = nil,
         generationError: String? = nil,
         durationSeconds: Double = 0,
+        authorizationRejected: Bool = false,
         includeRawDiagnostics: Bool = true
     ) -> ScratchPadBillingFidelityOutcome {
         let answer = ReasoningContent.answer(from: rawModelText)
@@ -493,7 +647,7 @@ enum ScratchPadBillingFidelityScorer {
             normalizedOutputLines: normalizedOutputLines,
             rawModelLineScores: rawModelLineScores,
             lineScores: scores,
-            authorizationRejected: generationError?.contains("invalidEvidenceScope") == true
+            authorizationRejected: authorizationRejected
         )
     }
 
@@ -672,13 +826,21 @@ public enum ScratchPadBillingFidelityHarness {
                 durationSeconds: Date().timeIntervalSince(startedAt)
             )
         } catch {
+            let authorizationRejected: Bool
+            if let billingError = error as? BillingDraftError,
+               case .invalidEvidenceScope = billingError {
+                authorizationRejected = true
+            } else {
+                authorizationRejected = false
+            }
             return ScratchPadBillingFidelityScorer.score(
                 fixture: fixture,
                 rawModelText: capturedRaw,
                 normalizedModelText: "{\"lineItems\":[]}",
                 systemPrompt: capturedSystemPrompt.isEmpty ? nil : capturedSystemPrompt,
                 userPrompt: capturedUserPrompt.isEmpty ? nil : capturedUserPrompt,
-                generationError: String(describing: error)
+                generationError: String(describing: error),
+                authorizationRejected: authorizationRejected
             )
         }
     }

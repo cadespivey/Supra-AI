@@ -49,12 +49,8 @@ struct BillingEvidenceScope: Sendable, Equatable {
                 ? Self.resolveMatterFromText(entry.text, matters: matters)
                 : nil
             let allowedMatterIDs = textResolution?.matterIDs ?? combined
-            if combined.isEmpty {
-                if allowedMatterIDs.count == 1 {
-                    candidates.formUnion(allowedMatterIDs)
-                }
-            } else {
-                candidates.formUnion(combined)
+            if allowedMatterIDs.count == 1 {
+                candidates.formUnion(allowedMatterIDs)
             }
             authorizations[entry.id] = EntryAuthorization(
                 allowedMatterIDs: allowedMatterIDs.count == 1 ? allowedMatterIDs : [],
@@ -71,7 +67,7 @@ struct BillingEvidenceScope: Sendable, Equatable {
                 ))
             }
         }
-        for attachment in includedAttachments {
+        for attachment in includedAttachments where attachment.entryID == nil {
             guard let matterID = Self.normalizedID(attachment.matterID),
                   validMatterIDs.contains(matterID) else { continue }
             candidates.insert(matterID)

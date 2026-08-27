@@ -304,41 +304,50 @@ public final class BillingDraftService {
             if $0.seq == $1.seq { return $0.createdAt < $1.createdAt }
             return $0.seq < $1.seq
         }
-        for (start, end) in zip(ordered, ordered.dropFirst()) {
-            guard end.createdAt > start.createdAt,
-                  end.createdAt.timeIntervalSince(start.createdAt) <= 12 * 60 * 60,
-                  !hasExplicitWrittenDuration(start.text),
-                  !hasExplicitWrittenDuration(end.text),
-                  isStartBoundary(start.text),
-                  isEndBoundary(end.text),
-                  !subjectTokens(start.text).isDisjoint(with: subjectTokens(end.text)),
-                  let startAuthorization = evidenceScope.entryAuthorizations[start.id],
-                  let endAuthorization = evidenceScope.entryAuthorizations[end.id],
-                  startAuthorization.allowedMatterIDs.count == 1,
-                  startAuthorization.allowedMatterIDs == endAuthorization.allowedMatterIDs
-            else { continue }
-
-            let boundaryIDs: Set<String> = [start.id, end.id]
-            let participating = payload.lineItems.enumerated().filter { _, line in
-                !Set(line.sourceEntryIDs ?? []).isDisjoint(with: boundaryIDs)
+        var unmatchedStarts: [ScratchPadEntryRecord] = []
+        for entry in ordered {
+            unmatchedStarts.removeAll {
+                entry.createdAt.timeIntervalSince($0.createdAt) > 12 * 60 * 60
             }
-            guard !participating.isEmpty else { continue }
-            let isSingleMergedLine = participating.count == 1
-                && boundaryIDs.isSubset(of: Set(participating[0].element.sourceEntryIDs ?? []))
-            guard isSingleMergedLine else {
-                throw BillingEvidenceScopeViolation(
-                    lineIndex: participating[0].offset,
-                    reason: .fragmentedTimestampInterval(
-                        startEntryID: start.id,
-                        endEntryID: end.id
-                    )
-                )
+
+            if !hasExplicitWrittenDuration(entry.text), isEndBoundary(entry.text),
+               let endAuthorization = evidenceScope.entryAuthorizations[entry.id],
+               endAuthorization.allowedMatterIDs.count == 1,
+               let startIndex = unmatchedStarts.lastIndex(where: { start in
+                   guard entry.createdAt > start.createdAt,
+                         !subjectTokens(start.text).isDisjoint(with: subjectTokens(entry.text)),
+                         let startAuthorization = evidenceScope.entryAuthorizations[start.id]
+                   else { return false }
+                   return startAuthorization.allowedMatterIDs == endAuthorization.allowedMatterIDs
+               }) {
+                let start = unmatchedStarts.remove(at: startIndex)
+                let boundaryIDs: Set<String> = [start.id, entry.id]
+                let participating = payload.lineItems.enumerated().filter { _, line in
+                    !Set(line.sourceEntryIDs ?? []).isDisjoint(with: boundaryIDs)
+                }
+                if !participating.isEmpty {
+                    let isSingleMergedLine = participating.count == 1
+                        && boundaryIDs.isSubset(of: Set(participating[0].element.sourceEntryIDs ?? []))
+                    guard isSingleMergedLine else {
+                        throw BillingEvidenceScopeViolation(
+                            lineIndex: participating[0].offset,
+                            reason: .fragmentedTimestampInterval(
+                                startEntryID: start.id,
+                                endEntryID: entry.id
+                            )
+                        )
+                    }
+                }
+            }
+
+            if !hasExplicitWrittenDuration(entry.text), isStartBoundary(entry.text) {
+                unmatchedStarts.append(entry)
             }
         }
     }
 
     private static func hasExplicitWrittenDuration(_ text: String) -> Bool {
-        let pattern = #"\b\d+(?:\.\d+)?[\s-]*(?:h|hr|hrs|hour|hours|m|min|mins|minute|minutes)\b"#
+        let pattern = #"\b(?:(?:\d+(?:\.\d+)?|\d+\s*/\s*\d+)[\s-]*(?:h|hr|hrs|hour|hours|m|min|mins|minute|minutes)|(?:a|an|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|one[\s-]+half|three[\s-]+quarters)[\s-]+(?:hr|hrs|hour|hours|min|mins|minute|minutes)|(?:half|quarter|three[\s-]+quarters)[\s-]+(?:an?[\s-]+)?(?:hour|hours))\b"#
         return text.range(
             of: pattern,
             options: [.regularExpression, .caseInsensitive]
@@ -357,8 +366,9 @@ public final class BillingDraftService {
 
     private static func subjectTokens(_ text: String) -> Set<String> {
         let ignored: Set<String> = [
-            "a", "an", "and", "began", "completed", "ended", "finished", "for",
-            "of", "session", "started", "the", "to", "work"
+            "a", "about", "an", "and", "began", "client", "completed", "ended",
+            "finished", "for", "matter", "of", "regarding", "session", "started",
+            "the", "to", "work"
         ]
         return Set(normalizedWords(text).filter { $0.count >= 4 && !ignored.contains($0) })
     }
