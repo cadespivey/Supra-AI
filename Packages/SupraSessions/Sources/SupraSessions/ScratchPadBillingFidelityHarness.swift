@@ -702,7 +702,7 @@ enum ScratchPadBillingFidelityScorer {
 }
 
 public enum ScratchPadBillingFidelityHarness {
-    public static let fixtureVersion = "scratchpad-billing-fidelity-v3"
+    public static let fixtureVersion = "scratchpad-billing-fidelity-v4"
 
     @MainActor
     public static func run(
@@ -776,6 +776,7 @@ public enum ScratchPadBillingFidelityHarness {
         var capturedSystemPrompt = ""
         var capturedUserPrompt = ""
         var capturedRaw = ""
+        var capturedPrimaryGeneration = false
         do {
             let store = try SupraStore.inMemory()
             let day = try store.scratchPad.fetchOrCreateDay(fixture.dayDate)
@@ -822,10 +823,14 @@ public enum ScratchPadBillingFidelityHarness {
             }
 
             let service = BillingDraftService(store: store) { systemPrompt, userPrompt in
-                capturedSystemPrompt = systemPrompt
-                capturedUserPrompt = userPrompt
-                capturedRaw = try await generate(systemPrompt, userPrompt)
-                return ReasoningContent.answer(from: capturedRaw)
+                let generated = try await generate(systemPrompt, userPrompt)
+                if !capturedPrimaryGeneration {
+                    capturedSystemPrompt = systemPrompt
+                    capturedUserPrompt = userPrompt
+                    capturedRaw = generated
+                    capturedPrimaryGeneration = true
+                }
+                return ReasoningContent.answer(from: generated)
             }
             let result = try await service.generateDraft(
                 dayID: day.id,
@@ -910,7 +915,9 @@ public enum ScratchPadBillingFidelityHarness {
         fixtures.append(singleFixture(
             number: 1, day: "2026-07-01", matterName: "Northstar Foods v. Harbor Transit",
             client: "Northstar Foods", text: "Spent exactly 1.2 hours drafting a motion to compel missing shipment records.",
-            terms: [["motion"], ["compel"]], hours: 1.2, task: "L310", activity: "A103"
+            terms: [["motion"], ["compel"]], hours: 1.2, task: "L350", activity: "A103",
+            acceptableTasks: Set(["L310", "L350"]),
+            codeRationale: "UTBMS L350 is the specific discovery-motion phase for a motion to compel; L310 remains defensible when the work is characterized as written discovery."
         ))
         fixtures.append(singleFixture(
             number: 2, day: "2026-07-02", matterName: "Aster Labs v. Meridian Systems",
@@ -997,24 +1004,32 @@ public enum ScratchPadBillingFidelityHarness {
 
         fixtures.append(multiMatterFixture(
             number: 16, day: "2026-07-16",
-            first: ("Umbra Foods v. Vale Shipping", "Umbra Foods", "Spent exactly 0.3 hours drafting a status report.", [["status"], ["report"]], 0.3, "L110", "A103"),
-            second: ("Willow Health v. Xenon Data", "Willow Health", "Spent exactly 0.2 hours attending the scheduling conference.", [["scheduling"], ["conference"]], 0.2, "L110", "A105"),
+            first: ("Umbra Foods v. Vale Shipping", "Umbra Foods", "Spent exactly 0.3 hours drafting a factual status report summarizing investigation results.", [["status"], ["report"]], 0.3, "L110", "A103"),
+            second: ("Willow Health v. Xenon Data", "Willow Health", "Spent exactly 0.2 hours attending the court scheduling conference.", [["scheduling"], ["conference"]], 0.2, "L230", "A109"),
             untaggedText: "For Umbra Foods, spent exactly 0.6 hours researching carrier liability defenses.",
-            untaggedMatter: .first, untaggedTerms: [["research"], ["carrier", "liability"]], untaggedHours: 0.6, untaggedTask: "L120", untaggedActivity: "A102"
+            untaggedMatter: .first, untaggedTerms: [["research"], ["carrier", "liability"]], untaggedHours: 0.6, untaggedTask: "L120", untaggedActivity: "A102",
+            secondCodeRationale: "UTBMS L230 covers the court-mandated conference phase, and A109 records appearing at or attending that conference."
         ))
         fixtures.append(multiMatterFixture(
             number: 17, day: "2026-07-17",
-            first: ("Yarrow Labs v. Zenith Devices", "Yarrow Labs", "Spent exactly 0.4 hours preparing a discovery plan.", [["discovery"], ["plan"]], 0.4, "L120", "A103"),
-            second: ("Aurora Bank v. Beacon Title", "Aurora Bank", "Spent exactly 0.5 hours analyzing witness interview notes.", [["witness"], ["interview"]], 0.5, "L320", "A104"),
-            untaggedText: "For Aurora Bank, spent exactly 0.3 hours emailing the client about witness availability.",
-            untaggedMatter: .second, untaggedTerms: [["email", "correspond"], ["witness"]], untaggedHours: 0.3, untaggedTask: "L320", untaggedActivity: "A106"
+            first: ("Yarrow Labs v. Zenith Devices", "Yarrow Labs", "Spent exactly 0.4 hours preparing an overall discovery plan.", [["discovery"], ["plan"]], 0.4, "L120", "A103"),
+            second: ("Aurora Bank v. Beacon Title", "Aurora Bank", "Spent exactly 0.5 hours analyzing fact-witness interview notes during initial fact investigation.", [["witness"], ["interview"]], 0.5, "L110", "A104"),
+            untaggedText: "For Aurora Bank, spent exactly 0.3 hours emailing the client about fact-witness availability for the investigation.",
+            untaggedMatter: .second, untaggedTerms: [["email", "correspond"], ["witness"]], untaggedHours: 0.3, untaggedTask: "L110", untaggedActivity: "A106",
+            firstAcceptableTasks: Set(["L120", "L300"]),
+            firstAcceptableActivities: Set(["A101", "A103"]),
+            firstCodeRationale: "An overall discovery plan can reasonably advance legal strategy under L120 or discovery under L300; A101 planning and A103 drafting are both supported by preparing the plan.",
+            secondCodeRationale: "Fact-witness interview analysis during initial investigation advances L110 fact investigation rather than L320 document production.",
+            untaggedCodeRationale: "Client correspondence about fact-witness availability during investigation advances L110 and uses A106 communication with the client."
         ))
         fixtures.append(multiMatterFixture(
             number: 18, day: "2026-07-18",
             first: ("Cobalt Stores v. Drift Logistics", "Cobalt Stores", "Spent exactly 0.6 hours revising requests for admission.", [["admission"], ["revis"]], 0.6, "L310", "A103"),
             second: ("Evergreen Clinic v. Fathom Software", "Evergreen Clinic", "Spent exactly 0.4 hours researching damages standards.", [["research"], ["damage"]], 0.4, "L120", "A102"),
             untaggedText: "For Cobalt Stores, spent exactly 0.2 hours organizing and indexing Drift Logistics' production files.",
-            untaggedMatter: .first, untaggedTerms: [["organiz"], ["production"], ["file"]], untaggedHours: 0.2, untaggedTask: "L320", untaggedActivity: "A110"
+            untaggedMatter: .first, untaggedTerms: [["organiz"], ["production"], ["file"]], untaggedHours: 0.2, untaggedTask: "L320", untaggedActivity: "A110",
+            untaggedAcceptableTasks: Set(["L140", "L320"]),
+            untaggedCodeRationale: "Organizing production files can reasonably be classified as matter-level file management under L140 or document-production work under L320; A110 identifies data/file management."
         ))
         fixtures.append(multiMatterFixture(
             number: 19, day: "2026-07-19",
@@ -1026,9 +1041,11 @@ public enum ScratchPadBillingFidelityHarness {
         fixtures.append(multiMatterFixture(
             number: 20, day: "2026-07-20",
             first: ("Juniper Foods v. Kinetic Packaging", "Juniper Foods", "Spent exactly 0.5 hours analyzing settlement terms.", [["settlement"], ["term"]], 0.5, "L160", "A104"),
-            second: ("Lunar Transit v. Metro Signals", "Lunar Transit", "Spent exactly 0.8 hours drafting a motion for protective order.", [["protective"], ["order"]], 0.8, "L310", "A103"),
+            second: ("Lunar Transit v. Metro Signals", "Lunar Transit", "Spent exactly 0.8 hours drafting a discovery motion for protective order.", [["protective"], ["order"]], 0.8, "L350", "A103"),
             untaggedText: "For Juniper Foods, spent exactly 0.4 hours conferencing with the client about settlement authority.",
-            untaggedMatter: .first, untaggedTerms: [["conference"], ["settlement"]], untaggedHours: 0.4, untaggedTask: "L160", untaggedActivity: "A106"
+            untaggedMatter: .first, untaggedTerms: [["conference"], ["settlement"]], untaggedHours: 0.4, untaggedTask: "L160", untaggedActivity: "A106",
+            secondAcceptableTasks: Set(["L310", "L350"]),
+            secondCodeRationale: "A discovery motion for protective order is specifically L350; L310 remains defensible when characterized as written-discovery work, and drafting is A103."
         ))
         return fixtures
     }
@@ -1142,7 +1159,16 @@ public enum ScratchPadBillingFidelityHarness {
         untaggedTerms: [[String]],
         untaggedHours: Double,
         untaggedTask: String?,
-        untaggedActivity: String?
+        untaggedActivity: String?,
+        firstAcceptableTasks: Set<String>? = nil,
+        firstAcceptableActivities: Set<String>? = nil,
+        secondAcceptableTasks: Set<String>? = nil,
+        secondAcceptableActivities: Set<String>? = nil,
+        untaggedAcceptableTasks: Set<String>? = nil,
+        untaggedAcceptableActivities: Set<String>? = nil,
+        firstCodeRationale: String = "Reasonable UTBMS interpretation of the generated narrative and cited source evidence.",
+        secondCodeRationale: String = "Reasonable UTBMS interpretation of the generated narrative and cited source evidence.",
+        untaggedCodeRationale: String = "Reasonable UTBMS interpretation of the generated narrative and cited source evidence."
     ) -> ScratchPadBillingFidelityFixture {
         let prefix = "f\(number)"
         let firstMatter = MatterRecord(id: "\(prefix)-matter-a", name: first.name, clientNames: first.client)
@@ -1157,9 +1183,48 @@ public enum ScratchPadBillingFidelityHarness {
             matters: [(firstMatter, .litigation), (secondMatter, .litigation)],
             entries: [firstEntry, secondEntry, untaggedEntry],
             expectations: [
-                expectation(id: "\(prefix)-x1", sources: [firstEntry.id], matter: firstMatter.id, basis: .tagged, terms: first.terms, hours: first.hours, time: .explicitWritten, task: first.task, activity: first.activity),
-                expectation(id: "\(prefix)-x2", sources: [secondEntry.id], matter: secondMatter.id, basis: .tagged, terms: second.terms, hours: second.hours, time: .explicitWritten, task: second.task, activity: second.activity),
-                expectation(id: "\(prefix)-x3", sources: [untaggedEntry.id], matter: inferredMatter.id, basis: .untaggedInference, terms: untaggedTerms, hours: untaggedHours, time: .explicitWritten, task: untaggedTask, activity: untaggedActivity),
+                expectation(
+                    id: "\(prefix)-x1",
+                    sources: [firstEntry.id],
+                    matter: firstMatter.id,
+                    basis: .tagged,
+                    terms: first.terms,
+                    hours: first.hours,
+                    time: .explicitWritten,
+                    task: first.task,
+                    activity: first.activity,
+                    acceptableTasks: firstAcceptableTasks,
+                    acceptableActivities: firstAcceptableActivities,
+                    codeRationale: firstCodeRationale
+                ),
+                expectation(
+                    id: "\(prefix)-x2",
+                    sources: [secondEntry.id],
+                    matter: secondMatter.id,
+                    basis: .tagged,
+                    terms: second.terms,
+                    hours: second.hours,
+                    time: .explicitWritten,
+                    task: second.task,
+                    activity: second.activity,
+                    acceptableTasks: secondAcceptableTasks,
+                    acceptableActivities: secondAcceptableActivities,
+                    codeRationale: secondCodeRationale
+                ),
+                expectation(
+                    id: "\(prefix)-x3",
+                    sources: [untaggedEntry.id],
+                    matter: inferredMatter.id,
+                    basis: .untaggedInference,
+                    terms: untaggedTerms,
+                    hours: untaggedHours,
+                    time: .explicitWritten,
+                    task: untaggedTask,
+                    activity: untaggedActivity,
+                    acceptableTasks: untaggedAcceptableTasks,
+                    acceptableActivities: untaggedAcceptableActivities,
+                    codeRationale: untaggedCodeRationale
+                ),
             ]
         )
     }

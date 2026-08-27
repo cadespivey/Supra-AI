@@ -129,7 +129,23 @@ public final class BillingDraftService {
         )
 
         let raw = try await generate(BillingDraftPrompt.system(), BillingDraftPrompt.user(context))
-        guard let payload = Self.parse(raw) else { throw BillingDraftError.unparseable }
+        guard var payload = Self.parse(raw) else { throw BillingDraftError.unparseable }
+        if autoCoding, !payload.lineItems.isEmpty {
+            do {
+                let reviewRaw = try await generate(
+                    BillingDraftPrompt.reviewSystem(),
+                    BillingDraftPrompt.reviewUser(context, payload: payload)
+                )
+                if let review = Self.parseReview(reviewRaw),
+                   let reviewedPayload = Self.applying(review: review, to: payload) {
+                    payload = reviewedPayload
+                } else {
+                    payload = Self.markingCodingReviewUnavailable(payload)
+                }
+            } catch {
+                payload = Self.markingCodingReviewUnavailable(payload)
+            }
+        }
 
         let codeSetByMatter = Dictionary(uniqueKeysWithValues: matterRules.map { ($0.matterID, $0.codeSet) })
         let inputs: [BillingLineItemInput]
@@ -226,6 +242,83 @@ public final class BillingDraftService {
         return try? JSONDecoder().decode(BillingDraftPayload.self, from: Data(json.utf8))
     }
 
+    static func parseReview(_ raw: String) -> BillingDraftReviewPayload? {
+        guard let json = DocumentClassificationService.extractJSONObject(from: raw) else { return nil }
+        return try? JSONDecoder().decode(BillingDraftReviewPayload.self, from: Data(json.utf8))
+    }
+
+    static func applying(
+        review: BillingDraftReviewPayload,
+        to payload: BillingDraftPayload
+    ) -> BillingDraftPayload? {
+        let expectedIndices = Set(payload.lineItems.indices)
+        let actualIndices = Set(review.lineReviews.map(\.lineIndex))
+        guard review.lineReviews.count == payload.lineItems.count,
+              actualIndices == expectedIndices else {
+            return nil
+        }
+
+        var reviewed = payload
+        for lineReview in review.lineReviews {
+            let index = lineReview.lineIndex
+            let originalTaskCode = trimmedOrNil(reviewed.lineItems[index].taskCode)
+            let originalActivityCode = trimmedOrNil(reviewed.lineItems[index].activityCode)
+            let reviewNote = trimmedOrNil(lineReview.codeNote)
+            let proposedTaskCode = trimmedOrNil(lineReview.taskCode)
+            let proposedActivityCode = trimmedOrNil(lineReview.activityCode)
+            let reviewedTaskCode = proposedTaskCode ?? originalTaskCode
+            let reviewedActivityCode = proposedActivityCode ?? originalActivityCode
+
+            reviewed.lineItems[index].taskCode = reviewedTaskCode
+            reviewed.lineItems[index].activityCode = reviewedActivityCode
+            if let reviewNote {
+                reviewed.lineItems[index].codeNote = appendingCodeNote(
+                    reviewed.lineItems[index].codeNote,
+                    reviewNote
+                )
+            }
+
+            var changes: [String] = []
+            if originalTaskCode != reviewedTaskCode {
+                changes.append("task code from \(codeValue(originalTaskCode)) to \(codeValue(reviewedTaskCode))")
+            }
+            if originalActivityCode != reviewedActivityCode {
+                changes.append("activity code from \(codeValue(originalActivityCode)) to \(codeValue(reviewedActivityCode))")
+            }
+            if !changes.isEmpty {
+                reviewed.lineItems[index].codeNote = appendingCodeNote(
+                    reviewed.lineItems[index].codeNote,
+                    "Automatic coding review changed " + changes.joined(separator: " and ") + "."
+                )
+            } else {
+                reviewed.lineItems[index].codeNote = appendingCodeNote(
+                    reviewed.lineItems[index].codeNote,
+                    "Automatic coding review completed without code changes."
+                )
+            }
+        }
+        return reviewed
+    }
+
+    static func markingCodingReviewUnavailable(_ payload: BillingDraftPayload) -> BillingDraftPayload {
+        var marked = payload
+        for index in marked.lineItems.indices {
+            marked.lineItems[index].codeNote = appendingCodeNote(
+                marked.lineItems[index].codeNote,
+                "Automatic coding review was unavailable; codes require human review."
+            )
+        }
+        return marked
+    }
+
+    private static func codeValue(_ value: String?) -> String {
+        value?.uppercased() ?? "blank"
+    }
+
+    private static func appendingCodeNote(_ existing: String?, _ addition: String) -> String {
+        [trimmedOrNil(existing), addition].compactMap { $0 }.joined(separator: " ")
+    }
+
     /// Validates + repairs the model's raw line DTOs into persistable inputs:
     /// resolves the matter (by id or name) against the day's matters or drops it,
     /// rounds hours to the increment, defaults the work date and confidence, and
@@ -260,13 +353,21 @@ public final class BillingDraftService {
             let activityCode = autoCoding
                 ? UTBMSCodes.normalizedActivityCode(dto.activityCode)
                 : nil
-            let codeNote = droppedCodeNote(
+            let droppedNote = droppedCodeNote(
                 existing: dto.codeNote,
                 rawTaskCode: autoCoding ? dto.taskCode : nil,
                 normalizedTaskCode: taskCode,
                 rawActivityCode: autoCoding ? dto.activityCode : nil,
                 normalizedActivityCode: activityCode
             )
+            let codeNote = autoCoding
+                ? missingCodeReviewNote(
+                    existing: droppedNote,
+                    taskCode: taskCode,
+                    activityCode: activityCode,
+                    codeSet: codeSet
+                )
+                : droppedNote
             inputs.append(BillingLineItemInput(
                 clientID: matter?.clientID,
                 matterID: matter?.id,
@@ -427,6 +528,31 @@ public final class BillingDraftService {
         return ((value / increment).rounded() * increment * 100).rounded() / 100
     }
 
+    private static func missingCodeReviewNote(
+        existing: String?,
+        taskCode: String?,
+        activityCode: String?,
+        codeSet: BillingCodeSet
+    ) -> String? {
+        let existing = trimmedOrNil(existing)
+        let existingIsUseful = existing.map {
+            $0.count >= 12 && $0.split(whereSeparator: \.isWhitespace).count >= 3
+        } ?? false
+        guard !existingIsUseful else { return existing }
+
+        var reasons: [String] = []
+        if taskCode == nil {
+            reasons.append(codeSet == .none
+                ? "Task code is not configured for this matter."
+                : "Task code requires human review because the evidence does not support a canonical selection.")
+        }
+        if activityCode == nil {
+            reasons.append("Activity code requires human review because the evidence does not identify a canonical selection.")
+        }
+        guard !reasons.isEmpty else { return existing }
+        return ([existing].compactMap { $0 } + reasons).joined(separator: " ")
+    }
+
     private static func droppedCodeNote(
         existing: String?,
         rawTaskCode: String?,
@@ -502,5 +628,16 @@ struct BillingDraftPayload: Codable {
         var evidence: String?
         var codeNote: String?
         var sourceEntryIDs: [String]?
+    }
+}
+
+struct BillingDraftReviewPayload: Codable {
+    var lineReviews: [LineReview]
+
+    struct LineReview: Codable {
+        var lineIndex: Int
+        var taskCode: String?
+        var activityCode: String?
+        var codeNote: String?
     }
 }

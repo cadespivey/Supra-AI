@@ -48,6 +48,33 @@ final class ScratchPadBillingFidelityHarnessTests: XCTestCase {
         XCTAssertTrue(record.outcomes.allSatisfy { !$0.strictJSONObjectOnly })
     }
 
+    @MainActor
+    func testRunFixtureReportsFirstPassRawTextWhenCodingReviewDiffers() async {
+        let fixture = ScratchPadBillingFidelityHarness.standardFixtures()[0]
+        let firstPass = ScratchPadBillingFidelityHarness.canonicalJSON(for: fixture)
+        let review = #"{"lineReviews":[{"lineIndex":0,"taskCode":"L350","activityCode":"A103","codeNote":null,"sourceEntryIDs":["f1-e1"]}]}"#
+        var callCount = 0
+
+        let outcome = await ScratchPadBillingFidelityHarness.runFixture(
+            fixture,
+            timekeeper: BillingTimekeeper(
+                id: "synthetic-tk",
+                name: "Synthetic Timekeeper",
+                classification: "PARTNER",
+                defaultRate: 500,
+                lawFirmID: "synthetic-firm"
+            )
+        ) { _, _ in
+            callCount += 1
+            return callCount == 1 ? firstPass : review
+        }
+
+        XCTAssertEqual(callCount, 2)
+        XCTAssertEqual(outcome.rawModelText, firstPass)
+        XCTAssertEqual(outcome.lineScores[0].actualTaskCode, "L350")
+        XCTAssertTrue(outcome.lineScores[0].taskCodeReasonable)
+    }
+
     func testStandardCorpusHasRequiredCoverage() {
         let fixtures = ScratchPadBillingFidelityHarness.standardFixtures()
         let expectations = fixtures.flatMap(\.expectations)
@@ -64,6 +91,7 @@ final class ScratchPadBillingFidelityHarnessTests: XCTestCase {
     }
 
     func testAdjudicatedUTBMSFixtureLabelsAndAcceptableSets() throws {
+        XCTAssertEqual(ScratchPadBillingFidelityHarness.fixtureVersion, "scratchpad-billing-fidelity-v4")
         let fixtures = Dictionary(uniqueKeysWithValues: ScratchPadBillingFidelityHarness.standardFixtures().map { ($0.id, $0) })
         func expectation(_ fixtureID: String) throws -> ScratchPadBillingFidelityExpectation {
             try XCTUnwrap(fixtures[fixtureID]?.expectations.first)
@@ -76,6 +104,23 @@ final class ScratchPadBillingFidelityHarnessTests: XCTestCase {
         XCTAssertEqual(try expectation("f11").acceptableTaskCodes, Set(["L120", "L210"]))
         XCTAssertEqual(try expectation("f13").acceptableTaskCodes, Set(["L210", "L250"]))
         XCTAssertEqual(try expectation("f14").expectedActivityCode, "A101")
+
+        XCTAssertEqual(try expectation("f1").expectedTaskCode, "L350")
+        XCTAssertEqual(try expectation("f1").acceptableTaskCodes, Set(["L310", "L350"]))
+        let f16 = try XCTUnwrap(fixtures["f16"])
+        XCTAssertEqual(f16.expectations[1].expectedTaskCode, "L230")
+        XCTAssertEqual(f16.expectations[1].expectedActivityCode, "A109")
+        XCTAssertTrue(f16.expectations[1].codeRationale.contains("court-mandated conference"))
+        let f17 = try XCTUnwrap(fixtures["f17"])
+        XCTAssertEqual(f17.expectations[0].acceptableTaskCodes, Set(["L120", "L300"]))
+        XCTAssertEqual(f17.expectations[0].acceptableActivityCodes, Set(["A101", "A103"]))
+        XCTAssertEqual(f17.expectations[1].expectedTaskCode, "L110")
+        XCTAssertEqual(f17.expectations[2].expectedTaskCode, "L110")
+        let f18 = try XCTUnwrap(fixtures["f18"])
+        XCTAssertEqual(f18.expectations[2].acceptableTaskCodes, Set(["L140", "L320"]))
+        let f20 = try XCTUnwrap(fixtures["f20"])
+        XCTAssertEqual(f20.expectations[1].expectedTaskCode, "L350")
+        XCTAssertEqual(f20.expectations[1].acceptableTaskCodes, Set(["L310", "L350"]))
     }
 
     @MainActor
@@ -122,7 +167,7 @@ final class ScratchPadBillingFidelityHarnessTests: XCTestCase {
         XCTAssertTrue(fixture.expectations[0].acceptableTaskCodes.contains("L350"))
 
         let canonical = ScratchPadBillingFidelityHarness.canonicalJSON(for: fixture)
-        let defensibleAlternative = canonical.replacingOccurrences(of: "L310", with: "L350")
+        let defensibleAlternative = canonical.replacingOccurrences(of: "L350", with: "L310")
         let alternativeScore = ScratchPadBillingFidelityScorer.score(
             fixture: fixture,
             rawModelText: defensibleAlternative
@@ -130,7 +175,7 @@ final class ScratchPadBillingFidelityHarnessTests: XCTestCase {
         XCTAssertTrue(alternativeScore.taskCodeCanonical)
         XCTAssertTrue(alternativeScore.taskCodeReasonable)
 
-        let unrelatedCanonical = canonical.replacingOccurrences(of: "L310", with: "L500")
+        let unrelatedCanonical = canonical.replacingOccurrences(of: "L350", with: "L500")
         let unrelatedScore = ScratchPadBillingFidelityScorer.score(
             fixture: fixture,
             rawModelText: unrelatedCanonical
@@ -174,7 +219,7 @@ final class ScratchPadBillingFidelityHarnessTests: XCTestCase {
     func testProductionPathPersistsNormalizedCodesAndFiltersExcludedEvidence() async throws {
         let fixture = ScratchPadBillingFidelityHarness.standardFixtures()[0]
         let invalidCodes = ScratchPadBillingFidelityHarness.canonicalJSON(for: fixture)
-            .replacingOccurrences(of: "L310", with: "L999")
+            .replacingOccurrences(of: "L350", with: "L999")
             .replacingOccurrences(of: "A103", with: "A120")
         let outcome = await ScratchPadBillingFidelityHarness.runFixture(
             fixture,
