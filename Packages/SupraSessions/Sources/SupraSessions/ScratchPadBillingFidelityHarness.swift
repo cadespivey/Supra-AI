@@ -16,9 +16,13 @@ private actor ScratchPadBillingFidelityTimeoutGate<Value: Sendable> {
     }
 
     @discardableResult
-    func resolve(_ result: Result<Value, any Error>) -> Bool {
+    func resolve(
+        _ result: Result<Value, any Error>,
+        beforeResume: @Sendable () -> Void = {}
+    ) -> Bool {
         guard let continuation else { return false }
         self.continuation = nil
+        beforeResume()
         continuation.resume(with: result)
         return true
     }
@@ -55,9 +59,10 @@ public enum ScratchPadBillingFidelityTimeout {
                 } catch {
                     return
                 }
-                if await gate.resolve(.failure(ScratchPadBillingFidelityTimeoutError.timedOut)) {
-                    operationTask.cancel()
-                }
+                _ = await gate.resolve(
+                    .failure(ScratchPadBillingFidelityTimeoutError.timedOut),
+                    beforeResume: { operationTask.cancel() }
+                )
             }
         }
     }

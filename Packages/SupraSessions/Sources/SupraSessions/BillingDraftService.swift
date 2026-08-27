@@ -323,11 +323,16 @@ public final class BillingDraftService {
                 let start = unmatchedStarts.remove(at: startIndex)
                 let boundaryIDs: Set<String> = [start.id, entry.id]
                 let participating = payload.lineItems.enumerated().filter { _, line in
-                    !Set(line.sourceEntryIDs ?? []).isDisjoint(with: boundaryIDs)
+                    !Set(BillingEvidenceScope.normalizedSourceEntryIDs(line.sourceEntryIDs))
+                        .isDisjoint(with: boundaryIDs)
                 }
                 if !participating.isEmpty {
                     let isSingleMergedLine = participating.count == 1
-                        && boundaryIDs.isSubset(of: Set(participating[0].element.sourceEntryIDs ?? []))
+                        && boundaryIDs.isSubset(
+                            of: Set(BillingEvidenceScope.normalizedSourceEntryIDs(
+                                participating[0].element.sourceEntryIDs
+                            ))
+                        )
                     guard isSingleMergedLine else {
                         throw BillingEvidenceScopeViolation(
                             lineIndex: participating[0].offset,

@@ -93,11 +93,10 @@ struct BillingEvidenceScope: Sendable, Equatable {
         rawMatterValue: String?,
         lineIndex: Int
     ) throws -> [String] {
-        let sources = (rawSourceEntryIDs ?? []).compactMap(Self.normalizedID)
-        guard !sources.isEmpty else {
+        let uniqueSources = Self.normalizedSourceEntryIDs(rawSourceEntryIDs)
+        guard !uniqueSources.isEmpty else {
             throw BillingEvidenceScopeViolation(lineIndex: lineIndex, reason: .missingSources)
         }
-        let uniqueSources = Array(Set(sources)).sorted()
         for sourceID in uniqueSources {
             guard let authorization = entryAuthorizations[sourceID] else {
                 throw BillingEvidenceScopeViolation(
@@ -128,6 +127,10 @@ struct BillingEvidenceScope: Sendable, Equatable {
             }
         }
         return uniqueSources
+    }
+
+    static func normalizedSourceEntryIDs(_ rawSourceEntryIDs: [String]?) -> [String] {
+        Array(Set((rawSourceEntryIDs ?? []).compactMap(Self.normalizedID))).sorted()
     }
 
     var persistedSummary: BillingEvidenceValidationSummary {

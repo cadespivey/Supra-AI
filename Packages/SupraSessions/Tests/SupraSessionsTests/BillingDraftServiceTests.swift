@@ -725,6 +725,54 @@ final class BillingDraftServiceTests: XCTestCase {
         }
     }
 
+    func testACRBILL016WhitespacePaddedSourceIDsDoNotBypassSplitBoundaryGuard() async throws {
+        let (store, matterID, dayID) = try makeStoreWithMatterAndDay()
+        let start = Date(timeIntervalSince1970: 1_782_921_600)
+        let end = start.addingTimeInterval(30 * 60)
+        try await store.database.writer.write { db in
+            try ScratchPadEntryRecord(
+                id: "padded-boundary-start",
+                dayID: dayID,
+                seq: 2,
+                text: "Began preparing the project manager for deposition.",
+                mentionsJSON: ScratchPadJSON.encodeStrings([matterID]),
+                tagsJSON: ScratchPadJSON.encodeStrings([]),
+                createdAt: start,
+                updatedAt: start
+            ).insert(db)
+            try ScratchPadEntryRecord(
+                id: "padded-boundary-end",
+                dayID: dayID,
+                seq: 3,
+                text: "Completed deposition preparation session.",
+                mentionsJSON: ScratchPadJSON.encodeStrings([matterID]),
+                tagsJSON: ScratchPadJSON.encodeStrings([]),
+                createdAt: end,
+                updatedAt: end
+            ).insert(db)
+        }
+        let json = #"{"lineItems":[{"matterID":"\#(matterID)","narrative":"Prepared project manager for deposition.","hours":0.5,"sourceEntryIDs":["  padded-boundary-start\n"]},{"matterID":"\#(matterID)","narrative":"Completed deposition preparation session.","hours":0.5,"sourceEntryIDs":["\t padded-boundary-end  "]}]}"#
+
+        do {
+            _ = try await service(store, returning: json).generateDraft(
+                dayID: dayID,
+                sensitivity: 0.5,
+                timekeeper: timekeeper,
+                invoiceDate: "2026-06-22"
+            )
+            XCTFail("source ID whitespace must not hide one fragmented timestamp interval")
+        } catch BillingDraftError.invalidEvidenceScope(let violation) {
+            XCTAssertEqual(
+                violation.reason,
+                .fragmentedTimestampInterval(
+                    startEntryID: "padded-boundary-start",
+                    endEntryID: "padded-boundary-end"
+                )
+            )
+            XCTAssertNil(try store.billing.latestDraft(dayID: dayID))
+        }
+    }
+
     func testACRBILL012InterveningNoteDoesNotHideSplitBoundaryInterval() async throws {
         let (store, matterID, dayID) = try makeStoreWithMatterAndDay()
         let start = Date(timeIntervalSince1970: 1_782_925_200)
