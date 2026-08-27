@@ -248,6 +248,30 @@ final class BillingDraftServiceTests: XCTestCase {
         XCTAssertTrue(capturedUserPrompt.contains("codeSet=litigation"))
     }
 
+    func testInvalidModelCodesAreDroppedAndRecordedForReview() async throws {
+        let (store, matterID, dayID) = try makeStoreWithMatterAndDay()
+        let json = """
+        {"lineItems":[
+          {"matterID":"\(matterID)","narrative":"Drafted opposition.","hours":1.0,"taskCode":"L999","activityCode":"A999","codeNote":"Model rationale.","sourceEntryIDs":["e1"]}
+        ]}
+        """
+
+        let result = try await service(store, returning: json).generateDraft(
+            dayID: dayID,
+            sensitivity: 0.5,
+            timekeeper: timekeeper,
+            invoiceDate: "2026-06-22"
+        )
+        let line = try XCTUnwrap(store.billing.lineItems(draftID: result.draftID).first)
+
+        XCTAssertNil(line.utbmsTaskCode)
+        XCTAssertNil(line.utbmsActivityCode)
+        let codeNote = try XCTUnwrap(line.codeNote)
+        XCTAssertTrue(codeNote.contains("Model rationale."))
+        XCTAssertTrue(codeNote.contains("Rejected unsupported task code L999."))
+        XCTAssertTrue(codeNote.contains("Rejected unsupported activity code A999."))
+    }
+
     func testAutoCodingOffDirectiveReachesThePrompt() async throws {
         let (store, _, dayID) = try makeStoreWithMatterAndDay()
         var capturedUserPrompt = ""
@@ -521,6 +545,149 @@ final class BillingDraftServiceTests: XCTestCase {
                 invoiceDate: "2026-06-22"
             )
             XCTFail("unassigned evidence may not borrow a candidate from another entry")
+        } catch {
+            XCTAssertNil(try store.billing.latestDraft(dayID: dayID))
+        }
+    }
+
+    func testACRBILL008UniqueClientNameTextAuthorizesMatterWithAuditBasis() async throws {
+        let (store, matterID, dayID) = try makeStoreWithMatterAndDay()
+        let inferred = try store.scratchPad.addEntry(
+            dayID: dayID,
+            text: "For McKernon Motors, researched carrier liability defenses for exactly 0.6 hours.",
+            mentions: []
+        )
+        let json = #"{"lineItems":[{"matterID":"\#(matterID)","narrative":"Researched carrier liability defenses.","hours":0.6,"taskCode":"L120","activityCode":"A102","sourceEntryIDs":["\#(inferred.id)"]}]}"#
+
+        let result = try await service(store, returning: json).generateDraft(
+            dayID: dayID,
+            sensitivity: 0.5,
+            timekeeper: timekeeper,
+            invoiceDate: "2026-06-22"
+        )
+
+        let lines = try store.billing.lineItems(draftID: result.draftID)
+        XCTAssertEqual(lines.map(\.matterID), [matterID])
+        let draft = try XCTUnwrap(store.billing.latestDraft(dayID: dayID))
+        let reconciliationJSON = try XCTUnwrap(draft.reconciliationJSON)
+        let reconciliation = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(reconciliationJSON.utf8)) as? [String: Any])
+        let validation = try XCTUnwrap(reconciliation["evidenceValidation"] as? [String: Any])
+        let authorizations = try XCTUnwrap(validation["inferredMatterAuthorizations"] as? [[String: Any]])
+        XCTAssertEqual(authorizations.count, 1)
+        XCTAssertEqual(authorizations[0]["entryID"] as? String, inferred.id)
+        XCTAssertEqual(authorizations[0]["matterID"] as? String, matterID)
+        XCTAssertEqual(authorizations[0]["basis"] as? String, "explicitClientName")
+    }
+
+    func testACRBILL010SharedClientNameRemainsAmbiguous() async throws {
+        let (store, firstMatterID, dayID) = try makeStoreWithMatterAndDay()
+        let secondMatterID = "shared-client-second-matter"
+        try await store.database.writer.write { db in
+            try MatterRecord(
+                id: secondMatterID,
+                name: "McKernon Motors v. Second Defendant",
+                clientNames: "McKernon Motors"
+            ).insert(db)
+        }
+        let inferred = try store.scratchPad.addEntry(
+            dayID: dayID,
+            text: "For McKernon Motors, researched liability defenses for 0.3 hours.",
+            mentions: []
+        )
+        let json = #"{"lineItems":[{"matterID":"\#(firstMatterID)","narrative":"Researched liability defenses.","hours":0.3,"sourceEntryIDs":["\#(inferred.id)"]}]}"#
+        var capturedUserPrompt = ""
+        let draftService = BillingDraftService(store: store) { _, userPrompt in
+            capturedUserPrompt = userPrompt
+            return json
+        }
+
+        do {
+            _ = try await draftService.generateDraft(
+                dayID: dayID,
+                sensitivity: 0.5,
+                timekeeper: timekeeper,
+                invoiceDate: "2026-06-22"
+            )
+            XCTFail("shared client name must not choose between two matters")
+        } catch BillingDraftError.invalidEvidenceScope(let violation) {
+            XCTAssertEqual(violation.reason, .ambiguousSourceEntry(inferred.id))
+            XCTAssertFalse(capturedUserPrompt.contains("McKernon Motors v. Second Defendant"))
+            XCTAssertNil(try store.billing.latestDraft(dayID: dayID))
+        }
+    }
+
+    func testACRBILL011ExplicitDurationsDoNotTriggerTimestampBoundaryGuard() async throws {
+        let (store, matterID, dayID) = try makeStoreWithMatterAndDay()
+        let start = Date(timeIntervalSince1970: 1_782_921_600)
+        let end = start.addingTimeInterval(1_800)
+        try await store.database.writer.write { db in
+            try ScratchPadEntryRecord(
+                id: "explicit-start",
+                dayID: dayID,
+                seq: 2,
+                text: "Started reviewing client correspondence about indemnity; spent 0.2 hours.",
+                mentionsJSON: ScratchPadJSON.encodeStrings([matterID]),
+                createdAt: start,
+                updatedAt: start
+            ).insert(db)
+            try ScratchPadEntryRecord(
+                id: "explicit-end",
+                dayID: dayID,
+                seq: 3,
+                text: "Completed drafting client update about settlement; spent 0.3 hours.",
+                mentionsJSON: ScratchPadJSON.encodeStrings([matterID]),
+                createdAt: end,
+                updatedAt: end
+            ).insert(db)
+        }
+        let json = #"{"lineItems":[{"matterID":"\#(matterID)","narrative":"Reviewed indemnity correspondence.","hours":0.2,"sourceEntryIDs":["explicit-start"]},{"matterID":"\#(matterID)","narrative":"Drafted settlement update.","hours":0.3,"sourceEntryIDs":["explicit-end"]}]}"#
+
+        let result = try await service(store, returning: json).generateDraft(
+            dayID: dayID,
+            sensitivity: 0.5,
+            timekeeper: timekeeper,
+            invoiceDate: "2026-06-22"
+        )
+
+        XCTAssertEqual(result.lineCount, 2)
+    }
+
+    func testACRBILL009SplitBoundaryIntervalRejectsWholePayload() async throws {
+        let (store, matterID, dayID) = try makeStoreWithMatterAndDay()
+        let start = Date(timeIntervalSince1970: 1_782_918_000)
+        let end = start.addingTimeInterval(30 * 60)
+        try await store.database.writer.write { db in
+            try ScratchPadEntryRecord(
+                id: "boundary-start",
+                dayID: dayID,
+                seq: 2,
+                text: "Began preparing the project manager for deposition.",
+                mentionsJSON: ScratchPadJSON.encodeStrings([matterID]),
+                tagsJSON: ScratchPadJSON.encodeStrings([]),
+                createdAt: start,
+                updatedAt: start
+            ).insert(db)
+            try ScratchPadEntryRecord(
+                id: "boundary-end",
+                dayID: dayID,
+                seq: 3,
+                text: "Completed deposition preparation session.",
+                mentionsJSON: ScratchPadJSON.encodeStrings([matterID]),
+                tagsJSON: ScratchPadJSON.encodeStrings([]),
+                createdAt: end,
+                updatedAt: end
+            ).insert(db)
+        }
+        let json = #"{"lineItems":[{"matterID":"\#(matterID)","narrative":"Prepared project manager for deposition.","hours":0.5,"sourceEntryIDs":["boundary-start"]},{"matterID":"\#(matterID)","narrative":"Completed deposition preparation session.","hours":0.5,"sourceEntryIDs":["boundary-end"]}]}"#
+
+        do {
+            _ = try await service(store, returning: json).generateDraft(
+                dayID: dayID,
+                sensitivity: 0.5,
+                timekeeper: timekeeper,
+                invoiceDate: "2026-06-22"
+            )
+            XCTFail("one timestamp interval must not persist as two full-duration lines")
         } catch {
             XCTAssertNil(try store.billing.latestDraft(dayID: dayID))
         }

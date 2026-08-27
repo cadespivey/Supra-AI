@@ -37,8 +37,9 @@ enum BillingDraftPrompt {
         - matterID MUST be copied verbatim from the provided matter ids, or null if you cannot tell.
         - hours: your best decimal estimate; the app rounds to the increment. NEVER invent time with no basis — if you genuinely cannot tell, use 0 and confidence "low".
         - evidence: state exactly what justifies the duration (a timestamp gap, a file's page/word count, a written "~0.4h" cue, or the implied workflow you inferred).
+        - When notes mark the beginning and completion of the same work interval, produce exactly one line citing both boundary note ids and count the elapsed interval once. Never turn each boundary note into a separate full-duration line.
         - sourceEntryIDs: copy the exact id values (shown as `id=…` at the start of each day note) of the notes this line is drawn from. This lets the app preserve the lawyer's manual edits when the draft is regenerated, so it matters — do not omit or invent ids.
-        - UTBMS coding: when automatic coding is enabled, choose codes only from the supplied canonical catalog. Litigation matters may receive a litigation task and universal activity code. Transactional/advisory matters receive a firm-specific task only when the supplied matter instructions expressly define it; otherwise taskCode is null. Prefer null plus codeNote over an unsupported guess.
+        - UTBMS coding: when automatic coding is enabled, choose codes only from the supplied canonical catalog. Litigation matters may receive a litigation task and universal activity code. Transactional/advisory matters receive a firm-specific task only when the supplied matter instructions expressly define it; otherwise taskCode is null. Prefer null over an unsupported guess. Whenever taskCode or activityCode is null, codeNote MUST be non-null and briefly explain the missing or ambiguous coding evidence.
         - Exclude apparent non-billable time (lunch, personal, routine admin).
         """
     }

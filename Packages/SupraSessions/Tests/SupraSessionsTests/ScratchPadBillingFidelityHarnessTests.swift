@@ -5,6 +5,10 @@ import SupraRuntimeInterface
 @testable import SupraSessions
 import XCTest
 
+private func blockCurrentThreadForTimeoutRegression() {
+    Thread.sleep(forTimeInterval: 0.25)
+}
+
 final class ScratchPadBillingFidelityHarnessTests: XCTestCase {
     @MainActor
     func testRunRetainsGatewayRawTextWhileScoringProductionAnswer() async {
@@ -57,6 +61,21 @@ final class ScratchPadBillingFidelityHarnessTests: XCTestCase {
         XCTAssertTrue(fixtures.contains { $0.entries.contains(where: \.isNonBillable) })
         XCTAssertTrue(fixtures.contains { !$0.autoTimestamp })
         XCTAssertTrue(fixtures.allSatisfy { !$0.entries.isEmpty && !$0.matters.isEmpty })
+    }
+
+    func testAdjudicatedUTBMSFixtureLabelsAndAcceptableSets() throws {
+        let fixtures = Dictionary(uniqueKeysWithValues: ScratchPadBillingFidelityHarness.standardFixtures().map { ($0.id, $0) })
+        func expectation(_ fixtureID: String) throws -> ScratchPadBillingFidelityExpectation {
+            try XCTUnwrap(fixtures[fixtureID]?.expectations.first)
+        }
+
+        XCTAssertEqual(try expectation("f4").expectedTaskCode, "L120")
+        XCTAssertEqual(try expectation("f6").acceptableTaskCodes, Set(["L500", "L510"]))
+        XCTAssertEqual(try expectation("f9").expectedActivityCode, "A107")
+        XCTAssertEqual(try expectation("f10").expectedTaskCode, "L250")
+        XCTAssertEqual(try expectation("f11").acceptableTaskCodes, Set(["L120", "L210"]))
+        XCTAssertEqual(try expectation("f13").acceptableTaskCodes, Set(["L210", "L250"]))
+        XCTAssertEqual(try expectation("f14").expectedActivityCode, "A101")
     }
 
     @MainActor
@@ -118,6 +137,37 @@ final class ScratchPadBillingFidelityHarnessTests: XCTestCase {
         ).lineScores[0]
         XCTAssertTrue(unrelatedScore.taskCodeCanonical, "L500 is a real litigation code")
         XCTAssertFalse(unrelatedScore.taskCodeReasonable, "an appeal code is not reasonable for written discovery")
+    }
+
+    @MainActor
+    func testSystemPromptRequiresOneLineForTimestampBoundaryPair() {
+        let prompt = BillingDraftPrompt.system()
+
+        XCTAssertTrue(prompt.contains("produce exactly one line citing both boundary note ids"))
+        XCTAssertTrue(prompt.contains("count the elapsed interval once"))
+        XCTAssertTrue(prompt.contains("Whenever taskCode or activityCode is null"))
+    }
+
+    @MainActor
+    func testCanonicalUniqueClientInferencePassesProductionPath() async throws {
+        let fixture = ScratchPadBillingFidelityHarness.standardFixtures()[15]
+        let outcome = await ScratchPadBillingFidelityHarness.runFixture(
+            fixture,
+            timekeeper: BillingTimekeeper(
+                id: "synthetic-tk",
+                name: "Synthetic Timekeeper",
+                classification: "PARTNER",
+                defaultRate: 500,
+                lawFirmID: "synthetic-firm"
+            )
+        ) { _, _ in
+            ScratchPadBillingFidelityHarness.canonicalJSON(for: fixture)
+        }
+
+        XCTAssertNil(outcome.generationError)
+        XCTAssertFalse(outcome.authorizationRejected)
+        XCTAssertEqual(outcome.outputLineCount, 3)
+        XCTAssertTrue(outcome.lineScores.allSatisfy(\.matterCorrect))
     }
 
     @MainActor
@@ -246,7 +296,26 @@ final class ScratchPadBillingFidelityHarnessTests: XCTestCase {
     }
 
     @MainActor
-    func testDroppedCodesWithoutCodeNoteFailReviewabilityGate() async throws {
+    func testAuthorizationRejectionPreservesSeparateRawModelScoresInReport() throws {
+        let fixture = ScratchPadBillingFidelityHarness.standardFixtures()[0]
+        let canonical = ScratchPadBillingFidelityHarness.canonicalJSON(for: fixture)
+        let outcome = ScratchPadBillingFidelityScorer.score(
+            fixture: fixture,
+            rawModelText: canonical,
+            normalizedModelText: #"{"lineItems":[]}"#,
+            generationError: "invalidEvidenceScope(matterNotAllowed)"
+        )
+        let encoded = try JSONEncoder().encode(outcome)
+        let report = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        let rawScores = try XCTUnwrap(report["rawModelLineScores"] as? [[String: Any]])
+
+        XCTAssertEqual(rawScores.first?["matterCorrect"] as? Bool, true)
+        XCTAssertEqual(outcome.lineScores.first?.matterCorrect, false)
+        XCTAssertEqual(report["authorizationRejected"] as? Bool, true)
+    }
+
+    @MainActor
+    func testDroppedCodesGainReviewNoteButStillFailCanonicalGate() async throws {
         let fixture = ScratchPadBillingFidelityHarness.standardFixtures()[0]
         let canonical = ScratchPadBillingFidelityHarness.canonicalJSON(for: fixture)
         var object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(canonical.utf8)) as? [String: Any])
@@ -273,8 +342,13 @@ final class ScratchPadBillingFidelityHarnessTests: XCTestCase {
 
         XCTAssertNil(outcome.lineScores[0].actualTaskCode)
         XCTAssertNil(outcome.lineScores[0].actualActivityCode)
-        XCTAssertFalse(outcome.lineScores[0].abstentionJustified)
-        XCTAssertEqual(summary.justifiedAbstentionRate, 0)
+        let codeNote = try XCTUnwrap(outcome.lineScores[0].actualCodeNote)
+        XCTAssertTrue(codeNote.contains("Rejected unsupported task code L999."))
+        XCTAssertTrue(codeNote.contains("Rejected unsupported activity code A120."))
+        XCTAssertTrue(outcome.lineScores[0].abstentionJustified)
+        XCTAssertEqual(summary.justifiedAbstentionRate, 1)
+        XCTAssertFalse(outcome.lineScores[0].taskCodeCanonical)
+        XCTAssertFalse(outcome.lineScores[0].activityCodeCanonical)
         XCTAssertFalse(summary.passesHardGates)
     }
 
@@ -319,6 +393,28 @@ final class ScratchPadBillingFidelityHarnessTests: XCTestCase {
 
         XCTAssertEqual(summary.inferredTimeEvidenceRate, 0)
         XCTAssertFalse(summary.passesHardGates)
+    }
+
+    func testProbeTimeoutClockResolvesWhileMainActorOperationIsBlocked() async {
+        let clock = ContinuousClock()
+        let started = clock.now
+
+        let result = await Task.detached {
+            do {
+                let _: String = try await ScratchPadBillingFidelityTimeout.value(
+                    after: .milliseconds(20)
+                ) {
+                    blockCurrentThreadForTimeoutRegression()
+                    return "late"
+                }
+                return false
+            } catch {
+                return error as? ScratchPadBillingFidelityTimeoutError == .timedOut
+            }
+        }.value
+
+        XCTAssertTrue(result)
+        XCTAssertLessThan(started.duration(to: clock.now), .milliseconds(150))
     }
 
     @MainActor

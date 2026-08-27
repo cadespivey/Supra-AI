@@ -6,22 +6,37 @@ import Foundation
 // (totals, per-matter subtotals, amounts, rounding/confidence flags) is complete
 // and pure.
 
+public struct BillingInferredMatterAuthorization: Codable, Sendable, Equatable {
+    public var entryID: String
+    public var matterID: String
+    public var basis: String
+
+    public init(entryID: String, matterID: String, basis: String) {
+        self.entryID = entryID
+        self.matterID = matterID
+        self.basis = basis
+    }
+}
+
 public struct BillingEvidenceValidationSummary: Codable, Sendable, Equatable {
     public var version: Int
     public var candidateMatterIDs: [String]
     public var includedEntryIDs: [String]
     public var includedAttachmentIDs: [String]
+    public var inferredMatterAuthorizations: [BillingInferredMatterAuthorization]?
 
     public init(
         version: Int,
         candidateMatterIDs: [String],
         includedEntryIDs: [String],
-        includedAttachmentIDs: [String]
+        includedAttachmentIDs: [String],
+        inferredMatterAuthorizations: [BillingInferredMatterAuthorization]? = nil
     ) {
         self.version = version
         self.candidateMatterIDs = candidateMatterIDs
         self.includedEntryIDs = includedEntryIDs
         self.includedAttachmentIDs = includedAttachmentIDs
+        self.inferredMatterAuthorizations = inferredMatterAuthorizations
     }
 }
 

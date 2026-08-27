@@ -104,18 +104,14 @@ public final class BillingDraftService {
             return includedEntryIDs.contains(entryID)
         }
         let excludedAttachmentCount = allAttachments.count - attachments.count
-        let rawCandidateMatterIDs = BillingEvidenceScope.rawCandidateMatterIDs(
-            entries: entries,
-            attachments: attachments
-        )
-        let matters = try rawCandidateMatterIDs.sorted().compactMap { matterID in
-            try store.matters.fetchMatter(id: matterID)
-        }
+        let allMatters = try store.matters.fetchMatters()
         let evidenceScope = BillingEvidenceScope(
             entries: entries,
             attachments: attachments,
-            validMatterIDs: Set(matters.map(\.id))
+            matters: allMatters
         )
+        let mattersByID = Dictionary(uniqueKeysWithValues: allMatters.map { ($0.id, $0) })
+        let matters = evidenceScope.candidateMatterIDs.sorted().compactMap { mattersByID[$0] }
         let matterRules = matters.map { rules(for: $0) }
         let dayDate = (try? store.scratchPad.fetchDay(id: dayID))?.day ?? invoiceDate
 
@@ -138,6 +134,13 @@ public final class BillingDraftService {
         let codeSetByMatter = Dictionary(uniqueKeysWithValues: matterRules.map { ($0.matterID, $0.codeSet) })
         let inputs: [BillingLineItemInput]
         do {
+            if autoTimestamp {
+                try Self.validateTimestampBoundaryIntervals(
+                    payload: payload,
+                    entries: entries,
+                    evidenceScope: evidenceScope
+                )
+            }
             inputs = try Self.buildInputs(
                 payload: payload,
                 matters: matters,
@@ -251,6 +254,19 @@ public final class BillingDraftService {
             let codeSet = matter.flatMap { codeSetByMatter[$0.id] } ?? .none
             let hours = roundToIncrement(max(0, dto.hours ?? 0), increment)
             let confidence = BillingConfidence(rawValue: (dto.confidence ?? "medium").lowercased()) ?? .medium
+            let taskCode = autoCoding
+                ? UTBMSCodes.normalizedTaskCode(dto.taskCode, codeSet: codeSet)
+                : nil
+            let activityCode = autoCoding
+                ? UTBMSCodes.normalizedActivityCode(dto.activityCode)
+                : nil
+            let codeNote = droppedCodeNote(
+                existing: dto.codeNote,
+                rawTaskCode: autoCoding ? dto.taskCode : nil,
+                normalizedTaskCode: taskCode,
+                rawActivityCode: autoCoding ? dto.activityCode : nil,
+                normalizedActivityCode: activityCode
+            )
             inputs.append(BillingLineItemInput(
                 clientID: matter?.clientID,
                 matterID: matter?.id,
@@ -260,12 +276,8 @@ public final class BillingDraftService {
                 // UTBMS codes are validated against the matter's code set; an invalid
                 // or out-of-set code is dropped (→ nil) so the validator flags it for
                 // a manual pick rather than letting a bad code reach LEDES.
-                utbmsTaskCode: autoCoding
-                    ? UTBMSCodes.normalizedTaskCode(dto.taskCode, codeSet: codeSet)
-                    : nil,
-                utbmsActivityCode: autoCoding
-                    ? UTBMSCodes.normalizedActivityCode(dto.activityCode)
-                    : nil,
+                utbmsTaskCode: taskCode,
+                utbmsActivityCode: activityCode,
                 timekeeperID: timekeeper.id,
                 // nil = inherit the configured timekeeper's rate at compute/export
                 // time (single-timekeeper scope), so reconfiguring the rate in
@@ -274,12 +286,92 @@ public final class BillingDraftService {
                 rate: nil,
                 confidence: confidence,
                 evidenceJSON: trimmedOrNil(dto.evidence),
-                codeNote: trimmedOrNil(dto.codeNote),
+                codeNote: codeNote,
                 sourceEntryIDs: sourceEntryIDs,
                 userEdited: false
             ))
         }
         return inputs
+    }
+
+    static func validateTimestampBoundaryIntervals(
+        payload: BillingDraftPayload,
+        entries: [ScratchPadEntryRecord],
+        evidenceScope: BillingEvidenceScope
+    ) throws {
+        guard entries.count > 1 else { return }
+        let ordered = entries.sorted {
+            if $0.seq == $1.seq { return $0.createdAt < $1.createdAt }
+            return $0.seq < $1.seq
+        }
+        for (start, end) in zip(ordered, ordered.dropFirst()) {
+            guard end.createdAt > start.createdAt,
+                  end.createdAt.timeIntervalSince(start.createdAt) <= 12 * 60 * 60,
+                  !hasExplicitWrittenDuration(start.text),
+                  !hasExplicitWrittenDuration(end.text),
+                  isStartBoundary(start.text),
+                  isEndBoundary(end.text),
+                  !subjectTokens(start.text).isDisjoint(with: subjectTokens(end.text)),
+                  let startAuthorization = evidenceScope.entryAuthorizations[start.id],
+                  let endAuthorization = evidenceScope.entryAuthorizations[end.id],
+                  startAuthorization.allowedMatterIDs.count == 1,
+                  startAuthorization.allowedMatterIDs == endAuthorization.allowedMatterIDs
+            else { continue }
+
+            let boundaryIDs: Set<String> = [start.id, end.id]
+            let participating = payload.lineItems.enumerated().filter { _, line in
+                !Set(line.sourceEntryIDs ?? []).isDisjoint(with: boundaryIDs)
+            }
+            guard !participating.isEmpty else { continue }
+            let isSingleMergedLine = participating.count == 1
+                && boundaryIDs.isSubset(of: Set(participating[0].element.sourceEntryIDs ?? []))
+            guard isSingleMergedLine else {
+                throw BillingEvidenceScopeViolation(
+                    lineIndex: participating[0].offset,
+                    reason: .fragmentedTimestampInterval(
+                        startEntryID: start.id,
+                        endEntryID: end.id
+                    )
+                )
+            }
+        }
+    }
+
+    private static func hasExplicitWrittenDuration(_ text: String) -> Bool {
+        let pattern = #"\b\d+(?:\.\d+)?[\s-]*(?:h|hr|hrs|hour|hours|m|min|mins|minute|minutes)\b"#
+        return text.range(
+            of: pattern,
+            options: [.regularExpression, .caseInsensitive]
+        ) != nil
+    }
+
+    private static func isStartBoundary(_ text: String) -> Bool {
+        let words = normalizedWords(text)
+        return words.prefix(4).contains { ["began", "started"].contains($0) }
+    }
+
+    private static func isEndBoundary(_ text: String) -> Bool {
+        let words = normalizedWords(text)
+        return words.prefix(4).contains { ["completed", "finished", "ended"].contains($0) }
+    }
+
+    private static func subjectTokens(_ text: String) -> Set<String> {
+        let ignored: Set<String> = [
+            "a", "an", "and", "began", "completed", "ended", "finished", "for",
+            "of", "session", "started", "the", "to", "work"
+        ]
+        return Set(normalizedWords(text).filter { $0.count >= 4 && !ignored.contains($0) })
+    }
+
+    private static func normalizedWords(_ text: String) -> [String] {
+        let folded = text.folding(
+            options: [.caseInsensitive, .diacriticInsensitive],
+            locale: Locale(identifier: "en_US_POSIX")
+        )
+        let scalars = folded.unicodeScalars.map {
+            CharacterSet.alphanumerics.contains($0) ? Character(String($0)) : " "
+        }
+        return String(scalars).split(whereSeparator: \.isWhitespace).map(String.init)
     }
 
     static func billingLines(inputs: [BillingLineItemInput], matters: [MatterRecord], timekeeper: BillingTimekeeper) -> [BillingLine] {
@@ -313,6 +405,25 @@ public final class BillingDraftService {
     static func roundToIncrement(_ value: Double, _ increment: Double) -> Double {
         guard increment > 0 else { return value }
         return ((value / increment).rounded() * increment * 100).rounded() / 100
+    }
+
+    private static func droppedCodeNote(
+        existing: String?,
+        rawTaskCode: String?,
+        normalizedTaskCode: String?,
+        rawActivityCode: String?,
+        normalizedActivityCode: String?
+    ) -> String? {
+        var reasons: [String] = []
+        if let raw = trimmedOrNil(rawTaskCode), normalizedTaskCode == nil {
+            reasons.append("Rejected unsupported task code \(raw.uppercased()).")
+        }
+        if let raw = trimmedOrNil(rawActivityCode), normalizedActivityCode == nil {
+            reasons.append("Rejected unsupported activity code \(raw.uppercased()).")
+        }
+        let existing = trimmedOrNil(existing)
+        guard !reasons.isEmpty else { return existing }
+        return ([existing].compactMap { $0 } + reasons).joined(separator: " ")
     }
 
     /// Accepts a real `yyyy-MM-dd` calendar date; returns nil for anything else

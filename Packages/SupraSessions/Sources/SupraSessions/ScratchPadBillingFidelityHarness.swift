@@ -8,8 +8,7 @@ public enum ScratchPadBillingFidelityTimeoutError: Error, Equatable, Sendable {
     case timedOut
 }
 
-@MainActor
-private final class ScratchPadBillingFidelityTimeoutGate<Value: Sendable> {
+private actor ScratchPadBillingFidelityTimeoutGate<Value: Sendable> {
     private var continuation: CheckedContinuation<Value, any Error>?
 
     init(_ continuation: CheckedContinuation<Value, any Error>) {
@@ -26,8 +25,7 @@ private final class ScratchPadBillingFidelityTimeoutGate<Value: Sendable> {
 }
 
 public enum ScratchPadBillingFidelityTimeout {
-    @MainActor
-    public static func value<Value: Sendable>(
+    public nonisolated static func value<Value: Sendable>(
         after duration: Duration,
         operation: @escaping @MainActor () async throws -> Value
     ) async throws -> Value {
@@ -36,28 +34,28 @@ public enum ScratchPadBillingFidelityTimeout {
             let operationTask = Task { @MainActor in
                 try await operation()
             }
-            let timeoutTask = Task { @MainActor in
+            let timeoutTask = Task.detached {
                 try await Task.sleep(for: duration)
             }
-            Task { @MainActor in
+            Task.detached {
                 do {
                     let value = try await operationTask.value
-                    if gate.resolve(.success(value)) {
+                    if await gate.resolve(.success(value)) {
                         timeoutTask.cancel()
                     }
                 } catch {
-                    if gate.resolve(.failure(error)) {
+                    if await gate.resolve(.failure(error)) {
                         timeoutTask.cancel()
                     }
                 }
             }
-            Task { @MainActor in
+            Task.detached {
                 do {
                     try await timeoutTask.value
                 } catch {
                     return
                 }
-                if gate.resolve(.failure(ScratchPadBillingFidelityTimeoutError.timedOut)) {
+                if await gate.resolve(.failure(ScratchPadBillingFidelityTimeoutError.timedOut)) {
                     operationTask.cancel()
                 }
             }
@@ -171,7 +169,9 @@ public struct ScratchPadBillingFidelityOutcome: Codable, Sendable {
     public let outputLineCount: Int
     public let unexpectedOutputLineCount: Int
     public let normalizedOutputLines: [ScratchPadBillingFidelityOutputLine]
+    public let rawModelLineScores: [ScratchPadBillingFidelityLineScore]
     public let lineScores: [ScratchPadBillingFidelityLineScore]
+    public let authorizationRejected: Bool
 }
 
 public struct ScratchPadBillingFidelitySummary: Codable, Sendable {
@@ -196,10 +196,16 @@ public struct ScratchPadBillingFidelitySummary: Codable, Sendable {
     public let justifiedAbstentionRate: Double
     public let inferredTimeEvidenceRate: Double
     public let unexpectedOutputLineCount: Int
+    public let rawModelMatterAccuracyRate: Double
+    public let rawModelSourceAttributionRate: Double
+    public let rawModelReasonableTaskCodeRate: Double
+    public let rawModelReasonableActivityCodeRate: Double
+    public let authorizationRejectedFixtureCount: Int
     public let passesHardGates: Bool
 
     init(outcomes: [ScratchPadBillingFidelityOutcome]) {
         let lines = outcomes.flatMap(\.lineScores)
+        let rawLines = outcomes.flatMap(\.rawModelLineScores)
         let tagged = lines.filter { $0.matterBasis == .tagged }
         let untagged = lines.filter { $0.matterBasis == .untaggedInference }
         let explicit = lines.filter { $0.timeBasis == .explicitWritten }
@@ -231,6 +237,12 @@ public struct ScratchPadBillingFidelitySummary: Codable, Sendable {
         justifiedAbstentionRate = Self.rate(abstentions, where: \.abstentionJustified)
         inferredTimeEvidenceRate = Self.rate(inferred, where: \.hasDurationEvidence)
         unexpectedOutputLineCount = outcomes.reduce(0) { $0 + $1.unexpectedOutputLineCount }
+        rawModelMatterAccuracyRate = Self.rate(rawLines, where: \.matterCorrect)
+        rawModelSourceAttributionRate = Self.rate(rawLines, where: \.sourceAttributionCorrect)
+        let rawTaskJudgments = rawLines.filter { !$0.acceptableTaskCodes.isEmpty }
+        rawModelReasonableTaskCodeRate = Self.rate(rawTaskJudgments, where: \.taskCodeReasonable)
+        rawModelReasonableActivityCodeRate = Self.rate(rawLines, where: \.activityCodeReasonable)
+        authorizationRejectedFixtureCount = outcomes.filter(\.authorizationRejected).count
 
         passesHardGates = firstPassJSONValidityRate >= 0.95
             && parserAcceptanceRate >= 0.95
@@ -283,7 +295,8 @@ enum ScratchPadBillingFidelityScorer {
         systemPrompt: String? = nil,
         userPrompt: String? = nil,
         generationError: String? = nil,
-        durationSeconds: Double = 0
+        durationSeconds: Double = 0,
+        includeRawDiagnostics: Bool = true
     ) -> ScratchPadBillingFidelityOutcome {
         let answer = ReasoningContent.answer(from: rawModelText)
         let parserPayload = BillingDraftService.parse(answer)
@@ -449,6 +462,21 @@ enum ScratchPadBillingFidelityScorer {
             0,
             rawOutputLineCount - fixture.expectations.count
         )
+        let rawModelLineScores: [ScratchPadBillingFidelityLineScore]
+        if includeRawDiagnostics, normalizedModelText != nil {
+            rawModelLineScores = score(
+                fixture: fixture,
+                rawModelText: rawModelText,
+                normalizedModelText: nil,
+                systemPrompt: systemPrompt,
+                userPrompt: userPrompt,
+                generationError: nil,
+                durationSeconds: durationSeconds,
+                includeRawDiagnostics: false
+            ).lineScores
+        } else {
+            rawModelLineScores = scores
+        }
 
         return ScratchPadBillingFidelityOutcome(
             fixtureID: fixture.id,
@@ -463,7 +491,9 @@ enum ScratchPadBillingFidelityScorer {
             outputLineCount: outputs.count,
             unexpectedOutputLineCount: max(unused.count, rawUnexpectedOutputLineCount),
             normalizedOutputLines: normalizedOutputLines,
-            lineScores: scores
+            rawModelLineScores: rawModelLineScores,
+            lineScores: scores,
+            authorizationRejected: generationError?.contains("invalidEvidenceScope") == true
         )
     }
 
@@ -497,7 +527,7 @@ enum ScratchPadBillingFidelityScorer {
 }
 
 public enum ScratchPadBillingFidelityHarness {
-    public static let fixtureVersion = "scratchpad-billing-fidelity-v2"
+    public static let fixtureVersion = "scratchpad-billing-fidelity-v3"
 
     @MainActor
     public static func run(
@@ -713,7 +743,7 @@ public enum ScratchPadBillingFidelityHarness {
         fixtures.append(singleFixture(
             number: 4, day: "2026-07-04", matterName: "Cedar Health v. Nimbus Billing",
             client: "Cedar Health", text: "Spent exactly 0.4 hours in a telephone conference with the client about initial case strategy.",
-            terms: [["telephone", "conference"], ["strategy"]], hours: 0.4, task: "L110", activity: "A106"
+            terms: [["telephone", "conference"], ["strategy"]], hours: 0.4, task: "L120", activity: "A106"
         ))
         fixtures.append(singleFixture(
             number: 5, day: "2026-07-05", matterName: "Delta Works v. Granite Supply",
@@ -723,7 +753,8 @@ public enum ScratchPadBillingFidelityHarness {
         fixtures.append(singleFixture(
             number: 6, day: "2026-07-06", matterName: "Elm Aviation v. Vector Parts",
             client: "Elm Aviation", text: "Spent exactly 0.3 hours analyzing appellate jurisdiction and briefing deadlines after a notice of appeal.",
-            terms: [["appeal", "appellate"], ["jurisdiction"]], hours: 0.3, task: "L510", activity: "A104"
+            terms: [["appeal", "appellate"], ["jurisdiction"]], hours: 0.3, task: "L510", activity: "A104",
+            acceptableTasks: Set(["L500", "L510"])
         ))
         fixtures.append(singleFixture(
             number: 7, day: "2026-07-07", matterName: "Fable Retail Contract Review",
@@ -738,21 +769,22 @@ public enum ScratchPadBillingFidelityHarness {
         fixtures.append(singleFixture(
             number: 9, day: "2026-07-09", matterName: "Helix Farms v. Ion Equipment",
             client: "Helix Farms", text: "Spent exactly 0.2 hours emailing opposing counsel about mediation dates.",
-            terms: [["email", "correspond"], ["mediat"]], hours: 0.2, task: "L160", activity: "A106"
+            terms: [["email", "correspond"], ["mediat"]], hours: 0.2, task: "L160", activity: "A107"
         ))
         fixtures.append(singleFixture(
             number: 10, day: "2026-07-10", matterName: "Indigo Hotels v. Juniper Design",
             client: "Indigo Hotels", text: "Spent exactly 0.9 hours working on motion-in-limine follow-up; this note does not say whether the work was drafting, review, or communication.",
-            terms: [["limine"], ["follow-up", "follow up"]], hours: 0.9, task: "L240", activity: nil,
+            terms: [["limine"], ["follow-up", "follow up"]], hours: 0.9, task: "L250", activity: nil,
             allowsBlankActivity: true,
-            codeRationale: "The litigation topic supports L240, but the evidence does not identify a single reasonable activity; blank plus explanation is preferred."
+            codeRationale: "A motion in limine is a non-dispositive written motion; the evidence does not identify a single reasonable activity, so blank plus explanation is preferred."
         ))
 
         fixtures.append(inferredFixture(
             number: 11, day: "2026-07-11", matterName: "Kestrel Finance v. Lattice Group", client: "Kestrel Finance",
             start: (9, 0, "Began reviewing the amended complaint for damages allegations."),
             end: (9, 40, "Completed review of the amended complaint."),
-            terms: [["review"], ["complaint"]], hours: 0.7, task: "L110", activity: "A104"
+            terms: [["review"], ["complaint"]], hours: 0.7, task: "L120", activity: "A104",
+            acceptableTasks: Set(["L120", "L210"])
         ))
         fixtures.append(inferredFixture(
             number: 12, day: "2026-07-12", matterName: "Monarch Transit v. Nova Freight", client: "Monarch Transit",
@@ -764,13 +796,14 @@ public enum ScratchPadBillingFidelityHarness {
             number: 13, day: "2026-07-13", matterName: "Orchid Medical v. Pine Analytics", client: "Orchid Medical",
             start: (13, 0, "Began drafting the opposition to the motion to dismiss."),
             end: (14, 12, "Completed the first opposition draft."),
-            terms: [["opposition"], ["dismiss"]], hours: 1.2, task: "L210", activity: "A103"
+            terms: [["opposition"], ["dismiss"]], hours: 1.2, task: "L250", activity: "A103",
+            acceptableTasks: Set(["L210", "L250"])
         ))
         fixtures.append(inferredFixture(
             number: 14, day: "2026-07-14", matterName: "Quartz Homes v. River Masonry", client: "Quartz Homes",
             start: (15, 0, "Began preparing the project manager for deposition."),
             end: (15, 30, "Completed deposition preparation session."),
-            terms: [["deposition"], ["prepar"]], hours: 0.5, task: "L330", activity: "A107"
+            terms: [["deposition"], ["prepar"]], hours: 0.5, task: "L330", activity: "A101"
         ))
         fixtures.append(inferredFixture(
             number: 15, day: "2026-07-15", matterName: "Summit Telecom v. Tidal Networks", client: "Summit Telecom",
@@ -828,6 +861,7 @@ public enum ScratchPadBillingFidelityHarness {
         task: String?,
         activity: String?,
         codeSet: BillingCodeSet = .litigation,
+        acceptableTasks: Set<String>? = nil,
         allowsBlankActivity: Bool = false,
         codeRationale: String = "Reasonable UTBMS interpretation of the generated narrative and cited source evidence.",
         overrideInstructions: String? = nil
@@ -880,7 +914,7 @@ public enum ScratchPadBillingFidelityHarness {
                 time: .explicitWritten,
                 task: task,
                 activity: activity,
-                acceptableTasks: number == 1 ? Set(["L310", "L350"]) : nil,
+                acceptableTasks: acceptableTasks ?? (number == 1 ? Set(["L310", "L350"]) : nil),
                 allowsBlankActivity: allowsBlankActivity,
                 codeRationale: codeRationale
             )],
@@ -899,7 +933,8 @@ public enum ScratchPadBillingFidelityHarness {
         terms: [[String]],
         hours: Double,
         task: String?,
-        activity: String?
+        activity: String?,
+        acceptableTasks: Set<String>? = nil
     ) -> ScratchPadBillingFidelityFixture {
         let prefix = "f\(number)"
         let matter = MatterRecord(id: "\(prefix)-matter", name: matterName, clientNames: client)
@@ -907,7 +942,7 @@ public enum ScratchPadBillingFidelityHarness {
         let second = makeEntry(id: "\(prefix)-e2", day: day, seq: 2, time: (end.0, end.1), text: end.2, mentions: [matter.id])
         return makeFixture(
             id: prefix, day: day, matters: [(matter, .litigation)], entries: [first, second],
-            expectations: [expectation(id: "\(prefix)-x1", sources: [first.id, second.id], matter: matter.id, basis: .tagged, terms: terms, hours: hours, time: .inferredTimestampGap, task: task, activity: activity)]
+            expectations: [expectation(id: "\(prefix)-x1", sources: [first.id, second.id], matter: matter.id, basis: .tagged, terms: terms, hours: hours, time: .inferredTimestampGap, task: task, activity: activity, acceptableTasks: acceptableTasks)]
         )
     }
 

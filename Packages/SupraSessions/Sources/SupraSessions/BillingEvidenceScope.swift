@@ -16,12 +16,14 @@ struct BillingEvidenceScope: Sendable, Equatable {
     let entryAuthorizations: [String: EntryAuthorization]
     let candidateMatterIDs: Set<String>
     let includedAttachmentIDs: Set<String>
+    let inferredMatterAuthorizations: [BillingInferredMatterAuthorization]
 
     init(
         entries: [ScratchPadEntryRecord],
         attachments: [ScratchPadAttachmentRecord],
-        validMatterIDs: Set<String>
+        matters: [MatterRecord]
     ) {
+        let validMatterIDs = Set(matters.map(\.id))
         let includedEntryIDs = Set(entries.map(\.id))
         let includedAttachments = attachments.filter { attachment in
             guard let entryID = attachment.entryID else { return true }
@@ -38,15 +40,36 @@ struct BillingEvidenceScope: Sendable, Equatable {
 
         var authorizations: [String: EntryAuthorization] = [:]
         var candidates = Set<String>()
+        var inferredAuthorizations: [BillingInferredMatterAuthorization] = []
         for entry in entries {
             let mentioned = Set(entry.mentions.compactMap(Self.normalizedID)).intersection(validMatterIDs)
             let attached = attachmentMattersByEntry[entry.id, default: []]
             let combined = mentioned.union(attached)
-            candidates.formUnion(combined)
+            let textResolution = combined.isEmpty
+                ? Self.resolveMatterFromText(entry.text, matters: matters)
+                : nil
+            let allowedMatterIDs = textResolution?.matterIDs ?? combined
+            if combined.isEmpty {
+                if allowedMatterIDs.count == 1 {
+                    candidates.formUnion(allowedMatterIDs)
+                }
+            } else {
+                candidates.formUnion(combined)
+            }
             authorizations[entry.id] = EntryAuthorization(
-                allowedMatterIDs: combined.count == 1 ? combined : [],
-                isAmbiguous: combined.count > 1
+                allowedMatterIDs: allowedMatterIDs.count == 1 ? allowedMatterIDs : [],
+                isAmbiguous: allowedMatterIDs.count > 1
             )
+            if let resolution = textResolution,
+               resolution.matterIDs.count == 1,
+               let matterID = resolution.matterIDs.first,
+               let basis = resolution.basis {
+                inferredAuthorizations.append(BillingInferredMatterAuthorization(
+                    entryID: entry.id,
+                    matterID: matterID,
+                    basis: basis
+                ))
+            }
         }
         for attachment in includedAttachments {
             guard let matterID = Self.normalizedID(attachment.matterID),
@@ -57,6 +80,7 @@ struct BillingEvidenceScope: Sendable, Equatable {
         self.entryAuthorizations = authorizations
         self.candidateMatterIDs = candidates
         self.includedAttachmentIDs = Set(includedAttachments.map(\.id))
+        self.inferredMatterAuthorizations = inferredAuthorizations.sorted { $0.entryID < $1.entryID }
     }
 
     static func rawCandidateMatterIDs(
@@ -85,7 +109,8 @@ struct BillingEvidenceScope: Sendable, Equatable {
                     reason: .unknownSourceEntry(sourceID)
                 )
             }
-            if authorization.isAmbiguous, selectedMatter != nil {
+            if authorization.isAmbiguous,
+               Self.normalizedID(rawMatterValue) != nil {
                 throw BillingEvidenceScopeViolation(
                     lineIndex: lineIndex,
                     reason: .ambiguousSourceEntry(sourceID)
@@ -111,11 +136,55 @@ struct BillingEvidenceScope: Sendable, Equatable {
 
     var persistedSummary: BillingEvidenceValidationSummary {
         BillingEvidenceValidationSummary(
-            version: 1,
+            version: inferredMatterAuthorizations.isEmpty ? 1 : 2,
             candidateMatterIDs: candidateMatterIDs.sorted(),
             includedEntryIDs: entryAuthorizations.keys.sorted(),
-            includedAttachmentIDs: includedAttachmentIDs.sorted()
+            includedAttachmentIDs: includedAttachmentIDs.sorted(),
+            inferredMatterAuthorizations: inferredMatterAuthorizations.isEmpty ? nil : inferredMatterAuthorizations
         )
+    }
+
+    private struct TextResolution {
+        let matterIDs: Set<String>
+        let basis: String?
+    }
+
+    private static func resolveMatterFromText(_ text: String, matters: [MatterRecord]) -> TextResolution {
+        let normalizedText = searchable(text)
+        let matterNameMatches = Set(matters.compactMap { matter in
+            containsBounded(normalizedText, phrase: searchable(matter.name)) ? matter.id : nil
+        })
+        if !matterNameMatches.isEmpty {
+            return TextResolution(
+                matterIDs: matterNameMatches,
+                basis: matterNameMatches.count == 1 ? "explicitMatterName" : nil
+            )
+        }
+
+        let clientNameMatches: Set<String> = Set(matters.compactMap { matter in
+            guard let clientName = matter.clientNames else { return nil }
+            return containsBounded(normalizedText, phrase: searchable(clientName)) ? matter.id : nil
+        })
+        return TextResolution(
+            matterIDs: clientNameMatches,
+            basis: clientNameMatches.count == 1 ? "explicitClientName" : nil
+        )
+    }
+
+    private static func searchable(_ value: String) -> String {
+        let folded = value.folding(
+            options: [.caseInsensitive, .diacriticInsensitive],
+            locale: Locale(identifier: "en_US_POSIX")
+        )
+        let scalars = folded.unicodeScalars.map {
+            CharacterSet.alphanumerics.contains($0) ? Character(String($0)) : " "
+        }
+        return String(scalars).split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    }
+
+    private static func containsBounded(_ text: String, phrase: String) -> Bool {
+        guard phrase.count >= 3 else { return false }
+        return " \(text) ".contains(" \(phrase) ")
     }
 
     private static func normalizedID(_ value: String?) -> String? {
@@ -132,6 +201,7 @@ public struct BillingEvidenceScopeViolation: Error, Equatable, Sendable {
         case unknownMatter(String)
         case ambiguousSourceEntry(String)
         case matterNotAllowed(matterID: String, sourceEntryID: String)
+        case fragmentedTimestampInterval(startEntryID: String, endEntryID: String)
     }
 
     public let lineIndex: Int
