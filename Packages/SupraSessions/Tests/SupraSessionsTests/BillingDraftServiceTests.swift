@@ -623,6 +623,43 @@ final class BillingDraftServiceTests: XCTestCase {
         }
     }
 
+    func testExactMatterNameCollidingWithAnotherMattersClientNameRemainsAmbiguous() async throws {
+        let (store, firstMatterID, dayID) = try makeStoreWithMatterAndDay()
+        let secondMatterID = "cross-type-collision-matter"
+        try await store.database.writer.write { db in
+            try MatterRecord(
+                id: secondMatterID,
+                name: "Dawson Holdings v. Transit Corp.",
+                clientNames: "McKernon Motors v. Liberty Rail"
+            ).insert(db)
+        }
+        let inferred = try store.scratchPad.addEntry(
+            dayID: dayID,
+            text: "For McKernon Motors v. Liberty Rail, researched liability defenses for 0.3 hours.",
+            mentions: []
+        )
+        let json = #"{"lineItems":[{"matterID":"\#(firstMatterID)","narrative":"Researched liability defenses.","hours":0.3,"sourceEntryIDs":["\#(inferred.id)"]}]}"#
+        var capturedUserPrompt = ""
+        let draftService = BillingDraftService(store: store) { _, userPrompt in
+            capturedUserPrompt = userPrompt
+            return json
+        }
+
+        do {
+            _ = try await draftService.generateDraft(
+                dayID: dayID,
+                sensitivity: 0.5,
+                timekeeper: timekeeper,
+                invoiceDate: "2026-06-22"
+            )
+            XCTFail("cross-type exact-name collision must not authorize either matter")
+        } catch BillingDraftError.invalidEvidenceScope(let violation) {
+            XCTAssertEqual(violation.reason, .ambiguousSourceEntry(inferred.id))
+            XCTAssertFalse(capturedUserPrompt.contains("Dawson Holdings v. Transit Corp."))
+            XCTAssertNil(try store.billing.latestDraft(dayID: dayID))
+        }
+    }
+
     func testACRBILL014ExactMatterNameUsesMatterNameAuditBasis() async throws {
         let (store, matterID, dayID) = try makeStoreWithMatterAndDay()
         let inferred = try store.scratchPad.addEntry(
@@ -721,6 +758,52 @@ final class BillingDraftServiceTests: XCTestCase {
             )
             XCTFail("one timestamp interval must not persist as two full-duration lines")
         } catch {
+            XCTAssertNil(try store.billing.latestDraft(dayID: dayID))
+        }
+    }
+
+    func testGenericBoundaryNotesCannotBypassSplitIntervalGuard() async throws {
+        let (store, matterID, dayID) = try makeStoreWithMatterAndDay()
+        let start = Date(timeIntervalSince1970: 1_782_919_800)
+        let end = start.addingTimeInterval(30 * 60)
+        try await store.database.writer.write { db in
+            try ScratchPadEntryRecord(
+                id: "generic-boundary-start",
+                dayID: dayID,
+                seq: 2,
+                text: "Began work.",
+                mentionsJSON: ScratchPadJSON.encodeStrings([matterID]),
+                createdAt: start,
+                updatedAt: start
+            ).insert(db)
+            try ScratchPadEntryRecord(
+                id: "generic-boundary-end",
+                dayID: dayID,
+                seq: 3,
+                text: "Completed work.",
+                mentionsJSON: ScratchPadJSON.encodeStrings([matterID]),
+                createdAt: end,
+                updatedAt: end
+            ).insert(db)
+        }
+        let json = #"{"lineItems":[{"matterID":"\#(matterID)","narrative":"Began work.","hours":0.5,"sourceEntryIDs":["generic-boundary-start"]},{"matterID":"\#(matterID)","narrative":"Completed work.","hours":0.5,"sourceEntryIDs":["generic-boundary-end"]}]}"#
+
+        do {
+            _ = try await service(store, returning: json).generateDraft(
+                dayID: dayID,
+                sensitivity: 0.5,
+                timekeeper: timekeeper,
+                invoiceDate: "2026-06-22"
+            )
+            XCTFail("generic start/end notes must not persist one interval twice")
+        } catch BillingDraftError.invalidEvidenceScope(let violation) {
+            XCTAssertEqual(
+                violation.reason,
+                .fragmentedTimestampInterval(
+                    startEntryID: "generic-boundary-start",
+                    endEntryID: "generic-boundary-end"
+                )
+            )
             XCTAssertNil(try store.billing.latestDraft(dayID: dayID))
         }
     }

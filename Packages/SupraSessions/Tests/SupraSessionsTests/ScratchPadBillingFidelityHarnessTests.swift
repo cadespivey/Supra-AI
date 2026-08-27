@@ -270,7 +270,7 @@ final class ScratchPadBillingFidelityHarnessTests: XCTestCase {
     }
 
     @MainActor
-    func testRawExtraRejectedDuringPersistenceStillFailsUnexpectedLineGate() throws {
+    func testRawExtraRejectedDuringPersistenceDoesNotContaminatePersistedUnexpectedLineGate() throws {
         let fixture = ScratchPadBillingFidelityHarness.standardFixtures()[0]
         let canonical = ScratchPadBillingFidelityHarness.canonicalJSON(for: fixture)
         var object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(canonical.utf8)) as? [String: Any])
@@ -291,8 +291,11 @@ final class ScratchPadBillingFidelityHarnessTests: XCTestCase {
 
         XCTAssertEqual(outcome.rawOutputLineCount, 2)
         XCTAssertEqual(outcome.outputLineCount, 1)
-        XCTAssertEqual(outcome.unexpectedOutputLineCount, 1)
-        XCTAssertFalse(summary.passesHardGates)
+        XCTAssertEqual(outcome.rawUnexpectedOutputLineCount, 1)
+        XCTAssertEqual(outcome.unexpectedOutputLineCount, 0)
+        XCTAssertEqual(summary.rawUnexpectedOutputLineCount, 1)
+        XCTAssertEqual(summary.unexpectedOutputLineCount, 0)
+        XCTAssertTrue(summary.passesHardGates)
     }
 
     @MainActor
@@ -327,6 +330,7 @@ final class ScratchPadBillingFidelityHarnessTests: XCTestCase {
         )
         outcomeObject.removeValue(forKey: "rawModelLineScores")
         outcomeObject.removeValue(forKey: "authorizationRejected")
+        outcomeObject.removeValue(forKey: "rawUnexpectedOutputLineCount")
         let legacyOutcome = try JSONDecoder().decode(
             ScratchPadBillingFidelityOutcome.self,
             from: JSONSerialization.data(withJSONObject: outcomeObject, options: [.sortedKeys])
@@ -334,6 +338,7 @@ final class ScratchPadBillingFidelityHarnessTests: XCTestCase {
 
         XCTAssertEqual(legacyOutcome.rawModelLineScores.count, legacyOutcome.lineScores.count)
         XCTAssertFalse(legacyOutcome.authorizationRejected)
+        XCTAssertEqual(legacyOutcome.rawUnexpectedOutputLineCount, legacyOutcome.unexpectedOutputLineCount)
 
         let summary = ScratchPadBillingFidelitySummary(outcomes: [outcome])
         var summaryObject = try XCTUnwrap(
@@ -345,6 +350,7 @@ final class ScratchPadBillingFidelityHarnessTests: XCTestCase {
             "rawModelReasonableTaskCodeRate",
             "rawModelReasonableActivityCodeRate",
             "authorizationRejectedFixtureCount",
+            "rawUnexpectedOutputLineCount",
         ] {
             summaryObject.removeValue(forKey: key)
         }
@@ -358,6 +364,7 @@ final class ScratchPadBillingFidelityHarnessTests: XCTestCase {
         XCTAssertEqual(legacySummary.rawModelReasonableTaskCodeRate, legacySummary.reasonableTaskCodeRate)
         XCTAssertEqual(legacySummary.rawModelReasonableActivityCodeRate, legacySummary.reasonableActivityCodeRate)
         XCTAssertEqual(legacySummary.authorizationRejectedFixtureCount, 0)
+        XCTAssertEqual(legacySummary.rawUnexpectedOutputLineCount, legacySummary.unexpectedOutputLineCount)
     }
 
     @MainActor

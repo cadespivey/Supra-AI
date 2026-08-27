@@ -314,8 +314,12 @@ public final class BillingDraftService {
                let endAuthorization = evidenceScope.entryAuthorizations[entry.id],
                endAuthorization.allowedMatterIDs.count == 1,
                let startIndex = unmatchedStarts.lastIndex(where: { start in
+                   let startSubject = subjectTokens(start.text)
+                   let endSubject = subjectTokens(entry.text)
                    guard entry.createdAt > start.createdAt,
-                         !subjectTokens(start.text).isDisjoint(with: subjectTokens(entry.text)),
+                         (startSubject.isEmpty
+                            || endSubject.isEmpty
+                            || !startSubject.isDisjoint(with: endSubject)),
                          let startAuthorization = evidenceScope.entryAuthorizations[start.id]
                    else { return false }
                    return startAuthorization.allowedMatterIDs == endAuthorization.allowedMatterIDs
@@ -377,6 +381,7 @@ public final class BillingDraftService {
         ]
         return Set(normalizedWords(text).filter { $0.count >= 4 && !ignored.contains($0) })
     }
+
 
     private static func normalizedWords(_ text: String) -> [String] {
         let folded = text.folding(

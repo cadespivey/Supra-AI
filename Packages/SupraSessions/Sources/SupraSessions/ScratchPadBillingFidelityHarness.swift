@@ -172,6 +172,7 @@ public struct ScratchPadBillingFidelityOutcome: Codable, Sendable {
     public let durationSeconds: Double
     public let rawOutputLineCount: Int
     public let outputLineCount: Int
+    public let rawUnexpectedOutputLineCount: Int
     public let unexpectedOutputLineCount: Int
     public let normalizedOutputLines: [ScratchPadBillingFidelityOutputLine]
     public let rawModelLineScores: [ScratchPadBillingFidelityLineScore]
@@ -189,6 +190,7 @@ public struct ScratchPadBillingFidelityOutcome: Codable, Sendable {
         case durationSeconds
         case rawOutputLineCount
         case outputLineCount
+        case rawUnexpectedOutputLineCount
         case unexpectedOutputLineCount
         case normalizedOutputLines
         case rawModelLineScores
@@ -207,6 +209,7 @@ public struct ScratchPadBillingFidelityOutcome: Codable, Sendable {
         durationSeconds: Double,
         rawOutputLineCount: Int,
         outputLineCount: Int,
+        rawUnexpectedOutputLineCount: Int,
         unexpectedOutputLineCount: Int,
         normalizedOutputLines: [ScratchPadBillingFidelityOutputLine],
         rawModelLineScores: [ScratchPadBillingFidelityLineScore],
@@ -223,6 +226,7 @@ public struct ScratchPadBillingFidelityOutcome: Codable, Sendable {
         self.durationSeconds = durationSeconds
         self.rawOutputLineCount = rawOutputLineCount
         self.outputLineCount = outputLineCount
+        self.rawUnexpectedOutputLineCount = rawUnexpectedOutputLineCount
         self.unexpectedOutputLineCount = unexpectedOutputLineCount
         self.normalizedOutputLines = normalizedOutputLines
         self.rawModelLineScores = rawModelLineScores
@@ -243,6 +247,10 @@ public struct ScratchPadBillingFidelityOutcome: Codable, Sendable {
         rawOutputLineCount = try container.decode(Int.self, forKey: .rawOutputLineCount)
         outputLineCount = try container.decode(Int.self, forKey: .outputLineCount)
         unexpectedOutputLineCount = try container.decode(Int.self, forKey: .unexpectedOutputLineCount)
+        rawUnexpectedOutputLineCount = try container.decodeIfPresent(
+            Int.self,
+            forKey: .rawUnexpectedOutputLineCount
+        ) ?? unexpectedOutputLineCount
         normalizedOutputLines = try container.decode(
             [ScratchPadBillingFidelityOutputLine].self,
             forKey: .normalizedOutputLines
@@ -277,6 +285,7 @@ public struct ScratchPadBillingFidelitySummary: Codable, Sendable {
     public let nonLitigationBlankTaskRate: Double
     public let justifiedAbstentionRate: Double
     public let inferredTimeEvidenceRate: Double
+    public let rawUnexpectedOutputLineCount: Int
     public let unexpectedOutputLineCount: Int
     public let rawModelMatterAccuracyRate: Double
     public let rawModelSourceAttributionRate: Double
@@ -306,6 +315,7 @@ public struct ScratchPadBillingFidelitySummary: Codable, Sendable {
         case nonLitigationBlankTaskRate
         case justifiedAbstentionRate
         case inferredTimeEvidenceRate
+        case rawUnexpectedOutputLineCount
         case unexpectedOutputLineCount
         case rawModelMatterAccuracyRate
         case rawModelSourceAttributionRate
@@ -338,6 +348,10 @@ public struct ScratchPadBillingFidelitySummary: Codable, Sendable {
         justifiedAbstentionRate = try container.decode(Double.self, forKey: .justifiedAbstentionRate)
         inferredTimeEvidenceRate = try container.decode(Double.self, forKey: .inferredTimeEvidenceRate)
         unexpectedOutputLineCount = try container.decode(Int.self, forKey: .unexpectedOutputLineCount)
+        rawUnexpectedOutputLineCount = try container.decodeIfPresent(
+            Int.self,
+            forKey: .rawUnexpectedOutputLineCount
+        ) ?? unexpectedOutputLineCount
         rawModelMatterAccuracyRate = try container.decodeIfPresent(
             Double.self,
             forKey: .rawModelMatterAccuracyRate
@@ -394,6 +408,7 @@ public struct ScratchPadBillingFidelitySummary: Codable, Sendable {
         }
         justifiedAbstentionRate = Self.rate(abstentions, where: \.abstentionJustified)
         inferredTimeEvidenceRate = Self.rate(inferred, where: \.hasDurationEvidence)
+        rawUnexpectedOutputLineCount = outcomes.reduce(0) { $0 + $1.rawUnexpectedOutputLineCount }
         unexpectedOutputLineCount = outcomes.reduce(0) { $0 + $1.unexpectedOutputLineCount }
         rawModelMatterAccuracyRate = Self.rate(rawLines, where: \.matterCorrect)
         rawModelSourceAttributionRate = Self.rate(rawLines, where: \.sourceAttributionCorrect)
@@ -648,7 +663,8 @@ enum ScratchPadBillingFidelityScorer {
             durationSeconds: durationSeconds,
             rawOutputLineCount: rawOutputLineCount,
             outputLineCount: outputs.count,
-            unexpectedOutputLineCount: max(unused.count, rawUnexpectedOutputLineCount),
+            rawUnexpectedOutputLineCount: rawUnexpectedOutputLineCount,
+            unexpectedOutputLineCount: unused.count,
             normalizedOutputLines: normalizedOutputLines,
             rawModelLineScores: rawModelLineScores,
             lineScores: scores,

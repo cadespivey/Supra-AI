@@ -153,20 +153,16 @@ struct BillingEvidenceScope: Sendable, Equatable {
         let matterNameMatches = Set(matters.compactMap { matter in
             containsBounded(normalizedText, phrase: searchable(matter.name)) ? matter.id : nil
         })
-        if !matterNameMatches.isEmpty {
-            return TextResolution(
-                matterIDs: matterNameMatches,
-                basis: matterNameMatches.count == 1 ? "explicitMatterName" : nil
-            )
-        }
-
         let clientNameMatches: Set<String> = Set(matters.compactMap { matter in
             guard let clientName = matter.clientNames else { return nil }
             return containsBounded(normalizedText, phrase: searchable(clientName)) ? matter.id : nil
         })
+        let matches = matterNameMatches.union(clientNameMatches)
         return TextResolution(
-            matterIDs: clientNameMatches,
-            basis: clientNameMatches.count == 1 ? "explicitClientName" : nil
+            matterIDs: matches,
+            basis: matches.count == 1
+                ? (matterNameMatches.isEmpty ? "explicitClientName" : "explicitMatterName")
+                : nil
         )
     }
 
