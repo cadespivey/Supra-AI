@@ -552,7 +552,7 @@ final class HeadlessProbeIsolationTests: XCTestCase {
         ))
     }
 
-    func testBillingReportWriterRemovesFileAfterParentRenameFollowingCreation() throws {
+    func testBillingReportWriterTruncatesFileAfterParentRenameFollowingCreation() throws {
         let root = try makeTemporaryDirectory()
         let outside = try makeTemporaryDirectory()
         defer {
@@ -574,12 +574,13 @@ final class HeadlessProbeIsolationTests: XCTestCase {
                 try FileManager.default.moveItem(at: reports, to: moved)
             }
         ))
-        XCTAssertFalse(FileManager.default.fileExists(
-            atPath: moved.appendingPathComponent("nested/billing-report.json").path
-        ))
+        XCTAssertEqual(
+            try Data(contentsOf: moved.appendingPathComponent("nested/billing-report.json")),
+            Data()
+        )
     }
 
-    func testBillingReportWriterRemovesFailedWriteAndAllowsSamePathRetry() throws {
+    func testBillingReportWriterScrubsFailedWriteAndConsumesSamePath() throws {
         let root = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let output = root.appendingPathComponent("billing-report.json")
@@ -595,17 +596,17 @@ final class HeadlessProbeIsolationTests: XCTestCase {
                 throw NSError(domain: "ScratchPadBillingFidelityReportWriterTests", code: 1)
             }
         ))
-        XCTAssertFalse(FileManager.default.fileExists(atPath: output.path))
+        XCTAssertEqual(try Data(contentsOf: output), Data())
 
         let completed = Data("complete report".utf8)
-        XCTAssertNoThrow(try ScratchPadBillingFidelityReportWriter.write(
+        XCTAssertThrowsError(try ScratchPadBillingFidelityReportWriter.write(
             completed,
             rootURL: root,
             expectedRootIdentity: rootIdentity,
             relativeParentComponents: [],
             fileName: output.lastPathComponent
         ))
-        XCTAssertEqual(try Data(contentsOf: output), completed)
+        XCTAssertEqual(try Data(contentsOf: output), Data())
     }
 
     func testBillingReportWriterRejectsLeafRenameBeforeWritingAndPreservesReplacement() throws {

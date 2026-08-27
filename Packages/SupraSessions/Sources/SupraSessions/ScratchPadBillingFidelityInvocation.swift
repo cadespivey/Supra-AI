@@ -76,71 +76,59 @@ public enum ScratchPadBillingFidelityReportWriter {
         }
         guard fileFD >= 0 else { throw posixError() }
         defer { Darwin.close(fileFD) }
-        let expectedFileIdentity = try identity(of: fileFD)
-        var shouldRemoveFile = true
-        defer {
-            if shouldRemoveFile {
-                _ = Darwin.ftruncate(fileFD, 0)
-                _ = Darwin.fsync(fileFD)
-                if leafMatches(
-                    expectedIdentity: expectedFileIdentity,
-                    directoryFD: directoryFD,
-                    fileName: fileName
-                ) {
-                    _ = fileName.withCString { name in
-                        Darwin.unlinkat(directoryFD, name, 0)
+        do {
+            let expectedFileIdentity = try identity(of: fileFD)
+            try afterFileCreation()
+            guard directoryChainMatches(
+                rootURL: rootURL,
+                expectedRootIdentity: expectedRootIdentity,
+                components: relativeParentComponents,
+                expectedDescriptors: directoryDescriptors
+            ), leafMatches(
+                expectedIdentity: expectedFileIdentity,
+                directoryFD: directoryFD,
+                fileName: fileName
+            ) else {
+                throw posixError(code: ESTALE)
+            }
+
+            try data.withUnsafeBytes { bytes in
+                var written = 0
+                while written < bytes.count {
+                    guard let baseAddress = bytes.baseAddress else { break }
+                    let result = Darwin.write(
+                        fileFD,
+                        baseAddress.advanced(by: written),
+                        bytes.count - written
+                    )
+                    if result < 0 {
+                        if errno == EINTR { continue }
+                        throw posixError()
                     }
-                    _ = Darwin.fsync(directoryFD)
+                    guard result > 0 else { throw posixError(code: EIO) }
+                    written += result
                 }
             }
-        }
-
-        try afterFileCreation()
-        guard directoryChainMatches(
-            rootURL: rootURL,
-            expectedRootIdentity: expectedRootIdentity,
-            components: relativeParentComponents,
-            expectedDescriptors: directoryDescriptors
-        ), leafMatches(
-            expectedIdentity: expectedFileIdentity,
-            directoryFD: directoryFD,
-            fileName: fileName
-        ) else {
-            throw posixError(code: ESTALE)
-        }
-
-        try data.withUnsafeBytes { bytes in
-            var written = 0
-            while written < bytes.count {
-                guard let baseAddress = bytes.baseAddress else { break }
-                let result = Darwin.write(
-                    fileFD,
-                    baseAddress.advanced(by: written),
-                    bytes.count - written
-                )
-                if result < 0 {
-                    if errno == EINTR { continue }
-                    throw posixError()
-                }
-                guard result > 0 else { throw posixError(code: EIO) }
-                written += result
+            guard Darwin.fsync(fileFD) == 0 else { throw posixError() }
+            try afterDataWrite()
+            guard directoryChainMatches(
+                rootURL: rootURL,
+                expectedRootIdentity: expectedRootIdentity,
+                components: relativeParentComponents,
+                expectedDescriptors: directoryDescriptors
+            ), leafMatches(
+                expectedIdentity: expectedFileIdentity,
+                directoryFD: directoryFD,
+                fileName: fileName
+            ) else {
+                throw posixError(code: ESTALE)
             }
+        } catch {
+            let writeError = error
+            guard Darwin.ftruncate(fileFD, 0) == 0 else { throw posixError() }
+            guard Darwin.fsync(fileFD) == 0 else { throw posixError() }
+            throw writeError
         }
-        guard Darwin.fsync(fileFD) == 0 else { throw posixError() }
-        try afterDataWrite()
-        guard directoryChainMatches(
-            rootURL: rootURL,
-            expectedRootIdentity: expectedRootIdentity,
-            components: relativeParentComponents,
-            expectedDescriptors: directoryDescriptors
-        ), leafMatches(
-            expectedIdentity: expectedFileIdentity,
-            directoryFD: directoryFD,
-            fileName: fileName
-        ) else {
-            throw posixError(code: ESTALE)
-        }
-        shouldRemoveFile = false
     }
 
     private static func directoryChainMatches(
