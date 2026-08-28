@@ -350,6 +350,14 @@ final class BillingDraftServiceTests: XCTestCase {
         }
     }
 
+    func testCodingReviewPromptRequiresSupportedLitigationCodeWhenOriginalIsBlank() {
+        let prompt = BillingDraftPrompt.reviewSystem()
+
+        XCTAssertTrue(prompt.contains("supply a canonical litigation task code whenever the narrative and cited evidence reasonably support one and no controlling matter instruction forbids it"))
+        XCTAssertTrue(prompt.contains("The absence of a matter-specific instruction does not justify a blank litigation task code"))
+        XCTAssertTrue(prompt.contains("applies only to transactional or advisory task codes"))
+    }
+
     func testCodingReviewChangesOnlyCodesAndPersistsProvenance() async throws {
         let (store, matterID, dayID) = try makeStoreWithMatterAndDay()
         var prompts: [(system: String, user: String)] = []
