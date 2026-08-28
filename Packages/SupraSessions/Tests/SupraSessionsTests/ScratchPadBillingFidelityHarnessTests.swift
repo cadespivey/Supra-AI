@@ -519,7 +519,7 @@ final class ScratchPadBillingFidelityHarnessTests: XCTestCase {
     func testProbeTimeoutReturnsBeforeSuspendedOperationCompletesAndCancelsIt() async {
         let clock = ContinuousClock()
         let started = clock.now
-        var operationWasCancelled = false
+        let operationWasCancelled = expectation(description: "timed-out operation was cancelled")
 
         do {
             let _: String = try await ScratchPadBillingFidelityTimeout.value(
@@ -529,7 +529,8 @@ final class ScratchPadBillingFidelityHarnessTests: XCTestCase {
                     try await Task.sleep(for: .seconds(10))
                     return "late"
                 } catch {
-                    operationWasCancelled = Task.isCancelled
+                    XCTAssertTrue(Task.isCancelled)
+                    operationWasCancelled.fulfill()
                     throw error
                 }
             }
@@ -539,8 +540,7 @@ final class ScratchPadBillingFidelityHarnessTests: XCTestCase {
         }
 
         XCTAssertLessThan(started.duration(to: clock.now), .milliseconds(500))
-        await Task.yield()
-        XCTAssertTrue(operationWasCancelled)
+        await fulfillment(of: [operationWasCancelled], timeout: 1)
     }
 
     @MainActor
