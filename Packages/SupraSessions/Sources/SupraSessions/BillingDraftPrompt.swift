@@ -181,6 +181,7 @@ enum BillingDraftPrompt {
         Coding distinctions:
         - Task codes describe the litigation phase or objective; activity codes describe the action performed. Research does not automatically mean L120, and drafting does not automatically mean L250.
         - If only the activity is ambiguous, retain the supported task code and return only activityCode as null with a specific codeNote; do not discard a supported task code.
+        - Communications still require a litigation task code when their supported purpose advances a litigation phase. For example, communication about fact-witness availability during an investigation advances L110; A106 identifies the client communication.
         - Use L110 for fact investigation and development, L120 for legal analysis or overall case strategy, L140 for matter-level document/file management, and L160 for settlement or non-binding ADR.
         - Use L230 for court-mandated scheduling or status conferences; use A109 for appearing at or attending a conference, hearing, deposition, or trial.
         - Use L240 for dispositive motions and L250 for other written motions or submissions, except when a more specific phase code controls.

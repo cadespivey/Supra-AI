@@ -342,6 +342,8 @@ final class BillingDraftServiceTests: XCTestCase {
         XCTAssertTrue(capturedUserPrompt.contains("Allowed sourceEntryIDs: e1"))
         XCTAssertTrue(capturedUserPrompt.contains("Every line must cite at least one of exactly these ids"))
         XCTAssertTrue(capturedUserPrompt.contains("If only the activity is ambiguous, retain the supported task code"))
+        XCTAssertTrue(capturedUserPrompt.contains("Communications still require a litigation task code when their supported purpose advances a litigation phase"))
+        XCTAssertTrue(capturedUserPrompt.contains("communication about fact-witness availability during an investigation advances L110"))
         XCTAssertTrue(capturedUserPrompt.contains("codeNote"))
         for item in UTBMSCodes.litigationTask + UTBMSCodes.activity {
             XCTAssertEqual(
