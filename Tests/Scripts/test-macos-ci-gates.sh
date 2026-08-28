@@ -1074,6 +1074,12 @@ else
   record_failure 'Protected macOS CI does not execute Tests/Scripts/test-release-transaction.sh'
 fi
 
+if grep -Eq '^[[:space:]]+sudo apt-get install .*libxml2-utils([[:space:]]|$)' "$ci_workflow"; then
+  printf '%s\n' 'PASS: publication-metadata CI installs xmllint on Ubuntu'
+else
+  record_failure 'publication-metadata CI does not install xmllint on Ubuntu'
+fi
+
 if (( failures != 0 )); then
   printf 'macOS CI gate tests failed: %d\n' "$failures" >&2
   exit 1

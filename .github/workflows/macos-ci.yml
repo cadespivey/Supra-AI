@@ -161,6 +161,11 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           persist-credentials: false
+      - name: Install publication metadata XML tooling
+        if: needs.plan.outputs.publication_metadata == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y libxml2-utils
       - name: Validate publication metadata only
         if: needs.plan.outputs.publication_metadata == 'true'
         run: |
