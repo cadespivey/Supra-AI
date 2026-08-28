@@ -397,7 +397,9 @@ public struct SignedReleaseSmokeRunner: Sendable {
 
         do {
             let response = try await runtimeClient.unloadModel()
-            if response.status != .unloaded || response.error != nil {
+            let cleanupReachedUnloadedState = response.status == .unloaded
+                || response.status == .noModelLoaded
+            if !cleanupReachedUnloadedState || response.error != nil {
                 cleanupFailure = .unloadRejected
             }
         } catch {

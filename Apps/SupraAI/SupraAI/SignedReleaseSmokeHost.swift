@@ -80,8 +80,46 @@ private enum SignedReleaseSmokeHost {
             }
             return writeReport(report) ? EX_OK : EX_IOERR
         } catch {
+            let message = "Signed release smoke failure: \(diagnosticCode(for: error))\n"
+            FileHandle.standardError.write(Data(message.utf8))
             return EX_SOFTWARE
         }
+    }
+
+    private static func diagnosticCode(for error: Error) -> String {
+        if let runnerError = error as? SignedReleaseSmokeRunnerError {
+            switch runnerError {
+            case .invalidMetadata: return "invalidMetadata"
+            case .modelPreflightFailed: return "modelPreflightFailed"
+            case .xpcConnectionFailed: return "xpcConnectionFailed"
+            case .loadTransportFailed: return "loadTransportFailed"
+            case .loadRejected: return "loadRejected"
+            case .loadedModelIdentityMismatch: return "loadedModelIdentityMismatch"
+            case .loadedModelContentMismatch: return "loadedModelContentMismatch"
+            case .invalidLoadMetrics: return "invalidLoadMetrics"
+            case .tokenizerTransportFailed: return "tokenizerTransportFailed"
+            case .tokenizerContractViolation: return "tokenizerContractViolation"
+            case .generationTransportFailed: return "generationTransportFailed"
+            case .eventContractViolation: return "eventContractViolation"
+            case .cancellationTransportFailed: return "cancellationTransportFailed"
+            case .cancellationRejected: return "cancellationRejected"
+            case .generationQuiescenceFailed: return "generationQuiescenceFailed"
+            case .unloadTransportFailed: return "unloadTransportFailed"
+            case .unloadRejected: return "unloadRejected"
+            case .modelPostflightFailed: return "modelPostflightFailed"
+            case .internalInvariantFailed: return "internalInvariantFailed"
+            }
+        }
+        if error is SignedReleaseModelAuthorizationError {
+            return "modelAuthorizationFailed"
+        }
+        if error is HostError {
+            return "invalidBundleMetadata"
+        }
+        if error is EncodingError {
+            return "attestationEncodingFailed"
+        }
+        return "unexpectedFailure"
     }
 
     private static func validatedBindingsOrExit() -> Bindings {
