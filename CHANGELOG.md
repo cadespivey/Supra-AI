@@ -10,6 +10,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.2] - 2026-08-28
+
+### Changed
+
+- Improved ScratchPad billing drafts with stricter evidence grounding, timestamp validation, and matter/source fidelity.
+- Clarified litigation task and activity coding so client communications retain the supported litigation objective while using the appropriate communication activity code.
+
+### Fixed
+
+- Prevented fact-investigation communications from dropping the applicable litigation task code when the supporting matter evidence identifies the objective.
+- Hardened billing-draft review against malformed, out-of-scope, or internally inconsistent source evidence.
+
+
 ## [3.0.1] - 2026-08-17
 
 ### Fixed
