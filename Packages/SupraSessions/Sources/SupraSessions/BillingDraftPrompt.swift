@@ -176,6 +176,7 @@ enum BillingDraftPrompt {
         3. Use the most specific reasonable code; several interpretations may be defensible. If no listed code is a reasonable interpretation, return null and briefly explain the uncertainty in codeNote. Never invent a code.
         4. A110 means managing data or files; do not use it as a generic fallback for drafting, review, research, or communication.
         5. For transactional/advisory matters, use a task code only when the matter instructions expressly supply that firm-specific code. Otherwise return taskCode null.
+        6. For litigation matters, canonical task codes in the catalog are available without a matter-specific instruction. Do not return taskCode null when the narrative and cited evidence reasonably support a listed litigation task code and no controlling matter instruction forbids it.
 
         Coding distinctions:
         - Task codes describe the litigation phase or objective; activity codes describe the action performed. Research does not automatically mean L120, and drafting does not automatically mean L250.

@@ -333,6 +333,8 @@ final class BillingDraftServiceTests: XCTestCase {
         XCTAssertTrue(capturedUserPrompt.contains("A103 — Draft/revise"))
         XCTAssertTrue(capturedUserPrompt.contains("generated narrative and its cited note or attachment evidence"))
         XCTAssertTrue(capturedUserPrompt.contains("If no listed code is a reasonable interpretation"))
+        XCTAssertTrue(capturedUserPrompt.contains("For litigation matters, canonical task codes in the catalog are available without a matter-specific instruction"))
+        XCTAssertTrue(capturedUserPrompt.contains("Do not return taskCode null when the narrative and cited evidence reasonably support a listed litigation task code"))
         XCTAssertTrue(capturedUserPrompt.contains("Task codes describe the litigation phase or objective; activity codes describe the action performed"))
         XCTAssertTrue(capturedUserPrompt.contains("L350 for discovery motions, including motions to compel and motions for protective orders"))
         XCTAssertTrue(capturedUserPrompt.contains("L230 for court-mandated scheduling or status conferences"))
