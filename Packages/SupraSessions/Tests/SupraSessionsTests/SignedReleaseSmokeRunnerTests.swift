@@ -397,6 +397,49 @@ final class SignedReleaseSmokeRunnerTests: XCTestCase {
         XCTAssertEqual(failedClient.unloadCallCount, 1)
     }
 
+    func testNoModelLoadedCleanupIsAcceptedAsAlreadyUnloaded() async throws {
+        let fixture = try makeFixture()
+        let authorization = try authorize(fixture)
+        let client = SignedSmokeRuntimeClientFake(
+            stream: { request in Self.stream(events: Self.validEvents(for: request)) },
+            unload: { UnloadModelResponse(status: .noModelLoaded) }
+        )
+        let runner = SignedReleaseSmokeRunner(
+            runtimeClient: client,
+            authorization: authorization,
+            metadata: metadata
+        )
+
+        let attestation = try await runner.run()
+
+        XCTAssertTrue(attestation.verification.modelUnloaded)
+        XCTAssertEqual(client.unloadCallCount, 1)
+    }
+
+    func testNoModelLoadedCleanupWithErrorRejectsAttestation() async throws {
+        let fixture = try makeFixture()
+        let authorization = try authorize(fixture)
+        let client = SignedSmokeRuntimeClientFake(
+            stream: { request in Self.stream(events: Self.validEvents(for: request)) },
+            unload: {
+                UnloadModelResponse(
+                    status: .noModelLoaded,
+                    error: RuntimeError(category: "test", message: "unload-error-canary")
+                )
+            }
+        )
+        let runner = SignedReleaseSmokeRunner(
+            runtimeClient: client,
+            authorization: authorization,
+            metadata: metadata
+        )
+
+        let error = await capturedError { try await runner.run() }
+
+        XCTAssertNotNil(error)
+        XCTAssertEqual(client.unloadCallCount, 1)
+    }
+
     func testLoadThrowFailedResponseAndWrongIdentityNeverGenerateAndStillUnload() async throws {
         let throwingFixture = try makeFixture()
         let throwingAuthorization = try authorize(throwingFixture)
